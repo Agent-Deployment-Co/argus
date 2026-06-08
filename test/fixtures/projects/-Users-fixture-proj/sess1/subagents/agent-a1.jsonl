@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"sess1","isSidechain":true,"cwd":"/Users/fixture/proj","timestamp":"2026-06-01T17:00:04.000Z","attributionSkill":null,"message":{"id":"m3","model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"subagent work"}]}}
