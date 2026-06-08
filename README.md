@@ -86,7 +86,7 @@ The dashboard backend (Cloudflare Worker + D1) lives in a **separate private rep
 # Interactive login: opens the browser, then caches refreshable OAuth credentials.
 export ARGUS_ENDPOINT=https://argus.agentdeployment.co
 argus login
-argus push                       # user = git email (else $USER@host); org = email domain
+argus push                       # user = git email (else $USER@host)
 argus push --user alice          # override the user id
 ```
 
@@ -105,10 +105,8 @@ argus push
 ```
 
 - **User** is auto-detected from your git email (override `--user` / it's the part before `@`).
-- **Org** defaults to your email domain (`mando@gradient.works` → `gradient.works`); override
-  with `--org` / `ARGUS_ORG`. If you push with a bare `--user` (no domain) and no `--org`,
-  the org is taken from your **token** server-side. The server always validates the org against
-  the token and rejects mismatches.
+- **Org** comes from your authenticated Cloudflare Access identity. You can override it with
+  `--org` / `ARGUS_ORG`, but the server validates the override against the authenticated org.
 
 Each `push` reparses your transcripts and sends a full snapshot; the Worker **replaces** that
 `(org, user)`'s rows (idempotent — re-pushing never double-counts). Then open the dashboard at
