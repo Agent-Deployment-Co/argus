@@ -1,5 +1,5 @@
 import { describe, expect, test, mock, beforeAll, afterAll } from "bun:test";
-import { detectOrg, pushSnapshot } from "../src/push.ts";
+import { detectOrg, pushSnapshot, SCHEMA_VERSION } from "../src/push.ts";
 import type { PushPayload } from "../src/push.ts";
 
 describe("detectOrg", () => {
@@ -20,7 +20,7 @@ describe("detectOrg", () => {
 
 describe("pushSnapshot", () => {
   const dummyPayload = {
-    schemaVersion: 1,
+    schemaVersion: SCHEMA_VERSION as any,
     org: "acme.test",
     user: "user@acme.test",
     generatedAtMs: 123456789,
@@ -31,7 +31,7 @@ describe("pushSnapshot", () => {
     const originalFetch = globalThis.fetch;
     let sentHeaders: Record<string, string> = {};
 
-    globalThis.fetch = async (url, options) => {
+    globalThis.fetch = (async (url: any, options: any) => {
       sentHeaders = (options?.headers as Record<string, string>) || {};
       return {
         ok: true,
@@ -39,7 +39,7 @@ describe("pushSnapshot", () => {
         headers: new Headers({ "content-type": "application/json" }),
         text: async () => "success",
       } as Response;
-    };
+    }) as any;
 
     try {
       const res = await pushSnapshot(
@@ -63,7 +63,7 @@ describe("pushSnapshot", () => {
     const originalFetch = globalThis.fetch;
     let sentHeaders: Record<string, string> = {};
 
-    globalThis.fetch = async (url, options) => {
+    globalThis.fetch = (async (url: any, options: any) => {
       sentHeaders = (options?.headers as Record<string, string>) || {};
       return {
         ok: true,
@@ -71,7 +71,7 @@ describe("pushSnapshot", () => {
         headers: new Headers({ "content-type": "application/json" }),
         text: async () => "success",
       } as Response;
-    };
+    }) as any;
 
     try {
       const res = await pushSnapshot(
@@ -92,14 +92,14 @@ describe("pushSnapshot", () => {
   test("detects Access login challenge (HTML response)", async () => {
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = async (url, options) => {
+    globalThis.fetch = (async (url: any, options: any) => {
       return {
         ok: true,
         status: 200,
         headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
         text: async () => "<!DOCTYPE html><html><body>Access Denied</body></html>",
       } as Response;
-    };
+    }) as any;
 
     try {
       const res = await pushSnapshot(
