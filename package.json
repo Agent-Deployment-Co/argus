@@ -19,7 +19,7 @@
     "bun": ">=1.2"
   },
   "dependencies": {
-    "@agentdeploymentco/argus-schema": "github:agentdeploymentco/argus-schema#v0.2.0"
+    "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
