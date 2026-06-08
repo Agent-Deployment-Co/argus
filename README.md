@@ -83,11 +83,25 @@ The dashboard backend (Cloudflare Worker + D1) lives in a **separate private rep
 `agentdeploymentco/argus-dash`; this public CLI just produces and pushes snapshots to it.
 
 ```bash
-# each user, e.g. from a cron / after work
+# Interactive login: opens the browser, then caches refreshable OAuth credentials.
 export ARGUS_ENDPOINT=https://argus.agentdeployment.co
-export ARGUS_TOKEN=<your-org-token>
+argus login
 argus push                       # user = git email (else $USER@host); org = email domain
-argus push --user alice --org acme.test   # override either
+argus push --user alice          # override the user id
+```
+
+The Access application must have **Managed OAuth** enabled. Under its Managed OAuth
+settings, enable **dynamic client registration** and **Allow loopback clients** so the
+browser can return to Argus on `http://127.0.0.1:<port>/callback`. Argus uses authorization
+code + PKCE, stores the access and refresh tokens in `~/.claude/argus-token.json` with mode
+`0600`, and refreshes expired access tokens automatically.
+
+For unattended CI or cron jobs, use a Cloudflare Access service token instead of browser login:
+
+```bash
+export CF_ACCESS_CLIENT_ID=<service-token-client-id>
+export CF_ACCESS_CLIENT_SECRET=<service-token-client-secret>
+argus push
 ```
 
 - **User** is auto-detected from your git email (override `--user` / it's the part before `@`).

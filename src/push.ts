@@ -36,6 +36,7 @@ export function detectOrg(override: string | undefined, user: string): string | 
 }
 
 export interface PushCredentials {
+  bearerToken?: string;
   jwt?: string;
   clientId?: string;
   clientSecret?: string;
@@ -62,6 +63,8 @@ export async function pushSnapshot(
   if (credentials.clientId && credentials.clientSecret) {
     headers["cf-access-client-id"] = credentials.clientId;
     headers["cf-access-client-secret"] = credentials.clientSecret;
+  } else if (credentials.bearerToken) {
+    headers.authorization = `Bearer ${credentials.bearerToken}`;
   } else if (credentials.jwt) {
     headers["cf-access-token"] = credentials.jwt;
   }
@@ -73,6 +76,9 @@ export async function pushSnapshot(
   });
   const body = await res.text();
   const contentType = res.headers.get("content-type") || "";
-  const isAccessChallenge = contentType.includes("text/html");
+  const authenticate = res.headers.get("www-authenticate") || "";
+  const isAccessChallenge =
+    contentType.includes("text/html") ||
+    (res.status === 401 && authenticate.toLowerCase().includes("resource_metadata"));
   return { ok: res.ok && !isAccessChallenge, status: res.status, body, isAccessChallenge };
 }
