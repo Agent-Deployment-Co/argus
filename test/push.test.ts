@@ -59,6 +59,35 @@ describe("pushSnapshot", () => {
     }
   });
 
+  test("sends OAuth access tokens as bearer authorization", async () => {
+    const originalFetch = globalThis.fetch;
+    let sentHeaders: Record<string, string> = {};
+
+    globalThis.fetch = (async (url: any, options: any) => {
+      sentHeaders = (options?.headers as Record<string, string>) || {};
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        text: async () => "success",
+      } as Response;
+    }) as any;
+
+    try {
+      const res = await pushSnapshot(
+        "https://api.test",
+        { bearerToken: "oauth-token" },
+        dummyPayload,
+      );
+
+      expect(res.ok).toBe(true);
+      expect(sentHeaders.authorization).toBe("Bearer oauth-token");
+      expect(sentHeaders["cf-access-token"]).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("sends client ID and secret when credentials have service tokens", async () => {
     const originalFetch = globalThis.fetch;
     let sentHeaders: Record<string, string> = {};
@@ -111,6 +140,36 @@ describe("pushSnapshot", () => {
       expect(res.ok).toBe(false); // Should be false because it is an Access challenge
       expect(res.isAccessChallenge).toBe(true);
       expect(res.body).toContain("Access Denied");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("detects a Managed OAuth Access challenge", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async () => {
+      return {
+        ok: false,
+        status: 401,
+        headers: new Headers({
+          "content-type": "application/json",
+          "www-authenticate":
+            'Bearer realm="OAuth", resource_metadata="https://api.test/.well-known/cloudflare-access-protected-resource/"',
+        }),
+        text: async () => JSON.stringify({ error: "invalid_token" }),
+      } as Response;
+    }) as any;
+
+    try {
+      const res = await pushSnapshot(
+        "https://api.test",
+        { bearerToken: "expired-oauth-token" },
+        dummyPayload,
+      );
+
+      expect(res.ok).toBe(false);
+      expect(res.isAccessChallenge).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }

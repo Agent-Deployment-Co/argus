@@ -1,8 +1,18 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { aggregate } from "./aggregate.ts";
+import {
+  isLegacyAccessTokenCache,
+  isManagedOAuthTokenCache,
+  loadAccessTokenCache,
+  loginWithManagedOAuth,
+  oauthCacheMatchesEndpoint,
+  oauthTokenIsFresh,
+  refreshManagedOAuthToken,
+  saveAccessTokenCache,
+} from "./auth.ts";
 import { vendoredChartJs } from "./chartjs.ts";
 import { loadPlugins } from "./inventory.ts";
 import { parseAll, type TranscriptSource } from "./parse.ts";
@@ -82,7 +92,7 @@ const HELP = `argus — audit your Claude Code and Codex usage
 
 Usage:
   argus [report] [options]    build the local HTML dashboard (default)
-  argus login [options]       login via Cloudflare Access SSO to get a token
+  argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
 
 Report options:
@@ -207,32 +217,12 @@ async function runLogin(flags: Flags, log: Log): Promise<void> {
   const endpoint = flags.endpoint || "https://argus.agentdeployment.co";
   log(`Logging in to Cloudflare Access for ${endpoint}…`);
 
-  const check = spawnSync("which", ["cloudflared"], { encoding: "utf8" });
-  if (check.status !== 0) {
-    log("! 'cloudflared' CLI is required for login. Please install it:");
-    log("  brew install cloudflare/cloudflare/cloudflared");
-    process.exit(1);
-  }
-
-  log("Running 'cloudflared' login flow…");
-  const run = spawnSync("cloudflared", ["access", "token", `--app=${endpoint}`], { encoding: "utf8" });
-  if (run.status !== 0) {
-    log(`✗ Login failed: ${run.stderr || run.stdout || "Unknown error"}`);
-    process.exit(1);
-  }
-
-  const token = run.stdout.trim();
-  if (!token) {
-    log("✗ Login failed: cloudflared returned an empty token.");
-    process.exit(1);
-  }
-
   try {
-    mkdirSync(dirname(ACCESS_TOKEN_FILE), { recursive: true });
-    writeFileSync(ACCESS_TOKEN_FILE, JSON.stringify({ token }, null, 2), { mode: 0o600 });
-    log("✓ Successfully authenticated and cached the Access token!");
+    const cache = await loginWithManagedOAuth(endpoint, { log });
+    saveAccessTokenCache(ACCESS_TOKEN_FILE, cache);
+    log("✓ Successfully authenticated and cached the OAuth tokens!");
   } catch (err) {
-    log(`✗ Failed to write token cache to ${ACCESS_TOKEN_FILE}: ${err instanceof Error ? err.message : String(err)}`);
+    log(`✗ Login failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }
@@ -244,7 +234,7 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
 
   // Authenticate:
   // 1. CI/Automation: CF_ACCESS_CLIENT_ID + CF_ACCESS_CLIENT_SECRET
-  // 2. Human/Interactive: Cached ACCESS_TOKEN_FILE JWT
+  // 2. Human/Interactive: Cached Managed OAuth access + refresh tokens
   const clientId = process.env.CF_ACCESS_CLIENT_ID;
   const clientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
   const credentials: PushCredentials = {};
@@ -253,16 +243,25 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
     credentials.clientId = clientId;
     credentials.clientSecret = clientSecret;
   } else {
-    try {
-      if (existsSync(ACCESS_TOKEN_FILE)) {
-        const cached = JSON.parse(readFileSync(ACCESS_TOKEN_FILE, "utf8"));
-        credentials.jwt = cached.token;
+    let cached = loadAccessTokenCache(ACCESS_TOKEN_FILE);
+    if (isManagedOAuthTokenCache(cached) && oauthCacheMatchesEndpoint(cached, endpoint)) {
+      if (!oauthTokenIsFresh(cached)) {
+        log("Refreshing Cloudflare Access login…");
+        try {
+          cached = await refreshManagedOAuthToken(cached);
+          saveAccessTokenCache(ACCESS_TOKEN_FILE, cached);
+        } catch (err) {
+          log(`! Login refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+          cached = undefined;
+        }
       }
-    } catch {
-      // ignore parsing/reading errors
+      if (isManagedOAuthTokenCache(cached)) credentials.bearerToken = cached.accessToken;
+    } else if (isLegacyAccessTokenCache(cached)) {
+      // Preserve existing cloudflared caches during migration.
+      credentials.jwt = cached.token;
     }
 
-    if (!credentials.jwt) {
+    if (!credentials.bearerToken && !credentials.jwt) {
       log("! Unauthenticated. Please run 'argus login' first to authenticate via Cloudflare Access.");
       process.exit(1);
     }

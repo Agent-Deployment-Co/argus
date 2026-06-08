@@ -1,6 +1,6 @@
 {
   "name": "@agentdeploymentco/argus",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Audit your Claude Code and Codex usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
   "type": "module",
   "bin": {
