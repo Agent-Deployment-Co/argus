@@ -22,16 +22,9 @@ export function detectUser(override?: string): string {
   }
 }
 
-/**
- * Resolve the organization: explicit override wins, else the domain of the detected user
- * (e.g. mando@gradient.works -> gradient.works). Returns undefined when it can't be inferred
- * confidently (e.g. a bare --user with no domain) — in that case the payload omits org and the
- * server scopes authoritatively by the token's org. The server always validates any org we send.
- */
-export function detectOrg(override: string | undefined, user: string): string | undefined {
+/** Resolve an explicit org override; otherwise let the server use the authenticated Access org. */
+export function detectOrg(override?: string): string | undefined {
   if (override && override.trim()) return override.trim();
-  const at = user.lastIndexOf("@");
-  if (at >= 0 && at < user.length - 1) return user.slice(at + 1);
   return undefined;
 }
 

@@ -39,6 +39,7 @@ interface Flags {
   // push & login
   endpoint?: string;
   user?: string;
+  org?: string;
 }
 
 function parseArgs(argv: string[]): Flags {
@@ -51,6 +52,7 @@ function parseArgs(argv: string[]): Flags {
     json: false,
     help: false,
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
+    org: process.env.ARGUS_ORG,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -70,6 +72,7 @@ function parseArgs(argv: string[]): Flags {
       case "--json": f.json = true; break;
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
+      case "--org": f.org = next(); break;
       case "--help": case "-h": f.help = true; break;
       default:
         if (a.startsWith("-")) { console.error(`Unknown flag: ${a}`); process.exit(2); }
@@ -113,6 +116,7 @@ Login options:
 Push options (also honors --since/--until/--project/--summarize):
   --endpoint <url>         Worker base URL     (or env ARGUS_ENDPOINT, default: https://argus.agentdeployment.co)
   --user <id>              override the user id (default: git email, else \$USER@host)
+  --org <id>               override authenticated org (or env ARGUS_ORG)
 
   -h, --help               show this help
 
@@ -230,7 +234,7 @@ async function runLogin(flags: Flags, log: Log): Promise<void> {
 async function runPush(flags: Flags, log: Log): Promise<void> {
   const endpoint = flags.endpoint || "https://argus.agentdeployment.co";
   const user = detectUser(flags.user);
-  const org = detectOrg(undefined, user);
+  const org = detectOrg(flags.org);
 
   // Authenticate:
   // 1. CI/Automation: CF_ACCESS_CLIENT_ID + CF_ACCESS_CLIENT_SECRET
