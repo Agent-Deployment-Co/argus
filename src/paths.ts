@@ -9,5 +9,6 @@ export const HISTORY_FILE = join(CLAUDE_DIR, "history.jsonl");
 export const SETTINGS_FILE = join(CLAUDE_DIR, "settings.json");
 export const INSTALLED_PLUGINS_FILE = join(CLAUDE_DIR, "plugins", "installed_plugins.json");
 export const SUMMARY_CACHE_FILE = join(CLAUDE_DIR, "argus-cache.json");
+export const ACCESS_TOKEN_FILE = join(CLAUDE_DIR, "argus-token.json");
 export const PRICING_OVERRIDE_FILE = join(CLAUDE_DIR, "argus-pricing.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
