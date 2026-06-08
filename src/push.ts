@@ -35,27 +35,44 @@ export function detectOrg(override: string | undefined, user: string): string | 
   return undefined;
 }
 
+export interface PushCredentials {
+  jwt?: string;
+  clientId?: string;
+  clientSecret?: string;
+}
+
 export interface PushResult {
   ok: boolean;
   status: number;
   body: string;
+  isAccessChallenge?: boolean;
 }
 
-/** POST a per-user snapshot to the Worker ingest endpoint. */
+/** POST a per-user snapshot to the Worker ingest endpoint using Cloudflare Access. */
 export async function pushSnapshot(
   endpoint: string,
-  token: string,
+  credentials: PushCredentials,
   payload: PushPayload,
 ): Promise<PushResult> {
   const url = endpoint.replace(/\/+$/, "") + "/ingest";
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+
+  if (credentials.clientId && credentials.clientSecret) {
+    headers["cf-access-client-id"] = credentials.clientId;
+    headers["cf-access-client-secret"] = credentials.clientSecret;
+  } else if (credentials.jwt) {
+    headers["cf-access-token"] = credentials.jwt;
+  }
+
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-    },
+    headers,
     body: JSON.stringify(payload),
   });
   const body = await res.text();
-  return { ok: res.ok, status: res.status, body };
+  const contentType = res.headers.get("content-type") || "";
+  const isAccessChallenge = contentType.includes("text/html");
+  return { ok: res.ok && !isAccessChallenge, status: res.status, body, isAccessChallenge };
 }

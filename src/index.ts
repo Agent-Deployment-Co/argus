@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { aggregate } from "./aggregate.ts";
 import { vendoredChartJs } from "./chartjs.ts";
 import { loadPlugins } from "./inventory.ts";
@@ -9,11 +9,13 @@ import { parseAll, type TranscriptSource } from "./parse.ts";
 import { renderHtml } from "./report.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
+import type { PushCredentials } from "./push.ts";
+import { ACCESS_TOKEN_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
 
 interface Flags {
-  command: "report" | "push";
+  command: "report" | "push" | "login";
   source: "all" | TranscriptSource;
   since?: string;
   until?: string;
@@ -24,11 +26,9 @@ interface Flags {
   open: boolean;
   json: boolean;
   help: boolean;
-  // push
+  // push & login
   endpoint?: string;
-  token?: string;
   user?: string;
-  org?: string;
 }
 
 function parseArgs(argv: string[]): Flags {
@@ -40,9 +40,7 @@ function parseArgs(argv: string[]): Flags {
     open: false,
     json: false,
     help: false,
-    endpoint: process.env.ARGUS_ENDPOINT,
-    token: process.env.ARGUS_TOKEN,
-    org: process.env.ARGUS_ORG,
+    endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -50,6 +48,7 @@ function parseArgs(argv: string[]): Flags {
     switch (a) {
       case "report": f.command = "report"; break;
       case "push": f.command = "push"; break;
+      case "login": f.command = "login"; break;
       case "--source": f.source = parseSource(next()); break;
       case "--since": f.since = next(); break;
       case "--until": f.until = next(); break;
@@ -60,9 +59,7 @@ function parseArgs(argv: string[]): Flags {
       case "--open": f.open = true; break;
       case "--json": f.json = true; break;
       case "--endpoint": f.endpoint = next(); break;
-      case "--token": f.token = next(); break;
       case "--user": f.user = next(); break;
-      case "--org": f.org = next(); break;
       case "--help": case "-h": f.help = true; break;
       default:
         if (a.startsWith("-")) { console.error(`Unknown flag: ${a}`); process.exit(2); }
@@ -85,6 +82,7 @@ const HELP = `argus — audit your Claude Code and Codex usage
 
 Usage:
   argus [report] [options]    build the local HTML dashboard (default)
+  argus login [options]       login via Cloudflare Access SSO to get a token
   argus push [options]        push your usage snapshot to a team Worker
 
 Report options:
@@ -99,11 +97,12 @@ Report options:
   --open                   open the report in the default browser when done (macOS)
   --json                   write raw aggregate JSON to --out instead of HTML
 
+Login options:
+  --endpoint <url>         SSO service URL     (default: https://argus.agentdeployment.co)
+
 Push options (also honors --since/--until/--project/--summarize):
-  --endpoint <url>         Worker base URL     (or env ARGUS_ENDPOINT)
-  --token <token>          your org's bearer token (or env ARGUS_TOKEN)
+  --endpoint <url>         Worker base URL     (or env ARGUS_ENDPOINT, default: https://argus.agentdeployment.co)
   --user <id>              override the user id (default: git email, else \$USER@host)
-  --org <id>               override the org    (default: email domain; or env ARGUS_ORG)
 
   -h, --help               show this help
 
@@ -204,29 +203,89 @@ async function runReport(flags: Flags, log: Log): Promise<void> {
   if (flags.open && !flags.json) spawnSync("open", [outPath]);
 }
 
+async function runLogin(flags: Flags, log: Log): Promise<void> {
+  const endpoint = flags.endpoint || "https://argus.agentdeployment.co";
+  log(`Logging in to Cloudflare Access for ${endpoint}…`);
+
+  const check = spawnSync("which", ["cloudflared"], { encoding: "utf8" });
+  if (check.status !== 0) {
+    log("! 'cloudflared' CLI is required for login. Please install it:");
+    log("  brew install cloudflare/cloudflare/cloudflared");
+    process.exit(1);
+  }
+
+  log("Running 'cloudflared' login flow…");
+  const run = spawnSync("cloudflared", ["access", "token", `--app=${endpoint}`], { encoding: "utf8" });
+  if (run.status !== 0) {
+    log(`✗ Login failed: ${run.stderr || run.stdout || "Unknown error"}`);
+    process.exit(1);
+  }
+
+  const token = run.stdout.trim();
+  if (!token) {
+    log("✗ Login failed: cloudflared returned an empty token.");
+    process.exit(1);
+  }
+
+  try {
+    mkdirSync(dirname(ACCESS_TOKEN_FILE), { recursive: true });
+    writeFileSync(ACCESS_TOKEN_FILE, JSON.stringify({ token }, null, 2), { mode: 0o600 });
+    log("✓ Successfully authenticated and cached the Access token!");
+  } catch (err) {
+    log(`✗ Failed to write token cache to ${ACCESS_TOKEN_FILE}: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
+
 async function runPush(flags: Flags, log: Log): Promise<void> {
-  if (!flags.endpoint) {
-    log("! No endpoint. Pass --endpoint <url> or set ARGUS_ENDPOINT.");
-    process.exit(2);
-  }
-  if (!flags.token) {
-    log("! No token. Pass --token <token> or set ARGUS_TOKEN.");
-    process.exit(2);
-  }
+  const endpoint = flags.endpoint || "https://argus.agentdeployment.co";
   const user = detectUser(flags.user);
-  const org = detectOrg(flags.org, user);
+  const org = detectOrg(undefined, user);
+
+  // Authenticate:
+  // 1. CI/Automation: CF_ACCESS_CLIENT_ID + CF_ACCESS_CLIENT_SECRET
+  // 2. Human/Interactive: Cached ACCESS_TOKEN_FILE JWT
+  const clientId = process.env.CF_ACCESS_CLIENT_ID;
+  const clientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
+  const credentials: PushCredentials = {};
+
+  if (clientId && clientSecret) {
+    credentials.clientId = clientId;
+    credentials.clientSecret = clientSecret;
+  } else {
+    try {
+      if (existsSync(ACCESS_TOKEN_FILE)) {
+        const cached = JSON.parse(readFileSync(ACCESS_TOKEN_FILE, "utf8"));
+        credentials.jwt = cached.token;
+      }
+    } catch {
+      // ignore parsing/reading errors
+    }
+
+    if (!credentials.jwt) {
+      log("! Unauthenticated. Please run 'argus login' first to authenticate via Cloudflare Access.");
+      process.exit(1);
+    }
+  }
+
   const dash = buildDashboard(flags, log);
-  log(`Pushing snapshot for "${user}" (org: ${org ?? "from token"}) → ${flags.endpoint}`);
+  log(`Pushing snapshot for "${user}" (org: ${org ?? "from token"}) → ${endpoint}`);
   log(`  ${summary(dash)}`);
-  const res = await pushSnapshot(flags.endpoint, flags.token, {
+
+  const res = await pushSnapshot(endpoint, credentials, {
     schemaVersion: SCHEMA_VERSION,
     org,
     user,
     generatedAtMs: dash.generatedAtMs,
     dashboard: dash,
   });
+
   if (res.ok) {
     log(`✓ Pushed (${res.status}). ${res.body.slice(0, 200)}`);
+  } else if (res.isAccessChallenge) {
+    log(`✗ Push failed (${res.status}): Cloudflare Access login required or token has expired.`);
+    log(`  Please run 'argus login' to authenticate.`);
+    process.exit(1);
   } else {
     log(`✗ Push failed (${res.status}): ${res.body.slice(0, 400)}`);
     process.exit(1);
@@ -238,6 +297,7 @@ async function main() {
   if (flags.help) { process.stdout.write(HELP); return; }
   const log: Log = (s) => process.stderr.write(s + "\n");
   if (flags.command === "push") await runPush(flags, log);
+  else if (flags.command === "login") await runLogin(flags, log);
   else await runReport(flags, log);
 }
 
