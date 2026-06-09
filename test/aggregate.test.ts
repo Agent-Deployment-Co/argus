@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { aggregate } from "../src/aggregate.ts";
 import { parseAll } from "../src/parse.ts";
-import type { PluginInfo } from "../src/types.ts";
+import { emptyUsage, type MessageRecord, type ParseResult, type PluginInfo } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
 const parsed = parseAll({ projectsDir: join(FIX, "projects"), historyFile: join(FIX, "history.jsonl") });
@@ -66,5 +66,29 @@ describe("aggregate", () => {
 
   test("groups by project", () => {
     expect(dash.byProject.map((p) => p.name)).toContain("fixture/proj");
+  });
+
+  test("prices tiered models per message rather than on combined usage", () => {
+    const message = (sessionId: string): MessageRecord => ({
+      source: "gemini",
+      sessionId,
+      project: "fixture/gemini",
+      cwd: "/Users/fixture/gemini",
+      gitBranch: "",
+      ts: 1,
+      date: "2026-06-01",
+      model: "gemini-2.5-pro",
+      usage: { ...emptyUsage(), input: 150_000 },
+      attributionSkill: null,
+      toolUses: [],
+    });
+    const tiered: ParseResult = {
+      messages: [message("g1"), message("g2")],
+      sessions: new Map(),
+      toolResults: new Map(),
+    };
+    const result = aggregate(tiered, new Map(), new Map());
+    expect(result.byModel[0]?.cost).toBeCloseTo(0.375, 6);
+    expect(result.totals.cost).toBeCloseTo(0.375, 6);
   });
 });

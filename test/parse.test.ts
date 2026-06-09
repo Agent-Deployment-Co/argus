@@ -122,6 +122,55 @@ describe("parseAll with Codex transcripts", () => {
   });
 });
 
+describe("parseAll with Gemini transcripts", () => {
+  const parsed = parseAll({ geminiDir: join(FIX, "gemini"), sources: ["gemini"] });
+
+  test("replays current JSONL and legacy JSON sessions", () => {
+    expect(parsed.messages.length).toBe(4);
+    expect(parsed.sessions.size).toBe(3);
+    expect(parsed.messages.every((m) => m.source === "gemini")).toBe(true);
+    expect(parsed.messages.map((m) => m.sessionId)).toContain("gemini:gemini-subagent");
+    expect(parsed.messages.map((m) => m.sessionId)).toContain("gemini:gemini-legacy");
+  });
+
+  test("keeps the final message update and applies rewinds", () => {
+    const main = parsed.messages.filter((m) => m.sessionId === "gemini:gemini-main");
+    expect(main.length).toBe(2);
+    expect(main.some((m) => m.usage.input === 999)).toBe(false);
+    expect(main.some((m) => m.usage.input === 5000)).toBe(false);
+    expect(main[0]?.toolUses.map((t) => t.name)).toContain("read_file");
+  });
+
+  test("splits cached input and includes thought/tool tokens in output", () => {
+    const first = parsed.messages.find((m) => m.model === "gemini-2.5-flash")!;
+    expect(first.usage.input).toBe(75);
+    expect(first.usage.cacheRead).toBe(25);
+    expect(first.usage.output).toBe(15);
+    expect(first.usage.cacheWrite5m).toBe(0);
+    expect(first.usage.cacheWrite1h).toBe(0);
+  });
+
+  test("extracts Gemini tools, paths, result weight, and categories", () => {
+    const first = parsed.messages.find((m) => m.model === "gemini-2.5-flash")!;
+    const read = first.toolUses.find((t) => t.name === "read_file")!;
+    expect(read.filePath).toBe("/Users/fixture/gemini-proj/a.ts");
+    expect(read.category).toBe("file-io");
+    expect(parsed.toolResults.get("read_file")?.count).toBe(1);
+    expect(parsed.toolResults.get("read_file")?.approxTokens).toBeGreaterThan(0);
+  });
+
+  test("resolves project roots and first prompts", () => {
+    const main = parsed.sessions.get("gemini:gemini-main")!;
+    expect(main.cwd).toBe("/Users/fixture/gemini-proj");
+    expect(main.project).toBe("fixture/gemini-proj");
+    expect(main.firstPrompt).toBe("gemini hello");
+
+    const legacy = parsed.sessions.get("gemini:gemini-legacy")!;
+    expect(legacy.cwd).toBe("/Users/fixture/gemini-legacy");
+    expect(legacy.project).toBe("fixture/gemini-legacy");
+  });
+});
+
 describe("projectLabel", () => {
   test("uses the last two path segments", () => {
     expect(projectLabel("/Users/mando/code/gw/webapp")).toBe("gw/webapp");

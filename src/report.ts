@@ -44,7 +44,7 @@ export function renderHtml(d: Dashboard, opts: RenderOptions = {}): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Argus — Claude Code and Codex usage</title>
+<title>Argus — Claude Code, Codex, and Gemini CLI usage</title>
 ${chartTag}
 <style>
   :root {
@@ -93,7 +93,7 @@ ${chartTag}
 <body>
 <header>
   <h1>Argus</h1>
-  <span class="sub">Claude Code and Codex usage${scope} · ${esc(d.range.start)} → ${esc(d.range.end)} · generated ${esc(generated)}</span>
+  <span class="sub">Claude Code, Codex, and Gemini CLI usage${scope} · ${esc(d.range.start)} → ${esc(d.range.end)} · generated ${esc(generated)}</span>
   ${userSelector}
 </header>
 <main>

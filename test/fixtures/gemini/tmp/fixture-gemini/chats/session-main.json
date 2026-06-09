@@ -1,0 +1,15 @@
+{
+  "sessionId": "gemini-main",
+  "projectHash": "fixture-hash",
+  "startTime": "2026-06-01T10:00:00.000Z",
+  "lastUpdated": "2026-06-01T10:09:00.000Z",
+  "messages": [
+    {
+      "id": "stale-copy",
+      "timestamp": "2026-06-01T10:00:01.000Z",
+      "type": "gemini",
+      "model": "gemini-2.5-flash",
+      "tokens": { "input": 5000, "output": 5000, "cached": 0, "thoughts": 0, "tool": 0, "total": 10000 }
+    }
+  ]
+}

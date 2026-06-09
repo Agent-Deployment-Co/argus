@@ -13,7 +13,7 @@ export interface Price {
 
 // Static defaults (USD / Mtok). Anthropic cache-write multipliers follow its published
 // model: 5m write = 1.25x input, 1h write = 2x input, cache read = 0.1x input.
-// OpenAI/Codex cached input is represented in the shared cacheRead bucket.
+// OpenAI/Codex and Gemini cached input is represented in the shared cacheRead bucket.
 // Override any of these via ~/.claude/argus-pricing.json.
 const DEFAULTS: Record<string, Price> = {
   opus: { input: 15, output: 75, cacheRead: 1.5, cacheWrite5m: 18.75, cacheWrite1h: 30 },
@@ -25,6 +25,11 @@ const DEFAULTS: Record<string, Price> = {
   "gpt-5.3": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
   "codex-mini": { input: 1.5, output: 6, cacheRead: 0.375, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-2.5-pro": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-2.5-pro-long": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-2.5-flash-lite": { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite5m: 0, cacheWrite1h: 0 },
 };
 
 let table: Record<string, Price> = DEFAULTS;
@@ -41,7 +46,7 @@ if (existsSync(PRICING_OVERRIDE_FILE)) {
 const unpriced = new Set<string>();
 
 /** Resolve a model id to its price family, or null if unknown / synthetic. */
-function priceFor(model: string): Price | null {
+function priceFor(model: string, usage?: Usage): Price | null {
   const m = model.toLowerCase();
   if (m.includes("opus")) return table.opus!;
   if (m.includes("sonnet")) return table.sonnet!;
@@ -52,13 +57,20 @@ function priceFor(model: string): Price | null {
   if (m.includes("gpt-5.4")) return table["gpt-5.4"]!;
   if (m.includes("gpt-5.3") || m.includes("gpt-5.2")) return table["gpt-5.3"]!;
   if (m.includes("gpt-5-codex") || /^gpt-5(?:-|$)/.test(m)) return table["gpt-5"]!;
+  if (m.includes("gemini-2.5-flash-lite")) return table["gemini-2.5-flash-lite"]!;
+  if (m.includes("gemini-2.5-flash")) return table["gemini-2.5-flash"]!;
+  if (m.includes("gemini-2.5-pro")) {
+    const promptTokens = (usage?.input || 0) + (usage?.cacheRead || 0);
+    return promptTokens > 200_000 ? table["gemini-2.5-pro-long"]! : table["gemini-2.5-pro"]!;
+  }
+  if (m.includes("gemini-3") && m.includes("flash")) return table["gemini-3-flash"]!;
   if (!unpriced.has(model)) unpriced.add(model);
   return null;
 }
 
 /** Estimated USD cost of a usage record under the given model. Unknown models cost 0. */
 export function cost(usage: Usage, model: string): number {
-  const p = priceFor(model);
+  const p = priceFor(model, usage);
   if (!p) return 0;
   return (
     (usage.input * p.input +

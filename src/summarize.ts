@@ -58,15 +58,8 @@ function condenseTranscript(filePath: string, limitChars = 8000): string {
     return "";
   }
   const lines: string[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let o: any;
-    try {
-      o = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const content = o.message?.content;
+  const append = (o: any): void => {
+    const content = o.message?.content ?? o.content;
     if (o.type === "user") {
       const text = typeof content === "string" ? content : extractText(content);
       if (text && !text.startsWith("<")) lines.push(`USER: ${truncate(text, 400)}`);
@@ -75,6 +68,36 @@ function condenseTranscript(filePath: string, limitChars = 8000): string {
       const tools = content.filter((p: any) => p?.type === "tool_use").map((p: any) => p.name);
       if (text) lines.push(`ASSISTANT: ${truncate(text, 400)}`);
       if (tools.length) lines.push(`TOOLS: ${tools.join(", ")}`);
+    } else if (o.type === "gemini") {
+      const text = typeof content === "string" ? content : extractText(content);
+      const tools = Array.isArray(o.toolCalls)
+        ? o.toolCalls.filter((call: any) => typeof call?.name === "string").map((call: any) => call.name)
+        : [];
+      if (text) lines.push(`ASSISTANT: ${truncate(text, 400)}`);
+      if (tools.length) lines.push(`TOOLS: ${tools.join(", ")}`);
+    }
+  };
+
+  try {
+    const legacy = JSON.parse(raw);
+    if (Array.isArray(legacy?.messages)) {
+      for (const message of legacy.messages) append(message);
+    } else {
+      append(legacy);
+    }
+  } catch {
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line);
+        if (Array.isArray(record?.$set?.messages)) {
+          for (const message of record.$set.messages) append(message);
+        } else {
+          append(record);
+        }
+      } catch {
+        // skip malformed line
+      }
     }
   }
   // Favor the start (intent) and end (outcome).
@@ -116,7 +139,7 @@ export function llmSummaries(
     const body = condenseTranscript(meta.filePath);
     if (!body) continue;
     const prompt =
-      "Summarize what this Claude Code session accomplished in 2-3 plain sentences. " +
+      "Summarize what this coding-agent session accomplished in 2-3 plain sentences. " +
       "Focus on the goal and the outcome, not the mechanics. No preamble.\n\n--- TRANSCRIPT ---\n" +
       body;
     const args = ["-p", prompt];

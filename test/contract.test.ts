@@ -15,12 +15,13 @@ describe("CLI output ↔ wire contract", () => {
       projectsDir: join(FIX, "projects"),
       historyFile: join(FIX, "history.jsonl"),
       codexSessionsDir: join(FIX, "codex-sessions"),
-      sources: ["claude", "codex"],
+      geminiDir: join(FIX, "gemini"),
+      sources: ["claude", "codex", "gemini"],
     });
     const dash = aggregate(parsed, new Map<string, PluginInfo>(), new Map());
     dash.generatedAtMs = 1_780_000_000_000;
-    expect(dash.bySource.map((s) => s.name).sort()).toEqual(["claude", "codex"]);
-    expect(dash.sessions.every((s) => s.source === "claude" || s.source === "codex")).toBe(true);
+    expect(dash.bySource.map((s) => s.name).sort()).toEqual(["claude", "codex", "gemini"]);
+    expect(dash.sessions.every((s) => ["claude", "codex", "gemini"].includes(s.source))).toBe(true);
 
     const payload = { schemaVersion: SCHEMA_VERSION, org: "fixture.test", user: "tester@fixture.test", generatedAtMs: dash.generatedAtMs, dashboard: dash };
     const result = PushPayloadSchema.safeParse(payload);

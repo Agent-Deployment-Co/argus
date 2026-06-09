@@ -1,0 +1,31 @@
+{
+  "sessionId": "gemini-legacy",
+  "projectHash": "legacy-hash",
+  "startTime": "2026-05-31T09:00:00.000Z",
+  "lastUpdated": "2026-05-31T09:01:00.000Z",
+  "directories": ["/Users/fixture/gemini-legacy"],
+  "messages": [
+    {
+      "id": "lu1",
+      "timestamp": "2026-05-31T09:00:00.000Z",
+      "type": "user",
+      "content": "search the docs"
+    },
+    {
+      "id": "lg1",
+      "timestamp": "2026-05-31T09:00:01.000Z",
+      "type": "gemini",
+      "content": "Found it.",
+      "model": "gemini-2.5-flash-lite",
+      "tokens": { "input": 20, "output": 3, "cached": 5, "thoughts": 1, "tool": 1, "total": 25 },
+      "toolCalls": [
+        {
+          "id": "legacy-call",
+          "name": "google_web_search",
+          "args": { "query": "Gemini CLI docs" },
+          "result": "Documentation result"
+        }
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 export const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 export const CODEX_DIR = process.env.CODEX_HOME || process.env.CODEX_CONFIG_DIR || join(homedir(), ".codex");
+export const GEMINI_DIR = join(process.env.GEMINI_CLI_HOME || homedir(), ".gemini");
 
 export const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 export const HISTORY_FILE = join(CLAUDE_DIR, "history.jsonl");

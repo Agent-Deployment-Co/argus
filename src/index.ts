@@ -82,16 +82,16 @@ function parseArgs(argv: string[]): Flags {
 }
 
 function parseSource(value: string | undefined): "all" | TranscriptSource {
-  if (value === "all" || value === "claude" || value === "codex") return value;
-  console.error(`Invalid --source: ${value ?? ""} (expected claude, codex, or all)`);
+  if (value === "all" || value === "claude" || value === "codex" || value === "gemini") return value;
+  console.error(`Invalid --source: ${value ?? ""} (expected claude, codex, gemini, or all)`);
   process.exit(2);
 }
 
 function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
-  return source === "all" ? ["claude", "codex"] : [source];
+  return source === "all" ? ["claude", "codex", "gemini"] : [source];
 }
 
-const HELP = `argus — audit your Claude Code and Codex usage
+const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 
 Usage:
   argus [report] [options]    build the local HTML dashboard (default)
@@ -99,7 +99,7 @@ Usage:
   argus push [options]        push your usage snapshot to a team Worker
 
 Report options:
-  --source <claude|codex|all>
+  --source <claude|codex|gemini|all>
                             transcript source to parse (default: all)
   --since <YYYY-MM-DD>     only include messages on/after this date
   --until <YYYY-MM-DD>     only include messages on/before this date
@@ -120,8 +120,9 @@ Push options (also honors --since/--until/--project/--summarize):
 
   -h, --help               show this help
 
-Reads transcripts from ~/.claude/projects (override dir via CLAUDE_CONFIG_DIR) and
-~/.codex/sessions (override dir via CODEX_HOME or CODEX_CONFIG_DIR).
+Reads transcripts from ~/.claude/projects (override dir via CLAUDE_CONFIG_DIR),
+~/.codex/sessions (override dir via CODEX_HOME or CODEX_CONFIG_DIR), and
+~/.gemini/tmp (override home via GEMINI_CLI_HOME).
 `;
 
 function withinRange(date: string, since?: string, until?: string): boolean {

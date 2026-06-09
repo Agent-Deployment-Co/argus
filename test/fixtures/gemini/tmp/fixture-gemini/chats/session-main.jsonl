@@ -1,0 +1,10 @@
+{"sessionId":"gemini-main","projectHash":"fixture-hash","startTime":"2026-06-01T10:00:00.000Z","lastUpdated":"2026-06-01T10:10:00.000Z","kind":"main"}
+{"id":"u1","timestamp":"2026-06-01T10:00:00.000Z","type":"user","content":"gemini hello"}
+{"id":"g1","timestamp":"2026-06-01T10:00:01.000Z","type":"gemini","content":"Reading the file.","model":"gemini-2.5-flash","tokens":{"input":100,"output":10,"cached":25,"thoughts":3,"tool":2,"total":115}}
+{"id":"g1","timestamp":"2026-06-01T10:00:01.000Z","type":"gemini","content":"Reading the file.","model":"gemini-2.5-flash","tokens":{"input":100,"output":10,"cached":25,"thoughts":3,"tool":2,"total":115},"toolCalls":[{"id":"call-1","name":"read_file","args":{"file_path":"/Users/fixture/gemini-proj/a.ts"},"result":{"llmContent":"export const answer = 42;"}}]}
+{"id":"u2","timestamp":"2026-06-01T10:01:00.000Z","type":"user","content":"discard this branch"}
+{"id":"g2","timestamp":"2026-06-01T10:01:01.000Z","type":"gemini","content":"This is rewound.","model":"gemini-2.5-flash","tokens":{"input":999,"output":999,"cached":0,"thoughts":0,"tool":0,"total":1998}}
+{"$rewindTo":"u2"}
+{"$set":{"lastUpdated":"2026-06-01T10:10:00.000Z"}}
+{"id":"u3","timestamp":"2026-06-01T10:02:00.000Z","type":"user","content":[{"text":"run the checks"}]}
+{"id":"g3","timestamp":"2026-06-01T10:02:01.000Z","type":"gemini","content":"Checks pass.","model":"gemini-2.5-pro","tokens":{"input":80,"output":4,"cached":20,"thoughts":1,"tool":1,"total":86},"toolCalls":[{"id":"call-2","name":"run_shell_command","args":{"command":"bun test"},"result":"4 pass"}]}
