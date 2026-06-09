@@ -15,6 +15,7 @@ import {
 } from "./auth.ts";
 import { printBanner } from "./banner.ts";
 import { vendoredChartJs } from "./chartjs.ts";
+import { consoleOverview, isBareInvocation } from "./console-report.ts";
 import { loadPlugins } from "./inventory.ts";
 import { parseAll, type TranscriptSource } from "./parse.ts";
 import { renderHtml } from "./report.ts";
@@ -95,7 +96,8 @@ function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
 const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 
 Usage:
-  argus [report] [options]    build the local HTML dashboard (default)
+  argus                       show a terminal overview
+  argus report [options]      build the local HTML dashboard
   argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
 
@@ -206,8 +208,12 @@ function summary(dash: Dashboard): string {
   );
 }
 
-async function runReport(flags: Flags, log: Log): Promise<void> {
+async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<void> {
   const dash = buildDashboard(flags, log);
+  if (consoleOnly) {
+    process.stdout.write(consoleOverview(dash));
+    return;
+  }
   const outPath = resolve(flags.out);
   if (flags.json) {
     writeFileSync(outPath, JSON.stringify(dash, null, 2));
@@ -299,12 +305,13 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
 
 async function main() {
   printBanner();
-  const flags = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const flags = parseArgs(argv);
   if (flags.help) { process.stdout.write(HELP); return; }
   const log: Log = (s) => process.stderr.write(s + "\n");
   if (flags.command === "push") await runPush(flags, log);
   else if (flags.command === "login") await runLogin(flags, log);
-  else await runReport(flags, log);
+  else await runReport(flags, log, isBareInvocation(argv));
 }
 
 main().catch((err) => {

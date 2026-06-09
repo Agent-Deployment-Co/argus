@@ -26,6 +26,10 @@ Requires [Bun](https://bun.sh) (≥1.2).
 bun run src/index.ts --open
 ```
 
+Running `argus` with no arguments prints a compact terminal overview (totals, recent
+daily tokens, top skills, MCP servers, and projects). Run `argus report --open` for
+the full HTML dashboard.
+
 ### Options
 
 | Flag | Description |
@@ -44,7 +48,7 @@ bun run src/index.ts --open
 ### Examples
 
 ```bash
-# Generate the report without opening it (writes ./argus-report.html)
+# Print the terminal overview
 bun run src/index.ts
 
 # Custom output path, then open it
