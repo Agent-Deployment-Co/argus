@@ -13,6 +13,7 @@ import {
   refreshManagedOAuthToken,
   saveAccessTokenCache,
 } from "./auth.ts";
+import { printBanner } from "./banner.ts";
 import { vendoredChartJs } from "./chartjs.ts";
 import { loadPlugins } from "./inventory.ts";
 import { parseAll, type TranscriptSource } from "./parse.ts";
@@ -297,6 +298,7 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
 }
 
 async function main() {
+  printBanner();
   const flags = parseArgs(process.argv.slice(2));
   if (flags.help) { process.stdout.write(HELP); return; }
   const log: Log = (s) => process.stderr.write(s + "\n");
