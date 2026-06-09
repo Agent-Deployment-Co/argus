@@ -1,7 +1,7 @@
 {
   "name": "@agentdeploymentco/argus",
-  "version": "0.1.4",
-  "description": "Audit your Claude Code and Codex usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
+  "version": "0.1.5",
+  "description": "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
   "type": "module",
   "bin": {
     "argus": "./dist/index.js"
@@ -19,7 +19,7 @@
     "bun": ">=1.2"
   },
   "dependencies": {
-    "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.2.0"
+    "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

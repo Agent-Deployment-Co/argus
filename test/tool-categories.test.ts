@@ -13,6 +13,12 @@ describe("categorizeTool", () => {
     expect(categorizeTool("TodoWrite")).toBe("todo");
     expect(categorizeTool("Skill")).toBe("skill");
     expect(categorizeTool("ToolSearch")).toBe("skill");
+    expect(categorizeTool("read_file")).toBe("file-io");
+    expect(categorizeTool("run_shell_command")).toBe("shell");
+    expect(categorizeTool("invoke_agent")).toBe("agent");
+    expect(categorizeTool("google_web_search")).toBe("web");
+    expect(categorizeTool("update_topic")).toBe("planning");
+    expect(categorizeTool("activate_skill")).toBe("skill");
   });
 
   test("any mcp__ tool is the mcp category", () => {

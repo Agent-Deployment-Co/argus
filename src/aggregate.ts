@@ -116,7 +116,7 @@ export function aggregate(
       t.sessions.add(m.sessionId);
       toolMap.set(tu.name, t);
 
-      if (tu.name === "Skill" && tu.skill) {
+      if ((tu.name === "Skill" || tu.name === "activate_skill") && tu.skill) {
         const inv = invMap.get(tu.skill) || { count: 0, sampleArgs: "" };
         inv.count++;
         if (!inv.sampleArgs && tu.args) inv.sampleArgs = tu.args;
@@ -139,16 +139,18 @@ export function aggregate(
   const skillCost = new Map<string, number>();
   const projectCost = new Map<string, number>();
   const sourceCost = new Map<string, number>();
+  const modelCost = new Map<string, number>();
   for (const m of messages) {
     const c = usageCost(m.usage, m.model);
     const sk = m.attributionSkill ?? "(none)";
     skillCost.set(sk, (skillCost.get(sk) || 0) + c);
     projectCost.set(m.project, (projectCost.get(m.project) || 0) + c);
     sourceCost.set(m.source, (sourceCost.get(m.source) || 0) + c);
+    modelCost.set(m.model, (modelCost.get(m.model) || 0) + c);
   }
 
   const byModel: NamedUsage[] = [...modelMap.entries()]
-    .map(([name, v]) => ({ name, messages: v.messages, total: totalTokens(v.u), cost: usageCost(v.u, name) }))
+    .map(([name, v]) => ({ name, messages: v.messages, total: totalTokens(v.u), cost: modelCost.get(name) || 0 }))
     .sort((a, b) => b.total - a.total);
 
   const bySource: NamedUsage[] = [...sourceMap.entries()]

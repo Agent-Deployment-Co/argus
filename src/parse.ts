@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
-import { CODEX_SESSIONS_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
+import { basename, isAbsolute, join } from "node:path";
+import { CODEX_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
   emptyUsage,
@@ -33,6 +34,7 @@ export interface ParseOptions {
   projectsDir?: string;
   historyFile?: string;
   codexSessionsDir?: string;
+  geminiDir?: string;
   sources?: TranscriptSource[];
 }
 
@@ -103,6 +105,22 @@ function normalizeCodexUsage(raw: any): Usage {
   // Older imported Codex entries can carry only total_tokens. Keep them visible rather
   // than dropping the turn entirely, but leave them unpriced if the model is unknown.
   if (totalTokens(u) === 0 && raw.total_tokens) u.input = raw.total_tokens;
+  return u;
+}
+
+function normalizeGeminiUsage(raw: any): Usage {
+  const u = emptyUsage();
+  if (!raw) return u;
+  const input = Number(raw.input ?? raw.promptTokenCount) || 0;
+  const cached = Number(raw.cached ?? raw.cachedContentTokenCount) || 0;
+  u.input = Math.max(input - cached, 0);
+  u.cacheRead = cached;
+  u.output =
+    (Number(raw.output ?? raw.candidatesTokenCount) || 0) +
+    (Number(raw.thoughts ?? raw.thoughtsTokenCount) || 0) +
+    (Number(raw.tool ?? raw.toolUsePromptTokenCount) || 0);
+
+  if (totalTokens(u) === 0 && raw.total) u.input = Number(raw.total) || 0;
   return u;
 }
 
@@ -185,6 +203,234 @@ function toolUseFromCodexCall(name: string, rawArgs: unknown): ToolUse {
   return tu;
 }
 
+function textFromGeminiContent(content: unknown): string {
+  if (typeof content === "string") return content.slice(0, 500);
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const text = (part as any).text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 500);
+}
+
+function toolUseFromGeminiCall(call: any): ToolUse | null {
+  if (!call || typeof call.name !== "string" || !call.name) return null;
+  const tu = newToolUse(call.name);
+  const args = call.args && typeof call.args === "object" ? call.args : {};
+  const filePath = args.file_path ?? args.filePath ?? args.path;
+  if (typeof filePath === "string" && filePath) tu.filePath = filePath;
+  if (call.name === "activate_skill") {
+    const skill = args.skill ?? args.name;
+    if (typeof skill === "string" && skill) {
+      tu.skill = skill;
+      tu.args = JSON.stringify(args).slice(0, 280);
+    }
+  }
+  return tu;
+}
+
+interface GeminiConversation {
+  sessionId: string;
+  projectHash: string;
+  startTime?: string;
+  lastUpdated?: string;
+  directories?: string[];
+  messages: any[];
+}
+
+interface GeminiChatFile {
+  filePath: string;
+  projectDir: string;
+}
+
+function walkGeminiChatFiles(geminiDir: string): GeminiChatFile[] {
+  const tmpDir = join(geminiDir, "tmp");
+  let projects: string[];
+  try {
+    projects = readdirSync(tmpDir);
+  } catch {
+    return [];
+  }
+
+  const out: GeminiChatFile[] = [];
+  const walk = (dir: string, projectDir: string): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      const filePath = join(dir, name);
+      let st;
+      try {
+        st = statSync(filePath);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) walk(filePath, projectDir);
+      else if (name.endsWith(".json") || name.endsWith(".jsonl")) out.push({ filePath, projectDir });
+    }
+  };
+
+  for (const project of projects) {
+    const projectDir = join(tmpDir, project);
+    let st;
+    try {
+      st = statSync(projectDir);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) walk(join(projectDir, "chats"), projectDir);
+  }
+  return out;
+}
+
+function legacyGeminiConversation(raw: string): GeminiConversation | null {
+  try {
+    const value = JSON.parse(raw);
+    if (
+      !value ||
+      typeof value !== "object" ||
+      typeof value.sessionId !== "string" ||
+      typeof value.projectHash !== "string" ||
+      !Array.isArray(value.messages)
+    ) {
+      return null;
+    }
+    return value as GeminiConversation;
+  } catch {
+    return null;
+  }
+}
+
+/** Replay Gemini CLI's append-only JSONL records into the current conversation state. */
+function loadGeminiConversation(filePath: string): GeminiConversation | null {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+
+  if (filePath.endsWith(".json")) return legacyGeminiConversation(raw);
+
+  let metadata: Record<string, any> = {};
+  const messages = new Map<string, any>();
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let record: any;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (typeof record?.$rewindTo === "string") {
+      let found = false;
+      const remove: string[] = [];
+      for (const id of messages.keys()) {
+        if (id === record.$rewindTo) found = true;
+        if (found) remove.push(id);
+      }
+      if (found) {
+        for (const id of remove) messages.delete(id);
+      } else {
+        messages.clear();
+      }
+      continue;
+    }
+
+    if (typeof record?.id === "string") {
+      // Gemini writes the same message again as tool calls complete. Map#set keeps its
+      // original order while replacing the stale copy with the final version.
+      messages.set(record.id, record);
+      continue;
+    }
+
+    if (record?.$set && typeof record.$set === "object") {
+      if (Array.isArray(record.$set.messages)) {
+        messages.clear();
+        for (const message of record.$set.messages) {
+          if (typeof message?.id === "string") messages.set(message.id, message);
+        }
+      }
+      metadata = { ...metadata, ...record.$set };
+      continue;
+    }
+
+    if (typeof record?.sessionId === "string" && typeof record?.projectHash === "string") {
+      metadata = { ...metadata, ...record };
+      if (Array.isArray(record.messages)) {
+        for (const message of record.messages) {
+          if (typeof message?.id === "string") messages.set(message.id, message);
+        }
+      }
+    }
+  }
+
+  if (typeof metadata.sessionId !== "string" || typeof metadata.projectHash !== "string") {
+    return legacyGeminiConversation(raw);
+  }
+  return {
+    sessionId: metadata.sessionId,
+    projectHash: metadata.projectHash,
+    startTime: metadata.startTime,
+    lastUpdated: metadata.lastUpdated,
+    directories: Array.isArray(metadata.directories) ? metadata.directories : undefined,
+    messages: [...messages.values()],
+  };
+}
+
+interface GeminiProjectLookup {
+  bySlug: Map<string, string>;
+  byHash: Map<string, string>;
+}
+
+function loadGeminiProjectLookup(geminiDir: string): GeminiProjectLookup {
+  const lookup: GeminiProjectLookup = { bySlug: new Map(), byHash: new Map() };
+  try {
+    const registry = JSON.parse(readFileSync(join(geminiDir, "projects.json"), "utf8"));
+    if (!registry?.projects || typeof registry.projects !== "object") return lookup;
+    for (const [projectRoot, slug] of Object.entries(registry.projects)) {
+      if (typeof slug !== "string") continue;
+      lookup.bySlug.set(slug, projectRoot);
+      lookup.byHash.set(createHash("sha256").update(projectRoot).digest("hex"), projectRoot);
+    }
+  } catch {
+    // Older Gemini CLI installs only have hash-named project directories.
+  }
+  return lookup;
+}
+
+function geminiProjectRoot(
+  projectDir: string,
+  conversation: GeminiConversation,
+  lookup: GeminiProjectLookup,
+): string {
+  try {
+    const marker = readFileSync(join(projectDir, ".project_root"), "utf8").trim();
+    if (marker) return marker;
+  } catch {
+    // Fall through to the registry and legacy hash lookup.
+  }
+  const dirName = basename(projectDir);
+  const registered = lookup.bySlug.get(dirName) ?? lookup.byHash.get(conversation.projectHash);
+  if (registered) return registered;
+  const directory = conversation.directories?.find((value) => typeof value === "string" && isAbsolute(value));
+  return directory || "";
+}
+
+function timestampMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return NaN;
+  return Date.parse(value);
+}
+
 function normalizeSources(sources: TranscriptSource[] | undefined): TranscriptSource[] {
   if (!sources?.length) return ["claude"];
   return [...new Set(sources)];
@@ -218,6 +464,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
   const sources = normalizeSources(opts.sources);
   const projectsDir = opts.projectsDir ?? PROJECTS_DIR;
   const codexSessionsDir = opts.codexSessionsDir ?? CODEX_SESSIONS_DIR;
+  const geminiDir = opts.geminiDir ?? GEMINI_DIR;
   const messages: MessageRecord[] = [];
   const sessions = new Map<string, SessionMeta>();
   const toolResults = new Map<string, ToolResultStat>();
@@ -464,6 +711,88 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             }
             pendingToolUses = [];
           }
+        }
+      }
+    }
+  }
+
+  if (sources.includes("gemini")) {
+    const geminiTmpDir = join(geminiDir, "tmp");
+    if (!existsSync(geminiTmpDir)) {
+      missingRoots.push(geminiTmpDir);
+    } else {
+      rootsFound++;
+      const lookup = loadGeminiProjectLookup(geminiDir);
+      const conversations = new Map<
+        string,
+        { conversation: GeminiConversation; filePath: string; projectDir: string; jsonl: boolean; updated: number }
+      >();
+
+      // Migration can leave both session.json and session.jsonl behind. Keep one logical
+      // conversation per session, preferring the replayable JSONL form and then the newest copy.
+      for (const { filePath, projectDir } of walkGeminiChatFiles(geminiDir)) {
+        const conversation = loadGeminiConversation(filePath);
+        if (!conversation) continue;
+        const candidate = {
+          conversation,
+          filePath,
+          projectDir,
+          jsonl: filePath.endsWith(".jsonl"),
+          updated: timestampMs(conversation.lastUpdated),
+        };
+        const previous = conversations.get(conversation.sessionId);
+        if (
+          !previous ||
+          (candidate.jsonl && !previous.jsonl) ||
+          (candidate.jsonl === previous.jsonl &&
+            (Number.isNaN(previous.updated) || candidate.updated > previous.updated))
+        ) {
+          conversations.set(conversation.sessionId, candidate);
+        }
+      }
+
+      for (const { conversation, filePath, projectDir } of conversations.values()) {
+        const sid = `gemini:${conversation.sessionId}`;
+        const cwd = geminiProjectRoot(projectDir, conversation, lookup);
+        const fallbackProject = `gemini/${basename(projectDir)}`;
+        const firstPrompt = conversation.messages
+          .filter((message) => message?.type === "user")
+          .map((message) => textFromGeminiContent(message.content))
+          .find(Boolean);
+        const meta = ensureSession(sid, "gemini", cwd, filePath, firstPrompt);
+        if (!cwd) meta.project = fallbackProject;
+
+        for (const message of conversation.messages) {
+          if (message?.type !== "gemini" || !message.tokens) continue;
+          const usage = normalizeGeminiUsage(message.tokens);
+          if (totalTokens(usage) === 0) continue;
+          const ts = timestampMs(message.timestamp);
+          if (Number.isNaN(ts)) continue;
+          const toolUses: ToolUse[] = [];
+          if (Array.isArray(message.toolCalls)) {
+            for (const call of message.toolCalls) {
+              const toolUse = toolUseFromGeminiCall(call);
+              if (toolUse) toolUses.push(toolUse);
+              if (!call || typeof call.name !== "string" || !Object.hasOwn(call, "result")) continue;
+              const stat = toolResults.get(call.name) || { count: 0, approxTokens: 0 };
+              stat.count += 1;
+              stat.approxTokens += estimateTokens(call.result);
+              toolResults.set(call.name, stat);
+            }
+          }
+          messages.push({
+            source: "gemini",
+            sessionId: sid,
+            project: cwd ? projectLabel(cwd) : fallbackProject,
+            cwd,
+            gitBranch: "",
+            ts,
+            date: localDate(ts),
+            model: typeof message.model === "string" && message.model ? message.model : "(unknown)",
+            usage,
+            attributionSkill: null,
+            toolUses,
+          });
         }
       }
     }

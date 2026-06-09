@@ -1,11 +1,12 @@
 # Argus
 
-Audit how you actually use Claude Code and Codex. Reads your local session transcripts
-(`~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`) and produces a
+Audit how you actually use Claude Code, Codex, and Gemini CLI. Reads your local session
+transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, and
+`~/.gemini/tmp/*/chats/**/*.{json,jsonl}`) and produces a
 **self-contained HTML dashboard**:
 
 - **Tokens & cost over time** — per day, stacked by token class (input / output / cache read / cache write).
-- **Claude vs Codex breakdown** — sessions, messages, tokens, and estimated cost by transcript source.
+- **Source breakdown** — Claude, Codex, and Gemini sessions, messages, tokens, and estimated cost.
 - **Skill attribution** — which Claude skills you invoke and how many tokens each consumes (exact: usage and the active skill are recorded on the same message).
 - **Tools** — every tool call ranked by use and folded into categories (file-io / shell / agent / web / planning / todo / skill / mcp / other). Tool categorization and MCP `server · tool` name splitting follow [`cc-lens`](https://github.com/Arindam200/cc-lens).
 - **MCP servers** — call counts and which tools you actually use per server.
@@ -29,7 +30,7 @@ bun run src/index.ts --open
 
 | Flag | Description |
 |------|-------------|
-| `--source <claude\|codex\|all>` | transcript source to parse (default `all`) |
+| `--source <claude\|codex\|gemini\|all>` | transcript source to parse (default `all`) |
 | `--since <YYYY-MM-DD>` | only include messages on/after this date |
 | `--until <YYYY-MM-DD>` | only include messages on/before this date |
 | `--project <substr>` | only include sessions whose cwd matches `substr` |
@@ -49,7 +50,7 @@ bun run src/index.ts
 # Custom output path, then open it
 bun run src/index.ts -o ~/Desktop/usage.html --open
 
-# Only Claude transcripts (or codex / all)
+# Only Claude transcripts (or codex / gemini / all)
 bun run src/index.ts --source claude
 
 # Limit by date range or project
@@ -126,7 +127,8 @@ in the private `argus-dash` repo.
 ## Tests
 
 `bun test` (zero extra deps — uses `bun:test`). Covers parsing (Claude dedup, recursive subagent walk,
-cache 5m/1h split, Codex cached-input split, tool/skill/MCP extraction, result-token attribution), pricing, aggregation,
+cache 5m/1h split, Codex cached-input split, Gemini JSON/JSONL replay and cached-input split,
+tool/skill/MCP extraction, result-token attribution), pricing, aggregation,
 inventory/skill→plugin mapping, heuristic summaries, and org detection. A **contract test** builds
 a dashboard from a fixture transcript and validates it against `@agentdeploymentco/argus-schema`'s
 `PushPayloadSchema`, so drift between the CLI's output and the wire contract fails in CI.
@@ -138,9 +140,9 @@ a dashboard from a fixture transcript and validates it against `@agentdeployment
   dedupes assistant messages by API `message.id` so tokens aren't multi-counted — the
   same approach `ccusage` uses. Token totals reconcile with `ccusage` within a few
   percent on output / cache-read / cache-write (the buckets that are 99%+ of usage).
-- **Cost** uses Anthropic and OpenAI API list prices. Anthropic cache writes use the
-  5-minute / 1-hour ephemeral split; Codex/OpenAI cached input is treated as cache
-  read because Codex reports it as a subset of total input tokens. Override any price
+- **Cost** uses Anthropic, OpenAI, and Google API list prices. Anthropic cache writes use
+  the 5-minute / 1-hour ephemeral split; Codex/OpenAI and Gemini cached input is treated
+  as cache read because both report it as a subset of total input tokens. Override any price
   via `~/.claude/argus-pricing.json`:
   ```json
   { "gpt-5.5": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite5m": 0, "cacheWrite1h": 0 } }
@@ -149,5 +151,7 @@ a dashboard from a fixture transcript and validates it against `@agentdeployment
   may not yet include the newest model ids. Codex plan credits can also differ from API
   dollars. These are estimates; if you're on a flat-rate plan, treat cost as directional.)
 - Reads `CLAUDE_CONFIG_DIR` if set, else `~/.claude`; reads `CODEX_HOME` or
-  `CODEX_CONFIG_DIR` if set, else `~/.codex`. Nothing is uploaded; all parsing is local.
+  `CODEX_CONFIG_DIR` if set, else `~/.codex`; and reads `.gemini` under
+  `GEMINI_CLI_HOME` if set, else under your home directory. Nothing is uploaded; all
+  parsing is local.
 - The generated HTML inlines Chart.js (`src/vendor/`) so it works fully offline.

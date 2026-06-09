@@ -17,7 +17,7 @@ export type {
 } from "@agentdeploymentco/argus-schema";
 export type { ToolCategory } from "./tool-categories.ts";
 
-export type AgentSource = "claude" | "codex";
+export type AgentSource = "claude" | "codex" | "gemini";
 
 export type SessionRow = SchemaSessionRow & {
   source: AgentSource;

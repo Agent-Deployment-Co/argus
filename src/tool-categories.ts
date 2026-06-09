@@ -23,8 +23,15 @@ export const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   Glob: "file-io",
   Grep: "file-io",
   NotebookEdit: "file-io",
+  read_file: "file-io",
+  read_many_files: "file-io",
+  write_file: "file-io",
+  replace: "file-io",
+  glob: "file-io",
+  grep_search: "file-io",
 
   Bash: "shell",
+  run_shell_command: "shell",
 
   Task: "agent",
   Agent: "agent",
@@ -34,13 +41,18 @@ export const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   TaskOutput: "agent",
   TaskStop: "agent",
   TaskGet: "agent",
+  invoke_agent: "agent",
+  complete_task: "agent",
 
   WebSearch: "web",
   WebFetch: "web",
+  google_web_search: "web",
+  get_internal_docs: "web",
 
   EnterPlanMode: "planning",
   ExitPlanMode: "planning",
   AskUserQuestion: "planning",
+  update_topic: "planning",
 
   TodoWrite: "todo",
 
@@ -48,6 +60,7 @@ export const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   ToolSearch: "skill",
   ListMcpResourcesTool: "skill",
   ReadMcpResourceTool: "skill",
+  activate_skill: "skill",
 };
 
 export const CATEGORY_LABELS: Record<ToolCategory, string> = {
