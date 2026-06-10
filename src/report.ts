@@ -134,7 +134,10 @@ ${opts.fontCss || ""}
   th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; }
   th:hover { color:var(--accent); }
-  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .nowrap { white-space:nowrap; }
+  .session-project { width:clamp(160px,24vw,260px); max-width:clamp(160px,24vw,260px); }
+  .truncate { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   tr:hover td { background:var(--hover); }
   .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--muted); margin:1px 3px 1px 0; }
   .pill.on { color:var(--pill-cool); border-color:var(--pill-cool-line); }
@@ -429,11 +432,12 @@ makeTable(document.getElementById('toolTable'),[
 // ---- generic sortable table ----
 function makeTable(el, cols, rows){
   let sortIdx=-1, sortDir=-1;
+  const classes=c=>[c.num?'num':'',c.className||''].filter(Boolean).join(' ');
   function render(){
-    const head='<thead><tr>'+cols.map((c,i)=>'<th class="'+(c.num?'num':'')+'" data-i="'+i+'">'+c.label+(i===sortIdx?(sortDir<0?' ▾':' ▴'):'')+'</th>').join('')+'</tr></thead>';
+    const head='<thead><tr>'+cols.map((c,i)=>'<th class="'+classes(c)+'" data-i="'+i+'">'+c.label+(i===sortIdx?(sortDir<0?' ▾':' ▴'):'')+'</th>').join('')+'</tr></thead>';
     const sorted=rows.slice();
     if(sortIdx>=0){ const c=cols[sortIdx]; sorted.sort((a,b)=>{const va=c.sort(a),vb=c.sort(b); return (va<vb?-1:va>vb?1:0)*sortDir;}); }
-    const body='<tbody>'+sorted.map(r=>'<tr>'+cols.map(c=>'<td class="'+(c.num?'num':'')+'">'+c.cell(r)+'</td>').join('')+'</tr>').join('')+'</tbody>';
+    const body='<tbody>'+sorted.map(r=>'<tr>'+cols.map(c=>'<td class="'+classes(c)+'">'+c.cell(r)+'</td>').join('')+'</tr>').join('')+'</tbody>';
     el.innerHTML=head+body;
     el.querySelectorAll('th').forEach(th=>th.onclick=()=>{const i=+th.dataset.i; if(i===sortIdx)sortDir*=-1; else {sortIdx=i;sortDir=-1;} render();});
   }
@@ -480,12 +484,17 @@ makeTable(document.getElementById('pluginTable'),[
   {label:'Cost', num:true, sort:r=>r.skillCost, cell:r=>r.skillCost?usd(r.skillCost):'<span class="muted">—</span>'},
 ], DATA.byPlugin);
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function compactProject(project){
+  const value=String(project||'');
+  const match=value.match(/^(gemini\\/)([0-9a-f]{32,})$/i);
+  return match ? match[1]+match[2].slice(0,8)+'…' : value;
+}
 
 // ---- sessions table ----
 const sessionCols = [
-  {label:'Started', sort:r=>r.start, cell:r=>dt(r.start)},
+  {label:'Started', className:'nowrap', sort:r=>r.start, cell:r=>dt(r.start)},
   {label:'Source', sort:r=>r.source||'', cell:r=>esc(r.source||'')},
-  {label:'Project', sort:r=>r.project, cell:r=>esc(r.project)},
+  {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
   {label:'Dur', num:true, sort:r=>r.durationMs, cell:r=>dur(r.durationMs)},
   {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
   {label:'Skills', sort:r=>r.topSkills.join(), cell:r=>r.topSkills.map(s=>'<span class="pill skill">'+esc(s)+'</span>').join('')||'<span class="muted">—</span>'},
