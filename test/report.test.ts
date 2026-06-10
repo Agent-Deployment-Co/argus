@@ -45,6 +45,10 @@ describe("HTML report", () => {
     expect(html).toContain("match(/^(gemini\\/)([0-9a-f]{32,})$/i)");
     expect(html).toContain('className:\'session-project\'');
     expect(html).toContain('title="\'+esc(r.project)+\'"');
+    expect(html).toContain(".pill.skill { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap");
+    expect(html).toContain("function skillPill(skill)");
+    expect(html).toContain("r.topSkills.map(skillPill)");
+    expect(html).toContain("r.skills.map(skillPill)");
     expect(html).not.toContain("--bg:#0f1115");
     expect(html).not.toContain("#6ea8fe");
     expect(html).not.toContain("rgba(217,119,87");
