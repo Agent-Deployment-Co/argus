@@ -40,6 +40,11 @@ describe("HTML report", () => {
     expect(html).toContain('data-theme-choice="dark"');
     expect(html).toContain("localStorage.setItem('argus-theme', theme)");
     expect(html).toContain("chart.update('none')");
+    expect(html).toContain(".session-project { width:clamp(160px,24vw,260px)");
+    expect(html).toContain("text-overflow:ellipsis");
+    expect(html).toContain("match(/^(gemini\\/)([0-9a-f]{32,})$/i)");
+    expect(html).toContain('className:\'session-project\'');
+    expect(html).toContain('title="\'+esc(r.project)+\'"');
     expect(html).not.toContain("--bg:#0f1115");
     expect(html).not.toContain("#6ea8fe");
     expect(html).not.toContain("rgba(217,119,87");
