@@ -3,6 +3,8 @@ import type { Dashboard } from "./types.ts";
 export interface RenderOptions {
   /** Chart.js source to inline. If omitted, falls back to a CDN script tag. */
   chartJs?: string;
+  /** Brand @font-face CSS to inline. Omit when the host provides Aleo and Poppins. */
+  fontCss?: string;
   /** When present, render a user selector in the header (Worker/team mode). */
   users?: string[];
   /** Currently-selected user ("all" or a user id). */
@@ -47,54 +49,79 @@ export function renderHtml(d: Dashboard, opts: RenderOptions = {}): string {
 <title>Argus — Claude Code, Codex, and Gemini CLI usage</title>
 ${chartTag}
 <style>
+${opts.fontCss || ""}
   :root {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
-    --fg:#e6e9ef; --muted:#8b93a3; --accent:#d97757; --accent2:#6ea8fe;
-    --green:#5fb878; --purple:#b18cf2; --yellow:#e6c84f;
+    color-scheme:dark;
+    --coffee-bean:#1c1105; --dark-coffee:#341f09; --tiger-orange:#ef8920;
+    --racing-red:#e2302c; --cornflower-ocean:#286992; --sky-surge:#5dbcdf;
+    --soft-apricot:#f3d7ba; --antique-white:#f9ebdc; --porcelain:#fefaf5;
+    --line:rgba(243,215,186,.18); --hover:rgba(249,235,220,.055);
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  header { padding:24px 32px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
-  header h1 { margin:0; font-size:20px; letter-spacing:.3px; }
-  header .sub { color:var(--muted); font-size:13px; }
-  main { padding:24px 32px; max-width:1200px; margin:0 auto; }
-  section { margin:0 0 36px; }
-  section h2 { font-size:15px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 14px; font-weight:600; }
+  body { margin:0; background:var(--coffee-bean); color:var(--antique-white); font:15px/1.55 "Aleo",Georgia,serif; -webkit-font-smoothing:antialiased; }
+  header { border-bottom:1px solid var(--line); }
+  .header-inner { max-width:1200px; margin:0 auto; padding:24px 32px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .brand { display:flex; align-items:center; gap:11px; }
+  .brand-mark { display:block; width:34px; height:auto; flex:0 0 auto; }
+  header h1 { margin:0; color:var(--porcelain); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:21px; font-weight:700; letter-spacing:.01em; }
+  header .sub { color:var(--soft-apricot); font-size:13px; opacity:.78; }
+  main { padding:30px 32px 64px; max-width:1200px; margin:0 auto; }
+  section { margin:0 0 42px; }
+  section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--tiger-orange); margin:0 0 14px; font-weight:600; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
-  .card .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
-  .card .value { font-size:24px; font-weight:600; margin-top:4px; }
-  .card .value small { font-size:13px; color:var(--muted); font-weight:400; }
-  .usersel { margin-left:auto; color:var(--muted); font-size:13px; }
-  .usersel select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 8px; font-size:13px; }
+  .card { background:var(--dark-coffee); border:1px solid var(--line); border-top:3px solid var(--tiger-orange); border-radius:12px; padding:15px 16px 16px; }
+  .card .label { color:var(--soft-apricot); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; }
+  .card .value { color:var(--porcelain); font-size:25px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .card .value small { font-size:13px; color:var(--soft-apricot); font-weight:400; }
+  .usersel { margin-left:auto; color:var(--soft-apricot); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  .usersel select { background:var(--dark-coffee); color:var(--antique-white); border:1px solid var(--cornflower-ocean); border-radius:7px; padding:5px 9px; font:13px "Aleo",Georgia,serif; text-transform:none; letter-spacing:normal; }
+  .usersel select:focus-visible { outline:2px solid var(--tiger-orange); outline-offset:2px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
   @media (max-width:880px){ .grid2{grid-template-columns:1fr;} }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; }
-  .panel h3 { margin:0 0 12px; font-size:14px; }
+  .panel { background:var(--dark-coffee); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .panel h3 { margin:0 0 12px; color:var(--porcelain); font-size:15px; font-weight:700; }
   canvas { max-width:100%; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:600; cursor:pointer; user-select:none; white-space:nowrap; }
-  th:hover { color:var(--fg); }
+  th { color:var(--soft-apricot); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; }
+  th:hover { color:var(--tiger-orange); }
   td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
-  tr:hover td { background:var(--panel2); }
-  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; border:1px solid var(--line); color:var(--muted); margin:1px 3px 1px 0; }
-  .pill.on { color:var(--green); border-color:#2f4a38; }
-  .pill.warn { color:var(--yellow); border-color:#4a4423; }
-  .pill.skill { color:var(--accent2); border-color:#2a3a52; }
-  .muted { color:var(--muted); }
-  .prompt { color:var(--muted); font-size:12px; }
+  tr:hover td { background:var(--hover); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--soft-apricot); margin:1px 3px 1px 0; }
+  .pill.on { color:var(--sky-surge); border-color:var(--cornflower-ocean); }
+  .pill.warn { color:var(--tiger-orange); border-color:var(--racing-red); }
+  .pill.skill { color:var(--sky-surge); border-color:var(--cornflower-ocean); }
+  .muted { color:var(--soft-apricot); opacity:.72; }
+  .prompt { color:var(--soft-apricot); opacity:.72; font-size:12px; }
   .summary { font-size:12.5px; }
-  .scroll { overflow:auto; border:1px solid var(--line); border-radius:10px; }
-  .note { color:var(--muted); font-size:12px; margin-top:8px; }
-  code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px; }
+  .scroll { overflow:auto; background:var(--dark-coffee); border:1px solid var(--line); border-radius:12px; }
+  .note { color:var(--soft-apricot); opacity:.78; font-size:12px; margin-top:8px; }
+  a { color:var(--sky-surge); text-underline-offset:2px; }
+  a:hover { color:var(--tiger-orange); }
+  code { background:rgba(249,235,220,.07); color:var(--porcelain); padding:1px 5px; border-radius:4px; font-size:12px; }
+  ::selection { background:var(--tiger-orange); color:var(--coffee-bean); }
+  @media (max-width:600px) {
+    .header-inner,main { padding-left:18px; padding-right:18px; }
+    .header-inner { align-items:flex-start; }
+    .usersel { width:100%; margin-left:45px; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>Argus</h1>
-  <span class="sub">Claude Code, Codex, and Gemini CLI usage${scope} · ${esc(d.range.start)} → ${esc(d.range.end)} · generated ${esc(generated)}</span>
-  ${userSelector}
+  <div class="header-inner">
+    <div class="brand">
+      <svg class="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="6 0 128 100" role="img" aria-label="The Agent Deployment Co. chevron">
+        <path d="M6 0 L30 0 L62 50 L30 100 L6 100 L38 50 Z" fill="#e2302c"/>
+        <path d="M30 0 L54 0 L86 50 L54 100 L30 100 L62 50 Z" fill="#ef8920"/>
+        <path d="M54 0 L78 0 L110 50 L78 100 L54 100 L86 50 Z" fill="#5dbcdf"/>
+        <path d="M78 0 L102 0 L134 50 L102 100 L78 100 L110 50 Z" fill="#286992"/>
+      </svg>
+      <h1>Argus</h1>
+    </div>
+    <span class="sub">Claude Code, Codex, and Gemini CLI usage${scope} · ${esc(d.range.start)} → ${esc(d.range.end)} · generated ${esc(generated)}</span>
+    ${userSelector}
+  </div>
 </header>
 <main>
   <section>
@@ -149,7 +176,7 @@ ${chartTag}
     </div>
     <div class="scroll" style="margin-top:24px"><table id="toolTable"></table></div>
     <p class="note">Tools are categorized and MCP names split (<code>server · tool</code>) the same way as
-      <a href="https://github.com/Arindam200/cc-lens" style="color:var(--accent2)">cc-lens</a>.</p>
+      <a href="https://github.com/Arindam200/cc-lens">cc-lens</a>.</p>
   </section>
 
   <section>
@@ -185,10 +212,15 @@ ${chartTag}
 <script id="data" type="application/json">${data}</script>
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
-const C = { input:'#6ea8fe', output:'#d97757', cacheRead:'#5fb878', cacheWrite:'#b18cf2', accent:'#d97757', grid:'#2a2f3a', muted:'#8b93a3' };
+const C = { input:'#5dbcdf', output:'#ef8920', cacheRead:'#286992', cacheWrite:'#e2302c', accent:'#ef8920', grid:'rgba(243,215,186,.18)', muted:'#f3d7ba', panel:'#341f09', fg:'#fefaf5' };
 Chart.defaults.color = C.muted;
 Chart.defaults.borderColor = C.grid;
-Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif";
+Chart.defaults.font.family = "Aleo, Georgia, serif";
+Chart.defaults.plugins.tooltip.backgroundColor = C.panel;
+Chart.defaults.plugins.tooltip.titleColor = C.fg;
+Chart.defaults.plugins.tooltip.bodyColor = C.fg;
+Chart.defaults.plugins.tooltip.borderColor = C.input;
+Chart.defaults.plugins.tooltip.borderWidth = 1;
 
 const fmt = n => n>=1e9 ? (n/1e9).toFixed(2)+'B' : n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'k' : String(n);
 const usd = n => '$'+(n<1 ? n.toFixed(3) : n.toFixed(2));
@@ -220,7 +252,7 @@ new Chart(tokensChart, { type:'bar', data:{ labels:days, datasets:[
 
 // ---- cost per day ----
 new Chart(costChart, { type:'line', data:{ labels:days, datasets:[
-  {label:'USD', data:DATA.daily.map(d=>d.cost), borderColor:C.accent, backgroundColor:'rgba(217,119,87,.15)', fill:true, tension:.25, pointRadius:2}
+  {label:'USD', data:DATA.daily.map(d=>d.cost), borderColor:C.accent, backgroundColor:'rgba(239,137,32,.16)', fill:true, tension:.25, pointRadius:2}
 ]}, options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ticks:{maxRotation:90,minRotation:45}}, y:{ticks:{callback:v=>'$'+v}} } }});
 
 // ---- source breakdown ----
@@ -276,7 +308,7 @@ new Chart(toolChart, { type:'bar', data:{ labels:ht.map(t=>t.tool), datasets:[
 
 // ---- tool calls by category ----
 const tc = DATA.byToolCategory || [];
-const CATPAL = ['#6ea8fe','#d97757','#5fb878','#b18cf2','#e6c84f','#5fb8b8','#e67ec8','#9aa6b8','#c98cf2'];
+const CATPAL = ['#ef8920','#5dbcdf','#e2302c','#286992','#f3d7ba','#f9ebdc','#fefaf5','#ef8920','#5dbcdf'];
 new Chart(toolCatChart, { type:'doughnut', data:{ labels:tc.map(c=>c.label), datasets:[
   {data:tc.map(c=>c.calls), backgroundColor:CATPAL}
 ]}, options:{ plugins:{legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.label+': '+fmt(c.parsed)+' calls · '+tc[c.dataIndex].tools+' tools'}}} }});
@@ -313,7 +345,7 @@ function makeTable(el, cols, rows){
 // ---- by-user table (team mode) ----
 if (DATA.byUser && DATA.byUser.length) {
   makeTable(document.getElementById('userTable'),[
-    {label:'User', sort:r=>r.name, cell:r=>'<a href="?user='+encodeURIComponent(r.name)+'" style="color:var(--accent2)">'+esc(r.name)+'</a>'},
+    {label:'User', sort:r=>r.name, cell:r=>'<a href="?user='+encodeURIComponent(r.name)+'">'+esc(r.name)+'</a>'},
     {label:'Sessions', num:true, sort:r=>r.meta?.sessions||0, cell:r=>r.meta?.sessions||0},
     {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
     {label:'Tokens', num:true, sort:r=>r.total, cell:r=>fmt(r.total)},
