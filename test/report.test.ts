@@ -10,7 +10,7 @@ import type { PluginInfo } from "../src/types.ts";
 const FIX = join(import.meta.dir, "fixtures");
 
 describe("HTML report", () => {
-  test("uses the ADC dark-mode brand system", () => {
+  test("uses the ADC brand system with light + dark modes", () => {
     const parsed = parseAll({
       projectsDir: join(FIX, "projects"),
       historyFile: join(FIX, "history.jsonl"),
@@ -29,7 +29,12 @@ describe("HTML report", () => {
     expect(html).toContain('font:15px/1.55 "Aleo",Georgia,serif');
     expect(html).toContain('font-family:"Poppins","Avenir Next",Arial,sans-serif');
     expect(html).toContain('aria-label="The Agent Deployment Co. chevron"');
-    expect(html).toContain("const C = { input:'#5dbcdf', output:'#ef8920'");
+    expect(html).toContain("input:'#5dbcdf', output:'#ef8920', cacheRead:'#286992'");
+    // Adapts to the OS color scheme: a light-mode block and a runtime detector for chart chrome.
+    expect(html).toContain("color-scheme:light dark");
+    expect(html).toContain("@media (prefers-color-scheme:light)");
+    expect(html).toContain("--bg:var(--antique-white)");
+    expect(html).toContain("window.matchMedia('(prefers-color-scheme: dark)')");
     expect(html).not.toContain("--bg:#0f1115");
     expect(html).not.toContain("#6ea8fe");
     expect(html).not.toContain("rgba(217,119,87");
