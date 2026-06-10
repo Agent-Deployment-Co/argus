@@ -142,7 +142,7 @@ ${opts.fontCss || ""}
   .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--muted); margin:1px 3px 1px 0; }
   .pill.on { color:var(--pill-cool); border-color:var(--pill-cool-line); }
   .pill.warn { color:var(--tiger-orange); border-color:var(--racing-red); }
-  .pill.skill { color:var(--pill-cool); border-color:var(--pill-cool-line); }
+  .pill.skill { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; color:var(--pill-cool); border-color:var(--pill-cool-line); }
   .muted { color:var(--muted); }
   .prompt { color:var(--muted); font-size:12px; }
   .summary { font-size:12.5px; }
@@ -477,13 +477,14 @@ makeTable(document.getElementById('sourceTable'),[
 makeTable(document.getElementById('pluginTable'),[
   {label:'Plugin', sort:r=>r.name, cell:r=>esc(r.name)+(r.marketplace?' <span class="muted">@'+esc(r.marketplace)+'</span>':'')},
   {label:'Status', sort:r=>(r.enabled?2:0)+(r.used?1:0), cell:r=> r.used?'<span class="pill on">used</span>': r.enabled?'<span class="pill warn">enabled · unused</span>':'<span class="pill">disabled</span>'},
-  {label:'Skills used', sort:r=>r.skills.length, cell:r=>r.skills.map(s=>'<span class="pill skill">'+esc(s)+'</span>').join('')||'<span class="muted">—</span>'},
+  {label:'Skills used', sort:r=>r.skills.length, cell:r=>r.skills.map(skillPill).join('')||'<span class="muted">—</span>'},
   {label:'Msgs', num:true, sort:r=>r.skillMessages, cell:r=>fmt(r.skillMessages)},
   {label:'Tokens', num:true, sort:r=>r.skillTokens, cell:r=>fmt(r.skillTokens)},
   {label:'MCP calls', num:true, sort:r=>r.mcpCalls, cell:r=>r.mcpCalls||'<span class="muted">—</span>'},
   {label:'Cost', num:true, sort:r=>r.skillCost, cell:r=>r.skillCost?usd(r.skillCost):'<span class="muted">—</span>'},
 ], DATA.byPlugin);
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function skillPill(skill){return '<span class="pill skill" title="'+esc(skill)+'">'+esc(skill)+'</span>';}
 function compactProject(project){
   const value=String(project||'');
   const match=value.match(/^(gemini\\/)([0-9a-f]{32,})$/i);
@@ -497,7 +498,7 @@ const sessionCols = [
   {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
   {label:'Dur', num:true, sort:r=>r.durationMs, cell:r=>dur(r.durationMs)},
   {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
-  {label:'Skills', sort:r=>r.topSkills.join(), cell:r=>r.topSkills.map(s=>'<span class="pill skill">'+esc(s)+'</span>').join('')||'<span class="muted">—</span>'},
+  {label:'Skills', sort:r=>r.topSkills.join(), cell:r=>r.topSkills.map(skillPill).join('')||'<span class="muted">—</span>'},
   {label:'Tokens', num:true, sort:r=>r.total, cell:r=>fmt(r.total)},
   {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
   {label:'Summary', sort:r=>r.summary, cell:r=>'<div class="summary">'+esc(r.summary)+'</div>'+(r.firstPrompt&&!r.summary.includes('"')?'<div class="prompt">'+esc(r.firstPrompt.slice(0,120))+'</div>':'')},
