@@ -51,55 +51,76 @@ ${chartTag}
 <style>
 ${opts.fontCss || ""}
   :root {
-    color-scheme:dark;
+    color-scheme:light dark;
     --coffee-bean:#1c1105; --dark-coffee:#341f09; --tiger-orange:#ef8920;
     --racing-red:#e2302c; --cornflower-ocean:#286992; --sky-surge:#5dbcdf;
     --soft-apricot:#f3d7ba; --antique-white:#f9ebdc; --porcelain:#fefaf5;
+    /* Semantic roles — dark (Coffee Bean world) is the default. */
+    --bg:var(--coffee-bean); --surface:var(--dark-coffee);
+    --text:var(--antique-white); --heading:var(--porcelain); --muted:var(--soft-apricot);
     --line:rgba(243,215,186,.18); --hover:rgba(249,235,220,.055);
+    --accent:var(--tiger-orange);
+    --link:var(--sky-surge); --link-hover:var(--tiger-orange);
+    --pill-cool:var(--sky-surge); --pill-cool-line:var(--cornflower-ocean);
+    --code-bg:rgba(249,235,220,.07); --code-text:var(--porcelain);
+    --sel-bg:var(--tiger-orange); --sel-text:var(--coffee-bean);
+  }
+  @media (prefers-color-scheme:light) {
+    :root {
+      /* Light (Antique White world): paper surfaces, coffee ink; cool accents shift Sky→Ocean. */
+      --bg:var(--antique-white); --surface:var(--porcelain);
+      --text:var(--dark-coffee); --heading:var(--coffee-bean);
+      --muted:color-mix(in srgb, var(--dark-coffee) 68%, var(--antique-white));
+      --line:rgba(52,31,9,.16); --hover:rgba(52,31,9,.045);
+      --link:var(--cornflower-ocean); --link-hover:var(--tiger-orange);
+      --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
+      --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
+      --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
+    }
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--coffee-bean); color:var(--antique-white); font:15px/1.55 "Aleo",Georgia,serif; -webkit-font-smoothing:antialiased; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 "Aleo",Georgia,serif; -webkit-font-smoothing:antialiased; }
   header { border-bottom:1px solid var(--line); }
   .header-inner { max-width:1200px; margin:0 auto; padding:24px 32px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
   .brand { display:flex; align-items:center; gap:11px; }
   .brand-mark { display:block; width:34px; height:auto; flex:0 0 auto; }
-  header h1 { margin:0; color:var(--porcelain); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:21px; font-weight:700; letter-spacing:.01em; }
-  header .sub { color:var(--soft-apricot); font-size:13px; opacity:.78; }
+  header h1 { margin:0; color:var(--heading); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:21px; font-weight:700; letter-spacing:.01em; }
+  header .sub { color:var(--muted); font-size:13px; }
   main { padding:30px 32px 64px; max-width:1200px; margin:0 auto; }
   section { margin:0 0 42px; }
-  section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--tiger-orange); margin:0 0 14px; font-weight:600; }
+  section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--accent); margin:0 0 14px; font-weight:600; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
-  .card { background:var(--dark-coffee); border:1px solid var(--line); border-top:3px solid var(--tiger-orange); border-radius:12px; padding:15px 16px 16px; }
-  .card .label { color:var(--soft-apricot); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; }
-  .card .value { color:var(--porcelain); font-size:25px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums; }
-  .card .value small { font-size:13px; color:var(--soft-apricot); font-weight:400; }
-  .usersel { margin-left:auto; color:var(--soft-apricot); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
-  .usersel select { background:var(--dark-coffee); color:var(--antique-white); border:1px solid var(--cornflower-ocean); border-radius:7px; padding:5px 9px; font:13px "Aleo",Georgia,serif; text-transform:none; letter-spacing:normal; }
+  .card { background:var(--surface); border:1px solid var(--line); border-top:3px solid var(--accent); border-radius:12px; padding:15px 16px 16px; }
+  .card .label { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; }
+  .card .value { color:var(--heading); font-size:25px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .card .value small { font-size:13px; color:var(--muted); font-weight:400; }
+  .usersel { margin-left:auto; color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  .usersel select { background:var(--surface); color:var(--text); border:1px solid var(--cornflower-ocean); border-radius:7px; padding:5px 9px; font:13px "Aleo",Georgia,serif; text-transform:none; letter-spacing:normal; }
   .usersel select:focus-visible { outline:2px solid var(--tiger-orange); outline-offset:2px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
   @media (max-width:880px){ .grid2{grid-template-columns:1fr;} }
-  .panel { background:var(--dark-coffee); border:1px solid var(--line); border-radius:12px; padding:18px; }
-  .panel h3 { margin:0 0 12px; color:var(--porcelain); font-size:15px; font-weight:700; }
+  .panel { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .panel h3 { margin:0 0 12px; color:var(--heading); font-size:15px; font-weight:700; }
   canvas { max-width:100%; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--soft-apricot); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; }
-  th:hover { color:var(--tiger-orange); }
+  th { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; }
+  th:hover { color:var(--accent); }
   td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
   tr:hover td { background:var(--hover); }
-  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--soft-apricot); margin:1px 3px 1px 0; }
-  .pill.on { color:var(--sky-surge); border-color:var(--cornflower-ocean); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--muted); margin:1px 3px 1px 0; }
+  .pill.on { color:var(--pill-cool); border-color:var(--pill-cool-line); }
   .pill.warn { color:var(--tiger-orange); border-color:var(--racing-red); }
-  .pill.skill { color:var(--sky-surge); border-color:var(--cornflower-ocean); }
-  .muted { color:var(--soft-apricot); opacity:.72; }
-  .prompt { color:var(--soft-apricot); opacity:.72; font-size:12px; }
+  .pill.skill { color:var(--pill-cool); border-color:var(--pill-cool-line); }
+  .muted { color:var(--muted); }
+  .prompt { color:var(--muted); font-size:12px; }
   .summary { font-size:12.5px; }
-  .scroll { overflow:auto; background:var(--dark-coffee); border:1px solid var(--line); border-radius:12px; }
-  .note { color:var(--soft-apricot); opacity:.78; font-size:12px; margin-top:8px; }
-  a { color:var(--sky-surge); text-underline-offset:2px; }
-  a:hover { color:var(--tiger-orange); }
-  code { background:rgba(249,235,220,.07); color:var(--porcelain); padding:1px 5px; border-radius:4px; font-size:12px; }
-  ::selection { background:var(--tiger-orange); color:var(--coffee-bean); }
+  .scroll { overflow:auto; background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .note { color:var(--muted); font-size:12px; margin-top:8px; }
+  a { color:var(--link); text-underline-offset:2px; }
+  a:hover { color:var(--link-hover); }
+  code { background:var(--code-bg); color:var(--code-text); padding:1px 5px; border-radius:4px; font-size:12px; }
+  ::selection { background:var(--sel-bg); color:var(--sel-text); }
   @media (max-width:600px) {
     .header-inner,main { padding-left:18px; padding-right:18px; }
     .header-inner { align-items:flex-start; }
@@ -212,14 +233,23 @@ ${opts.fontCss || ""}
 <script id="data" type="application/json">${data}</script>
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
-const C = { input:'#5dbcdf', output:'#ef8920', cacheRead:'#286992', cacheWrite:'#e2302c', accent:'#ef8920', grid:'rgba(243,215,186,.18)', muted:'#f3d7ba', panel:'#341f09', fg:'#fefaf5' };
+// Data-series hues are brand colors that read on either background; only the chart
+// chrome (tick/label text, gridlines, tooltip surface) flips with the OS color scheme.
+const DARK = !window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches;
+const C = {
+  input:'#5dbcdf', output:'#ef8920', cacheRead:'#286992', cacheWrite:'#e2302c', accent:'#ef8920',
+  grid:  DARK ? 'rgba(243,215,186,.18)' : 'rgba(52,31,9,.13)',
+  muted: DARK ? '#f3d7ba' : '#6f5331',
+  panel: DARK ? '#341f09' : '#fefaf5',
+  fg:    DARK ? '#fefaf5' : '#1c1105',
+};
 Chart.defaults.color = C.muted;
 Chart.defaults.borderColor = C.grid;
 Chart.defaults.font.family = "Aleo, Georgia, serif";
 Chart.defaults.plugins.tooltip.backgroundColor = C.panel;
 Chart.defaults.plugins.tooltip.titleColor = C.fg;
 Chart.defaults.plugins.tooltip.bodyColor = C.fg;
-Chart.defaults.plugins.tooltip.borderColor = C.input;
+Chart.defaults.plugins.tooltip.borderColor = '#286992';
 Chart.defaults.plugins.tooltip.borderWidth = 1;
 
 const fmt = n => n>=1e9 ? (n/1e9).toFixed(2)+'B' : n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'k' : String(n);
