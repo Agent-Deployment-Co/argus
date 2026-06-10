@@ -14,6 +14,7 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { printBanner } from "./banner.ts";
+import { vendoredBrandFontsCss } from "./brand.ts";
 import { vendoredChartJs } from "./chartjs.ts";
 import { consoleOverview, isBareInvocation } from "./console-report.ts";
 import { loadPlugins } from "./inventory.ts";
@@ -218,7 +219,7 @@ async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<v
   if (flags.json) {
     writeFileSync(outPath, JSON.stringify(dash, null, 2));
   } else {
-    writeFileSync(outPath, renderHtml(dash, { chartJs: vendoredChartJs() }));
+    writeFileSync(outPath, renderHtml(dash, { chartJs: vendoredChartJs(), fontCss: vendoredBrandFontsCss() }));
   }
   log(`Wrote ${outPath}`);
   log(`Totals: ${summary(dash)}`);
