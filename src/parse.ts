@@ -17,7 +17,7 @@ import {
 
 const FILE_TOOLS = new Set(["Edit", "Write", "Read", "NotebookEdit", "MultiEdit"]);
 
-/** Start a ToolUse with cc-lens category + MCP server/tool split applied consistently. */
+/** Start a ToolUse with canonical category and MCP server/tool parsing applied. */
 function newToolUse(name: string): ToolUse {
   const tu: ToolUse = { name, category: categorizeTool(name) };
   const mcp = parseMcpTool(name);

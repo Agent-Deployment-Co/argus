@@ -50,10 +50,10 @@ The pipeline is a one-way data flow; each stage is its own module:
   re-walking individual messages** (not by summing usage then pricing once) so sessions that mix
   models are priced correctly.
 
-- **`tool-categories.ts`** — Canonical tool/MCP parsing, ported to match [cc-lens](https://github.com/Arindam200/cc-lens)
-  (`lib/tool-categories.ts`): `categorizeTool` (9 categories), `isMcpTool`, `parseMcpTool` (the `mcp__server__tool`
-  split — requires ≥3 `__` segments, tool keeps any further `__`), `toolDisplayName`. Both `parse.ts` and
-  `aggregate.ts` use it so categorization and MCP server/tool naming stay identical to cc-lens. `aggregate.ts`
+- **`tool-categories.ts`** — Canonical tool/MCP parsing: `categorizeTool` (9 categories),
+  `isMcpTool`, `parseMcpTool` (the `mcp__server__tool` split — requires ≥3 `__` segments,
+  tool keeps any further `__`), and `toolDisplayName`. Both `parse.ts` and `aggregate.ts`
+  use it so categorization and MCP server/tool naming remain consistent. `aggregate.ts`
   emits `byTool` (per-tool ranking) and `byToolCategory` (category rollup) from it.
 
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
