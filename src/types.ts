@@ -23,7 +23,7 @@ export type SessionRow = SchemaSessionRow & {
   source: AgentSource;
 };
 
-/** Per-tool usage ranking (cc-lens ToolSummary analog): call count + distinct sessions. */
+/** Per-tool usage ranking: call count and distinct sessions. */
 export interface ToolStat {
   name: string;
   category: ToolCategory;
@@ -34,7 +34,7 @@ export interface ToolStat {
   approxResultTokens: number;
 }
 
-/** Tool calls folded by category (cc-lens category rollup). */
+/** Tool calls folded by category. */
 export interface ToolCategoryStat {
   category: ToolCategory;
   label: string;
@@ -48,7 +48,7 @@ export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   bySource: NamedUsage[];
   sessions: SessionRow[];
   // CLI-only fields emitted ahead of a schema-package release (stripped on push until the
-  // wire contract adopts them). Mirror cc-lens's tool/MCP analytics.
+  // wire contract adopts them).
   byTool: ToolStat[];
   byToolCategory: ToolCategoryStat[];
 };
@@ -73,7 +73,7 @@ export function totalTokens(u: Usage): number {
 export interface ToolUse {
   /** Raw tool name, e.g. "Bash", "Skill", "mcp__fathom__search_meetings". */
   name: string;
-  /** cc-lens-style category, e.g. "file-io", "mcp", "skill". */
+  /** Canonical category, e.g. "file-io", "mcp", "skill". */
   category: ToolCategory;
   /** For name === "Skill": the invoked skill, e.g. "jj:jj". */
   skill?: string;

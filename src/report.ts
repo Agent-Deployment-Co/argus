@@ -196,8 +196,7 @@ ${opts.fontCss || ""}
       <div class="panel"><h3>Most-used tools (by calls)</h3><canvas id="toolRankChart" height="240"></canvas></div>
     </div>
     <div class="scroll" style="margin-top:24px"><table id="toolTable"></table></div>
-    <p class="note">Tools are categorized and MCP names split (<code>server · tool</code>) the same way as
-      <a href="https://github.com/Arindam200/cc-lens">cc-lens</a>.</p>
+    <p class="note">MCP tool names are displayed as <code>server · tool</code>.</p>
   </section>
 
   <section>
