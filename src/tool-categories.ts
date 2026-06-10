@@ -1,7 +1,5 @@
-// Tool + MCP-server parsing, ported to match cc-lens (Arindam200/cc-lens, lib/tool-categories.ts)
-// so argus categorizes tools and splits MCP server/tool names the same way. This is the single
-// source of truth for "what category is this tool" and "what server/tool does this mcp__ name
-// refer to" — used by both the parser (parse.ts) and the aggregator (aggregate.ts).
+// Single source of truth for tool categorization and MCP server/tool name parsing. Used by
+// both the parser (parse.ts) and the aggregator (aggregate.ts).
 
 export type ToolCategory =
   | "file-io"
@@ -14,7 +12,7 @@ export type ToolCategory =
   | "mcp"
   | "other";
 
-/** Built-in tool → category. Mirrors cc-lens's TOOL_CATEGORIES map. */
+/** Built-in tool to category mapping. */
 export const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   Read: "file-io",
   Write: "file-io",
@@ -75,7 +73,7 @@ export const CATEGORY_LABELS: Record<ToolCategory, string> = {
   other: "Other",
 };
 
-/** A tool name is an MCP tool iff it starts with the `mcp__` prefix (cc-lens semantics). */
+/** A tool name is an MCP tool iff it starts with the `mcp__` prefix. */
 export function isMcpTool(name: string): boolean {
   return name.startsWith("mcp__");
 }
@@ -90,7 +88,7 @@ export function categorizeTool(name: string): ToolCategory {
 }
 
 /**
- * Split an `mcp__<server>__<tool>` name into its server and tool parts, matching cc-lens.
+ * Split an `mcp__<server>__<tool>` name into its server and tool parts.
  * Requires at least 3 `__`-delimited segments; the tool part keeps any further `__` (e.g.
  * `mcp__srv__a__b` → { server: "srv", tool: "a__b" }). Returns null for non-MCP or malformed names.
  */

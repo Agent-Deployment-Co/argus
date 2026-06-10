@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { categorizeTool, isMcpTool, parseMcpTool, toolDisplayName } from "../src/tool-categories.ts";
 
-// These mirror cc-lens (Arindam200/cc-lens) so argus parses tools and MCP servers identically.
 describe("categorizeTool", () => {
   test("classifies built-ins by category", () => {
     expect(categorizeTool("Read")).toBe("file-io");

@@ -44,7 +44,7 @@ describe("aggregate", () => {
     expect(dash.heaviestToolResults.some((t) => t.tool === "Edit")).toBe(true);
   });
 
-  test("ranks tools and rolls them up by category (cc-lens style)", () => {
+  test("ranks tools and rolls them up by category", () => {
     const edit = dash.byTool.find((t) => t.name === "Edit")!;
     expect(edit.category).toBe("file-io");
     expect(edit.calls).toBeGreaterThan(0);

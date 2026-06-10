@@ -53,7 +53,7 @@ export function aggregate(
   const invMap = new Map<string, { count: number; sampleArgs: string }>();
   // mcp servers
   const mcpMap = new Map<string, { calls: number; tools: Map<string, number> }>();
-  // every tool call, keyed by raw name (cc-lens-style tool ranking + category rollup)
+  // Every tool call, keyed by raw name for tool ranking and category rollup.
   const toolMap = new Map<
     string,
     { category: ToolCategory; display: string; calls: number; sessions: Set<string> }
@@ -193,7 +193,7 @@ export function aggregate(
       const topTools = [...v.tools.entries()]
         .map(([tool, count]) => {
           approx += toolResults.get(tool)?.approxTokens || 0;
-          // canonical mcp__server__tool split (matches cc-lens parseMcpTool)
+          // Canonical mcp__server__tool split.
           return { tool: parseMcpTool(tool)?.tool ?? tool, count };
         })
         .sort((a, b) => b.count - a.count);
@@ -201,7 +201,7 @@ export function aggregate(
     })
     .sort((a, b) => b.calls - a.calls);
 
-  // ---- per-tool ranking + category rollup (cc-lens tools analytics) ----
+  // ---- per-tool ranking + category rollup ----
   const byTool: ToolStat[] = [...toolMap.entries()]
     .map(([name, v]) => ({
       name,
