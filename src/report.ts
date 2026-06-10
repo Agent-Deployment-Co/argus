@@ -47,6 +47,16 @@ export function renderHtml(d: Dashboard, opts: RenderOptions = {}): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Argus — Claude Code, Codex, and Gemini CLI usage</title>
+<script>
+  (() => {
+    let theme;
+    try { theme = localStorage.getItem("argus-theme"); } catch {}
+    if (theme !== "light" && theme !== "dark") {
+      theme = window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    document.documentElement.dataset.theme = theme;
+  })();
+</script>
 ${chartTag}
 <style>
 ${opts.fontCss || ""}
@@ -65,9 +75,21 @@ ${opts.fontCss || ""}
     --code-bg:rgba(249,235,220,.07); --code-text:var(--porcelain);
     --sel-bg:var(--tiger-orange); --sel-text:var(--coffee-bean);
   }
+  :root[data-theme="dark"] { color-scheme:dark; }
+  :root[data-theme="light"] {
+    color-scheme:light;
+    /* Light (Antique White world): paper surfaces, coffee ink; cool accents shift Sky→Ocean. */
+    --bg:var(--antique-white); --surface:var(--porcelain);
+    --text:var(--dark-coffee); --heading:var(--coffee-bean);
+    --muted:color-mix(in srgb, var(--dark-coffee) 68%, var(--antique-white));
+    --line:rgba(52,31,9,.16); --hover:rgba(52,31,9,.045);
+    --link:var(--cornflower-ocean); --link-hover:var(--tiger-orange);
+    --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
+    --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
+    --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
+  }
   @media (prefers-color-scheme:light) {
-    :root {
-      /* Light (Antique White world): paper surfaces, coffee ink; cool accents shift Sky→Ocean. */
+    :root:not([data-theme]) {
       --bg:var(--antique-white); --surface:var(--porcelain);
       --text:var(--dark-coffee); --heading:var(--coffee-bean);
       --muted:color-mix(in srgb, var(--dark-coffee) 68%, var(--antique-white));
@@ -86,6 +108,12 @@ ${opts.fontCss || ""}
   .brand-mark { display:block; width:34px; height:auto; flex:0 0 auto; }
   header h1 { margin:0; color:var(--heading); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:21px; font-weight:700; letter-spacing:.01em; }
   header .sub { color:var(--muted); font-size:13px; }
+  .header-controls { display:flex; align-items:center; gap:12px; margin-left:auto; }
+  .theme-switcher { display:inline-flex; align-items:center; padding:2px; background:var(--surface); border:1px solid var(--line); border-radius:8px; }
+  .theme-choice { border:0; border-radius:6px; padding:4px 9px; background:transparent; color:var(--muted); font:600 11px "Poppins","Avenir Next",Arial,sans-serif; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; }
+  .theme-choice:hover { color:var(--heading); }
+  .theme-choice[aria-pressed="true"] { background:var(--accent); color:var(--coffee-bean); }
+  .theme-choice:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   main { padding:30px 32px 64px; max-width:1200px; margin:0 auto; }
   section { margin:0 0 42px; }
   section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--accent); margin:0 0 14px; font-weight:600; }
@@ -94,7 +122,7 @@ ${opts.fontCss || ""}
   .card .label { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; }
   .card .value { color:var(--heading); font-size:25px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums; }
   .card .value small { font-size:13px; color:var(--muted); font-weight:400; }
-  .usersel { margin-left:auto; color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  .usersel { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
   .usersel select { background:var(--surface); color:var(--text); border:1px solid var(--cornflower-ocean); border-radius:7px; padding:5px 9px; font:13px "Aleo",Georgia,serif; text-transform:none; letter-spacing:normal; }
   .usersel select:focus-visible { outline:2px solid var(--tiger-orange); outline-offset:2px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
@@ -124,7 +152,7 @@ ${opts.fontCss || ""}
   @media (max-width:600px) {
     .header-inner,main { padding-left:18px; padding-right:18px; }
     .header-inner { align-items:flex-start; }
-    .usersel { width:100%; margin-left:45px; }
+    .header-controls { width:100%; margin-left:45px; justify-content:space-between; }
   }
 </style>
 </head>
@@ -141,7 +169,13 @@ ${opts.fontCss || ""}
       <h1>Argus</h1>
     </div>
     <span class="sub">Claude Code, Codex, and Gemini CLI usage${scope} · ${esc(d.range.start)} → ${esc(d.range.end)} · generated ${esc(generated)}</span>
-    ${userSelector}
+    <div class="header-controls">
+      ${userSelector}
+      <div class="theme-switcher" role="group" aria-label="Color theme">
+        <button class="theme-choice" type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+        <button class="theme-choice" type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+      </div>
+    </div>
   </div>
 </header>
 <main>
@@ -233,23 +267,58 @@ ${opts.fontCss || ""}
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
 // Data-series hues are brand colors that read on either background; only the chart
-// chrome (tick/label text, gridlines, tooltip surface) flips with the OS color scheme.
-const DARK = !window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches;
+// chrome (tick/label text, gridlines, tooltip surface) changes with the selected theme.
+const CHART_THEMES = {
+  dark: { grid:'rgba(243,215,186,.18)', muted:'#f3d7ba', panel:'#341f09', fg:'#fefaf5' },
+  light:{ grid:'rgba(52,31,9,.13)', muted:'#6f5331', panel:'#fefaf5', fg:'#1c1105' },
+};
+const currentTheme = () => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+const initialChartTheme = CHART_THEMES[currentTheme()];
 const C = {
   input:'#5dbcdf', output:'#ef8920', cacheRead:'#286992', cacheWrite:'#e2302c', accent:'#ef8920',
-  grid:  DARK ? 'rgba(243,215,186,.18)' : 'rgba(52,31,9,.13)',
-  muted: DARK ? '#f3d7ba' : '#6f5331',
-  panel: DARK ? '#341f09' : '#fefaf5',
-  fg:    DARK ? '#fefaf5' : '#1c1105',
+  grid:initialChartTheme.grid, muted:initialChartTheme.muted,
+  panel:initialChartTheme.panel, fg:initialChartTheme.fg,
 };
-Chart.defaults.color = C.muted;
-Chart.defaults.borderColor = C.grid;
 Chart.defaults.font.family = "Aleo, Georgia, serif";
-Chart.defaults.plugins.tooltip.backgroundColor = C.panel;
-Chart.defaults.plugins.tooltip.titleColor = C.fg;
-Chart.defaults.plugins.tooltip.bodyColor = C.fg;
 Chart.defaults.plugins.tooltip.borderColor = '#286992';
 Chart.defaults.plugins.tooltip.borderWidth = 1;
+
+function applyChartTheme(theme) {
+  const colors = CHART_THEMES[theme];
+  Object.assign(C, colors);
+  Chart.defaults.color = colors.muted;
+  Chart.defaults.borderColor = colors.grid;
+  Chart.defaults.plugins.tooltip.backgroundColor = colors.panel;
+  Chart.defaults.plugins.tooltip.titleColor = colors.fg;
+  Chart.defaults.plugins.tooltip.bodyColor = colors.fg;
+  Object.values(Chart.instances || {}).forEach(chart => {
+    chart.options.color = colors.muted;
+    chart.options.borderColor = colors.grid;
+    const tooltip = chart.options.plugins && chart.options.plugins.tooltip;
+    if (tooltip) {
+      tooltip.backgroundColor = colors.panel;
+      tooltip.titleColor = colors.fg;
+      tooltip.bodyColor = colors.fg;
+    }
+    chart.update('none');
+  });
+}
+function syncThemeButtons(theme) {
+  document.querySelectorAll('[data-theme-choice]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.themeChoice === theme));
+  });
+}
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('argus-theme', theme); } catch {}
+  syncThemeButtons(theme);
+  applyChartTheme(theme);
+}
+document.querySelectorAll('[data-theme-choice]').forEach(button => {
+  button.addEventListener('click', () => setTheme(button.dataset.themeChoice));
+});
+syncThemeButtons(currentTheme());
+applyChartTheme(currentTheme());
 
 const fmt = n => n>=1e9 ? (n/1e9).toFixed(2)+'B' : n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'k' : String(n);
 const usd = n => '$'+(n<1 ? n.toFixed(3) : n.toFixed(2));

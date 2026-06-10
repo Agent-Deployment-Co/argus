@@ -30,11 +30,16 @@ describe("HTML report", () => {
     expect(html).toContain('font-family:"Poppins","Avenir Next",Arial,sans-serif');
     expect(html).toContain('aria-label="The Agent Deployment Co. chevron"');
     expect(html).toContain("input:'#5dbcdf', output:'#ef8920', cacheRead:'#286992'");
-    // Adapts to the OS color scheme: a light-mode block and a runtime detector for chart chrome.
+    // Defaults from the OS, then persists explicit light/dark choices and redraws chart chrome.
     expect(html).toContain("color-scheme:light dark");
     expect(html).toContain("@media (prefers-color-scheme:light)");
+    expect(html).toContain(':root[data-theme="light"]');
     expect(html).toContain("--bg:var(--antique-white)");
-    expect(html).toContain("window.matchMedia('(prefers-color-scheme: dark)')");
+    expect(html).toContain('localStorage.getItem("argus-theme")');
+    expect(html).toContain('data-theme-choice="light"');
+    expect(html).toContain('data-theme-choice="dark"');
+    expect(html).toContain("localStorage.setItem('argus-theme', theme)");
+    expect(html).toContain("chart.update('none')");
     expect(html).not.toContain("--bg:#0f1115");
     expect(html).not.toContain("#6ea8fe");
     expect(html).not.toContain("rgba(217,119,87");
