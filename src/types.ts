@@ -19,6 +19,76 @@ export type { ToolCategory } from "./tool-categories.ts";
 
 export type AgentSource = "claude" | "codex" | "gemini";
 
+export type CapabilityType = "skill" | "tool" | "mcp";
+export type CapabilityOutcome = "success" | "failure" | "partial" | "unknown";
+export type CapabilityAssessmentBasis = "unassessed" | "observed" | "inferred";
+export type CapabilityFailureType =
+  | "authentication"
+  | "authorization"
+  | "timeout"
+  | "not_found"
+  | "invalid_input"
+  | "missing_dependency"
+  | "unsupported_operation"
+  | "user_correction"
+  | "abandoned"
+  | "unknown";
+export type CapabilityEvidenceKind =
+  | "invocation"
+  | "result"
+  | "error"
+  | "status"
+  | "user_correction"
+  | "semantic";
+
+export interface CapabilityRef {
+  type: CapabilityType;
+  /** Stable source-level identity: skill name, raw tool name, or raw MCP tool name. */
+  name: string;
+  displayName: string;
+  /** The source transcript's tool name, including Skill/activate_skill wrappers. */
+  toolName: string;
+  skill?: string;
+  mcpServer?: string;
+  mcpTool?: string;
+}
+
+export interface CapabilityEvidence {
+  kind: CapabilityEvidenceKind;
+  /** Whether the evidence came directly from a transcript or from later inference. */
+  basis: Exclude<CapabilityAssessmentBasis, "unassessed">;
+  /** Sanitized, single-line, bounded text. Never store raw argument/result objects here. */
+  summary: string;
+  timestamp?: number;
+}
+
+export type CapabilityEvidenceInput = Omit<CapabilityEvidence, "summary"> & {
+  summary: unknown;
+};
+
+export interface CapabilityEvent {
+  id: string;
+  source: AgentSource;
+  sessionId: string;
+  project: string;
+  timestamp: number;
+  invocationId?: string;
+  capability: CapabilityRef;
+  action?: string;
+  outcome: CapabilityOutcome;
+  failureType?: CapabilityFailureType;
+  assessmentBasis: CapabilityAssessmentBasis;
+  /** 0 for unassessed events; otherwise a value from 0 to 1. */
+  confidence: number;
+  durationMs?: number;
+  retryOf?: string;
+  evidence: CapabilityEvidence[];
+}
+
+export type CapabilityEventInput = Omit<CapabilityEvent, "evidence"> & {
+  evidence: CapabilityEvidenceInput[];
+};
+
 export type SessionRow = SchemaSessionRow & {
   source: AgentSource;
 };
@@ -73,6 +143,10 @@ export function totalTokens(u: Usage): number {
 export interface ToolUse {
   /** Raw tool name, e.g. "Bash", "Skill", "mcp__fathom__search_meetings". */
   name: string;
+  /** Source-level invocation ID used to correlate later results and errors. */
+  invocationId?: string;
+  /** Invocation timestamp when the source records it separately from token usage. */
+  timestamp?: number;
   /** Canonical category, e.g. "file-io", "mcp", "skill". */
   category: ToolCategory;
   /** For name === "Skill": the invoked skill, e.g. "jj:jj". */
@@ -119,6 +193,8 @@ export interface SessionMeta {
 
 export interface ParseResult {
   messages: MessageRecord[];
+  /** Source-neutral capability invocations and their current outcome assessments. */
+  capabilityEvents: CapabilityEvent[];
   /** sessionId -> metadata */
   sessions: Map<string, SessionMeta>;
   /** full tool name -> result-token stats */

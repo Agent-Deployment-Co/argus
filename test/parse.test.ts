@@ -60,6 +60,27 @@ describe("parseAll", () => {
     expect(edit.category).toBe("file-io");
   });
 
+  test("emits source-neutral capability events without assuming outcomes", () => {
+    expect(parsed.capabilityEvents).toHaveLength(3);
+    expect(parsed.capabilityEvents.map((event) => event.capability.type).sort()).toEqual([
+      "mcp",
+      "skill",
+      "tool",
+    ]);
+    expect(parsed.capabilityEvents.every((event) => event.outcome === "unknown")).toBe(true);
+    expect(parsed.capabilityEvents.every((event) => event.assessmentBasis === "unassessed")).toBe(true);
+    expect(parsed.capabilityEvents.every((event) => event.confidence === 0)).toBe(true);
+
+    const skill = parsed.capabilityEvents.find((event) => event.capability.type === "skill")!;
+    expect(skill.capability.name).toBe("jj:jj");
+    expect(skill.invocationId).toBe("t3");
+
+    const mcp = parsed.capabilityEvents.find((event) => event.capability.type === "mcp")!;
+    expect(mcp.capability.mcpServer).toBe("fathom");
+    expect(mcp.capability.mcpTool).toBe("search_meetings");
+    expect(mcp.timestamp).toBe(Date.parse("2026-06-01T17:00:01.500Z"));
+  });
+
   test("attributes tool-result token weight to the producing tool", () => {
     const edit = parsed.toolResults.get("Edit");
     expect(edit?.count).toBe(1);
@@ -113,6 +134,15 @@ describe("parseAll with Codex transcripts", () => {
     expect(stat?.approxTokens).toBeGreaterThan(0);
   });
 
+  test("preserves Codex invocation IDs and timestamps in capability events", () => {
+    expect(parsed.capabilityEvents).toHaveLength(2);
+    const exec = parsed.capabilityEvents.find((event) => event.capability.name === "exec_command")!;
+    expect(exec.source).toBe("codex");
+    expect(exec.invocationId).toBe("call-1");
+    expect(exec.timestamp).toBe(Date.parse("2026-06-03T13:00:03.000Z"));
+    expect(exec.outcome).toBe("unknown");
+  });
+
   test("records Codex session metadata and first prompt", () => {
     const meta = parsed.sessions.get("codex:codex-sess1")!;
     expect(meta.project).toBe("fixture/codex-proj");
@@ -157,6 +187,15 @@ describe("parseAll with Gemini transcripts", () => {
     expect(read.category).toBe("file-io");
     expect(parsed.toolResults.get("read_file")?.count).toBe(1);
     expect(parsed.toolResults.get("read_file")?.approxTokens).toBeGreaterThan(0);
+  });
+
+  test("preserves Gemini invocation IDs in capability events", () => {
+    expect(parsed.capabilityEvents).toHaveLength(4);
+    const read = parsed.capabilityEvents.find((event) => event.capability.name === "read_file")!;
+    expect(read.source).toBe("gemini");
+    expect(read.invocationId).toBe("call-1");
+    expect(read.capability.type).toBe("tool");
+    expect(read.outcome).toBe("unknown");
   });
 
   test("resolves project roots and first prompts", () => {
