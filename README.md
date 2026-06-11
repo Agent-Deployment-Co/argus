@@ -49,6 +49,7 @@ The report is written to `argus-report.html` by default and works fully offline.
 | `--summarize-model <id>` | Model used for summaries |
 | `--open` | Open the generated report (macOS) |
 | `--json` | Write the aggregate data as JSON instead of HTML |
+| `--no-cache` | Parse transcripts directly without the incremental fragment cache |
 | `-h, --help` | Show help |
 
 ### Examples
@@ -69,12 +70,29 @@ npx @agentdeploymentco/argus report --summarize --open
 
 # Raw aggregate data
 npx @agentdeploymentco/argus report --json -o argus.json
+
+# Bypass the local fragment cache for one run
+npx @agentdeploymentco/argus report --no-cache
 ```
 
 Without `--summarize`, Argus creates an instant heuristic summary from the first prompt,
 skills, tools, and edited files. With `--summarize`, it uses `claude -p` to create a short
 narrative and caches the result in `~/.claude/argus-cache.json`. Only new or changed
 sessions are summarized again.
+
+## Incremental cache
+
+Argus stores parsed transcript fragments in a private local SQLite cache so unchanged
+transcripts do not need to be reparsed on every run. The cache contains normalized usage,
+session, tool, and auxiliary metadata; it does not change what `report` keeps local or what
+`push` sends.
+
+Inspect or rebuild the cache when troubleshooting:
+
+```bash
+npx @agentdeploymentco/argus cache-status
+npx @agentdeploymentco/argus cache-rebuild
+```
 
 ## Keep and analyze data over time
 
