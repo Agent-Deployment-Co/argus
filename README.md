@@ -19,6 +19,9 @@ Reports include:
 
 Run `argus` directly with `npx`.
 
+Argus's published CLI requires Node.js 20.17 or newer. The repository uses Bun for
+development and tests, but the installed npm executable runs under Node.
+
 Print a compact overview in your terminal:
 
 ```bash
