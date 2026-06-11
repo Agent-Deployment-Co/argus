@@ -1,0 +1,19 @@
+{"bad":
+{"timestamp":"2026-06-11T15:00:00.000Z","type":"session_meta","payload":{"id":"fragment-sess","cwd":"/Users/fixture/original"}}
+{"timestamp":"2026-06-11T15:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first fragment prompt"}]}}
+{"timestamp":"2026-06-11T15:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"later prompt"}]}}
+{"timestamp":"2026-06-11T15:00:03.000Z","type":"turn_context","payload":{"cwd":"/Users/fixture/one","model":"gpt-5.5"}}
+{"timestamp":"2026-06-11T15:00:04.000Z","type":"response_item","payload":{"type":"function_call","name":"Skill","call_id":"call-skill","arguments":"{\"skill\":\"jj:jj\",\"args\":\"status\"}"}}
+{"timestamp":"2026-06-11T15:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":25,"output_tokens":10,"total_tokens":110}}}}
+{"timestamp":"2026-06-11T15:00:06.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"cached_input_tokens":0,"output_tokens":1,"total_tokens":21}}}}
+{"timestamp":"2026-06-11T15:00:07.000Z","type":"turn_context","payload":{"cwd":"/Users/fixture/two","model":"gpt-5.4-mini"}}
+{"timestamp":"2026-06-11T15:00:08.000Z","type":"response_item","payload":{"type":"function_call","namespace":"mcp__github","name":"get_issue","call_id":"call-shared","arguments":"{\"issue\":19,\"file_path\":\"/Users/fixture/two/src/a.ts\"}"}}
+{"timestamp":"2026-06-11T15:00:09.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-shared","output":"issue result with enough text to estimate tokens"}}
+{"timestamp":"2026-06-11T15:00:10.000Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call-patch","name":"apply_patch","input":"*** Begin Patch\n*** End Patch"}}
+{"timestamp":"2026-06-11T15:00:11.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-patch","output":"Success. Updated the file."}}
+{"timestamp":"2026-06-11T15:00:12.000Z","type":"response_item","payload":{"type":"web_search_call","id":"ws-1","status":"completed","action":{"type":"search","query":"cache contract"}}}
+{"timestamp":"2026-06-11T15:00:13.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":99}}}}
+{"timestamp":"2026-06-11T15:00:14.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-cleared","arguments":"{\"cmd\":\"bun test\"}"}}
+{"timestamp":"2026-06-11T15:00:15.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0},"total_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":50,"total_tokens":550}}}}
+{"timestamp":"2026-06-11T15:00:16.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":7}}}}
+{"timestamp":"2026-06-11T15:00:17.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"must remain uncorrelated"}}
