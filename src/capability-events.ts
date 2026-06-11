@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { toolDisplayName } from "./tool-categories.ts";
 import type {
   CapabilityAssessmentBasis,
@@ -13,7 +14,7 @@ import type {
 export const CAPABILITY_EVIDENCE_MAX_CHARS = 280;
 
 const SECRET_ASSIGNMENT =
-  /\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\b(\s*[:=]\s*)(["']?)[^\s,"'}]+/gi;
+  /\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,"'}]+)/gi;
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 
 export function sanitizeCapabilityEvidenceText(value: unknown): string {
@@ -94,13 +95,14 @@ export function isSuccessfulCapabilityEvent(event: CapabilityEvent): boolean {
 }
 
 export function capabilityRef(toolUse: ToolUse): CapabilityRef {
-  if ((toolUse.name === "Skill" || toolUse.name === "activate_skill") && toolUse.skill) {
+  if (toolUse.name === "Skill" || toolUse.name === "activate_skill") {
+    const skill = toolUse.skill || "(unknown skill)";
     return {
       type: "skill",
-      name: toolUse.skill,
-      displayName: toolUse.skill,
+      name: skill,
+      displayName: skill,
       toolName: toolUse.name,
-      skill: toolUse.skill,
+      ...(toolUse.skill ? { skill: toolUse.skill } : {}),
     };
   }
   if (toolUse.mcpServer && toolUse.mcpTool) {
@@ -121,19 +123,23 @@ export function capabilityRef(toolUse: ToolUse): CapabilityRef {
   };
 }
 
-function eventId(message: MessageRecord, toolUse: ToolUse, messageIndex: number, toolIndex: number): string {
-  const invocation = toolUse.invocationId || `${toolUse.timestamp ?? message.ts}:${messageIndex}:${toolIndex}`;
+function eventId(message: MessageRecord, toolUse: ToolUse, toolIndex: number): string {
+  const timestamp = toolUse.timestamp ?? message.ts;
+  const generatedId = createHash("sha256")
+    .update([message.source, message.sessionId, timestamp, toolUse.name, toolIndex].join("\0"))
+    .digest("hex");
+  const invocation = toolUse.invocationId || `generated-${generatedId}`;
   return [message.source, message.sessionId, invocation].map(encodeURIComponent).join(":");
 }
 
 export function capabilityEventsFromMessages(messages: MessageRecord[]): CapabilityEvent[] {
   const events: CapabilityEvent[] = [];
-  messages.forEach((message, messageIndex) => {
+  messages.forEach((message) => {
     message.toolUses.forEach((toolUse, toolIndex) => {
       const timestamp = toolUse.timestamp ?? message.ts;
       events.push(
         createCapabilityEvent({
-          id: eventId(message, toolUse, messageIndex, toolIndex),
+          id: eventId(message, toolUse, toolIndex),
           source: message.source,
           sessionId: message.sessionId,
           project: message.project,

@@ -14,7 +14,8 @@ longitudinal aggregate shape is defined.
 Each `CapabilityEvent` records:
 
 - source, session, project, and invocation timestamp
-- source invocation ID when available
+- source invocation ID when available; otherwise a deterministic ID derived from session,
+  invocation timestamp, tool name, and position within the message
 - normalized capability identity
 - outcome and failure classification
 - whether the assessment is observed, inferred, or not yet assessed
@@ -22,7 +23,8 @@ Each `CapabilityEvent` records:
 
 Capability types are:
 
-- `skill`: an explicit `Skill` or `activate_skill` invocation with a skill name
+- `skill`: an explicit `Skill` or `activate_skill` invocation; malformed calls without a
+  resolved skill name remain skill events under the `(unknown skill)` identity
 - `mcp`: an `mcp__<server>__<tool>` invocation, retaining both server and tool identity
 - `tool`: every other built-in or custom tool invocation
 

@@ -69,11 +69,13 @@ describe("capability event model", () => {
 
   test("bounds and redacts evidence text", () => {
     const sanitized = sanitizeCapabilityEvidenceText(
-      `Bearer abc.def api_key=top-secret password: hunter2 ${"x".repeat(500)}`,
+      `Bearer abc.def api_key="top-secret" password: 'hunter2' ${"x".repeat(500)}`,
     );
     expect(sanitized).toContain("Bearer [REDACTED]");
     expect(sanitized).toContain("api_key=[REDACTED]");
     expect(sanitized).toContain("password: [REDACTED]");
+    expect(sanitized).not.toContain('[REDACTED]"');
+    expect(sanitized).not.toContain("[REDACTED]'");
     expect(sanitized).not.toContain("top-secret");
     expect(sanitized).not.toContain("hunter2");
     expect(sanitized.length).toBeLessThanOrEqual(CAPABILITY_EVIDENCE_MAX_CHARS);
@@ -111,5 +113,55 @@ describe("capability event model", () => {
       "github · get_issue",
     );
     expect(events.every((event) => event.evidence[0]?.kind === "invocation")).toBe(true);
+  });
+
+  test("keeps generated event IDs stable when unrelated messages are added", () => {
+    const target: MessageRecord = {
+      source: "codex",
+      sessionId: "session-1",
+      project: "fixture/project",
+      cwd: "/fixture/project",
+      gitBranch: "",
+      ts: 200,
+      date: "2026-06-10",
+      model: "fixture-model",
+      usage: emptyUsage(),
+      attributionSkill: null,
+      toolUses: [{ name: "web_search_call", timestamp: 150, category: "other" }],
+    };
+    const earlier: MessageRecord = {
+      ...target,
+      sessionId: "unrelated-session",
+      ts: 100,
+      toolUses: [{ name: "Edit", category: "file-io" }],
+    };
+
+    const originalId = capabilityEventsFromMessages([target])[0]?.id;
+    const expandedId = capabilityEventsFromMessages([earlier, target]).find(
+      (event) => event.sessionId === target.sessionId,
+    )?.id;
+    expect(expandedId).toBe(originalId);
+    expect(originalId).toContain("generated-");
+  });
+
+  test("keeps malformed skill wrappers classified as skills", () => {
+    const message: MessageRecord = {
+      source: "gemini",
+      sessionId: "session-1",
+      project: "fixture/project",
+      cwd: "/fixture/project",
+      gitBranch: "",
+      ts: 100,
+      date: "2026-06-10",
+      model: "fixture-model",
+      usage: emptyUsage(),
+      attributionSkill: null,
+      toolUses: [{ name: "activate_skill", invocationId: "skill-1", category: "skill" }],
+    };
+
+    const event = capabilityEventsFromMessages([message])[0]!;
+    expect(event.capability.type).toBe("skill");
+    expect(event.capability.name).toBe("(unknown skill)");
+    expect(event.capability.skill).toBeUndefined();
   });
 });
