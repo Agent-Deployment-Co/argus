@@ -92,6 +92,11 @@ Global reconciliation owns:
 - final message ordering and tool-result aggregation
 - capability-event generation exactly once from reconciled messages
 
+For Gemini alternate representations, reconciliation preserves the existing CLI policy:
+group fragments by logical session, prefer replayable JSONL over legacy JSON, then prefer the
+newest `lastUpdated` value within the same representation. A stable fragment ID breaks any
+remaining tie so filesystem traversal order cannot change the selected conversation.
+
 ## Discovery and deletion
 
 Discovery results distinguish `complete`, `missing`, `unreadable`, and `partial` scans.
