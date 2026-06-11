@@ -50,6 +50,9 @@ The report is written to `argus-report.html` by default and works fully offline.
 | `--open` | Open the generated report (macOS) |
 | `--json` | Write the aggregate data as JSON instead of HTML |
 | `--no-cache` | Parse transcripts directly without the incremental fragment cache |
+| `--agentsview` | Import compatible AgentsView data when available (default) |
+| `--no-agentsview` | Disable AgentsView import |
+| `--agentsview-db <path>` | Read AgentsView data from a specific SQLite database path |
 | `-h, --help` | Show help |
 
 ### Examples
@@ -73,6 +76,10 @@ npx @agentdeploymentco/argus report --json -o argus.json
 
 # Bypass the local fragment cache for one run
 npx @agentdeploymentco/argus report --no-cache
+
+# Control optional AgentsView import
+npx @agentdeploymentco/argus report --no-agentsview
+npx @agentdeploymentco/argus report --agentsview-db /path/to/agentsview.sqlite3
 ```
 
 Without `--summarize`, Argus creates an instant heuristic summary from the first prompt,
@@ -86,6 +93,11 @@ Argus stores parsed transcript fragments in a private local SQLite cache so unch
 transcripts do not need to be reparsed on every run. The cache contains normalized usage,
 session, tool, and auxiliary metadata; it does not change what `report` keeps local or what
 `push` sends.
+
+When a compatible local AgentsView database is available, Argus imports read-only provenance
+into the same cache. Native transcript parsing remains authoritative for sources that have
+local transcript fragments; AgentsView facts are used only for selected sources without native
+fragments. Use `--no-agentsview` to disable this bridge.
 
 Inspect or rebuild the cache when troubleshooting:
 
