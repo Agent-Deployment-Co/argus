@@ -44,6 +44,8 @@ interface Flags {
   open: boolean;
   json: boolean;
   cache: boolean;
+  agentsView: "auto" | "off";
+  agentsViewDatabasePath?: string;
   help: boolean;
   // push & login
   endpoint?: string;
@@ -60,6 +62,7 @@ function parseArgs(argv: string[]): Flags {
     open: false,
     json: false,
     cache: true,
+    agentsView: "auto",
     help: false,
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
     org: process.env.ARGUS_ORG,
@@ -83,6 +86,9 @@ function parseArgs(argv: string[]): Flags {
       case "--open": f.open = true; break;
       case "--json": f.json = true; break;
       case "--no-cache": f.cache = false; break;
+      case "--agentsview": f.agentsView = "auto"; break;
+      case "--no-agentsview": f.agentsView = "off"; break;
+      case "--agentsview-db": f.agentsViewDatabasePath = next(); break;
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
       case "--org": f.org = next(); break;
@@ -126,6 +132,9 @@ Report options:
   --open                   open the report in the default browser when done (macOS)
   --json                   write raw aggregate JSON to --out instead of HTML
   --no-cache               parse transcripts directly without the fragment cache
+  --agentsview             auto-detect AgentsView imports (default)
+  --no-agentsview          disable AgentsView discovery/import
+  --agentsview-db <path>   read a specific AgentsView sessions.db
 
 Login options:
   --endpoint <url>         SSO service URL     (default: https://argus.agentdeployment.co)
@@ -154,7 +163,11 @@ type Log = (s: string) => void;
 async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
   log("Parsing transcripts…");
   const parsed = flags.cache
-    ? (await parseAllIncrementalDetailed({ sources: sourcesFor(flags.source) }))
+    ? (await parseAllIncrementalDetailed({
+        sources: sourcesFor(flags.source),
+        agentsView: flags.agentsView,
+        agentsViewDatabasePath: flags.agentsViewDatabasePath,
+      }))
     : { parsed: parseAll({ sources: sourcesFor(flags.source) }), stats: undefined };
   if (flags.cache && parsed.stats) log(`  Cache: ${cacheStatsSummary(parsed.stats)}`);
   if (flags.cache && "diagnostics" in parsed) {
