@@ -1,6 +1,6 @@
 {
   "name": "@agentdeploymentco/argus",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
   "type": "module",
   "bin": {
