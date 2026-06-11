@@ -84,6 +84,7 @@ describe("aggregate", () => {
     });
     const tiered: ParseResult = {
       messages: [message("g1"), message("g2")],
+      capabilityEvents: [],
       sessions: new Map(),
       toolResults: new Map(),
     };

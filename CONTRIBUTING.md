@@ -42,6 +42,8 @@ parse.ts -> aggregate.ts -> report.ts or push.ts
   the terminal overview, HTML report, login, and push commands.
 - `src/parse.ts` reads Claude, Codex, and Gemini transcripts into normalized message and
   session records.
+- `src/capability-events.ts` defines source-neutral skill/tool/MCP events, outcome
+  assessment invariants, and bounded evidence handling.
 - `src/aggregate.ts` converts parsed records into the dashboard model and computes
   breakdowns and estimated cost.
 - `src/report.ts` renders the self-contained HTML report.
@@ -70,6 +72,12 @@ Transcript parsing is the most sensitive part of the CLI. Preserve these behavio
 - Associate tool results with the producing tool through `tool_use_id` or `call_id`.
 - Use `tool-categories.ts` from both parsing and aggregation so tool names and categories
   remain consistent.
+- Preserve source invocation IDs and timestamps so capability outcomes can be enriched
+  without source-specific aggregation logic.
+- Treat an invocation with no assessed result as `unknown`, never as implicit success.
+
+See [docs/capability-events.md](docs/capability-events.md) for capability-event semantics,
+source mappings, and evidence privacy constraints.
 
 Cost must be calculated from individual messages before aggregation. A session can use
 multiple models, so pricing combined token totals once would produce incorrect results.

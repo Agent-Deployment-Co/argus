@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
+import { capabilityEventsFromMessages } from "./capability-events.ts";
 import { CODEX_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
@@ -18,8 +19,10 @@ import {
 const FILE_TOOLS = new Set(["Edit", "Write", "Read", "NotebookEdit", "MultiEdit"]);
 
 /** Start a ToolUse with canonical category and MCP server/tool parsing applied. */
-function newToolUse(name: string): ToolUse {
+function newToolUse(name: string, invocationId?: string, timestamp?: number): ToolUse {
   const tu: ToolUse = { name, category: categorizeTool(name) };
+  if (invocationId) tu.invocationId = invocationId;
+  if (timestamp != null && Number.isFinite(timestamp)) tu.timestamp = timestamp;
   const mcp = parseMcpTool(name);
   if (mcp) {
     tu.mcpServer = mcp.server;
@@ -142,11 +145,11 @@ function estimateTokens(content: unknown): number {
   return Math.round(chars / 4);
 }
 
-function toolUsesFrom(content: any[]): ToolUse[] {
+function toolUsesFrom(content: any[], timestamp?: number): ToolUse[] {
   const out: ToolUse[] = [];
   for (const part of content) {
     if (!part || part.type !== "tool_use" || typeof part.name !== "string") continue;
-    const tu = newToolUse(part.name);
+    const tu = newToolUse(part.name, typeof part.id === "string" ? part.id : undefined, timestamp);
     const input = part.input ?? {};
     if (part.name === "Skill" && typeof input.skill === "string") {
       tu.skill = input.skill;
@@ -191,9 +194,14 @@ function codexSessionId(filePath: string, meta: any): string {
   return match?.[1] || name;
 }
 
-function toolUseFromCodexCall(name: string, rawArgs: unknown): ToolUse {
+function toolUseFromCodexCall(
+  name: string,
+  rawArgs: unknown,
+  invocationId?: string,
+  timestamp?: number,
+): ToolUse {
   const args = parseJsonObject(rawArgs);
-  const tu = newToolUse(name);
+  const tu = newToolUse(name, invocationId, timestamp);
   if (name === "Skill" && typeof args.skill === "string") {
     tu.skill = args.skill;
     if (typeof args.args === "string" && args.args) tu.args = args.args.slice(0, 280);
@@ -217,9 +225,11 @@ function textFromGeminiContent(content: unknown): string {
     .slice(0, 500);
 }
 
-function toolUseFromGeminiCall(call: any): ToolUse | null {
+function toolUseFromGeminiCall(call: any, timestamp?: number): ToolUse | null {
   if (!call || typeof call.name !== "string" || !call.name) return null;
-  const tu = newToolUse(call.name);
+  const invocationId =
+    typeof call.id === "string" ? call.id : typeof call.callId === "string" ? call.callId : undefined;
+  const tu = newToolUse(call.name, invocationId, timestamp);
   const args = call.args && typeof call.args === "object" ? call.args : {};
   const filePath = args.file_path ?? args.filePath ?? args.path;
   if (typeof filePath === "string" && filePath) tu.filePath = filePath;
@@ -579,7 +589,9 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             // Continuation line of the message we're already building: merge its tool_uses,
             // but don't re-count the (repeated) usage.
             if (msgId && msgId === openMsgId && openRecord) {
-              if (Array.isArray(content)) openRecord.toolUses.push(...toolUsesFrom(content));
+              if (Array.isArray(content)) {
+                openRecord.toolUses.push(...toolUsesFrom(content, timestampMs(o.timestamp)));
+              }
               continue;
             }
             if (msgId && seenMessageIds.has(msgId)) continue; // replayed copy of a completed message
@@ -597,7 +609,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
               model: o.message.model || "(unknown)",
               usage: normalizeUsage(o.message.usage),
               attributionSkill: o.attributionSkill ?? null,
-              toolUses: Array.isArray(content) ? toolUsesFrom(content) : [],
+              toolUses: Array.isArray(content) ? toolUsesFrom(content, ts) : [],
             };
             messages.push(rec);
             openMsgId = msgId ?? null;
@@ -658,7 +670,14 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
 
           if (o.type === "response_item" && payload.type === "function_call" && typeof payload.name === "string") {
-            pendingToolUses.push(toolUseFromCodexCall(payload.name, payload.arguments));
+            pendingToolUses.push(
+              toolUseFromCodexCall(
+                payload.name,
+                payload.arguments,
+                typeof payload.call_id === "string" ? payload.call_id : undefined,
+                timestampMs(o.timestamp),
+              ),
+            );
             if (typeof payload.call_id === "string") callIdToName.set(payload.call_id, payload.name);
             continue;
           }
@@ -678,7 +697,13 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             typeof payload.type === "string" &&
             payload.type.endsWith("_call")
           ) {
-            pendingToolUses.push(newToolUse(payload.type));
+            const invocationId =
+              typeof payload.call_id === "string"
+                ? payload.call_id
+                : typeof payload.id === "string"
+                  ? payload.id
+                  : undefined;
+            pendingToolUses.push(newToolUse(payload.type, invocationId, timestampMs(o.timestamp)));
             continue;
           }
 
@@ -771,7 +796,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           const toolUses: ToolUse[] = [];
           if (Array.isArray(message.toolCalls)) {
             for (const call of message.toolCalls) {
-              const toolUse = toolUseFromGeminiCall(call);
+              const toolUse = toolUseFromGeminiCall(call, ts);
               if (toolUse) toolUses.push(toolUse);
               if (!call || typeof call.name !== "string" || !Object.hasOwn(call, "result")) continue;
               const stat = toolResults.get(call.name) || { count: 0, approxTokens: 0 };
@@ -803,7 +828,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
   }
 
   messages.sort((a, b) => a.ts - b.ts);
-  return { messages, sessions, toolResults };
+  return { messages, capabilityEvents: capabilityEventsFromMessages(messages), sessions, toolResults };
 }
 
 export { projectLabel };
