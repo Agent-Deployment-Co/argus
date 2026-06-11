@@ -24,7 +24,8 @@ bun run typecheck                         # tsc --noEmit (also run in CI)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `bun x tsc --noEmit` then `bun test` on every push/PR.
-There is no separate build step — `src/index.ts` is the executable `bin` (run directly by Bun).
+Development runs `src/index.ts` directly with Bun. The published npm `bin` is
+`dist/index.js`, built as a Node-targeted bundle with `bun run build`.
 
 ## Architecture
 
