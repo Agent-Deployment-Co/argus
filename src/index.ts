@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { aggregate } from "./aggregate.ts";
 import {
@@ -27,9 +27,10 @@ import { renderHtml } from "./report.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
-import { ACCESS_TOKEN_FILE } from "./paths.ts";
+import { ACCESS_TOKEN_FILE, FRAGMENT_CACHE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
+import type { ParserDiagnostic } from "./cache-contract.ts";
 import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
 
 interface Flags {
@@ -159,6 +160,49 @@ function withinRange(date: string, since?: string, until?: string): boolean {
 
 type Log = (s: string) => void;
 
+function diagnosticKey(entry: ParserDiagnostic): string {
+  return `${entry.severity}\0${entry.code}\0${entry.message}`;
+}
+
+function uniqueDiagnostics(entries: ParserDiagnostic[]): ParserDiagnostic[] {
+  const seen = new Set<string>();
+  const out: ParserDiagnostic[] = [];
+  for (const entry of entries) {
+    const key = diagnosticKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
+function logCacheDiagnostics(
+  diagnostics: ParserDiagnostic[],
+  flags: Flags,
+  log: Log,
+): void {
+  const surfacedInfo = new Set([
+    "agentsview_import_used",
+    "agentsview_native_precedence",
+    "cache_file_changed",
+    "cache_parser_version_changed",
+    "cache_contract_version_changed",
+    "cache_fragment_unavailable",
+  ]);
+  if (flags.agentsView === "off") surfacedInfo.add("agentsview_disabled");
+  if (flags.agentsViewDatabasePath) surfacedInfo.add("agentsview_unavailable");
+
+  const surfaced = uniqueDiagnostics(diagnostics).filter(
+    (entry) => entry.severity !== "info" || surfacedInfo.has(entry.code),
+  );
+  const important = surfaced.filter((entry) => entry.severity !== "info").slice(0, 5);
+  const info = surfaced.filter((entry) => entry.severity === "info").slice(0, 5);
+  for (const entry of important) log(`  ! ${entry.message}`);
+  for (const entry of info) log(`  i ${entry.message}`);
+  const omitted = surfaced.length - important.length - info.length;
+  if (omitted > 0) log(`  i ${omitted} additional cache diagnostics omitted.`);
+}
+
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
 async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
   log("Parsing transcripts…");
@@ -169,13 +213,13 @@ async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
         agentsViewDatabasePath: flags.agentsViewDatabasePath,
       }))
     : { parsed: parseAll({ sources: sourcesFor(flags.source) }), stats: undefined };
-  if (flags.cache && parsed.stats) log(`  Cache: ${cacheStatsSummary(parsed.stats)}`);
+  if (flags.cache && parsed.stats && "diagnostics" in parsed) {
+    log(`  Cache: ${cacheStatsSummary(parsed.stats, parsed.diagnostics)}`);
+  } else if (flags.cache && parsed.stats) {
+    log(`  Cache: ${cacheStatsSummary(parsed.stats)}`);
+  }
   if (flags.cache && "diagnostics" in parsed) {
-    const important = parsed.diagnostics.filter((entry) => entry.severity !== "info").slice(0, 5);
-    for (const entry of important) log(`  ! ${entry.message}`);
-    if (parsed.diagnostics.length > important.length) {
-      log(`  ! ${parsed.diagnostics.length - important.length} additional cache diagnostics omitted.`);
-    }
+    logCacheDiagnostics(parsed.diagnostics, flags, log);
   }
   if (!flags.cache) log("  Cache: disabled.");
   const parseResult = parsed.parsed;
@@ -247,6 +291,18 @@ function summary(dash: Dashboard): string {
     `${dash.totals.sessions} sessions · ${dash.totals.messages} msgs · ` +
     `${(dash.totals.total / 1e6).toFixed(2)}M tokens · $${dash.totals.cost.toFixed(2)} est.`
   );
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB"];
+  let amount = value / 1024;
+  let unit = units[0]!;
+  for (let i = 1; i < units.length && amount >= 1024; i++) {
+    amount /= 1024;
+    unit = units[i]!;
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${unit}`;
 }
 
 async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<void> {
@@ -345,17 +401,43 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
 }
 
 async function runCacheStatus(log: Log): Promise<void> {
-  const cache = await openFragmentCache();
+  log(`Cache path: ${FRAGMENT_CACHE_FILE}`);
+  let cache;
+  try {
+    cache = await openFragmentCache();
+  } catch (err) {
+    log(`Cache unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    log("Run `argus cache-rebuild` to recreate the local fragment cache.");
+    process.exit(1);
+  }
   try {
     const rows = await cache.list();
     const successful = rows.filter((row) => row.status === "success");
     const bySource = new Map<string, number>();
+    const byKind = new Map<string, number>();
+    const byStatus = new Map<string, number>();
     for (const row of successful) {
       bySource.set(row.source ?? "external", (bySource.get(row.source ?? "external") ?? 0) + 1);
+      byKind.set(row.kind, (byKind.get(row.kind) ?? 0) + 1);
+    }
+    for (const row of rows) byStatus.set(row.status, (byStatus.get(row.status) ?? 0) + 1);
+    try {
+      log(`Cache size: ${formatBytes(statSync(FRAGMENT_CACHE_FILE).size)}`);
+    } catch {
+      log("Cache size: unavailable");
     }
     log(`Cache fragments: ${successful.length} successful / ${rows.length} total`);
+    for (const [status, count] of [...byStatus.entries()].sort()) {
+      log(`  status:${status}: ${count}`);
+    }
+    for (const [kind, count] of [...byKind.entries()].sort()) {
+      log(`  kind:${kind}: ${count}`);
+    }
     for (const [source, count] of [...bySource.entries()].sort()) {
       log(`  ${source}: ${count}`);
+    }
+    if (rows.some((row) => row.status !== "success")) {
+      log("Some cached fragments are not reusable; the next report can reparse or replace them.");
     }
   } finally {
     await cache.close();

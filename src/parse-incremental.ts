@@ -5,6 +5,7 @@ import {
   isAuthoritativeDiscovery,
   sameFileFingerprint,
   type AuxiliaryParserAdapter,
+  type CachedFragmentMetadata,
   type CacheFragment,
   type CompleteDiscovery,
   type DiscoveryResult,
@@ -138,6 +139,68 @@ function auxiliaryFragmentCacheable(
   );
 }
 
+function cacheMissDiagnostic(
+  metadata: CachedFragmentMetadata | undefined,
+  fragment: CacheFragment | undefined,
+  parser: { name: string; source: AgentSource; version: string },
+  file: CompleteDiscovery["files"][number],
+  kind: "transcript" | "auxiliary",
+): ParserDiagnostic | undefined {
+  if (!metadata) return undefined;
+  const label = `${parser.source} ${kind} ${file.file.relativePath}`;
+  if (metadata.status !== "success") {
+    return diagnostic(
+      "cache_previous_fragment_not_successful",
+      `Reparsing ${label} because the previous cached fragment is ${metadata.status}.`,
+      "info",
+    );
+  }
+  if (!fragment) {
+    return diagnostic(
+      "cache_fragment_unavailable",
+      `Reparsing ${label} because cached metadata exists but the fragment could not be loaded.`,
+      "warning",
+    );
+  }
+  if (fragment.kind !== kind) {
+    return diagnostic(
+      "cache_fragment_kind_changed",
+      `Reparsing ${label} because the cached fragment kind changed from ${fragment.kind}.`,
+      "info",
+    );
+  }
+  if (fragment.contractVersion !== 1) {
+    return diagnostic(
+      "cache_contract_version_changed",
+      `Reparsing ${label} because the cached contract version is ${fragment.contractVersion}.`,
+      "info",
+    );
+  }
+  if (
+    fragment.parser.name !== parser.name ||
+    fragment.parser.source !== parser.source ||
+    fragment.parser.version !== parser.version
+  ) {
+    return diagnostic(
+      "cache_parser_version_changed",
+      `Reparsing ${label} because the parser changed from ${fragment.parser.name}@${fragment.parser.version} to ${parser.name}@${parser.version}.`,
+      "info",
+    );
+  }
+  if (!sameFileFingerprint(fragment.snapshot.fingerprint, file.fingerprint)) {
+    return diagnostic(
+      "cache_file_changed",
+      `Reparsing ${label} because its filesystem fingerprint changed.`,
+      "info",
+    );
+  }
+  return diagnostic(
+    "cache_fragment_not_reusable",
+    `Reparsing ${label} because the cached fragment was not reusable.`,
+    "info",
+  );
+}
+
 async function cachedFragmentsForRoot(
   cache: FragmentCache,
   source: AgentSource,
@@ -192,6 +255,8 @@ async function collectTranscriptFragments(
       fragments.push(cached);
       continue;
     }
+    const miss = cacheMissDiagnostic(metadata, cached, parser.parser, file, "transcript");
+    if (miss) diagnostics.push(miss);
 
     const result = parser.parseFile(file);
     if (result.status === "current") {
@@ -251,6 +316,8 @@ async function collectAuxiliaryFragments(
       fragments.push(cached);
       continue;
     }
+    const miss = cacheMissDiagnostic(metadata, cached, parser.parser, file, "auxiliary");
+    if (miss) diagnostics.push(miss);
 
     const result = parser.parseFile(file);
     if (result.status === "current") {
@@ -725,7 +792,33 @@ export async function parseAllIncremental(
   return (await parseAllIncrementalDetailed(opts)).parsed;
 }
 
-export function cacheStatsSummary(stats: IncrementalCacheStats): string {
-  if (stats.fallback) return "cache fallback";
-  return `${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
+export function cacheRunModeSummary(
+  stats: IncrementalCacheStats,
+  diagnostics: ParserDiagnostic[] = [],
+): string {
+  if (stats.fallback) return "raw parser fallback";
+  const agentsViewUsed = diagnostics.some((entry) => entry.code === "agentsview_import_used");
+  const agentsViewProvenance = diagnostics.some(
+    (entry) => entry.code === "agentsview_native_precedence",
+  );
+  const nativeTouched =
+    stats.hits > 0 ||
+    stats.parsed > 0 ||
+    stats.replaced > 0 ||
+    stats.deleted > 0 ||
+    stats.unstable > 0 ||
+    stats.failed > 0 ||
+    stats.incompleteDiscoveries > 0;
+  if (agentsViewUsed && nativeTouched) return "mixed native + AgentsView cache";
+  if (agentsViewUsed || (stats.imported > 0 && !nativeTouched)) return "AgentsView-assisted cache";
+  if (agentsViewProvenance || stats.imported > 0) return "native cache with AgentsView provenance";
+  return "native cache";
+}
+
+export function cacheStatsSummary(
+  stats: IncrementalCacheStats,
+  diagnostics: ParserDiagnostic[] = [],
+): string {
+  if (stats.fallback) return cacheRunModeSummary(stats, diagnostics);
+  return `${cacheRunModeSummary(stats, diagnostics)}: ${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
 }
