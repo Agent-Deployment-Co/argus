@@ -12,7 +12,8 @@ import { join } from "node:path";
 import sqlite3 from "sqlite3";
 import { openFragmentCache } from "../src/cache-store.ts";
 import { parseAll } from "../src/parse.ts";
-import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
+import { cacheStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
+import type { IncrementalCacheStats } from "../src/parse-incremental.ts";
 import type { AgentSource, MessageRecord, ParseResult, ToolUse } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -39,6 +40,21 @@ function cachePath(root: string): string {
 }
 
 const NO_AGENTSVIEW = { agentsView: "off" as const };
+
+function stats(overrides: Partial<IncrementalCacheStats> = {}): IncrementalCacheStats {
+  return {
+    hits: 0,
+    parsed: 0,
+    replaced: 0,
+    imported: 0,
+    deleted: 0,
+    unstable: 0,
+    failed: 0,
+    incompleteDiscoveries: 0,
+    fallback: false,
+    ...overrides,
+  };
+}
 
 function openDatabase(path: string): Promise<sqlite3.Database> {
   return new Promise((resolve, reject) => {
@@ -148,6 +164,31 @@ function comparable(result: ParseResult) {
 }
 
 describe("parseAllIncrementalDetailed", () => {
+  test("describes cache execution modes from stats and diagnostics", () => {
+    expect(cacheStatsSummary(stats({ hits: 2 }))).toStartWith("native cache:");
+    expect(
+      cacheStatsSummary(stats({ imported: 1 }), [
+        {
+          code: "agentsview_import_used",
+          severity: "info",
+          phase: "import",
+          message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
+        },
+      ]),
+    ).toStartWith("AgentsView-assisted cache:");
+    expect(
+      cacheStatsSummary(stats({ hits: 2, imported: 1 }), [
+        {
+          code: "agentsview_import_used",
+          severity: "info",
+          phase: "import",
+          message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
+        },
+      ]),
+    ).toStartWith("mixed native + AgentsView cache:");
+    expect(cacheStatsSummary(stats({ fallback: true }))).toBe("raw parser fallback");
+  });
+
   test("matches the native parser and reuses unchanged fragments on a second run", async () => {
     const root = tempRoot();
     const opts = {
