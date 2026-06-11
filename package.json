@@ -16,7 +16,7 @@
     "build": "bun build src/index.ts --target=node --outfile=dist/index.js && mkdir -p dist/vendor && cp src/vendor/* dist/vendor/ && tail -n +2 dist/index.js > dist/index.temp && echo '#!/usr/bin/env node' | cat - dist/index.temp > dist/index.js && rm dist/index.temp && chmod +x dist/index.js"
   },
   "engines": {
-    "bun": ">=1.2"
+    "node": ">=20.17"
   },
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0"
