@@ -19,6 +19,10 @@ import { vendoredChartJs } from "./chartjs.ts";
 import { consoleOverview, isBareInvocation } from "./console-report.ts";
 import { loadPlugins } from "./inventory.ts";
 import { parseAll, type TranscriptSource } from "./parse.ts";
+import {
+  cacheStatsSummary,
+  parseAllIncrementalDetailed,
+} from "./parse-incremental.ts";
 import { renderHtml } from "./report.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
@@ -26,9 +30,10 @@ import type { PushCredentials } from "./push.ts";
 import { ACCESS_TOKEN_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
+import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
 
 interface Flags {
-  command: "report" | "push" | "login";
+  command: "report" | "push" | "login" | "cache-status" | "cache-rebuild";
   source: "all" | TranscriptSource;
   since?: string;
   until?: string;
@@ -38,6 +43,7 @@ interface Flags {
   summarizeModel?: string;
   open: boolean;
   json: boolean;
+  cache: boolean;
   help: boolean;
   // push & login
   endpoint?: string;
@@ -53,6 +59,7 @@ function parseArgs(argv: string[]): Flags {
     summarize: false,
     open: false,
     json: false,
+    cache: true,
     help: false,
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
     org: process.env.ARGUS_ORG,
@@ -64,6 +71,8 @@ function parseArgs(argv: string[]): Flags {
       case "report": f.command = "report"; break;
       case "push": f.command = "push"; break;
       case "login": f.command = "login"; break;
+      case "cache-status": f.command = "cache-status"; break;
+      case "cache-rebuild": f.command = "cache-rebuild"; break;
       case "--source": f.source = parseSource(next()); break;
       case "--since": f.since = next(); break;
       case "--until": f.until = next(); break;
@@ -73,6 +82,7 @@ function parseArgs(argv: string[]): Flags {
       case "--summarize-model": f.summarizeModel = next(); break;
       case "--open": f.open = true; break;
       case "--json": f.json = true; break;
+      case "--no-cache": f.cache = false; break;
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
       case "--org": f.org = next(); break;
@@ -101,6 +111,8 @@ Usage:
   argus report [options]      build the local HTML dashboard
   argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
+  argus cache-status          show local fragment cache status
+  argus cache-rebuild         delete and recreate the local fragment cache
 
 Report options:
   --source <claude|codex|gemini|all>
@@ -113,6 +125,7 @@ Report options:
   --summarize-model <id>   model for summaries (e.g. claude-haiku-4-5-20251001)
   --open                   open the report in the default browser when done (macOS)
   --json                   write raw aggregate JSON to --out instead of HTML
+  --no-cache               parse transcripts directly without the fragment cache
 
 Login options:
   --endpoint <url>         SSO service URL     (default: https://argus.agentdeployment.co)
@@ -138,32 +151,46 @@ function withinRange(date: string, since?: string, until?: string): boolean {
 type Log = (s: string) => void;
 
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
-function buildDashboard(flags: Flags, log: Log): Dashboard {
+async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
   log("Parsing transcripts…");
-  const parsed = parseAll({ sources: sourcesFor(flags.source) });
+  const parsed = flags.cache
+    ? (await parseAllIncrementalDetailed({ sources: sourcesFor(flags.source) }))
+    : { parsed: parseAll({ sources: sourcesFor(flags.source) }), stats: undefined };
+  if (flags.cache && parsed.stats) log(`  Cache: ${cacheStatsSummary(parsed.stats)}`);
+  if (flags.cache && "diagnostics" in parsed) {
+    const important = parsed.diagnostics.filter((entry) => entry.severity !== "info").slice(0, 5);
+    for (const entry of important) log(`  ! ${entry.message}`);
+    if (parsed.diagnostics.length > important.length) {
+      log(`  ! ${parsed.diagnostics.length - important.length} additional cache diagnostics omitted.`);
+    }
+  }
+  if (!flags.cache) log("  Cache: disabled.");
+  const parseResult = parsed.parsed;
 
   // Apply filters.
   if (flags.since || flags.until || flags.project) {
-    parsed.messages = parsed.messages.filter(
+    parseResult.messages = parseResult.messages.filter(
       (m) =>
         withinRange(m.date, flags.since, flags.until) &&
         (!flags.project || m.cwd.includes(flags.project)),
     );
-    const keep = new Set(parsed.messages.map((m) => m.sessionId));
-    for (const sid of [...parsed.sessions.keys()]) if (!keep.has(sid)) parsed.sessions.delete(sid);
+    const keep = new Set(parseResult.messages.map((m) => m.sessionId));
+    for (const sid of [...parseResult.sessions.keys()]) {
+      if (!keep.has(sid)) parseResult.sessions.delete(sid);
+    }
   }
 
-  log(`  ${parsed.messages.length} assistant messages across ${parsed.sessions.size} sessions.`);
+  log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);
 
   const plugins = loadPlugins();
 
   // Build per-session last-timestamp + heuristic summaries first.
   const lastTs = new Map<string, number>();
   const factsBySession = new Map<string, { firstPrompt: string; topSkills: string[]; toolCounts: Record<string, number>; filesTouched: string[] }>();
-  for (const m of parsed.messages) {
+  for (const m of parseResult.messages) {
     lastTs.set(m.sessionId, Math.max(lastTs.get(m.sessionId) || 0, m.ts));
     const f = factsBySession.get(m.sessionId) || {
-      firstPrompt: parsed.sessions.get(m.sessionId)?.firstPrompt || "",
+      firstPrompt: parseResult.sessions.get(m.sessionId)?.firstPrompt || "",
       topSkills: [],
       toolCounts: {},
       filesTouched: [],
@@ -182,9 +209,9 @@ function buildDashboard(flags: Flags, log: Log): Dashboard {
     if (!claudeAvailable()) {
       log("  ! 'claude' CLI not found on PATH — falling back to heuristic summaries.");
     } else {
-      log(`Summarizing ${parsed.sessions.size} sessions via claude -p (cached; incremental)…`);
+      log(`Summarizing ${parseResult.sessions.size} sessions via claude -p (cached; incremental)…`);
       const targets: { meta: SessionMeta; lastTs: number }[] = [];
-      for (const meta of parsed.sessions.values()) {
+      for (const meta of parseResult.sessions.values()) {
         targets.push({ meta, lastTs: lastTs.get(meta.sessionId) || 0 });
       }
       const llm = llmSummaries(targets, flags.summarizeModel, log);
@@ -197,7 +224,7 @@ function buildDashboard(flags: Flags, log: Log): Dashboard {
     if (!summaries.has(sid)) summaries.set(sid, heuristicSummary(f));
   }
 
-  const dash = aggregate(parsed, plugins, summaries);
+  const dash = aggregate(parseResult, plugins, summaries);
   dash.generatedAtMs = Date.now();
   return dash;
 }
@@ -210,7 +237,7 @@ function summary(dash: Dashboard): string {
 }
 
 async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<void> {
-  const dash = buildDashboard(flags, log);
+  const dash = await buildDashboard(flags, log);
   if (consoleOnly) {
     process.stdout.write(consoleOverview(dash));
     return;
@@ -280,7 +307,7 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
     }
   }
 
-  const dash = buildDashboard(flags, log);
+  const dash = await buildDashboard(flags, log);
   log(`Pushing snapshot for "${user}" (org: ${org ?? "from token"}) → ${endpoint}`);
   log(`  ${summary(dash)}`);
 
@@ -304,6 +331,30 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
   }
 }
 
+async function runCacheStatus(log: Log): Promise<void> {
+  const cache = await openFragmentCache();
+  try {
+    const rows = await cache.list();
+    const successful = rows.filter((row) => row.status === "success");
+    const bySource = new Map<string, number>();
+    for (const row of successful) {
+      bySource.set(row.source ?? "external", (bySource.get(row.source ?? "external") ?? 0) + 1);
+    }
+    log(`Cache fragments: ${successful.length} successful / ${rows.length} total`);
+    for (const [source, count] of [...bySource.entries()].sort()) {
+      log(`  ${source}: ${count}`);
+    }
+  } finally {
+    await cache.close();
+  }
+}
+
+async function runCacheRebuild(log: Log): Promise<void> {
+  const cache = await rebuildFragmentCache();
+  await cache.close();
+  log("Rebuilt local Argus fragment cache.");
+}
+
 async function main() {
   printBanner();
   const argv = process.argv.slice(2);
@@ -312,6 +363,8 @@ async function main() {
   const log: Log = (s) => process.stderr.write(s + "\n");
   if (flags.command === "push") await runPush(flags, log);
   else if (flags.command === "login") await runLogin(flags, log);
+  else if (flags.command === "cache-status") await runCacheStatus(log);
+  else if (flags.command === "cache-rebuild") await runCacheRebuild(log);
   else await runReport(flags, log, isBareInvocation(argv));
 }
 
