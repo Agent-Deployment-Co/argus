@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import sqlite3 from "sqlite3";
 import { openFragmentCache } from "../src/cache-store.ts";
 import { parseAll } from "../src/parse.ts";
 import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
@@ -35,6 +36,83 @@ function copyFixture(name: string, root: string): string {
 
 function cachePath(root: string): string {
   return join(root, "cache", "fragments.sqlite3");
+}
+
+const NO_AGENTSVIEW = { agentsView: "off" as const };
+
+function openDatabase(path: string): Promise<sqlite3.Database> {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(path, (error) => {
+      if (error) reject(error);
+      else resolve(db);
+    });
+  });
+}
+
+function exec(db: sqlite3.Database, sql: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.exec(sql, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+function close(db: sqlite3.Database): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+async function createAgentsViewCodexDb(path: string): Promise<void> {
+  const db = await openDatabase(path);
+  try {
+    await exec(
+      db,
+      `
+        CREATE TABLE sessions (
+          id TEXT PRIMARY KEY,
+          agent TEXT NOT NULL,
+          first_message TEXT,
+          cwd TEXT,
+          git_branch TEXT,
+          source_session_id TEXT,
+          file_path TEXT,
+          file_size INTEGER,
+          file_mtime INTEGER,
+          file_inode INTEGER,
+          file_device INTEGER,
+          deleted_at TEXT
+        );
+        CREATE TABLE messages (
+          id INTEGER PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          role TEXT NOT NULL,
+          timestamp TEXT,
+          model TEXT,
+          token_usage TEXT,
+          claude_message_id TEXT,
+          claude_request_id TEXT
+        );
+        INSERT INTO sessions VALUES (
+          'codex:codex-db', 'codex', 'from agentsview', '/tmp/agentsview/codex',
+          '', 'codex-db', '/tmp/codex-db.jsonl', 10, 20, 30, 40, NULL
+        );
+        INSERT INTO messages VALUES (
+          1, 'codex:codex-db', 0, 'assistant', '2026-06-04T10:00:00Z',
+          'gpt-5.5',
+          '{"input_tokens":999,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}',
+          '', ''
+        );
+      `,
+    );
+  } finally {
+    await close(db);
+  }
 }
 
 function comparable(result: ParseResult) {
@@ -79,6 +157,7 @@ describe("parseAllIncrementalDetailed", () => {
       geminiDir: copyFixture("gemini", root),
       sources: ["claude", "codex", "gemini"] as AgentSource[],
       cachePath: cachePath(root),
+      ...NO_AGENTSVIEW,
     };
 
     const native = parseAll(opts);
@@ -98,6 +177,7 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       cachePath: cachePath(root),
+      ...NO_AGENTSVIEW,
     };
 
     await parseAllIncrementalDetailed(opts);
@@ -130,6 +210,7 @@ describe("parseAllIncrementalDetailed", () => {
       historyFile: join(copyFixture("history.jsonl", root)),
       sources: ["claude", "codex"] as AgentSource[],
       cachePath: cachePath(root),
+      ...NO_AGENTSVIEW,
     };
 
     await parseAllIncrementalDetailed(opts);
@@ -159,6 +240,7 @@ describe("parseAllIncrementalDetailed", () => {
       sources: ["codex"] as AgentSource[],
       cachePath: cachePath(root),
       noCache: true,
+      ...NO_AGENTSVIEW,
     };
 
     const parsed = await parseAllIncrementalDetailed(opts);
@@ -176,10 +258,58 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
       cachePath: path,
+      ...NO_AGENTSVIEW,
     });
 
     expect(parsed.stats.fallback).toBe(true);
     expect(parsed.diagnostics[0]?.code).toBe("cache_fallback");
     expect(parsed.parsed.messages).toHaveLength(2);
+  });
+
+  test("imports AgentsView provenance without duplicating native source facts", async () => {
+    const root = tempRoot();
+    const dbPath = join(root, "agentsview.db");
+    await createAgentsViewCodexDb(dbPath);
+    const opts = {
+      codexSessionsDir: copyFixture("codex-sessions", root),
+      sources: ["codex"] as AgentSource[],
+      cachePath: cachePath(root),
+      agentsViewDatabasePath: dbPath,
+    };
+
+    const native = parseAll(opts);
+    const assisted = await parseAllIncrementalDetailed(opts);
+    expect(comparable(assisted.parsed)).toEqual(comparable(native));
+    expect(assisted.stats.imported).toBe(1);
+    expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_native_precedence")).toBe(true);
+
+    const cache = await openFragmentCache({ path: opts.cachePath });
+    try {
+      expect((await cache.list()).some((row) => row.kind === "external" && row.status === "success")).toBe(true);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("uses AgentsView facts when native fragments are unavailable for the source", async () => {
+    const root = tempRoot();
+    const dbPath = join(root, "agentsview.db");
+    await createAgentsViewCodexDb(dbPath);
+
+    const assisted = await parseAllIncrementalDetailed({
+      codexSessionsDir: join(root, "missing-codex"),
+      sources: ["codex"] as AgentSource[],
+      cachePath: cachePath(root),
+      agentsViewDatabasePath: dbPath,
+    });
+
+    expect(assisted.parsed.messages).toHaveLength(1);
+    expect(assisted.parsed.messages[0]).toMatchObject({
+      source: "codex",
+      sessionId: "codex:codex-db",
+      model: "gpt-5.5",
+      usage: expect.objectContaining({ input: 999, output: 1 }),
+    });
+    expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_import_used")).toBe(true);
   });
 });
