@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { AgentsViewImporter } from "./agentsview-import.ts";
 import {
   compareReconciliationOrder,
   isAuthoritativeDiscovery,
@@ -8,6 +9,7 @@ import {
   type CompleteDiscovery,
   type DiscoveryResult,
   type FragmentCache,
+  type ImportedFragment,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type ParserDiagnostic,
@@ -46,6 +48,7 @@ export interface IncrementalCacheStats {
   hits: number;
   parsed: number;
   replaced: number;
+  imported: number;
   deleted: number;
   unstable: number;
   failed: number;
@@ -64,12 +67,15 @@ export interface IncrementalParseOptions extends ParseOptions {
   cache?: FragmentCache;
   noCache?: boolean;
   rebuildCache?: boolean;
+  agentsView?: "auto" | "off";
+  agentsViewDatabasePath?: string;
 }
 
 const EMPTY_STATS: IncrementalCacheStats = {
   hits: 0,
   parsed: 0,
   replaced: 0,
+  imported: 0,
   deleted: 0,
   unstable: 0,
   failed: 0,
@@ -330,7 +336,23 @@ function orderedMessages(fragments: ParsedFileFragment[]) {
 }
 
 export function reconcileFragments(input: ReconciliationInput): ParseResult {
-  const fragments = selectAlternateRepresentations(input.nativeFragments);
+  const nativeSources = new Set(input.nativeFragments.map((fragment) => fragment.parser.source));
+  const importedFragments = input.importedFragments.flatMap((fragment) => {
+    const source = fragment.provenance.coverage[0]?.source;
+    if (!source || nativeSources.has(source)) return [];
+    const converted: ParsedFileFragment = {
+      kind: "transcript",
+      id: fragment.id,
+      contractVersion: fragment.contractVersion,
+      parser: { name: "agentsview", source, version: fragment.provenance.adapter.version },
+      snapshot: fragment.provenance.database,
+      facts: fragment.facts,
+      dependencies: [],
+      diagnostics: fragment.diagnostics,
+    };
+    return [converted];
+  });
+  const fragments = selectAlternateRepresentations([...input.nativeFragments, ...importedFragments]);
   const sessions = new Map<string, SessionMeta>();
   const firstPrompts = new Map<string, { text: string; timestampMs: number }>();
   const projectRoots = new Map<string, string>();
@@ -564,6 +586,65 @@ async function gatherNativeFragments(
   return { nativeFragments, auxiliaryFragments };
 }
 
+async function gatherAgentsViewFragments(
+  opts: IncrementalParseOptions,
+  cache: FragmentCache,
+  stats: IncrementalCacheStats,
+  diagnostics: ParserDiagnostic[],
+  nativeFragments: ParsedFileFragment[],
+): Promise<ImportedFragment[]> {
+  if (opts.agentsView === "off") {
+    diagnostics.push(
+      diagnostic("agentsview_disabled", "AgentsView import disabled by user control.", "info"),
+    );
+    return [];
+  }
+
+  const importer = new AgentsViewImporter({ databasePath: opts.agentsViewDatabasePath });
+  const probe = await importer.probe();
+  if (!probe.compatible) {
+    diagnostics.push(
+      diagnostic(
+        "agentsview_unavailable",
+        `AgentsView import unavailable: ${probe.reason}`,
+        "info",
+      ),
+    );
+    return [];
+  }
+
+  const staleExternal = (await cache.list())
+    .filter((metadata) => metadata.kind === "external" && metadata.status === "success")
+    .map((metadata) => metadata.id);
+  if (staleExternal.length) await cache.invalidate(staleExternal, "external_import_changed");
+
+  const requestedSources = new Set(normalizeSources(opts.sources));
+  const imported = (await importer.importFragments(probe)).filter((fragment) => {
+    const source = fragment.provenance.coverage[0]?.source;
+    return !!source && requestedSources.has(source);
+  });
+  for (const fragment of imported) await cache.replace(fragment);
+  stats.imported += imported.length;
+
+  const nativeSources = new Set(nativeFragments.map((fragment) => fragment.parser.source));
+  for (const fragment of imported) {
+    const source = fragment.provenance.coverage[0]?.source;
+    if (!source) continue;
+    diagnostics.push(
+      diagnostic(
+        nativeSources.has(source)
+          ? "agentsview_native_precedence"
+          : "agentsview_import_used",
+        nativeSources.has(source)
+          ? `AgentsView ${source} facts imported for provenance; native Argus fragments remain authoritative.`
+          : `AgentsView ${source} facts used because no native Argus fragments were available for that source.`,
+        "info",
+      ),
+    );
+  }
+  return imported;
+}
+
 export async function parseAllIncrementalDetailed(
   opts: IncrementalParseOptions = {},
 ): Promise<IncrementalParseDetails> {
@@ -592,8 +673,16 @@ export async function parseAllIncrementalDetailed(
       stats,
       diagnostics,
     );
+    const importedFragments = await gatherAgentsViewFragments(
+      opts,
+      cache,
+      stats,
+      diagnostics,
+      nativeFragments,
+    );
     if (
       nativeFragments.length === 0 &&
+      importedFragments.length === 0 &&
       diagnostics.some(
         (entry) => entry.phase === "discovery" && entry.code === "missing_root",
       )
@@ -604,7 +693,7 @@ export async function parseAllIncrementalDetailed(
       parsed: reconcileFragments({
         nativeFragments,
         auxiliaryFragments,
-        importedFragments: [],
+        importedFragments,
         diagnostics,
       }),
       stats,
@@ -638,5 +727,5 @@ export async function parseAllIncremental(
 
 export function cacheStatsSummary(stats: IncrementalCacheStats): string {
   if (stats.fallback) return "cache fallback";
-  return `${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
+  return `${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
 }
