@@ -21,7 +21,46 @@ export type AgentSource = "claude" | "codex" | "gemini";
 
 export type SessionRow = SchemaSessionRow & {
   source: AgentSource;
+  /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
+  health: SessionHealth;
 };
+
+/**
+ * Per-session health metrics (#38), derived in aggregate.ts from messages + SessionFriction.
+ * Friction-derived fields are null when the session's source doesn't expose friction
+ * (codex/gemini/AgentsView imports) — distinct from an observed zero.
+ */
+export interface SessionHealth {
+  interruptions: number | null;
+  rejections: number | null;
+  compactions: number | null;
+  turns: number | null;
+  medianTurnMs: number | null;
+  maxTurnMs: number | null;
+  /** Assistant stop_reason counts — the agentic (tool_use) vs conversational (end_turn) mix. */
+  stopReasons: Record<string, number> | null;
+  /**
+   * Tokens-per-message growth within the session: mean total tokens of the last decile of
+   * messages over the first decile. High values flag sessions that got expensive late and
+   * might have been better restarted. Null when the session is too short (<10 messages).
+   */
+  tokenGrowth: number | null;
+  /**
+   * How the session ended: "interrupted" when the final activity was a user interruption,
+   * "clean" when the last recorded stop reason is end_turn/stop_sequence, else "unknown"
+   * (mid-tool-use tails — possibly still running — and sources without stop reasons).
+   */
+  outcome: "clean" | "interrupted" | "unknown";
+}
+
+/** Cross-session friction rollup over sessions where friction is observable. */
+export interface FrictionTotals {
+  observableSessions: number;
+  interruptions: number;
+  rejections: number;
+  compactions: number;
+  turns: number;
+}
 
 /** Per-tool usage ranking: call count and distinct sessions. */
 export interface ToolStat {
@@ -51,6 +90,7 @@ export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   // wire contract adopts them).
   byTool: ToolStat[];
   byToolCategory: ToolCategoryStat[];
+  frictionTotals: FrictionTotals;
 };
 
 export function emptyUsage(): Usage {
@@ -99,6 +139,8 @@ export interface MessageRecord {
   model: string;
   usage: Usage;
   attributionSkill: string | null; // skill active for this message
+  /** Assistant stop_reason (claude only) — first non-null across the message's streamed lines. */
+  stopReason?: string;
   toolUses: ToolUse[];
 }
 
@@ -126,6 +168,8 @@ export interface SessionFriction {
   turnDurationsMs: number[];
   /** Assistant stop_reason counts, one per deduped assistant message. */
   stopReasons: Record<string, number>;
+  /** Timestamp of the latest interruption, when records carry timestamps (#38 outcome proxy). */
+  lastInterruptionMs?: number;
 }
 
 export function emptySessionFriction(): SessionFriction {
