@@ -30,6 +30,7 @@ import {
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
 } from "./cache-contract.ts";
+import { claudeFrictionEvents } from "./friction.ts";
 import { HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
 import { parseMcpTool } from "./tool-categories.ts";
 import { emptyUsage, type Usage } from "./types.ts";
@@ -39,7 +40,8 @@ export const CLAUDE_CONFIG_ROOT_ID = "claude-config";
 export const CLAUDE_TRANSCRIPT_ROOT_ID = CLAUDE_PROJECTS_ROOT_ID;
 export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "1";
+// v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "2";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",
@@ -626,6 +628,9 @@ function createMessageFact(
       typeof record.value.attributionSkill === "string"
         ? record.value.attributionSkill
         : null,
+    ...(typeof record.value.message?.stop_reason === "string"
+      ? { stopReason: record.value.message.stop_reason }
+      : {}),
     position: record.position,
   };
 }
@@ -733,6 +738,11 @@ function parseTranscript(
     const sourceSessionId = session.fact.sourceSessionId;
     const content = contentParts(record.value);
 
+    const frictionEvents = claudeFrictionEvents(record.value);
+    if (frictionEvents.length) {
+      (session.fact.frictionEvents ??= []).push(...frictionEvents);
+    }
+
     if (record.value.type === "assistant") {
       for (const part of content) {
         if (
@@ -803,6 +813,10 @@ function parseTranscript(
     }
 
     if (isContinuation && open?.message) {
+      // Streamed messages repeat metadata per line; stop_reason is only non-null on the last.
+      if (!open.message.stopReason && typeof record.value.message?.stop_reason === "string") {
+        open.message.stopReason = record.value.message.stop_reason;
+      }
       addInvocations(record, open.message, facts, invocationFacts);
       continue;
     }

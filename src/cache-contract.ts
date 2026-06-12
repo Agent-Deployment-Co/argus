@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { FrictionEvent } from "./friction.ts";
 import type { AgentSource, ParseResult, Usage } from "./types.ts";
 
 /**
@@ -116,6 +117,11 @@ export interface SessionFact {
   rawProjectId?: string;
   /** Native prompt when the transcript itself owns it (for example Codex or Gemini). */
   firstPrompt?: string;
+  /**
+   * Session friction events (#37) observed in this file, identified stably so the
+   * reconciler can dedupe replays across resumed-session files. Claude only.
+   */
+  frictionEvents?: FrictionEvent[];
   position: SourcePosition;
 }
 
@@ -131,6 +137,8 @@ export interface MessageFact {
   cwd?: string;
   gitBranch?: string;
   attributionSkill: string | null;
+  /** Assistant stop_reason — first non-null value across the message's streamed lines. */
+  stopReason?: string;
   position: SourcePosition;
 }
 
