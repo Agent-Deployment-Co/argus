@@ -603,6 +603,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             if (msgId && msgId === openMsgId && openRecord) {
               if (openStopReasonPending && typeof o.message.stop_reason === "string") {
                 countStopReason(sid, o.message.stop_reason);
+                openRecord.stopReason = o.message.stop_reason;
                 openStopReasonPending = false;
               }
               if (Array.isArray(content)) openRecord.toolUses.push(...toolUsesFrom(content));
@@ -630,6 +631,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             openRecord = rec;
             if (typeof o.message.stop_reason === "string") {
               countStopReason(sid, o.message.stop_reason);
+              rec.stopReason = o.message.stop_reason;
               openStopReasonPending = false;
             } else {
               openStopReasonPending = true;
