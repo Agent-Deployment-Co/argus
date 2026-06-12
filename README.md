@@ -84,7 +84,7 @@ npx @agentdeploymentco/argus report --agentsview-db /path/to/agentsview.sqlite3
 
 Without `--summarize`, Argus creates an instant heuristic summary from the first prompt,
 skills, tools, and edited files. With `--summarize`, it uses `claude -p` to create a short
-narrative and caches the result in `~/.claude/argus-cache.json`. Only new or changed
+narrative and caches the result in `$ARGUS_CACHE_DIR/summaries.json` (macOS: `~/Library/Caches/argus/summaries.json`). Only new or changed
 sessions are summarized again.
 
 ## Incremental cache
@@ -147,7 +147,7 @@ Pushing the same snapshot again does not double-count it.
   live in nested directories. Argus walks recursively and deduplicates assistant messages by
   API message id.
 - **Estimated cost.** Cost uses published API prices and may differ from subscription or plan
-  billing. Override prices in `~/.claude/argus-pricing.json`:
+  billing. Override prices in `$ARGUS_CONFIG_DIR/pricing.json` (macOS: `~/Library/Application Support/argus/pricing.json`):
 
   ```json
   { "gpt-5.5": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite5m": 0, "cacheWrite1h": 0 } }

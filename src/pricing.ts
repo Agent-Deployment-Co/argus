@@ -14,7 +14,7 @@ export interface Price {
 // Static defaults (USD / Mtok). Anthropic cache-write multipliers follow its published
 // model: 5m write = 1.25x input, 1h write = 2x input, cache read = 0.1x input.
 // OpenAI/Codex and Gemini cached input is represented in the shared cacheRead bucket.
-// Override any of these via ~/.claude/argus-pricing.json.
+// Override any of these via $ARGUS_CONFIG_DIR/pricing.json.
 const DEFAULTS: Record<string, Price> = {
   opus: { input: 15, output: 75, cacheRead: 1.5, cacheWrite5m: 18.75, cacheWrite1h: 30 },
   sonnet: { input: 3, output: 15, cacheRead: 0.3, cacheWrite5m: 3.75, cacheWrite1h: 6 },
