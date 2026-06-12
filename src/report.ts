@@ -145,7 +145,7 @@ ${opts.fontCss || ""}
   canvas { max-width:100%; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; }
+  th { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; position:sticky; top:0; background:var(--surface); z-index:1; }
   th:hover { color:var(--accent); }
   td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .nowrap { white-space:nowrap; }
@@ -235,7 +235,7 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tokens by source</h3><canvas id="sourceChart" height="220"></canvas></div>
         <div class="panel"><h3>Est. cost by source</h3><canvas id="sourceCostChart" height="220"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="sourceTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="sourceTable"></table></div>
     </section>
 
     ${
@@ -246,7 +246,7 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tokens by user</h3><canvas id="userChart" height="240"></canvas></div>
         <div class="panel"><h3>Est. cost by user</h3><canvas id="userCostChart" height="240"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="userTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="userTable"></table></div>
     </section>`
         : ""
     }
@@ -264,12 +264,12 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tokens by project</h3><canvas id="projectChart" height="260"></canvas></div>
         <div class="panel"><h3>Est. cost by project</h3><canvas id="projectCostChart" height="260"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="projectTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="projectTable"></table></div>
     </section>
 
     <section>
       <h2>Sessions (${d.sessions.length})</h2>
-      <div class="scroll"><table id="sessionTable"></table></div>
+      <div class="scroll" style="max-height:510px"><table id="sessionTable"></table></div>
     </section>
   </div>
 
@@ -289,7 +289,7 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tool calls by category</h3><canvas id="toolCatChart" height="240"></canvas></div>
         <div class="panel"><h3>Most-used tools (by calls)</h3><canvas id="toolRankChart" height="240"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="toolTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="toolTable"></table></div>
       <p class="note">MCP tool names are displayed as <code>server · tool</code>.</p>
     </section>
 
@@ -304,7 +304,7 @@ ${opts.fontCss || ""}
 
     <section>
       <h2>Plugins</h2>
-      <div class="scroll"><table id="pluginTable"></table></div>
+      <div class="scroll" style="max-height:510px"><table id="pluginTable"></table></div>
       <p class="note">Rows marked <span class="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
     </section>
   </div>
@@ -322,7 +322,7 @@ ${opts.fontCss || ""}
 
     <section>
       <h2>Sessions</h2>
-      <div class="scroll"><table id="healthSessionTable"></table></div>
+      <div class="scroll" style="max-height:510px"><table id="healthSessionTable"></table></div>
     </section>
   </div>
 </main>
