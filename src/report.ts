@@ -159,6 +159,8 @@ ${opts.fontCss || ""}
   .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--muted); margin:1px 3px 1px 0; }
   .pill.on { color:var(--pill-cool); border-color:var(--pill-cool-line); }
   .pill.warn { color:var(--tiger-orange); border-color:var(--racing-red); }
+  .pill.clean { color:var(--sky-surge); border-color:var(--cornflower-ocean); }
+  .pill.interrupted { color:var(--racing-red); border-color:var(--racing-red); }
   .pill.skill { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; color:var(--pill-cool); border-color:var(--pill-cool-line); }
   .muted { color:var(--muted); }
   .prompt { color:var(--muted); font-size:12px; }
@@ -211,6 +213,14 @@ ${opts.fontCss || ""}
       <div class="cards" id="cards"></div>
       ${d.unpriced.length ? `<p class="note">Unpriced models (cost excluded): ${d.unpriced.map(esc).join(", ")}.</p>` : ""}
     </section>
+
+    ${d.frictionTotals.observableSessions > 0 ? `<section>
+      <h2>Session health</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Outcomes</h3><canvas id="outcomeChart" height="200"></canvas></div>
+        <div class="panel"><h3>Friction signals <span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--muted);margin-left:6px">${d.frictionTotals.observableSessions} observable sessions</span></h3><div class="cards" id="frictionCards"></div></div>
+      </div>
+    </section>` : ''}
 
     <section>
       <h2>Activity over time</h2>
@@ -406,6 +416,32 @@ const cards = [
 document.getElementById('cards').innerHTML = cards.map(([l,v]) =>
   '<div class="card"><div class="label">'+l+'</div><div class="value">'+v+'</div></div>').join('');
 
+// ---- session health ----
+const FT = DATA.frictionTotals || {};
+if (FT.observableSessions > 0) {
+  const n = FT.observableSessions;
+  const frictionItems = [
+    ['Interruptions', FT.interruptions + ' <small>'+( FT.interruptions/n).toFixed(1)+'/session</small>'],
+    ['Rejections', FT.rejections + ' <small>'+(FT.rejections/n).toFixed(1)+'/session</small>'],
+    ['Compactions', String(FT.compactions)],
+    ['Turns', fmt(FT.turns)+' <small>'+(FT.turns/n).toFixed(0)+'/session</small>'],
+  ];
+  const fcEl = document.getElementById('frictionCards');
+  if (fcEl) fcEl.innerHTML = frictionItems.map(([l,v]) =>
+    '<div class="card"><div class="label">'+l+'</div><div class="value">'+v+'</div></div>').join('');
+
+  const outcomeCounts = {clean:0, interrupted:0, unknown:0};
+  DATA.sessions.forEach(s => { const o = (s.health && s.health.outcome) || 'unknown'; outcomeCounts[o] = (outcomeCounts[o]||0)+1; });
+  const ocEl = document.getElementById('outcomeChart');
+  if (ocEl) new Chart(ocEl, { type:'doughnut', data:{
+    labels:['Clean','Interrupted','Unknown'],
+    datasets:[{data:[outcomeCounts.clean, outcomeCounts.interrupted, outcomeCounts.unknown],
+      backgroundColor:['#5dbcdf','#e2302c','rgba(243,215,186,.35)']}]
+  }, options:{ plugins:{ legend:{position:'right'},
+    tooltip:{callbacks:{label:c=>{const pct=Math.round(100*c.parsed/(DATA.sessions.length||1)); return c.label+': '+c.parsed+' ('+pct+'%)';}}}
+  }}});
+}
+
 // ---- tokens per day (stacked) ----
 const days = DATA.daily.map(d=>d.date);
 new Chart(tokensChart, { type:'bar', data:{ labels:days, datasets:[
@@ -555,6 +591,17 @@ function compactProject(project){
   return match ? match[1]+match[2].slice(0,8)+'…' : value;
 }
 
+function outcomeCell(outcome) {
+  if (outcome === 'clean') return '<span class="pill clean">clean</span>';
+  if (outcome === 'interrupted') return '<span class="pill interrupted">intr.</span>';
+  return '<span class="muted">—</span>';
+}
+function tokGrowthCell(g) {
+  if (g == null) return '<span class="muted">—</span>';
+  const txt = g.toFixed(1)+'×';
+  return g >= 5 ? '<span class="pill warn">'+txt+'</span>' : txt;
+}
+
 // ---- sessions table ----
 const sessionCols = [
   {label:'Started', className:'nowrap', sort:r=>r.start, cell:r=>dt(r.start)},
@@ -562,6 +609,9 @@ const sessionCols = [
   {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
   {label:'Dur', num:true, sort:r=>r.durationMs, cell:r=>dur(r.durationMs)},
   {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
+  {label:'Outcome', sort:r=>(r.health&&r.health.outcome)||'', cell:r=>outcomeCell(r.health&&r.health.outcome)},
+  {label:'Interrupts', num:true, sort:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:-1, cell:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:'<span class="muted">—</span>'},
+  {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},
   {label:'Skills', sort:r=>r.topSkills.join(), cell:r=>r.topSkills.map(skillPill).join('')||'<span class="muted">—</span>'},
   {label:'Tokens', num:true, sort:r=>r.total, cell:r=>fmt(r.total)},
   {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
