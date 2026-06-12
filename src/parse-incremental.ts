@@ -18,7 +18,9 @@ import {
   type TranscriptParserAdapter,
 } from "./cache-contract.ts";
 import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
+import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import {
+  CLAUDE_TRANSCRIPT_PARSER,
   createClaudeHistoryParserAdapter,
   createClaudeTranscriptDiscoveryAdapter,
   createClaudeTranscriptParserAdapter,
@@ -523,6 +525,31 @@ export function reconcileFragments(input: ReconciliationInput): ParseResult {
     if (!existing.firstPrompt && firstPrompt) existing.firstPrompt = firstPrompt;
   }
 
+  // Session friction (#37): only native Claude transcript fragments observe friction, so
+  // AgentsView-imported sessions stay undefined (unknown) rather than a misleading zero.
+  // Events are identified stably (record uuid / tool_use_id), so a resumed session that
+  // replays records into a second file dedupes here instead of double-counting.
+  const frictionEventsBySession = new Map<string, FrictionEvent[]>();
+  const seenFrictionEventIds = new Set<string>();
+  for (const fragment of fragments) {
+    if (fragment.parser.name !== CLAUDE_TRANSCRIPT_PARSER.name) continue;
+    for (const fact of fragment.facts.sessions) {
+      const sid = canonicalSessionId(fact.source, fact.sourceSessionId);
+      const events = frictionEventsBySession.get(sid) ?? [];
+      if (!frictionEventsBySession.has(sid)) frictionEventsBySession.set(sid, events);
+      for (const event of fact.frictionEvents ?? []) {
+        const key = `${event.kind} ${event.eventId}`;
+        if (seenFrictionEventIds.has(key)) continue;
+        seenFrictionEventIds.add(key);
+        events.push(event);
+      }
+    }
+  }
+  for (const [sid, events] of frictionEventsBySession) {
+    const session = sessions.get(sid);
+    if (session) session.friction = foldFrictionEvents(events);
+  }
+
   const invocationByMessage = new Map<string, ParsedFileFragment["facts"]["invocations"]>();
   const invocationByFactId = new Map<string, ParsedFileFragment["facts"]["invocations"][number]>();
   for (const invocation of fragments.flatMap((fragment) => fragment.facts.invocations)) {
@@ -541,6 +568,10 @@ export function reconcileFragments(input: ReconciliationInput): ParseResult {
     }
     const sessionId = canonicalSessionId(fact.source, fact.sourceSessionId);
     const session = sessions.get(sessionId);
+    if (fact.stopReason && session?.friction) {
+      session.friction.stopReasons[fact.stopReason] =
+        (session.friction.stopReasons[fact.stopReason] ?? 0) + 1;
+    }
     const cwd = fact.cwd ?? session?.cwd ?? "";
     const toolUses = (invocationByMessage.get(fact.id) ?? [])
       .sort((a, b) =>
