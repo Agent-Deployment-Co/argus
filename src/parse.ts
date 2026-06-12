@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
+import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { CODEX_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
@@ -473,6 +474,16 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
   // Resumed/compacted sessions re-append prior assistant messages verbatim. Dedup on the API
   // message id (first occurrence wins) so we don't multi-count tokens — same approach as ccusage.
   const seenMessageIds = new Set<string>();
+  // Session friction (#37): events carry stable ids (record uuid / tool_use_id) so replayed
+  // lines dedupe the same way; stop reasons are counted once per deduped assistant message.
+  const frictionEventsBySession = new Map<string, FrictionEvent[]>();
+  const seenFrictionEventIds = new Set<string>();
+  const stopReasonsBySession = new Map<string, Record<string, number>>();
+  const countStopReason = (sid: string, stopReason: string): void => {
+    const counts = stopReasonsBySession.get(sid) ?? {};
+    if (!stopReasonsBySession.has(sid)) stopReasonsBySession.set(sid, counts);
+    counts[stopReason] = (counts[stopReason] ?? 0) + 1;
+  };
   const missingRoots: string[] = [];
   let rootsFound = 0;
 
@@ -525,6 +536,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
         // same-id message replayed in another file is treated as a replay, not a continuation.
         let openMsgId: string | null = null;
         let openRecord: MessageRecord | null = null;
+        let openStopReasonPending = false;
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
           let o: any;
@@ -540,6 +552,15 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           const existing = ensureSession(sid, "claude", cwd, filePath, prompts.get(sid));
           // Prefer the main transcript over subagents/* files (used by the summarizer).
           if (filePath.endsWith(`${sid}.jsonl`)) existing.filePath = filePath;
+
+          for (const event of claudeFrictionEvents(o)) {
+            const key = `${event.kind} ${event.eventId}`;
+            if (seenFrictionEventIds.has(key)) continue;
+            seenFrictionEventIds.add(key);
+            const events = frictionEventsBySession.get(sid) ?? [];
+            if (!frictionEventsBySession.has(sid)) frictionEventsBySession.set(sid, events);
+            events.push(event);
+          }
 
           const content = o.message?.content;
 
@@ -577,8 +598,13 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           if (o.type === "assistant" && o.message?.usage) {
             const msgId: string | undefined = o.message?.id;
             // Continuation line of the message we're already building: merge its tool_uses,
-            // but don't re-count the (repeated) usage.
+            // but don't re-count the (repeated) usage. stop_reason streams as null until the
+            // message's final line, so the continuation may be the first to carry it.
             if (msgId && msgId === openMsgId && openRecord) {
+              if (openStopReasonPending && typeof o.message.stop_reason === "string") {
+                countStopReason(sid, o.message.stop_reason);
+                openStopReasonPending = false;
+              }
               if (Array.isArray(content)) openRecord.toolUses.push(...toolUsesFrom(content));
               continue;
             }
@@ -602,8 +628,23 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             messages.push(rec);
             openMsgId = msgId ?? null;
             openRecord = rec;
+            if (typeof o.message.stop_reason === "string") {
+              countStopReason(sid, o.message.stop_reason);
+              openStopReasonPending = false;
+            } else {
+              openStopReasonPending = true;
+            }
           }
         }
+      }
+
+      // Fold friction onto every native Claude session — zeros are meaningful here,
+      // unlike codex/gemini sessions where friction stays undefined (not observable).
+      for (const [sid, meta] of sessions) {
+        if (meta.source !== "claude") continue;
+        meta.friction = foldFrictionEvents(frictionEventsBySession.get(sid) ?? []);
+        const stopReasons = stopReasonsBySession.get(sid);
+        if (stopReasons) meta.friction.stopReasons = stopReasons;
       }
     }
   }
