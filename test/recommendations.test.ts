@@ -43,6 +43,7 @@ function baseDash(over: Partial<Dashboard> = {}): Dashboard {
     byProject: [],
     sessions: [],
     frictionTotals: ft(),
+    byModelDaily: [],
     ...over,
   };
 }

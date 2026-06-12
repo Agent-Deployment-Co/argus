@@ -104,6 +104,7 @@ export function aggregate(
   const totalUsage = emptyUsage();
   let totalCost = 0;
   const dayMap = new Map<string, DayBucket>();
+  const modelDayMap = new Map<string, Map<string, number>>();
   const modelMap = new Map<string, { u: Usage; messages: number }>();
   const sourceMap = new Map<string, { u: Usage; messages: number; sessions: Set<string> }>();
   const skillMap = new Map<string, { u: Usage; messages: number }>();
@@ -142,6 +143,11 @@ export function aggregate(
     addUsage(md.u, m.usage);
     md.messages++;
     modelMap.set(m.model, md);
+
+    // model × day
+    let mdRow = modelDayMap.get(m.date);
+    if (!mdRow) { mdRow = new Map(); modelDayMap.set(m.date, mdRow); }
+    mdRow.set(m.model, (mdRow.get(m.model) ?? 0) + totalTokens(m.usage));
 
     // source
     const src = sourceMap.get(m.source) || { u: emptyUsage(), messages: 0, sessions: new Set() };
@@ -193,6 +199,7 @@ export function aggregate(
 
   const dates = [...dayMap.keys()].sort();
   const daily = dates.map((d) => dayMap.get(d)!);
+  const byModelDaily = dates.map((d) => ({ date: d, byModel: Object.fromEntries(modelDayMap.get(d) ?? []) }));
 
   // Exact per-entity cost (re-walk messages so each message is priced by its own model;
   // summing usage first and pricing once would mis-price sessions that mix models).
@@ -438,6 +445,7 @@ export function aggregate(
     },
     unpriced: unpricedModels(),
     daily,
+    byModelDaily,
     byModel,
     bySource,
     bySkill,
