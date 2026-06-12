@@ -108,6 +108,37 @@ export interface ToolResultStat {
   approxTokens: number;
 }
 
+/**
+ * Session-level friction counters (#37), parsed from native Claude Code transcripts.
+ * Undefined means "not observable for this session" (codex/gemini/AgentsView-imported),
+ * which is distinct from a Claude session that simply had zero friction.
+ */
+export interface SessionFriction {
+  /** User pressed Escape: "[Request interrupted by user]" (plain or "for tool use"). */
+  interruptions: number;
+  /** Tool uses the user declined at the permission prompt. */
+  rejections: number;
+  /** Context compactions observed in the transcript. */
+  compactions: number;
+  /** Completed turns (system/turn_duration records). */
+  turns: number;
+  /** Wall-clock duration of each completed turn, in transcript order. */
+  turnDurationsMs: number[];
+  /** Assistant stop_reason counts, one per deduped assistant message. */
+  stopReasons: Record<string, number>;
+}
+
+export function emptySessionFriction(): SessionFriction {
+  return {
+    interruptions: 0,
+    rejections: 0,
+    compactions: 0,
+    turns: 0,
+    turnDurationsMs: [],
+    stopReasons: {},
+  };
+}
+
 export interface SessionMeta {
   source: AgentSource;
   sessionId: string;
@@ -115,6 +146,8 @@ export interface SessionMeta {
   cwd: string;
   filePath: string; // transcript path, for on-demand LLM summarization
   firstPrompt?: string;
+  /** Present only for sessions parsed from native Claude transcripts. */
+  friction?: SessionFriction;
 }
 
 export interface ParseResult {

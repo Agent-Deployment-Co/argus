@@ -51,6 +51,14 @@ The pipeline is a one-way data flow; each stage is its own module:
   re-walking individual messages** (not by summing usage then pricing once) so sessions that mix
   models are priced correctly.
 
+- **`friction.ts`** — Session-level friction signals (#37): detection of interruptions,
+  permission rejections, compactions, and turn durations from raw Claude JSONL records, plus
+  the per-session fold. Shared by both parse paths (`parse.ts` directly; `parse-claude.ts`
+  emits `SessionFact.frictionEvents` that `parse-incremental.ts` dedupes and folds). Events
+  carry stable ids (record uuid / `tool_use_id`) so resumed-session replays don't double-count.
+  Claude-only: codex/gemini/AgentsView sessions leave `SessionMeta.friction` undefined
+  (unknown) rather than zero — the support matrix is documented in the module header.
+
 - **`tool-categories.ts`** — Canonical tool/MCP parsing: `categorizeTool` (9 categories),
   `isMcpTool`, `parseMcpTool` (the `mcp__server__tool` split — requires ≥3 `__` segments,
   tool keeps any further `__`), and `toolDisplayName`. Both `parse.ts` and `aggregate.ts`
