@@ -28,6 +28,7 @@ export function renderHtml(d: Dashboard, opts: RenderOptions = {}): string {
   const data = JSON.stringify(d).replace(/</g, "\\u003c");
   const recs = computeRecommendations(d);
   const recsData = JSON.stringify(recs).replace(/</g, "\\u003c");
+  const hasHealth = d.frictionTotals.observableSessions > 0;
   const chartTag = opts.chartJs
     ? `<script>${opts.chartJs}</script>`
     : `<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>`;
@@ -77,7 +78,6 @@ ${opts.fontCss || ""}
     --pill-cool:var(--sky-surge); --pill-cool-line:var(--cornflower-ocean);
     --code-bg:rgba(249,235,220,.07); --code-text:var(--porcelain);
     --sel-bg:var(--tiger-orange); --sel-text:var(--coffee-bean);
-    --hm0:rgba(243,215,186,.08); --hm1:rgba(239,137,32,.32); --hm2:rgba(239,137,32,.54); --hm3:rgba(239,137,32,.77); --hm4:var(--tiger-orange);
   }
   :root[data-theme="dark"] { color-scheme:dark; }
   :root[data-theme="light"] {
@@ -91,7 +91,6 @@ ${opts.fontCss || ""}
     --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
     --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
     --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
-    --hm0:rgba(52,31,9,.06); --hm1:rgba(239,137,32,.34); --hm2:rgba(239,137,32,.56); --hm3:rgba(239,137,32,.78); --hm4:var(--tiger-orange);
   }
   @media (prefers-color-scheme:light) {
     :root:not([data-theme]) {
@@ -103,8 +102,7 @@ ${opts.fontCss || ""}
       --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
       --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
       --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
-      --hm0:rgba(52,31,9,.06); --hm1:rgba(239,137,32,.34); --hm2:rgba(239,137,32,.56); --hm3:rgba(239,137,32,.78); --hm4:var(--tiger-orange);
-    }
+      }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 "Aleo",Georgia,serif; -webkit-font-smoothing:antialiased; }
@@ -126,14 +124,9 @@ ${opts.fontCss || ""}
   .tab:hover { color:var(--heading); }
   .tab[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
   .tab:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .tab[aria-disabled="true"] { opacity:.38; cursor:not-allowed; }
+  .tab[aria-disabled="true"]:hover { color:var(--muted); }
   .screen[hidden] { display:none; }
-  .heatmap-wrap { overflow-x:auto; padding-bottom:4px; }
-  svg.heatmap { display:block; }
-  svg.heatmap text { fill:var(--muted); font:10px "Poppins","Avenir Next",Arial,sans-serif; }
-  svg.heatmap rect.cell { stroke:var(--line); stroke-width:.5; }
-  .hm-l0 { fill:var(--hm0); } .hm-l1 { fill:var(--hm1); } .hm-l2 { fill:var(--hm2); } .hm-l3 { fill:var(--hm3); } .hm-l4 { fill:var(--hm4); }
-  .hm-legend { display:flex; align-items:center; gap:6px; justify-content:flex-end; margin-top:8px; color:var(--muted); font:11px "Poppins","Avenir Next",Arial,sans-serif; }
-  .hm-legend .swatch { width:12px; height:12px; border-radius:2px; border:.5px solid var(--line); display:inline-block; }
   main { padding:30px 32px 64px; max-width:1200px; margin:0 auto; }
   section { margin:0 0 42px; }
   section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--accent); margin:0 0 14px; font-weight:600; }
@@ -152,7 +145,7 @@ ${opts.fontCss || ""}
   canvas { max-width:100%; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; }
+  th { color:var(--muted); font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; cursor:pointer; user-select:none; white-space:nowrap; position:sticky; top:0; background:var(--surface); z-index:1; }
   th:hover { color:var(--accent); }
   td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .nowrap { white-space:nowrap; }
@@ -213,6 +206,7 @@ ${opts.fontCss || ""}
     <button class="tab" type="button" role="tab" data-tab="activity" aria-selected="true">Activity</button>
     <button class="tab" type="button" role="tab" data-tab="projects" aria-selected="false">Projects</button>
     <button class="tab" type="button" role="tab" data-tab="tools" aria-selected="false">Tools</button>
+    <button class="tab" type="button" role="tab" data-tab="health" aria-selected="false"${!hasHealth ? ` aria-disabled="true" title="No Claude sessions — friction signals require native Claude transcripts"` : ""}>Health</button>
   </div>
 </nav>
 <main>
@@ -226,28 +220,6 @@ ${opts.fontCss || ""}
       <h2>Recommendations</h2>
       <div class="rec-list" id="recList"></div>
     </section>` : ""}
-
-    ${d.frictionTotals.observableSessions > 0 ? `<section>
-      <h2>Session health</h2>
-      <div class="grid2">
-        <div class="panel"><h3>Outcomes</h3><canvas id="outcomeChart" height="200"></canvas></div>
-        <div class="panel"><h3>Friction signals <span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--muted);margin-left:6px">${d.frictionTotals.observableSessions} observable sessions</span></h3><div class="cards" id="frictionCards"></div></div>
-      </div>
-    </section>` : ''}
-
-    <section>
-      <h2>Activity over time</h2>
-      <div class="panel">
-        <h3>Tokens per day</h3>
-        <div class="heatmap-wrap" id="tokensHeatmap"></div>
-        <div class="hm-legend">Less <span class="swatch hm-l0"></span><span class="swatch hm-l1"></span><span class="swatch hm-l2"></span><span class="swatch hm-l3"></span><span class="swatch hm-l4"></span> More</div>
-      </div>
-      <div class="panel" style="margin-top:24px">
-        <h3>Est. cost per day (USD)</h3>
-        <div class="heatmap-wrap" id="costHeatmap"></div>
-        <div class="hm-legend">Less <span class="swatch hm-l0"></span><span class="swatch hm-l1"></span><span class="swatch hm-l2"></span><span class="swatch hm-l3"></span><span class="swatch hm-l4"></span> More</div>
-      </div>
-    </section>
 
     <section>
       <h2>Trends</h2>
@@ -263,7 +235,7 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tokens by source</h3><canvas id="sourceChart" height="220"></canvas></div>
         <div class="panel"><h3>Est. cost by source</h3><canvas id="sourceCostChart" height="220"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="sourceTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="sourceTable"></table></div>
     </section>
 
     ${
@@ -274,16 +246,14 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tokens by user</h3><canvas id="userChart" height="240"></canvas></div>
         <div class="panel"><h3>Est. cost by user</h3><canvas id="userCostChart" height="240"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="userTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="userTable"></table></div>
     </section>`
         : ""
     }
 
     <section>
       <h2>Models</h2>
-      <div class="grid2">
-        <div class="panel"><h3>Tokens by model</h3><canvas id="modelChart" height="260"></canvas></div>
-      </div>
+      <div class="panel"><h3>Tokens by model</h3><canvas id="modelChart" height="260"></canvas></div>
     </section>
   </div>
 
@@ -294,12 +264,12 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tokens by project</h3><canvas id="projectChart" height="260"></canvas></div>
         <div class="panel"><h3>Est. cost by project</h3><canvas id="projectCostChart" height="260"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="projectTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="projectTable"></table></div>
     </section>
 
     <section>
       <h2>Sessions (${d.sessions.length})</h2>
-      <div class="scroll"><table id="sessionTable"></table></div>
+      <div class="scroll" style="max-height:510px"><table id="sessionTable"></table></div>
     </section>
   </div>
 
@@ -309,6 +279,7 @@ ${opts.fontCss || ""}
       <div class="grid2">
         <div class="panel"><h3>Top skills by tokens</h3><canvas id="skillChart" height="260"></canvas>
           <p class="note">Token attribution is exact — usage and the active skill are recorded on the same message.</p></div>
+        <div class="panel"><h3>Skill usage over time</h3><canvas id="skillTimeChart" height="260"></canvas></div>
       </div>
     </section>
 
@@ -318,7 +289,7 @@ ${opts.fontCss || ""}
         <div class="panel"><h3>Tool calls by category</h3><canvas id="toolCatChart" height="240"></canvas></div>
         <div class="panel"><h3>Most-used tools (by calls)</h3><canvas id="toolRankChart" height="240"></canvas></div>
       </div>
-      <div class="scroll" style="margin-top:24px"><table id="toolTable"></table></div>
+      <div class="scroll" style="margin-top:24px;max-height:510px"><table id="toolTable"></table></div>
       <p class="note">MCP tool names are displayed as <code>server · tool</code>.</p>
     </section>
 
@@ -333,8 +304,25 @@ ${opts.fontCss || ""}
 
     <section>
       <h2>Plugins</h2>
-      <div class="scroll"><table id="pluginTable"></table></div>
+      <div class="scroll" style="max-height:510px"><table id="pluginTable"></table></div>
       <p class="note">Rows marked <span class="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
+    </section>
+  </div>
+
+  <div class="screen" data-screen="health" hidden>
+    <section>
+      <div class="cards" id="frictionCards"></div>
+      <p class="note">${d.frictionTotals.observableSessions} observable sessions — native Claude transcripts with friction data.</p>
+    </section>
+
+    <section>
+      <h2>Outcomes</h2>
+      <div class="panel"><canvas id="outcomeChart" height="220"></canvas></div>
+    </section>
+
+    <section>
+      <h2>Sessions</h2>
+      <div class="scroll" style="max-height:510px"><table id="healthSessionTable"></table></div>
     </section>
   </div>
 </main>
@@ -463,6 +451,21 @@ if (FT.observableSessions > 0) {
   }}});
 }
 
+// ---- health sessions table ----
+makeTable(document.getElementById('healthSessionTable'),[
+  {label:'Started', className:'nowrap', sort:r=>r.start, cell:r=>dt(r.start)},
+  {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
+  {label:'Outcome', sort:r=>(r.health&&r.health.outcome)||'', cell:r=>outcomeCell(r.health&&r.health.outcome)},
+  {label:'Interrupts', num:true, sort:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:-1, cell:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:'<span class="muted">—</span>'},
+  {label:'Rejections', num:true, sort:r=>r.health&&r.health.rejections!=null?r.health.rejections:-1, cell:r=>r.health&&r.health.rejections!=null?r.health.rejections:'<span class="muted">—</span>'},
+  {label:'Compactions', num:true, sort:r=>r.health&&r.health.compactions!=null?r.health.compactions:-1, cell:r=>r.health&&r.health.compactions!=null?r.health.compactions:'<span class="muted">—</span>'},
+  {label:'Turns', num:true, sort:r=>r.health&&r.health.turns!=null?r.health.turns:-1, cell:r=>r.health&&r.health.turns!=null?r.health.turns:'<span class="muted">—</span>'},
+  {label:'Median turn', num:true, sort:r=>r.health&&r.health.medianTurnMs!=null?r.health.medianTurnMs:-1, cell:r=>r.health&&r.health.medianTurnMs!=null?dur(r.health.medianTurnMs):'<span class="muted">—</span>'},
+  {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},
+  {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
+  {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
+], DATA.sessions);
+
 // ---- tokens per day (stacked) ----
 const days = DATA.daily.map(d=>d.date);
 new Chart(tokensChart, { type:'bar', data:{ labels:days, datasets:[
@@ -491,10 +494,52 @@ new Chart(skillChart, { type:'bar', data:{ labels:sk.map(s=>s.name), datasets:[
   {label:'tokens', data:sk.map(s=>s.total), backgroundColor:C.cacheWrite}
 ]}, options:{ indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>fmt(c.parsed.x)+' tok · '+usd(sk[c.dataIndex].cost)+' · '+sk[c.dataIndex].messages+' msgs'}}}, scales:{x:{ticks:{callback:fmt}}} }});
 
-// ---- model doughnut ----
-new Chart(modelChart, { type:'doughnut', data:{ labels:DATA.byModel.map(m=>m.name), datasets:[
-  {data:DATA.byModel.map(m=>m.total), backgroundColor:[C.input,C.output,C.cacheRead,C.cacheWrite,C.muted]}
-]}, options:{ plugins:{legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.label+': '+fmt(c.parsed)+' tok'}}} }});
+// ---- skill usage over time (stacked bar) ----
+const bsd = DATA.bySkillDaily || [];
+const skillNames = DATA.bySkill.filter(s=>s.name!=='(none)').slice(0,12).map(s=>s.name);
+const SKILL_PAL = ['#ef8920','#5dbcdf','#e2302c','#286992','#f5a850','#3a9060','#2a8090','#c07010','#a04800','#2e7eb0','#887060','#82d0f0'];
+if (skillTimeChart && skillNames.length > 0) {
+  new Chart(skillTimeChart, { type:'bar', data:{ labels:bsd.map(d=>d.date), datasets:skillNames.map((name,i)=>({
+    label:name,
+    data:bsd.map(d=>(d.bySkill&&d.bySkill[name])||0),
+    backgroundColor:SKILL_PAL[i%SKILL_PAL.length],
+    stack:'s',
+  }))}, options:{ responsive:true,
+    plugins:{ legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.parsed.y)+' tok'}} },
+    scales:{ x:{stacked:true, ticks:{maxRotation:90,minRotation:45}}, y:{stacked:true, ticks:{callback:fmt}} }
+  }});
+}
+
+// ---- tokens by model over time (stacked bar) ----
+// Colors grouped by model family: Claude=oranges, Gemini=blues, GPT=greens, Codex=teals, other=muted.
+function modelFamilyColor(name) {
+  const n = String(name).toLowerCase();
+  if (n.includes('opus-4-8') || n.includes('opus-4.8')) return '#7a3200';
+  if (n.includes('opus-4-7') || n.includes('opus-4.7')) return '#a04800';
+  if (n.includes('opus'))     return '#7a3200';
+  if (n.includes('fable'))    return '#c07010';
+  if (n.includes('sonnet'))   return '#ef8920';
+  if (n.includes('haiku'))    return '#f5a850';
+  if (n.includes('claude'))   return '#d47820';
+  if (n.includes('gemini') && n.includes('pro'))    return '#1a4e78';
+  if (n.includes('gemini') && n.includes('2.5') && n.includes('flash')) return '#2e7eb0';
+  if (n.includes('gemini') && n.includes('flash'))  return '#5dbcdf';
+  if (n.includes('gemini'))                          return '#82d0f0';
+  if (n.includes('gpt') || /\bo[13]\b/.test(n))     return '#3a9060';
+  if (n.includes('codex'))    return '#2a8090';
+  return '#887060';
+}
+const bmd = DATA.byModelDaily || [];
+const modelNames = DATA.byModel.map(m=>m.name);
+new Chart(modelChart, { type:'bar', data:{ labels:bmd.map(d=>d.date), datasets:modelNames.map(name=>({
+  label:name,
+  data:bmd.map(d=>(d.byModel&&d.byModel[name])||0),
+  backgroundColor:modelFamilyColor(name),
+  stack:'m',
+}))}, options:{ responsive:true,
+  plugins:{ legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.parsed.y)+' tok'}} },
+  scales:{ x:{stacked:true, ticks:{maxRotation:90,minRotation:45}}, y:{stacked:true, ticks:{callback:fmt}} }
+}});
 
 // ---- by user (team mode) ----
 if (DATA.byUser && DATA.byUser.length) {
@@ -643,55 +688,22 @@ if (DATA.sessions.some(s=>s.user)) {
 }
 makeTable(document.getElementById('sessionTable'), sessionCols, DATA.sessions);
 
-// ---- github-style activity heatmaps ----
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function renderHeatmap(el, key, fmtVal){
-  if(!el) return;
-  const daily = DATA.daily || [];
-  if(!daily.length){ el.innerHTML = '<p class="muted">No activity in range.</p>'; return; }
-  const map = new Map(daily.map(d=>[d.date, d[key]||0]));
-  const parse = s=>{ const p=s.split('-').map(Number); return new Date(Date.UTC(p[0],p[1]-1,p[2])); };
-  const start = parse(daily[0].date), end = parse(daily[daily.length-1].date);
-  const gridStart = new Date(start); gridStart.setUTCDate(start.getUTCDate()-start.getUTCDay());
-  // quartile thresholds over non-zero days, so a few heavy days don't wash out the rest
-  const vals = daily.map(d=>d[key]||0).filter(v=>v>0).sort((a,b)=>a-b);
-  const q = p => vals.length ? vals[Math.min(vals.length-1, Math.floor(p*vals.length))] : 0;
-  const t1=q(.25), t2=q(.5), t3=q(.75);
-  const level = v => v<=0?0 : v<=t1?1 : v<=t2?2 : v<=t3?3 : 4;
-  const CELL=12, STRIDE=15, TOP=18, LEFT=30;
-  const cells=[], months=[], cur=new Date(gridStart); let col=0, lastMonth=-1;
-  while(cur<=end){
-    for(let row=0; row<7; row++){
-      const iso = cur.toISOString().slice(0,10);
-      const inRange = cur>=start && cur<=end;
-      const v = map.get(iso)||0;
-      const x = LEFT+col*STRIDE, y = TOP+row*STRIDE;
-      if(row===0){ const m=cur.getUTCMonth(); if(m!==lastMonth){ months.push('<text x="'+x+'" y="'+(TOP-6)+'">'+MONTHS[m]+'</text>'); lastMonth=m; } }
-      if(inRange){
-        cells.push('<rect class="cell hm-l'+level(v)+'" x="'+x+'" y="'+y+'" width="'+CELL+'" height="'+CELL+'" rx="2"><title>'+iso+' · '+fmtVal(v)+'</title></rect>');
-      }
-      cur.setUTCDate(cur.getUTCDate()+1);
-    }
-    col++;
-  }
-  const dows = [[1,'Mon'],[3,'Wed'],[5,'Fri']].map(([r,l])=>'<text x="0" y="'+(TOP+r*STRIDE+CELL-2)+'">'+l+'</text>').join('');
-  const w = LEFT+col*STRIDE, h = TOP+7*STRIDE;
-  el.innerHTML = '<svg class="heatmap" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+months.join('')+dows+cells.join('')+'</svg>';
-}
-renderHeatmap(document.getElementById('tokensHeatmap'), 'total', v=>fmt(v)+' tokens');
-renderHeatmap(document.getElementById('costHeatmap'), 'cost', v=>usd(v));
 
 // ---- tab navigation ----
-const TABS = ['activity','projects','tools'];
+const TABS = ['activity','projects','tools','health'];
 function showTab(name){
-  if(!TABS.includes(name)) name = 'activity';
+  const tabEl = document.querySelector('[data-tab="'+name+'"]');
+  if (!TABS.includes(name) || (tabEl && tabEl.getAttribute('aria-disabled') === 'true')) name = 'activity';
   document.querySelectorAll('.screen').forEach(s=>{ s.hidden = s.dataset.screen !== name; });
   document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected', String(t.dataset.tab === name)));
   // charts created while hidden have zero size; resize once their screen is visible
   Object.values(Chart.instances||{}).forEach(c=>{ try{ c.resize(); }catch{} });
   try{ history.replaceState(null,'','#'+name); }catch{}
 }
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>showTab(t.dataset.tab)));
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
+  if(t.getAttribute('aria-disabled') === 'true') return;
+  showTab(t.dataset.tab);
+}));
 showTab((location.hash||'').replace('#','') || 'activity');
 </script>
 </body>

@@ -42,7 +42,7 @@ export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "3";
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "4";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",
@@ -583,6 +583,7 @@ function createMessageFact(
   sourceSessionId: string,
   diagnostics: ParserDiagnostic[],
 ): MessageFact | undefined {
+  if (record.value.message?.model === "<synthetic>") return undefined;
   const timestamp = timestampMs(record.value.timestamp);
   if (!Number.isFinite(timestamp)) {
     diagnostics.push(
