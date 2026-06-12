@@ -74,6 +74,7 @@ ${opts.fontCss || ""}
     --pill-cool:var(--sky-surge); --pill-cool-line:var(--cornflower-ocean);
     --code-bg:rgba(249,235,220,.07); --code-text:var(--porcelain);
     --sel-bg:var(--tiger-orange); --sel-text:var(--coffee-bean);
+    --hm0:rgba(243,215,186,.08); --hm1:rgba(239,137,32,.32); --hm2:rgba(239,137,32,.54); --hm3:rgba(239,137,32,.77); --hm4:var(--tiger-orange);
   }
   :root[data-theme="dark"] { color-scheme:dark; }
   :root[data-theme="light"] {
@@ -87,6 +88,7 @@ ${opts.fontCss || ""}
     --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
     --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
     --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
+    --hm0:rgba(52,31,9,.06); --hm1:rgba(239,137,32,.34); --hm2:rgba(239,137,32,.56); --hm3:rgba(239,137,32,.78); --hm4:var(--tiger-orange);
   }
   @media (prefers-color-scheme:light) {
     :root:not([data-theme]) {
@@ -98,6 +100,7 @@ ${opts.fontCss || ""}
       --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
       --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
       --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
+      --hm0:rgba(52,31,9,.06); --hm1:rgba(239,137,32,.34); --hm2:rgba(239,137,32,.56); --hm3:rgba(239,137,32,.78); --hm4:var(--tiger-orange);
     }
   }
   * { box-sizing:border-box; }
@@ -114,6 +117,20 @@ ${opts.fontCss || ""}
   .theme-choice:hover { color:var(--heading); }
   .theme-choice[aria-pressed="true"] { background:var(--accent); color:var(--coffee-bean); }
   .theme-choice:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  nav.tabs { border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; background:var(--bg); }
+  .tabs-inner { max-width:1200px; margin:0 auto; padding:0 32px; display:flex; gap:2px; }
+  .tab { border:0; background:transparent; color:var(--muted); font:600 12px "Poppins","Avenir Next",Arial,sans-serif; text-transform:uppercase; letter-spacing:.1em; padding:14px 16px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tab:hover { color:var(--heading); }
+  .tab[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
+  .tab:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .screen[hidden] { display:none; }
+  .heatmap-wrap { overflow-x:auto; padding-bottom:4px; }
+  svg.heatmap { display:block; }
+  svg.heatmap text { fill:var(--muted); font:10px "Poppins","Avenir Next",Arial,sans-serif; }
+  svg.heatmap rect.cell { stroke:var(--line); stroke-width:.5; }
+  .hm-l0 { fill:var(--hm0); } .hm-l1 { fill:var(--hm1); } .hm-l2 { fill:var(--hm2); } .hm-l3 { fill:var(--hm3); } .hm-l4 { fill:var(--hm4); }
+  .hm-legend { display:flex; align-items:center; gap:6px; justify-content:flex-end; margin-top:8px; color:var(--muted); font:11px "Poppins","Avenir Next",Arial,sans-serif; }
+  .hm-legend .swatch { width:12px; height:12px; border-radius:2px; border:.5px solid var(--line); display:inline-block; }
   main { padding:30px 32px 64px; max-width:1200px; margin:0 auto; }
   section { margin:0 0 42px; }
   section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--accent); margin:0 0 14px; font-weight:600; }
@@ -181,89 +198,122 @@ ${opts.fontCss || ""}
     </div>
   </div>
 </header>
+<nav class="tabs" role="tablist" aria-label="Dashboard sections">
+  <div class="tabs-inner">
+    <button class="tab" type="button" role="tab" data-tab="activity" aria-selected="true">Activity</button>
+    <button class="tab" type="button" role="tab" data-tab="projects" aria-selected="false">Projects</button>
+    <button class="tab" type="button" role="tab" data-tab="tools" aria-selected="false">Tools</button>
+  </div>
+</nav>
 <main>
-  <section>
-    <div class="cards" id="cards"></div>
-    ${d.unpriced.length ? `<p class="note">Unpriced models (cost excluded): ${d.unpriced.map(esc).join(", ")}.</p>` : ""}
-  </section>
+  <div class="screen" data-screen="activity">
+    <section>
+      <div class="cards" id="cards"></div>
+      ${d.unpriced.length ? `<p class="note">Unpriced models (cost excluded): ${d.unpriced.map(esc).join(", ")}.</p>` : ""}
+    </section>
 
-  <section>
-    <h2>Over time</h2>
-    <div class="grid2">
-      <div class="panel"><h3>Tokens per day</h3><canvas id="tokensChart" height="220"></canvas></div>
-      <div class="panel"><h3>Cost per day (USD)</h3><canvas id="costChart" height="220"></canvas></div>
-    </div>
-  </section>
+    <section>
+      <h2>Activity over time</h2>
+      <div class="panel">
+        <h3>Tokens per day</h3>
+        <div class="heatmap-wrap" id="tokensHeatmap"></div>
+        <div class="hm-legend">Less <span class="swatch hm-l0"></span><span class="swatch hm-l1"></span><span class="swatch hm-l2"></span><span class="swatch hm-l3"></span><span class="swatch hm-l4"></span> More</div>
+      </div>
+      <div class="panel" style="margin-top:24px">
+        <h3>Est. cost per day (USD)</h3>
+        <div class="heatmap-wrap" id="costHeatmap"></div>
+        <div class="hm-legend">Less <span class="swatch hm-l0"></span><span class="swatch hm-l1"></span><span class="swatch hm-l2"></span><span class="swatch hm-l3"></span><span class="swatch hm-l4"></span> More</div>
+      </div>
+    </section>
 
-  <section>
-    <h2>Sources</h2>
-    <div class="grid2">
-      <div class="panel"><h3>Tokens by source</h3><canvas id="sourceChart" height="220"></canvas></div>
-      <div class="panel"><h3>Est. cost by source</h3><canvas id="sourceCostChart" height="220"></canvas></div>
-    </div>
-    <div class="scroll" style="margin-top:24px"><table id="sourceTable"></table></div>
-  </section>
+    <section>
+      <h2>Trends</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Tokens per day</h3><canvas id="tokensChart" height="220"></canvas></div>
+        <div class="panel"><h3>Cost per day (USD)</h3><canvas id="costChart" height="220"></canvas></div>
+      </div>
+    </section>
 
-  ${
-    d.byUser && d.byUser.length
-      ? `<section>
-    <h2>By user</h2>
-    <div class="grid2">
-      <div class="panel"><h3>Tokens by user</h3><canvas id="userChart" height="240"></canvas></div>
-      <div class="panel"><h3>Est. cost by user</h3><canvas id="userCostChart" height="240"></canvas></div>
-    </div>
-    <div class="scroll" style="margin-top:24px"><table id="userTable"></table></div>
-  </section>`
-      : ""
-  }
+    <section>
+      <h2>Sources</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Tokens by source</h3><canvas id="sourceChart" height="220"></canvas></div>
+        <div class="panel"><h3>Est. cost by source</h3><canvas id="sourceCostChart" height="220"></canvas></div>
+      </div>
+      <div class="scroll" style="margin-top:24px"><table id="sourceTable"></table></div>
+    </section>
 
-  <section>
-    <h2>Attribution</h2>
-    <div class="grid2">
-      <div class="panel"><h3>Top skills by tokens</h3><canvas id="skillChart" height="260"></canvas>
-        <p class="note">Token attribution is exact — usage and the active skill are recorded on the same message.</p></div>
-      <div class="panel"><h3>Tokens by model</h3><canvas id="modelChart" height="260"></canvas></div>
-    </div>
-  </section>
+    ${
+      d.byUser && d.byUser.length
+        ? `<section>
+      <h2>By user</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Tokens by user</h3><canvas id="userChart" height="240"></canvas></div>
+        <div class="panel"><h3>Est. cost by user</h3><canvas id="userCostChart" height="240"></canvas></div>
+      </div>
+      <div class="scroll" style="margin-top:24px"><table id="userTable"></table></div>
+    </section>`
+        : ""
+    }
 
-  <section>
-    <h2>Tools</h2>
-    <div class="grid2">
-      <div class="panel"><h3>Tool calls by category</h3><canvas id="toolCatChart" height="240"></canvas></div>
-      <div class="panel"><h3>Most-used tools (by calls)</h3><canvas id="toolRankChart" height="240"></canvas></div>
-    </div>
-    <div class="scroll" style="margin-top:24px"><table id="toolTable"></table></div>
-    <p class="note">MCP tool names are displayed as <code>server · tool</code>.</p>
-  </section>
+    <section>
+      <h2>Models</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Tokens by model</h3><canvas id="modelChart" height="260"></canvas></div>
+      </div>
+    </section>
+  </div>
 
-  <section>
-    <h2>MCP servers &amp; tool output weight</h2>
-    <div class="grid2">
-      <div class="panel"><h3>MCP server calls</h3><canvas id="mcpChart" height="240"></canvas></div>
-      <div class="panel"><h3>Heaviest tool results (approx tokens dumped into context)</h3><canvas id="toolChart" height="240"></canvas>
-        <p class="note">Approximate (≈chars/4). Shows which tools flood context — useful for trimming.</p></div>
-    </div>
-  </section>
+  <div class="screen" data-screen="projects" hidden>
+    <section>
+      <h2>Projects</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Tokens by project</h3><canvas id="projectChart" height="260"></canvas></div>
+        <div class="panel"><h3>Est. cost by project</h3><canvas id="projectCostChart" height="260"></canvas></div>
+      </div>
+      <div class="scroll" style="margin-top:24px"><table id="projectTable"></table></div>
+    </section>
 
-  <section>
-    <h2>Projects</h2>
-    <div class="grid2">
-      <div class="panel"><h3>Tokens by project</h3><canvas id="projectChart" height="260"></canvas></div>
-      <div class="panel"><h3>Est. cost by project</h3><canvas id="projectCostChart" height="260"></canvas></div>
-    </div>
-    <div class="scroll" style="margin-top:24px"><table id="projectTable"></table></div>
-  </section>
+    <section>
+      <h2>Sessions (${d.sessions.length})</h2>
+      <div class="scroll"><table id="sessionTable"></table></div>
+    </section>
+  </div>
 
-  <section>
-    <h2>Plugins</h2>
-    <div class="scroll"><table id="pluginTable"></table></div>
-    <p class="note">Rows marked <span class="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
-  </section>
+  <div class="screen" data-screen="tools" hidden>
+    <section>
+      <h2>Skills</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Top skills by tokens</h3><canvas id="skillChart" height="260"></canvas>
+          <p class="note">Token attribution is exact — usage and the active skill are recorded on the same message.</p></div>
+      </div>
+    </section>
 
-  <section>
-    <h2>Sessions (${d.sessions.length})</h2>
-    <div class="scroll"><table id="sessionTable"></table></div>
-  </section>
+    <section>
+      <h2>Tools</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Tool calls by category</h3><canvas id="toolCatChart" height="240"></canvas></div>
+        <div class="panel"><h3>Most-used tools (by calls)</h3><canvas id="toolRankChart" height="240"></canvas></div>
+      </div>
+      <div class="scroll" style="margin-top:24px"><table id="toolTable"></table></div>
+      <p class="note">MCP tool names are displayed as <code>server · tool</code>.</p>
+    </section>
+
+    <section>
+      <h2>MCP servers &amp; tool output weight</h2>
+      <div class="grid2">
+        <div class="panel"><h3>MCP server calls</h3><canvas id="mcpChart" height="240"></canvas></div>
+        <div class="panel"><h3>Heaviest tool results (approx tokens dumped into context)</h3><canvas id="toolChart" height="240"></canvas>
+          <p class="note">Approximate (≈chars/4). Shows which tools flood context — useful for trimming.</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Plugins</h2>
+      <div class="scroll"><table id="pluginTable"></table></div>
+      <p class="note">Rows marked <span class="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
+    </section>
+  </div>
 </main>
 
 <script id="data" type="application/json">${data}</script>
@@ -297,6 +347,20 @@ function applyChartTheme(theme) {
   Object.values(Chart.instances || {}).forEach(chart => {
     chart.options.color = colors.muted;
     chart.options.borderColor = colors.grid;
+    // Scale tick/grid and legend label colors are resolved per-instance at build time,
+    // so updating Chart.defaults alone won't recolor them on a theme switch — set them here.
+    Object.values(chart.options.scales || {}).forEach(scale => {
+      if (!scale) return;
+      scale.ticks = scale.ticks || {};
+      scale.ticks.color = colors.muted;
+      scale.grid = scale.grid || {};
+      scale.grid.color = colors.grid;
+    });
+    const legend = chart.options.plugins && chart.options.plugins.legend;
+    if (legend) {
+      legend.labels = legend.labels || {};
+      legend.labels.color = colors.muted;
+    }
     const tooltip = chart.options.plugins && chart.options.plugins.tooltip;
     if (tooltip) {
       tooltip.backgroundColor = colors.panel;
@@ -336,7 +400,7 @@ const cards = [
   ['Messages', fmt(DATA.totals.messages)],
   ['Total tokens', fmt(DATA.totals.total)],
   ['Est. cost', usd(DATA.totals.cost)],
-  ['Cache read', fmt(u.cacheRead)+' <small>'+Math.round(100*u.cacheRead/Math.max(1,DATA.totals.total))+'%</small>'],
+  ['Cache read', Math.round(100*u.cacheRead/Math.max(1,DATA.totals.total))+'% <small>'+fmt(u.cacheRead)+'</small>'],
   ['Output tokens', fmt(u.output)],
 ];
 document.getElementById('cards').innerHTML = cards.map(([l,v]) =>
@@ -507,6 +571,57 @@ if (DATA.sessions.some(s=>s.user)) {
   sessionCols.splice(1, 0, {label:'User', sort:r=>r.user||'', cell:r=>esc(r.user||'')});
 }
 makeTable(document.getElementById('sessionTable'), sessionCols, DATA.sessions);
+
+// ---- github-style activity heatmaps ----
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function renderHeatmap(el, key, fmtVal){
+  if(!el) return;
+  const daily = DATA.daily || [];
+  if(!daily.length){ el.innerHTML = '<p class="muted">No activity in range.</p>'; return; }
+  const map = new Map(daily.map(d=>[d.date, d[key]||0]));
+  const parse = s=>{ const p=s.split('-').map(Number); return new Date(Date.UTC(p[0],p[1]-1,p[2])); };
+  const start = parse(daily[0].date), end = parse(daily[daily.length-1].date);
+  const gridStart = new Date(start); gridStart.setUTCDate(start.getUTCDate()-start.getUTCDay());
+  // quartile thresholds over non-zero days, so a few heavy days don't wash out the rest
+  const vals = daily.map(d=>d[key]||0).filter(v=>v>0).sort((a,b)=>a-b);
+  const q = p => vals.length ? vals[Math.min(vals.length-1, Math.floor(p*vals.length))] : 0;
+  const t1=q(.25), t2=q(.5), t3=q(.75);
+  const level = v => v<=0?0 : v<=t1?1 : v<=t2?2 : v<=t3?3 : 4;
+  const CELL=12, STRIDE=15, TOP=18, LEFT=30;
+  const cells=[], months=[], cur=new Date(gridStart); let col=0, lastMonth=-1;
+  while(cur<=end){
+    for(let row=0; row<7; row++){
+      const iso = cur.toISOString().slice(0,10);
+      const inRange = cur>=start && cur<=end;
+      const v = map.get(iso)||0;
+      const x = LEFT+col*STRIDE, y = TOP+row*STRIDE;
+      if(row===0){ const m=cur.getUTCMonth(); if(m!==lastMonth){ months.push('<text x="'+x+'" y="'+(TOP-6)+'">'+MONTHS[m]+'</text>'); lastMonth=m; } }
+      if(inRange){
+        cells.push('<rect class="cell hm-l'+level(v)+'" x="'+x+'" y="'+y+'" width="'+CELL+'" height="'+CELL+'" rx="2"><title>'+iso+' · '+fmtVal(v)+'</title></rect>');
+      }
+      cur.setUTCDate(cur.getUTCDate()+1);
+    }
+    col++;
+  }
+  const dows = [[1,'Mon'],[3,'Wed'],[5,'Fri']].map(([r,l])=>'<text x="0" y="'+(TOP+r*STRIDE+CELL-2)+'">'+l+'</text>').join('');
+  const w = LEFT+col*STRIDE, h = TOP+7*STRIDE;
+  el.innerHTML = '<svg class="heatmap" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+months.join('')+dows+cells.join('')+'</svg>';
+}
+renderHeatmap(document.getElementById('tokensHeatmap'), 'total', v=>fmt(v)+' tokens');
+renderHeatmap(document.getElementById('costHeatmap'), 'cost', v=>usd(v));
+
+// ---- tab navigation ----
+const TABS = ['activity','projects','tools'];
+function showTab(name){
+  if(!TABS.includes(name)) name = 'activity';
+  document.querySelectorAll('.screen').forEach(s=>{ s.hidden = s.dataset.screen !== name; });
+  document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+  // charts created while hidden have zero size; resize once their screen is visible
+  Object.values(Chart.instances||{}).forEach(c=>{ try{ c.resize(); }catch{} });
+  try{ history.replaceState(null,'','#'+name); }catch{}
+}
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>showTab(t.dataset.tab)));
+showTab((location.hash||'').replace('#','') || 'activity');
 </script>
 </body>
 </html>`;
