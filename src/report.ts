@@ -279,6 +279,7 @@ ${opts.fontCss || ""}
       <div class="grid2">
         <div class="panel"><h3>Top skills by tokens</h3><canvas id="skillChart" height="260"></canvas>
           <p class="note">Token attribution is exact — usage and the active skill are recorded on the same message.</p></div>
+        <div class="panel"><h3>Skill usage over time</h3><canvas id="skillTimeChart" height="260"></canvas></div>
       </div>
     </section>
 
@@ -492,6 +493,22 @@ const sk = DATA.bySkill.filter(s=>s.name!=='(none)').slice(0,12);
 new Chart(skillChart, { type:'bar', data:{ labels:sk.map(s=>s.name), datasets:[
   {label:'tokens', data:sk.map(s=>s.total), backgroundColor:C.cacheWrite}
 ]}, options:{ indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>fmt(c.parsed.x)+' tok · '+usd(sk[c.dataIndex].cost)+' · '+sk[c.dataIndex].messages+' msgs'}}}, scales:{x:{ticks:{callback:fmt}}} }});
+
+// ---- skill usage over time (stacked bar) ----
+const bsd = DATA.bySkillDaily || [];
+const skillNames = DATA.bySkill.filter(s=>s.name!=='(none)').slice(0,12).map(s=>s.name);
+const SKILL_PAL = ['#ef8920','#5dbcdf','#e2302c','#286992','#f5a850','#3a9060','#2a8090','#c07010','#a04800','#2e7eb0','#887060','#82d0f0'];
+if (skillTimeChart && skillNames.length > 0) {
+  new Chart(skillTimeChart, { type:'bar', data:{ labels:bsd.map(d=>d.date), datasets:skillNames.map((name,i)=>({
+    label:name,
+    data:bsd.map(d=>(d.bySkill&&d.bySkill[name])||0),
+    backgroundColor:SKILL_PAL[i%SKILL_PAL.length],
+    stack:'s',
+  }))}, options:{ responsive:true,
+    plugins:{ legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.parsed.y)+' tok'}} },
+    scales:{ x:{stacked:true, ticks:{maxRotation:90,minRotation:45}}, y:{stacked:true, ticks:{callback:fmt}} }
+  }});
+}
 
 // ---- tokens by model over time (stacked bar) ----
 // Colors grouped by model family: Claude=oranges, Gemini=blues, GPT=greens, Codex=teals, other=muted.
