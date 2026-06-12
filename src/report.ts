@@ -1,3 +1,4 @@
+import { computeRecommendations } from "./recommendations.ts";
 import type { Dashboard } from "./types.ts";
 
 export interface RenderOptions {
@@ -25,6 +26,8 @@ function esc(s: string): string {
 export function renderHtml(d: Dashboard, opts: RenderOptions = {}): string {
   const generated = new Date(d.generatedAtMs).toISOString().replace("T", " ").slice(0, 16);
   const data = JSON.stringify(d).replace(/</g, "\\u003c");
+  const recs = computeRecommendations(d);
+  const recsData = JSON.stringify(recs).replace(/</g, "\\u003c");
   const chartTag = opts.chartJs
     ? `<script>${opts.chartJs}</script>`
     : `<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>`;
@@ -159,6 +162,11 @@ ${opts.fontCss || ""}
   .pill { display:inline-block; padding:1px 8px; border-radius:99px; font:11px "Poppins","Avenir Next",Arial,sans-serif; border:1px solid var(--line); color:var(--muted); margin:1px 3px 1px 0; }
   .pill.on { color:var(--pill-cool); border-color:var(--pill-cool-line); }
   .pill.warn { color:var(--tiger-orange); border-color:var(--racing-red); }
+  .rec-list { display:flex; flex-direction:column; gap:10px; }
+  .rec { background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--sky-surge); border-radius:10px; padding:12px 16px; }
+  .rec.warning { border-left-color:var(--racing-red); }
+  .rec-title { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:13px; font-weight:600; color:var(--heading); }
+  .rec-detail { font-size:12.5px; color:var(--muted); margin-top:4px; line-height:1.5; }
   .pill.clean { color:var(--sky-surge); border-color:var(--cornflower-ocean); }
   .pill.interrupted { color:var(--racing-red); border-color:var(--racing-red); }
   .pill.skill { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; color:var(--pill-cool); border-color:var(--pill-cool-line); }
@@ -213,6 +221,11 @@ ${opts.fontCss || ""}
       <div class="cards" id="cards"></div>
       ${d.unpriced.length ? `<p class="note">Unpriced models (cost excluded): ${d.unpriced.map(esc).join(", ")}.</p>` : ""}
     </section>
+
+    ${recs.length > 0 ? `<section id="recsSection">
+      <h2>Recommendations</h2>
+      <div class="rec-list" id="recList"></div>
+    </section>` : ""}
 
     ${d.frictionTotals.observableSessions > 0 ? `<section>
       <h2>Session health</h2>
@@ -327,8 +340,16 @@ ${opts.fontCss || ""}
 </main>
 
 <script id="data" type="application/json">${data}</script>
+<script id="recs-data" type="application/json">${recsData}</script>
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
+const RECS = JSON.parse(document.getElementById('recs-data').textContent);
+const recListEl = document.getElementById('recList');
+if (recListEl && RECS.length > 0) {
+  recListEl.innerHTML = RECS.map(r =>
+    '<div class="rec '+esc(r.severity)+'"><div class="rec-title">'+esc(r.title)+'</div><div class="rec-detail">'+esc(r.detail)+'</div></div>'
+  ).join('');
+}
 // Data-series hues are brand colors that read on either background; only the chart
 // chrome (tick/label text, gridlines, tooltip surface) changes with the selected theme.
 const CHART_THEMES = {
