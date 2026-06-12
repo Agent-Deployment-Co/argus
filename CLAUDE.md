@@ -68,13 +68,13 @@ The pipeline is a one-way data flow; each stage is its own module:
   emits `byTool` (per-tool ranking) and `byToolCategory` (category rollup) from it.
 
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
-  Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `~/.claude/argus-pricing.json`.
+  Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `$ARGUS_CONFIG_DIR/pricing.json`.
 
 - **`inventory.ts`** — Reads `~/.claude/settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`
   to map skills (`plugin:skill`) to owning plugins and to surface **enabled-but-unused** plugins.
 
 - **`summarize.ts`** — Per-session summaries. Default is a free heuristic; `--summarize` shells out to
-  headless `claude -p` and caches results in `~/.claude/argus-cache.json`, keyed by session + last-activity
+  headless `claude -p` and caches results in `$ARGUS_CACHE_DIR/summaries.json`, keyed by session + last-activity
   timestamp (so re-runs are incremental).
 
 - **`report.ts`** / **`chartjs.ts`** — Render the `Dashboard` to one self-contained HTML file with Chart.js
