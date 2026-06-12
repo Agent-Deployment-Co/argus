@@ -44,6 +44,7 @@ function dashboard(): Dashboard {
       turns: 0,
     },
     byModelDaily: [],
+    bySkillDaily: [],
   };
 }
 
