@@ -29,6 +29,8 @@ export interface FrictionEvent {
   kind: FrictionEventKind;
   /** kind === "turn": wall-clock duration of the completed turn. */
   durationMs?: number;
+  /** Record timestamp, when present — lets aggregation order events against messages. */
+  timestampMs?: number;
 }
 
 const INTERRUPTION_MARKERS = new Set([
@@ -57,6 +59,8 @@ export function claudeFrictionEvents(record: Record<string, any>): FrictionEvent
     typeof record.uuid === "string" && record.uuid
       ? record.uuid
       : `${kind}:${record.sessionId ?? ""}:${record.timestamp ?? ""}`;
+  const ts = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
+  const at = Number.isFinite(ts) ? { timestampMs: ts } : {};
 
   if (record.type === "system") {
     if (record.subtype === "turn_duration") {
@@ -65,9 +69,10 @@ export function claudeFrictionEvents(record: Record<string, any>): FrictionEvent
         kind: "turn",
         eventId: recordId("turn"),
         ...(Number.isFinite(durationMs) ? { durationMs } : {}),
+        ...at,
       });
     } else if (record.subtype === "compact_boundary") {
-      events.push({ kind: "compact_boundary", eventId: recordId("compact_boundary") });
+      events.push({ kind: "compact_boundary", eventId: recordId("compact_boundary"), ...at });
     }
     return events;
   }
@@ -75,12 +80,12 @@ export function claudeFrictionEvents(record: Record<string, any>): FrictionEvent
   if (record.type !== "user") return events;
 
   if (record.isCompactSummary === true) {
-    events.push({ kind: "compact_summary", eventId: recordId("compact_summary") });
+    events.push({ kind: "compact_summary", eventId: recordId("compact_summary"), ...at });
   }
 
   const content = record.message?.content;
   if (textParts(content).some((text) => INTERRUPTION_MARKERS.has(text.trim()))) {
-    events.push({ kind: "interruption", eventId: recordId("interruption") });
+    events.push({ kind: "interruption", eventId: recordId("interruption"), ...at });
   }
 
   if (Array.isArray(content)) {
@@ -94,6 +99,7 @@ export function claudeFrictionEvents(record: Record<string, any>): FrictionEvent
           typeof part.tool_use_id === "string" && part.tool_use_id
             ? part.tool_use_id
             : `${recordId("rejection")}:${itemIndex}`,
+        ...at,
       });
     }
   }
@@ -127,6 +133,9 @@ export function foldFrictionEvents(events: Iterable<FrictionEvent>): SessionFric
         friction.turns++;
         if (typeof event.durationMs === "number") friction.turnDurationsMs.push(event.durationMs);
         break;
+    }
+    if (event.kind === "interruption" && typeof event.timestampMs === "number") {
+      friction.lastInterruptionMs = Math.max(friction.lastInterruptionMs ?? -Infinity, event.timestampMs);
     }
   }
   friction.compactions = Math.max(boundaries, summaries);

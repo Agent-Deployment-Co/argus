@@ -49,7 +49,9 @@ The pipeline is a one-way data flow; each stage is its own module:
 - **`aggregate.ts`** — Pure transform from `ParseResult` → `Dashboard`. Builds all the breakdowns
   (daily, by model/source/skill/project, MCP servers, plugins, sessions). **Cost is computed by
   re-walking individual messages** (not by summing usage then pricing once) so sessions that mix
-  models are priced correctly.
+  models are priced correctly. Also derives per-session health (#38): friction counts, median/max
+  turn duration, stop-reason mix, token-growth trend, and an ended-clean/interrupted/unknown
+  outcome proxy — plus `frictionTotals` and per-project friction rollups (CLI-only fields).
 
 - **`friction.ts`** — Session-level friction signals (#37): detection of interruptions,
   permission rejections, compactions, and turn durations from raw Claude JSONL records, plus

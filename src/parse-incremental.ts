@@ -591,6 +591,7 @@ export function reconcileFragments(input: ReconciliationInput): ParseResult {
       model: fact.model,
       usage: fact.usage,
       attributionSkill: fact.attributionSkill,
+      ...(fact.stopReason ? { stopReason: fact.stopReason } : {}),
       toolUses,
     });
   }
