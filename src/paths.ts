@@ -16,13 +16,24 @@ function defaultArgusCacheDir(): string {
   return join(homedir(), ".cache", "argus");
 }
 
+function defaultArgusConfigDir(): string {
+  if (process.env.ARGUS_CONFIG_DIR) return process.env.ARGUS_CONFIG_DIR;
+  if (process.env.XDG_CONFIG_HOME) return join(process.env.XDG_CONFIG_HOME, "argus");
+  if (platform === "darwin") return join(homedir(), "Library", "Application Support", "argus");
+  if (platform === "win32" && process.env.APPDATA) {
+    return join(process.env.APPDATA, "Argus");
+  }
+  return join(homedir(), ".config", "argus");
+}
+
 export const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 export const HISTORY_FILE = join(CLAUDE_DIR, "history.jsonl");
 export const SETTINGS_FILE = join(CLAUDE_DIR, "settings.json");
 export const INSTALLED_PLUGINS_FILE = join(CLAUDE_DIR, "plugins", "installed_plugins.json");
-export const SUMMARY_CACHE_FILE = join(CLAUDE_DIR, "argus-cache.json");
 export const ARGUS_CACHE_DIR = defaultArgusCacheDir();
+export const ARGUS_CONFIG_DIR = defaultArgusConfigDir();
 export const FRAGMENT_CACHE_FILE = join(ARGUS_CACHE_DIR, "fragments.sqlite3");
-export const ACCESS_TOKEN_FILE = join(CLAUDE_DIR, "argus-token.json");
-export const PRICING_OVERRIDE_FILE = join(CLAUDE_DIR, "argus-pricing.json");
+export const SUMMARY_CACHE_FILE = join(ARGUS_CACHE_DIR, "summaries.json");
+export const ACCESS_TOKEN_FILE = join(ARGUS_CONFIG_DIR, "token.json");
+export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
