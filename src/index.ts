@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { aggregate } from "./aggregate.ts";
 import {
   isLegacyAccessTokenCache,
@@ -25,16 +26,17 @@ import {
 } from "./parse-incremental.ts";
 import { renderHtml } from "./report.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
+import { analyzeSession, cachedSessionAnalysis, formatSessionAnalysis } from "./session-analysis.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
 import { ACCESS_TOKEN_FILE, FRAGMENT_CACHE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
-import type { SessionMeta } from "./types.ts";
+import type { MessageRecord, ParseResult, SessionMeta, SessionRow } from "./types.ts";
 import type { ParserDiagnostic } from "./cache-contract.ts";
 import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
 
 interface Flags {
-  command: "report" | "push" | "login" | "cache-status" | "cache-rebuild";
+  command: "report" | "push" | "login" | "cache-status" | "cache-rebuild" | "analyze";
   source: "all" | TranscriptSource;
   since?: string;
   until?: string;
@@ -47,6 +49,12 @@ interface Flags {
   cache: boolean;
   agentsView: "auto" | "off";
   agentsViewDatabasePath?: string;
+  listSessions: boolean;
+  allColumns: boolean;
+  session?: string;
+  analysisModel?: string;
+  refreshAnalysis: boolean;
+  analysisLlm: boolean;
   help: boolean;
   // push & login
   endpoint?: string;
@@ -64,6 +72,10 @@ function parseArgs(argv: string[]): Flags {
     json: false,
     cache: true,
     agentsView: "auto",
+    listSessions: false,
+    allColumns: false,
+    refreshAnalysis: false,
+    analysisLlm: true,
     help: false,
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
     org: process.env.ARGUS_ORG,
@@ -77,6 +89,7 @@ function parseArgs(argv: string[]): Flags {
       case "login": f.command = "login"; break;
       case "cache-status": f.command = "cache-status"; break;
       case "cache-rebuild": f.command = "cache-rebuild"; break;
+      case "analyze": f.command = "analyze"; break;
       case "--source": f.source = parseSource(next()); break;
       case "--since": f.since = next(); break;
       case "--until": f.until = next(); break;
@@ -90,12 +103,19 @@ function parseArgs(argv: string[]): Flags {
       case "--agentsview": f.agentsView = "auto"; break;
       case "--no-agentsview": f.agentsView = "off"; break;
       case "--agentsview-db": f.agentsViewDatabasePath = next(); break;
+      case "--list": f.listSessions = true; break;
+      case "--all-columns": f.allColumns = true; break;
+      case "--session": f.session = next(); break;
+      case "--analysis-model": f.analysisModel = next(); break;
+      case "--refresh-analysis": f.refreshAnalysis = true; break;
+      case "--no-llm": f.analysisLlm = false; break;
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
       case "--org": f.org = next(); break;
       case "--help": case "-h": f.help = true; break;
       default:
         if (a.startsWith("-")) { console.error(`Unknown flag: ${a}`); process.exit(2); }
+        if (f.command === "analyze" && !f.session) f.session = a;
     }
   }
   return f;
@@ -116,6 +136,7 @@ const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 Usage:
   argus                       show a terminal overview
   argus report [options]      build the local HTML dashboard
+  argus analyze [options]     list, select, and analyze one session
   argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
   argus cache-status          show local fragment cache status
@@ -136,6 +157,15 @@ Report options:
   --agentsview             auto-detect AgentsView imports (default)
   --no-agentsview          disable AgentsView discovery/import
   --agentsview-db <path>   read a specific AgentsView sessions.db
+
+Analyze options (also honors --source/--since/--until/--project):
+  --list                  list available sessions for analysis
+  --all-columns           show project and session log path in session lists
+  --session <id|substr>   analyze a selected session by id or unique substring
+  --analysis-model <id>   model for headless 'claude -p' analysis
+  --refresh-analysis      ignore cached session analysis and regenerate it
+  --no-llm                use local heuristic analysis only
+  --json                  write the selected analysis as JSON
 
 Login options:
   --endpoint <url>         SSO service URL     (default: https://argus.agentdeployment.co)
@@ -159,6 +189,11 @@ function withinRange(date: string, since?: string, until?: string): boolean {
 }
 
 type Log = (s: string) => void;
+
+interface DashboardBuildResult {
+  dash: Dashboard;
+  parseResult: ParseResult;
+}
 
 function diagnosticKey(entry: ParserDiagnostic): string {
   return `${entry.severity}\0${entry.code}\0${entry.message}`;
@@ -204,7 +239,7 @@ function logCacheDiagnostics(
 }
 
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
-async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
+async function buildDashboardDetailed(flags: Flags, log: Log): Promise<DashboardBuildResult> {
   log("Parsing transcripts…");
   const parsed = flags.cache
     ? (await parseAllIncrementalDetailed({
@@ -283,7 +318,11 @@ async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
 
   const dash = aggregate(parseResult, plugins, summaries);
   dash.generatedAtMs = Date.now();
-  return dash;
+  return { dash, parseResult };
+}
+
+async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
+  return (await buildDashboardDetailed(flags, log)).dash;
 }
 
 function summary(dash: Dashboard): string {
@@ -320,6 +359,285 @@ async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<v
   log(`Wrote ${outPath}`);
   log(`Totals: ${summary(dash)}`);
   if (flags.open && !flags.json) spawnSync("open", [outPath]);
+}
+
+function compact(value: string, width: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (width <= 0) return "";
+  if (normalized.length <= width) return normalized;
+  if (width <= 3) return ".".repeat(width);
+  return `${normalized.slice(0, width - 3)}...`;
+}
+
+function sessionDate(row: SessionRow): string {
+  if (!row.start) return "(unknown)";
+  return new Date(row.start).toISOString().slice(0, 16).replace("T", " ");
+}
+
+function displaySessionId(sessionId: string): string {
+  const firstDash = sessionId.indexOf("-");
+  if (firstDash < 0) return sessionId;
+  const secondDash = sessionId.indexOf("-", firstDash + 1);
+  if (secondDash < 0) return sessionId;
+  return `${sessionId.slice(0, secondDash + 1)}...`;
+}
+
+interface SessionListColumn {
+  label: string;
+  minWidth: number;
+  weight?: number;
+  align?: "left" | "right";
+}
+
+const FALLBACK_TERMINAL_COLUMNS = 120;
+const SESSION_LIST_TERMINAL_RATIO = 0.75;
+
+function terminalColumns(): number {
+  const columns = process.stdout.columns;
+  return Number.isFinite(columns) && columns >= 40 ? Math.floor(columns) : FALLBACK_TERMINAL_COLUMNS;
+}
+
+function sessionListTableColumns(): number {
+  return Math.max(40, Math.floor(terminalColumns() * SESSION_LIST_TERMINAL_RATIO));
+}
+
+function sessionListColumns(allColumns: boolean): SessionListColumn[] {
+  const columns: SessionListColumn[] = [
+    { label: "Title", minWidth: 12, weight: 3 },
+    { label: "Messages", minWidth: 8, align: "right" },
+    { label: "Session", minWidth: 10, weight: 2 },
+    { label: "Started", minWidth: 16 },
+  ];
+  if (allColumns) {
+    columns.push(
+      { label: "Project", minWidth: 8, weight: 1 },
+      { label: "Log", minWidth: 8, weight: 4 },
+    );
+  }
+  return columns;
+}
+
+function sessionListWidths(columns: SessionListColumn[], terminalWidth: number): number[] {
+  const separatorWidth = Math.max(0, columns.length - 1) * 2;
+  const targetWidth = Math.max(0, terminalWidth - separatorWidth);
+  const widths = columns.map((column) => Math.max(column.minWidth, column.label.length));
+  let extra = targetWidth - widths.reduce((sum, width) => sum + width, 0);
+  const flexible = columns
+    .map((column, index) => ({ index, weight: column.weight ?? 0 }))
+    .filter((column) => column.weight > 0);
+
+  if (extra < 0) {
+    let deficit = -extra;
+    const shrinkable = [...flexible].sort((a, b) => b.weight - a.weight);
+    while (deficit > 0) {
+      const column = shrinkable.find((candidate) => widths[candidate.index]! > columns[candidate.index]!.label.length);
+      if (!column) break;
+      widths[column.index]!--;
+      deficit--;
+    }
+    return widths;
+  }
+
+  if (extra === 0) return widths;
+  if (!flexible.length) return widths;
+
+  const totalWeight = flexible.reduce((sum, column) => sum + column.weight, 0);
+  let used = 0;
+  for (const column of flexible) {
+    const added = Math.floor((extra * column.weight) / totalWeight);
+    widths[column.index]! += added;
+    used += added;
+  }
+  extra -= used;
+  for (let i = 0; extra > 0; i++, extra--) {
+    widths[flexible[i % flexible.length]!.index]!++;
+  }
+  return widths;
+}
+
+function renderSessionListCell(value: string, width: number, align: "left" | "right" = "left"): string {
+  const text = compact(value, width);
+  return align === "right" ? text.padStart(width) : text.padEnd(width);
+}
+
+function formatSessionList(
+  rows: SessionRow[],
+  limit = 40,
+  titles = new Map<string, string>(),
+  logPaths = new Map<string, string>(),
+  allColumns = false,
+): string {
+  if (!rows.length) return "No sessions matched the selected filters.\n";
+  const shown = rows.slice(0, limit);
+  const columns = sessionListColumns(allColumns);
+  const widths = sessionListWidths(columns, sessionListTableColumns());
+  const renderRow = (values: string[], header = false): string =>
+    values
+      .map((value, index) => renderSessionListCell(value, widths[index]!, header ? "left" : columns[index]?.align))
+      .join("  ");
+  const lines = [
+    "Available sessions for analysis",
+    "",
+    renderRow(columns.map((column) => column.label), true),
+  ];
+  for (let i = 0; i < shown.length; i++) {
+    const row = shown[i]!;
+    const title = titles.get(row.sessionId) || row.firstPrompt;
+    const values = [
+      title,
+      String(row.messages),
+      displaySessionId(row.sessionId),
+      sessionDate(row),
+    ];
+    if (allColumns) {
+      values.push(row.project, logPaths.get(row.sessionId) ?? "");
+    }
+    lines.push(
+      renderRow(values),
+    );
+  }
+  if (rows.length > shown.length) lines.push(``, `Showing ${shown.length} of ${rows.length} sessions. Narrow with --source, --since, --until, or --project.`);
+  return `${lines.join("\n")}\n`;
+}
+
+function sessionSearchText(row: SessionRow): string {
+  return [row.sessionId, row.project, row.firstPrompt, row.summary].join("\n").toLowerCase();
+}
+
+function resolveSession(rows: SessionRow[], selector: string): { row?: SessionRow; error?: string; matches?: SessionRow[] } {
+  const value = selector.trim();
+  const exact = rows.find((row) => row.sessionId === value);
+  if (exact) return { row: exact };
+  const needle = value.toLowerCase();
+  const matches = rows.filter((row) => sessionSearchText(row).includes(needle));
+  if (matches.length === 1) return { row: matches[0] };
+  if (!matches.length) return { error: `No session matched "${selector}".` };
+  return {
+    error: `Session selector "${selector}" matched ${matches.length} sessions. Use a more specific id or substring.`,
+    matches,
+  };
+}
+
+function messagesForSession(parseResult: ParseResult, sessionId: string): MessageRecord[] {
+  return parseResult.messages.filter((message) => message.sessionId === sessionId);
+}
+
+function cachedAnalysisTitles(rows: SessionRow[], parseResult: ParseResult): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const row of rows) {
+    const analysis = cachedSessionAnalysis({
+      row,
+      messages: messagesForSession(parseResult, row.sessionId),
+    });
+    if (analysis?.title) titles.set(row.sessionId, analysis.title);
+  }
+  return titles;
+}
+
+function sessionLogPaths(rows: SessionRow[], parseResult: ParseResult): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const row of rows) {
+    const filePath = parseResult.sessions.get(row.sessionId)?.filePath;
+    if (filePath) paths.set(row.sessionId, filePath);
+  }
+  return paths;
+}
+
+function sessionsForJsonList(
+  rows: SessionRow[],
+  titles: Map<string, string>,
+  logPaths: Map<string, string>,
+): Array<SessionRow & { analysisTitle?: string; sessionLogPath: string }> {
+  return rows.map((row) => {
+    const title = titles.get(row.sessionId);
+    return {
+      ...row,
+      analysisTitle: title || row.firstPrompt,
+      sessionLogPath: logPaths.get(row.sessionId) ?? "",
+    };
+  });
+}
+
+async function promptForSession(
+  rows: SessionRow[],
+  titles: Map<string, string>,
+  logPaths: Map<string, string>,
+  allColumns: boolean,
+  log: Log,
+): Promise<SessionRow | undefined> {
+  process.stdout.write(formatSessionList(rows, 20, titles, logPaths, allColumns));
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await rl.question("Select a session id or unique substring: ");
+    if (!answer.trim()) return undefined;
+    const selected = resolveSession(rows, answer);
+    if (selected.error) {
+      log(selected.error);
+      if (selected.matches?.length) process.stdout.write(formatSessionList(selected.matches, 10, titles, logPaths, allColumns));
+      return undefined;
+    }
+    return selected.row;
+  } finally {
+    rl.close();
+  }
+}
+
+async function runAnalyze(flags: Flags, log: Log): Promise<void> {
+  const { dash, parseResult } = await buildDashboardDetailed(flags, log);
+  const titles = cachedAnalysisTitles(dash.sessions, parseResult);
+  const logPaths = sessionLogPaths(dash.sessions, parseResult);
+  if (flags.listSessions) {
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(sessionsForJsonList(dash.sessions, titles, logPaths), null, 2) + "\n");
+    } else {
+      process.stdout.write(formatSessionList(dash.sessions, 40, titles, logPaths, flags.allColumns));
+    }
+    return;
+  }
+
+  if (!dash.sessions.length) {
+    log("No sessions matched the selected filters.");
+    process.exit(1);
+  }
+
+  let row: SessionRow | undefined;
+  if (flags.session) {
+    const selected = resolveSession(dash.sessions, flags.session);
+    if (selected.error) {
+      log(selected.error);
+      if (selected.matches?.length) process.stdout.write(formatSessionList(selected.matches, 10, titles, logPaths, flags.allColumns));
+      process.exit(2);
+    }
+    row = selected.row;
+  } else if (process.stdin.isTTY) {
+    row = await promptForSession(dash.sessions, titles, logPaths, flags.allColumns, log);
+  } else {
+    process.stdout.write(formatSessionList(dash.sessions, 40, titles, logPaths, flags.allColumns));
+    log("Pass --session <id|substring> to analyze a session in noninteractive mode.");
+    process.exit(2);
+  }
+
+  if (!row) {
+    log("No session selected.");
+    process.exit(2);
+  }
+
+  const result = analyzeSession({
+    row,
+    meta: parseResult.sessions.get(row.sessionId),
+    messages: messagesForSession(parseResult, row.sessionId),
+    model: flags.analysisModel ?? flags.summarizeModel,
+    refresh: flags.refreshAnalysis,
+    useLlm: flags.analysisLlm,
+    log,
+  });
+  if (result.fromCache) log("Using cached session analysis.");
+
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ fromCache: result.fromCache, analysis: result.analysis }, null, 2) + "\n");
+  } else {
+    process.stdout.write(formatSessionAnalysis(result.analysis, result.fromCache));
+  }
 }
 
 async function runLogin(flags: Flags, log: Log): Promise<void> {
@@ -460,6 +778,7 @@ async function main() {
   else if (flags.command === "login") await runLogin(flags, log);
   else if (flags.command === "cache-status") await runCacheStatus(log);
   else if (flags.command === "cache-rebuild") await runCacheRebuild(log);
+  else if (flags.command === "analyze") await runAnalyze(flags, log);
   else await runReport(flags, log, isBareInvocation(argv));
 }
 

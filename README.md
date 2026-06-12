@@ -14,6 +14,7 @@ Reports include:
 - Skill, tool, MCP server, plugin, model, and project attribution
 - Tools that return the most content to your context
 - Per-session duration, tokens, cost, prompts, and summaries
+- On-demand session analysis with intent, outcome, tool, skill, and MCP breakdowns
 
 ## Quick start
 
@@ -86,6 +87,32 @@ Without `--summarize`, Argus creates an instant heuristic summary from the first
 skills, tools, and edited files. With `--summarize`, it uses `claude -p` to create a short
 narrative and caches the result in `$ARGUS_CACHE_DIR/summaries.json` (macOS: `~/Library/Caches/argus/summaries.json`). Only new or changed
 sessions are summarized again.
+
+## Session analysis
+
+Use `analyze` to inspect one session in more detail. It can list available sessions,
+accept a selected session id or unique substring, and cache the generated analysis in
+`$ARGUS_CACHE_DIR/session-analysis.json`.
+`analyze --list` shows the generated analysis title when available, otherwise the first
+user message recorded for the session. Add `--all-columns` to include the project and
+local session log path.
+
+```bash
+# List recent sessions that match the same filters as report
+npx @agentdeploymentco/argus analyze --list
+
+# Analyze by exact id or unique substring
+npx @agentdeploymentco/argus analyze --session sess1
+
+# Regenerate a cached analysis or avoid the LLM path
+npx @agentdeploymentco/argus analyze --session sess1 --refresh-analysis
+npx @agentdeploymentco/argus analyze --session sess1 --no-llm
+```
+
+When `claude` is available on `PATH`, Argus uses headless `claude -p` for the narrative
+title, intent, and outcome judgment. If it is unavailable, or when `--no-llm` is used,
+Argus falls back to a local heuristic using the first prompt, final transcript text,
+session health, tools, skills, MCP servers, and touched files.
 
 ## Incremental cache
 

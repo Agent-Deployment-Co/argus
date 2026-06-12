@@ -34,6 +34,7 @@ export const ARGUS_CACHE_DIR = defaultArgusCacheDir();
 export const ARGUS_CONFIG_DIR = defaultArgusConfigDir();
 export const FRAGMENT_CACHE_FILE = join(ARGUS_CACHE_DIR, "fragments.sqlite3");
 export const SUMMARY_CACHE_FILE = join(ARGUS_CACHE_DIR, "summaries.json");
+export const SESSION_ANALYSIS_CACHE_FILE = join(ARGUS_CACHE_DIR, "session-analysis.json");
 export const ACCESS_TOKEN_FILE = join(ARGUS_CONFIG_DIR, "token.json");
 export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
