@@ -28,6 +28,7 @@ export function renderHtml(d: Dashboard, opts: RenderOptions = {}): string {
   const data = JSON.stringify(d).replace(/</g, "\\u003c");
   const recs = computeRecommendations(d);
   const recsData = JSON.stringify(recs).replace(/</g, "\\u003c");
+  const hasHealth = d.frictionTotals.observableSessions > 0;
   const chartTag = opts.chartJs
     ? `<script>${opts.chartJs}</script>`
     : `<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>`;
@@ -126,6 +127,8 @@ ${opts.fontCss || ""}
   .tab:hover { color:var(--heading); }
   .tab[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
   .tab:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .tab[aria-disabled="true"] { opacity:.38; cursor:not-allowed; }
+  .tab[aria-disabled="true"]:hover { color:var(--muted); }
   .screen[hidden] { display:none; }
   .heatmap-wrap { overflow-x:auto; padding-bottom:4px; }
   svg.heatmap { display:block; }
@@ -213,6 +216,7 @@ ${opts.fontCss || ""}
     <button class="tab" type="button" role="tab" data-tab="activity" aria-selected="true">Activity</button>
     <button class="tab" type="button" role="tab" data-tab="projects" aria-selected="false">Projects</button>
     <button class="tab" type="button" role="tab" data-tab="tools" aria-selected="false">Tools</button>
+    <button class="tab" type="button" role="tab" data-tab="health" aria-selected="false"${!hasHealth ? ` aria-disabled="true" title="No Claude sessions — friction signals require native Claude transcripts"` : ""}>Health</button>
   </div>
 </nav>
 <main>
@@ -226,14 +230,6 @@ ${opts.fontCss || ""}
       <h2>Recommendations</h2>
       <div class="rec-list" id="recList"></div>
     </section>` : ""}
-
-    ${d.frictionTotals.observableSessions > 0 ? `<section>
-      <h2>Session health</h2>
-      <div class="grid2">
-        <div class="panel"><h3>Outcomes</h3><canvas id="outcomeChart" height="200"></canvas></div>
-        <div class="panel"><h3>Friction signals <span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--muted);margin-left:6px">${d.frictionTotals.observableSessions} observable sessions</span></h3><div class="cards" id="frictionCards"></div></div>
-      </div>
-    </section>` : ''}
 
     <section>
       <h2>Activity over time</h2>
@@ -335,6 +331,21 @@ ${opts.fontCss || ""}
       <h2>Plugins</h2>
       <div class="scroll"><table id="pluginTable"></table></div>
       <p class="note">Rows marked <span class="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
+    </section>
+  </div>
+
+  <div class="screen" data-screen="health" hidden>
+    <section>
+      <h2>Session outcomes</h2>
+      <div class="grid2">
+        <div class="panel"><h3>Outcome distribution</h3><canvas id="outcomeChart" height="200"></canvas></div>
+        <div class="panel"><h3>Friction signals <span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--muted);margin-left:6px">${d.frictionTotals.observableSessions} observable sessions</span></h3><div class="cards" id="frictionCards"></div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Sessions</h2>
+      <div class="scroll"><table id="healthSessionTable"></table></div>
     </section>
   </div>
 </main>
@@ -462,6 +473,21 @@ if (FT.observableSessions > 0) {
     tooltip:{callbacks:{label:c=>{const pct=Math.round(100*c.parsed/(DATA.sessions.length||1)); return c.label+': '+c.parsed+' ('+pct+'%)';}}}
   }}});
 }
+
+// ---- health sessions table ----
+makeTable(document.getElementById('healthSessionTable'),[
+  {label:'Started', className:'nowrap', sort:r=>r.start, cell:r=>dt(r.start)},
+  {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
+  {label:'Outcome', sort:r=>(r.health&&r.health.outcome)||'', cell:r=>outcomeCell(r.health&&r.health.outcome)},
+  {label:'Interrupts', num:true, sort:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:-1, cell:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:'<span class="muted">—</span>'},
+  {label:'Rejections', num:true, sort:r=>r.health&&r.health.rejections!=null?r.health.rejections:-1, cell:r=>r.health&&r.health.rejections!=null?r.health.rejections:'<span class="muted">—</span>'},
+  {label:'Compactions', num:true, sort:r=>r.health&&r.health.compactions!=null?r.health.compactions:-1, cell:r=>r.health&&r.health.compactions!=null?r.health.compactions:'<span class="muted">—</span>'},
+  {label:'Turns', num:true, sort:r=>r.health&&r.health.turns!=null?r.health.turns:-1, cell:r=>r.health&&r.health.turns!=null?r.health.turns:'<span class="muted">—</span>'},
+  {label:'Median turn', num:true, sort:r=>r.health&&r.health.medianTurnMs!=null?r.health.medianTurnMs:-1, cell:r=>r.health&&r.health.medianTurnMs!=null?dur(r.health.medianTurnMs):'<span class="muted">—</span>'},
+  {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},
+  {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
+  {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
+], DATA.sessions);
 
 // ---- tokens per day (stacked) ----
 const days = DATA.daily.map(d=>d.date);
@@ -682,16 +708,20 @@ renderHeatmap(document.getElementById('tokensHeatmap'), 'total', v=>fmt(v)+' tok
 renderHeatmap(document.getElementById('costHeatmap'), 'cost', v=>usd(v));
 
 // ---- tab navigation ----
-const TABS = ['activity','projects','tools'];
+const TABS = ['activity','projects','tools','health'];
 function showTab(name){
-  if(!TABS.includes(name)) name = 'activity';
+  const tabEl = document.querySelector('[data-tab="'+name+'"]');
+  if (!TABS.includes(name) || (tabEl && tabEl.getAttribute('aria-disabled') === 'true')) name = 'activity';
   document.querySelectorAll('.screen').forEach(s=>{ s.hidden = s.dataset.screen !== name; });
   document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected', String(t.dataset.tab === name)));
   // charts created while hidden have zero size; resize once their screen is visible
   Object.values(Chart.instances||{}).forEach(c=>{ try{ c.resize(); }catch{} });
   try{ history.replaceState(null,'','#'+name); }catch{}
 }
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>showTab(t.dataset.tab)));
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
+  if(t.getAttribute('aria-disabled') === 'true') return;
+  showTab(t.dataset.tab);
+}));
 showTab((location.hash||'').replace('#','') || 'activity');
 </script>
 </body>
