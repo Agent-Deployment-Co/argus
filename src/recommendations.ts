@@ -92,6 +92,6 @@ function ruleUnpriced(d: Dashboard): Recommendation | null {
     id: "unpriced-models",
     severity: "tip",
     title: `Cost estimates exclude ${d.unpriced.length} model${d.unpriced.length > 1 ? "s" : ""}`,
-    detail: `No pricing data for: ${d.unpriced.join(", ")}. Add prices to \`~/.claude/argus-pricing.json\` for complete cost tracking.`,
+    detail: `No pricing data for: ${d.unpriced.join(", ")}. Add prices to \`$ARGUS_CONFIG_DIR/pricing.json\` for complete cost tracking.`,
   };
 }
