@@ -6,11 +6,14 @@ import {
   type Dashboard,
   emptyUsage,
   type DayBucket,
+  type FrictionTotals,
   type MessageRecord,
   type NamedUsage,
   type ParseResult,
   type PluginInfo,
   type PluginRow,
+  type SessionFriction,
+  type SessionHealth,
   type SessionRow,
   type ToolCategoryStat,
   type ToolStat,
@@ -31,6 +34,63 @@ export type {
 
 function usageCost(u: Usage, model: string): number {
   return cost(u, model);
+}
+
+// ---- session health (#38) ----
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/**
+ * Tokens-per-message growth within a session: mean total tokens of the last decile of
+ * messages over the first decile. Cache reads grow with context, so a high ratio flags a
+ * session whose late turns were paying for a long history — a restart candidate.
+ */
+function tokenGrowth(msgs: MessageRecord[]): number | null {
+  if (msgs.length < 10) return null;
+  const k = Math.floor(msgs.length / 10);
+  const mean = (slice: MessageRecord[]) =>
+    slice.reduce((sum, m) => sum + totalTokens(m.usage), 0) / slice.length;
+  const first = mean(msgs.slice(0, k));
+  return first > 0 ? mean(msgs.slice(-k)) / first : null;
+}
+
+function sessionOutcome(
+  msgs: MessageRecord[],
+  friction: SessionFriction | undefined,
+): SessionHealth["outcome"] {
+  // The user interrupted after the assistant's last message and never re-prompted.
+  const lastMessageTs = msgs[msgs.length - 1]!.ts;
+  if (friction?.lastInterruptionMs != null && friction.lastInterruptionMs >= lastMessageTs) {
+    return "interrupted";
+  }
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const stopReason = msgs[i]!.stopReason;
+    if (!stopReason) continue;
+    // A trailing tool_use means the transcript ends mid-work — possibly a live session —
+    // so it stays "unknown" rather than guessing "abandoned".
+    return stopReason === "end_turn" || stopReason === "stop_sequence" ? "clean" : "unknown";
+  }
+  return "unknown";
+}
+
+/** msgs must be in timestamp order (parse guarantees it). */
+function sessionHealth(msgs: MessageRecord[], friction: SessionFriction | undefined): SessionHealth {
+  return {
+    interruptions: friction?.interruptions ?? null,
+    rejections: friction?.rejections ?? null,
+    compactions: friction?.compactions ?? null,
+    turns: friction?.turns ?? null,
+    medianTurnMs: friction ? median(friction.turnDurationsMs) : null,
+    maxTurnMs: friction?.turnDurationsMs.length ? Math.max(...friction.turnDurationsMs) : null,
+    stopReasons: friction?.stopReasons ?? null,
+    tokenGrowth: tokenGrowth(msgs),
+    outcome: sessionOutcome(msgs, friction),
+  };
 }
 
 export function aggregate(
@@ -333,9 +393,38 @@ export function aggregate(
       cost: c,
       firstPrompt: meta?.firstPrompt || "",
       summary: summaries.get(sid) || "",
+      health: sessionHealth(msgs, meta?.friction),
     });
   }
   sessionRows.sort((a, b) => b.start - a.start);
+
+  // ---- friction rollups (#38): totals + per-project, over friction-observable sessions ----
+  const emptyFrictionTotals = (): FrictionTotals => ({
+    observableSessions: 0,
+    interruptions: 0,
+    rejections: 0,
+    compactions: 0,
+    turns: 0,
+  });
+  const frictionTotals = emptyFrictionTotals();
+  const projectFriction = new Map<string, FrictionTotals>();
+  for (const row of sessionRows) {
+    const h = row.health;
+    if (h.interruptions == null) continue; // friction not observable for this source
+    const pf = projectFriction.get(row.project) ?? emptyFrictionTotals();
+    if (!projectFriction.has(row.project)) projectFriction.set(row.project, pf);
+    for (const bucket of [frictionTotals, pf]) {
+      bucket.observableSessions++;
+      bucket.interruptions += h.interruptions;
+      bucket.rejections += h.rejections ?? 0;
+      bucket.compactions += h.compactions ?? 0;
+      bucket.turns += h.turns ?? 0;
+    }
+  }
+  for (const project of byProject) {
+    const friction = projectFriction.get(project.name);
+    if (friction) project.meta = { ...project.meta, friction };
+  }
 
   return {
     generatedAtMs: 0,
@@ -360,5 +449,6 @@ export function aggregate(
     byPlugin,
     byProject,
     sessions: sessionRows,
+    frictionTotals,
   };
 }

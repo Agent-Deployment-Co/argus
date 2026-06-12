@@ -41,7 +41,8 @@ export const CLAUDE_TRANSCRIPT_ROOT_ID = CLAUDE_PROJECTS_ROOT_ID;
 export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "2";
+// v3: friction events carry timestampMs for the session-outcome proxy (#38).
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "3";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",

@@ -36,6 +36,13 @@ function dashboard(): Dashboard {
       { name: "adc/argus", messages: 12, total: 1_000, cost: 0.25, meta: { sessions: 3 } },
     ],
     sessions: [],
+    frictionTotals: {
+      observableSessions: 0,
+      interruptions: 0,
+      rejections: 0,
+      compactions: 0,
+      turns: 0,
+    },
   };
 }
 

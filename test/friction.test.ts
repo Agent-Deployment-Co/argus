@@ -10,6 +10,13 @@ import {
 } from "../src/parse-claude.ts";
 import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
 import { parseAll } from "../src/parse.ts";
+import { aggregate } from "../src/aggregate.ts";
+import {
+  emptySessionFriction,
+  type MessageRecord,
+  type ParseResult,
+  type SessionFriction,
+} from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
 const FRICTION_PROJECTS = join(FIX, "friction-projects");
@@ -225,5 +232,145 @@ describe("Claude fragment friction (incremental path)", () => {
     }
     expect(second.stats.hits).toBeGreaterThan(0);
     expect(second.stats.parsed).toBe(0);
+  });
+});
+
+// ---- #38: session health aggregation ----
+
+function syntheticMessage(over: Partial<MessageRecord> & { ts: number }): MessageRecord {
+  return {
+    source: "claude",
+    sessionId: "syn1",
+    project: "syn/proj",
+    cwd: "/syn/proj",
+    gitBranch: "",
+    date: "2026-06-01",
+    model: "claude-sonnet-4-6",
+    usage: { input: 10, output: 5, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+    attributionSkill: null,
+    toolUses: [],
+    ...over,
+  };
+}
+
+function syntheticParse(messages: MessageRecord[], friction?: SessionFriction): ParseResult {
+  return {
+    messages,
+    sessions: new Map([
+      [
+        "syn1",
+        {
+          source: "claude" as const,
+          sessionId: "syn1",
+          project: "syn/proj",
+          cwd: "/syn/proj",
+          filePath: "/tmp/syn1.jsonl",
+          ...(friction ? { friction } : {}),
+        },
+      ],
+    ]),
+    toolResults: new Map(),
+  };
+}
+
+function aggregated(parsed: ParseResult) {
+  return aggregate(parsed, new Map(), new Map());
+}
+
+describe("session health (#38)", () => {
+  const dash = aggregated(parseAll({ projectsDir: FRICTION_PROJECTS, historyFile: HISTORY }));
+  const row = dash.sessions.find((s) => s.sessionId === "frict1")!;
+
+  test("folds friction onto SessionRow.health", () => {
+    expect(row.health).toMatchObject({
+      interruptions: 3,
+      rejections: 1,
+      compactions: 1,
+      turns: 3,
+      medianTurnMs: 13000,
+      maxTurnMs: 47000,
+      stopReasons: { tool_use: 1, end_turn: 1 },
+      tokenGrowth: null, // only 2 messages — too short for a decile trend
+    });
+  });
+
+  test("outcome is interrupted when the last activity is an interruption", () => {
+    // u-int-3 (10:05) lands after the last assistant message (10:01:01).
+    expect(row.health.outcome).toBe("interrupted");
+  });
+
+  test("rolls friction up to totals and per-project meta", () => {
+    expect(dash.frictionTotals).toEqual({
+      observableSessions: 1,
+      interruptions: 3,
+      rejections: 1,
+      compactions: 1,
+      turns: 3,
+    });
+    const project = dash.byProject.find((p) => p.name === "fixture/frict")!;
+    expect(project.meta?.friction).toEqual({
+      observableSessions: 1,
+      interruptions: 3,
+      rejections: 1,
+      compactions: 1,
+      turns: 3,
+    });
+  });
+
+  test("outcome is clean when the last stop reason is end_turn and no trailing interruption", () => {
+    const friction = emptySessionFriction();
+    friction.lastInterruptionMs = 1000; // interrupted mid-session, then continued
+    const msgs = [
+      syntheticMessage({ ts: 500, stopReason: "tool_use" }),
+      syntheticMessage({ ts: 2000, stopReason: "end_turn" }),
+    ];
+    const health = aggregated(syntheticParse(msgs, friction)).sessions[0]!.health;
+    expect(health.outcome).toBe("clean");
+  });
+
+  test("outcome is unknown for a mid-tool-use tail or when nothing is recorded", () => {
+    const tail = aggregated(
+      syntheticParse([syntheticMessage({ ts: 1, stopReason: "tool_use" })], emptySessionFriction()),
+    ).sessions[0]!.health;
+    expect(tail.outcome).toBe("unknown");
+
+    const codex = aggregated({
+      messages: [syntheticMessage({ ts: 1, source: "codex", sessionId: "cx", project: "p" })],
+      sessions: new Map(),
+      toolResults: new Map(),
+    }).sessions[0]!.health;
+    expect(codex.outcome).toBe("unknown");
+    expect(codex.interruptions).toBeNull();
+    expect(codex.stopReasons).toBeNull();
+  });
+
+  test("tokenGrowth compares last-decile to first-decile mean tokens per message", () => {
+    // 20 messages whose total tokens are i*1000: first decile mean 500, last 18500 → 37.
+    const msgs = Array.from({ length: 20 }, (_, i) =>
+      syntheticMessage({
+        ts: i * 1000,
+        usage: { input: 0, output: 0, cacheRead: i * 1000, cacheWrite5m: 0, cacheWrite1h: 0 },
+      }),
+    );
+    const health = aggregated(syntheticParse(msgs, emptySessionFriction())).sessions[0]!.health;
+    expect(health.tokenGrowth).toBe(37);
+
+    const short = aggregated(syntheticParse(msgs.slice(0, 9), emptySessionFriction()));
+    expect(short.sessions[0]!.health.tokenGrowth).toBeNull();
+  });
+
+  test("non-Claude sessions report null friction fields but still get tokenGrowth", () => {
+    const msgs = Array.from({ length: 10 }, (_, i) =>
+      syntheticMessage({
+        ts: i,
+        source: "codex",
+        sessionId: "cx2",
+        usage: { input: 100 * (i + 1), output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+      }),
+    );
+    const health = aggregated({ messages: msgs, sessions: new Map(), toolResults: new Map() })
+      .sessions[0]!.health;
+    expect(health.interruptions).toBeNull();
+    expect(health.tokenGrowth).toBe(10); // 1000/100
   });
 });
