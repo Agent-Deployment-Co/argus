@@ -91,6 +91,8 @@ export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   byTool: ToolStat[];
   byToolCategory: ToolCategoryStat[];
   frictionTotals: FrictionTotals;
+  /** Per-model token totals per day — parallel to `daily`, for the stacked model-over-time chart. */
+  byModelDaily: { date: string; byModel: Record<string, number> }[];
 };
 
 export function emptyUsage(): Usage {

@@ -43,6 +43,7 @@ function dashboard(): Dashboard {
       compactions: 0,
       turns: 0,
     },
+    byModelDaily: [],
   };
 }
 

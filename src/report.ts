@@ -78,7 +78,6 @@ ${opts.fontCss || ""}
     --pill-cool:var(--sky-surge); --pill-cool-line:var(--cornflower-ocean);
     --code-bg:rgba(249,235,220,.07); --code-text:var(--porcelain);
     --sel-bg:var(--tiger-orange); --sel-text:var(--coffee-bean);
-    --hm0:rgba(243,215,186,.08); --hm1:rgba(239,137,32,.32); --hm2:rgba(239,137,32,.54); --hm3:rgba(239,137,32,.77); --hm4:var(--tiger-orange);
   }
   :root[data-theme="dark"] { color-scheme:dark; }
   :root[data-theme="light"] {
@@ -92,7 +91,6 @@ ${opts.fontCss || ""}
     --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
     --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
     --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
-    --hm0:rgba(52,31,9,.06); --hm1:rgba(239,137,32,.34); --hm2:rgba(239,137,32,.56); --hm3:rgba(239,137,32,.78); --hm4:var(--tiger-orange);
   }
   @media (prefers-color-scheme:light) {
     :root:not([data-theme]) {
@@ -104,8 +102,7 @@ ${opts.fontCss || ""}
       --pill-cool:var(--cornflower-ocean); --pill-cool-line:var(--cornflower-ocean);
       --code-bg:rgba(52,31,9,.06); --code-text:var(--coffee-bean);
       --sel-bg:var(--tiger-orange); --sel-text:var(--porcelain);
-      --hm0:rgba(52,31,9,.06); --hm1:rgba(239,137,32,.34); --hm2:rgba(239,137,32,.56); --hm3:rgba(239,137,32,.78); --hm4:var(--tiger-orange);
-    }
+      }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 "Aleo",Georgia,serif; -webkit-font-smoothing:antialiased; }
@@ -130,13 +127,6 @@ ${opts.fontCss || ""}
   .tab[aria-disabled="true"] { opacity:.38; cursor:not-allowed; }
   .tab[aria-disabled="true"]:hover { color:var(--muted); }
   .screen[hidden] { display:none; }
-  .heatmap-wrap { overflow-x:auto; padding-bottom:4px; }
-  svg.heatmap { display:block; }
-  svg.heatmap text { fill:var(--muted); font:10px "Poppins","Avenir Next",Arial,sans-serif; }
-  svg.heatmap rect.cell { stroke:var(--line); stroke-width:.5; }
-  .hm-l0 { fill:var(--hm0); } .hm-l1 { fill:var(--hm1); } .hm-l2 { fill:var(--hm2); } .hm-l3 { fill:var(--hm3); } .hm-l4 { fill:var(--hm4); }
-  .hm-legend { display:flex; align-items:center; gap:6px; justify-content:flex-end; margin-top:8px; color:var(--muted); font:11px "Poppins","Avenir Next",Arial,sans-serif; }
-  .hm-legend .swatch { width:12px; height:12px; border-radius:2px; border:.5px solid var(--line); display:inline-block; }
   main { padding:30px 32px 64px; max-width:1200px; margin:0 auto; }
   section { margin:0 0 42px; }
   section h2 { font-family:"Poppins","Avenir Next",Arial,sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:.14em; color:var(--accent); margin:0 0 14px; font-weight:600; }
@@ -232,20 +222,6 @@ ${opts.fontCss || ""}
     </section>` : ""}
 
     <section>
-      <h2>Activity over time</h2>
-      <div class="panel">
-        <h3>Tokens per day</h3>
-        <div class="heatmap-wrap" id="tokensHeatmap"></div>
-        <div class="hm-legend">Less <span class="swatch hm-l0"></span><span class="swatch hm-l1"></span><span class="swatch hm-l2"></span><span class="swatch hm-l3"></span><span class="swatch hm-l4"></span> More</div>
-      </div>
-      <div class="panel" style="margin-top:24px">
-        <h3>Est. cost per day (USD)</h3>
-        <div class="heatmap-wrap" id="costHeatmap"></div>
-        <div class="hm-legend">Less <span class="swatch hm-l0"></span><span class="swatch hm-l1"></span><span class="swatch hm-l2"></span><span class="swatch hm-l3"></span><span class="swatch hm-l4"></span> More</div>
-      </div>
-    </section>
-
-    <section>
       <h2>Trends</h2>
       <div class="grid2">
         <div class="panel"><h3>Tokens per day</h3><canvas id="tokensChart" height="220"></canvas></div>
@@ -277,9 +253,7 @@ ${opts.fontCss || ""}
 
     <section>
       <h2>Models</h2>
-      <div class="grid2">
-        <div class="panel"><h3>Tokens by model</h3><canvas id="modelChart" height="260"></canvas></div>
-      </div>
+      <div class="panel"><h3>Tokens by model</h3><canvas id="modelChart" height="260"></canvas></div>
     </section>
   </div>
 
@@ -336,11 +310,13 @@ ${opts.fontCss || ""}
 
   <div class="screen" data-screen="health" hidden>
     <section>
-      <h2>Session outcomes</h2>
-      <div class="grid2">
-        <div class="panel"><h3>Outcome distribution</h3><canvas id="outcomeChart" height="200"></canvas></div>
-        <div class="panel"><h3>Friction signals <span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--muted);margin-left:6px">${d.frictionTotals.observableSessions} observable sessions</span></h3><div class="cards" id="frictionCards"></div></div>
-      </div>
+      <div class="cards" id="frictionCards"></div>
+      <p class="note">${d.frictionTotals.observableSessions} observable sessions — native Claude transcripts with friction data.</p>
+    </section>
+
+    <section>
+      <h2>Outcomes</h2>
+      <div class="panel"><canvas id="outcomeChart" height="220"></canvas></div>
     </section>
 
     <section>
@@ -517,10 +493,36 @@ new Chart(skillChart, { type:'bar', data:{ labels:sk.map(s=>s.name), datasets:[
   {label:'tokens', data:sk.map(s=>s.total), backgroundColor:C.cacheWrite}
 ]}, options:{ indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>fmt(c.parsed.x)+' tok · '+usd(sk[c.dataIndex].cost)+' · '+sk[c.dataIndex].messages+' msgs'}}}, scales:{x:{ticks:{callback:fmt}}} }});
 
-// ---- model doughnut ----
-new Chart(modelChart, { type:'doughnut', data:{ labels:DATA.byModel.map(m=>m.name), datasets:[
-  {data:DATA.byModel.map(m=>m.total), backgroundColor:[C.input,C.output,C.cacheRead,C.cacheWrite,C.muted]}
-]}, options:{ plugins:{legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.label+': '+fmt(c.parsed)+' tok'}}} }});
+// ---- tokens by model over time (stacked bar) ----
+// Colors grouped by model family: Claude=oranges, Gemini=blues, GPT=greens, Codex=teals, other=muted.
+function modelFamilyColor(name) {
+  const n = String(name).toLowerCase();
+  if (n.includes('opus-4-8') || n.includes('opus-4.8')) return '#7a3200';
+  if (n.includes('opus-4-7') || n.includes('opus-4.7')) return '#a04800';
+  if (n.includes('opus'))     return '#7a3200';
+  if (n.includes('fable'))    return '#c07010';
+  if (n.includes('sonnet'))   return '#ef8920';
+  if (n.includes('haiku'))    return '#f5a850';
+  if (n.includes('claude'))   return '#d47820';
+  if (n.includes('gemini') && n.includes('pro'))    return '#1a4e78';
+  if (n.includes('gemini') && n.includes('2.5') && n.includes('flash')) return '#2e7eb0';
+  if (n.includes('gemini') && n.includes('flash'))  return '#5dbcdf';
+  if (n.includes('gemini'))                          return '#82d0f0';
+  if (n.includes('gpt') || /\bo[13]\b/.test(n))     return '#3a9060';
+  if (n.includes('codex'))    return '#2a8090';
+  return '#887060';
+}
+const bmd = DATA.byModelDaily || [];
+const modelNames = DATA.byModel.map(m=>m.name);
+new Chart(modelChart, { type:'bar', data:{ labels:bmd.map(d=>d.date), datasets:modelNames.map(name=>({
+  label:name,
+  data:bmd.map(d=>(d.byModel&&d.byModel[name])||0),
+  backgroundColor:modelFamilyColor(name),
+  stack:'m',
+}))}, options:{ responsive:true,
+  plugins:{ legend:{position:'right'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.parsed.y)+' tok'}} },
+  scales:{ x:{stacked:true, ticks:{maxRotation:90,minRotation:45}}, y:{stacked:true, ticks:{callback:fmt}} }
+}});
 
 // ---- by user (team mode) ----
 if (DATA.byUser && DATA.byUser.length) {
@@ -669,43 +671,6 @@ if (DATA.sessions.some(s=>s.user)) {
 }
 makeTable(document.getElementById('sessionTable'), sessionCols, DATA.sessions);
 
-// ---- github-style activity heatmaps ----
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function renderHeatmap(el, key, fmtVal){
-  if(!el) return;
-  const daily = DATA.daily || [];
-  if(!daily.length){ el.innerHTML = '<p class="muted">No activity in range.</p>'; return; }
-  const map = new Map(daily.map(d=>[d.date, d[key]||0]));
-  const parse = s=>{ const p=s.split('-').map(Number); return new Date(Date.UTC(p[0],p[1]-1,p[2])); };
-  const start = parse(daily[0].date), end = parse(daily[daily.length-1].date);
-  const gridStart = new Date(start); gridStart.setUTCDate(start.getUTCDate()-start.getUTCDay());
-  // quartile thresholds over non-zero days, so a few heavy days don't wash out the rest
-  const vals = daily.map(d=>d[key]||0).filter(v=>v>0).sort((a,b)=>a-b);
-  const q = p => vals.length ? vals[Math.min(vals.length-1, Math.floor(p*vals.length))] : 0;
-  const t1=q(.25), t2=q(.5), t3=q(.75);
-  const level = v => v<=0?0 : v<=t1?1 : v<=t2?2 : v<=t3?3 : 4;
-  const CELL=12, STRIDE=15, TOP=18, LEFT=30;
-  const cells=[], months=[], cur=new Date(gridStart); let col=0, lastMonth=-1;
-  while(cur<=end){
-    for(let row=0; row<7; row++){
-      const iso = cur.toISOString().slice(0,10);
-      const inRange = cur>=start && cur<=end;
-      const v = map.get(iso)||0;
-      const x = LEFT+col*STRIDE, y = TOP+row*STRIDE;
-      if(row===0){ const m=cur.getUTCMonth(); if(m!==lastMonth){ months.push('<text x="'+x+'" y="'+(TOP-6)+'">'+MONTHS[m]+'</text>'); lastMonth=m; } }
-      if(inRange){
-        cells.push('<rect class="cell hm-l'+level(v)+'" x="'+x+'" y="'+y+'" width="'+CELL+'" height="'+CELL+'" rx="2"><title>'+iso+' · '+fmtVal(v)+'</title></rect>');
-      }
-      cur.setUTCDate(cur.getUTCDate()+1);
-    }
-    col++;
-  }
-  const dows = [[1,'Mon'],[3,'Wed'],[5,'Fri']].map(([r,l])=>'<text x="0" y="'+(TOP+r*STRIDE+CELL-2)+'">'+l+'</text>').join('');
-  const w = LEFT+col*STRIDE, h = TOP+7*STRIDE;
-  el.innerHTML = '<svg class="heatmap" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+months.join('')+dows+cells.join('')+'</svg>';
-}
-renderHeatmap(document.getElementById('tokensHeatmap'), 'total', v=>fmt(v)+' tokens');
-renderHeatmap(document.getElementById('costHeatmap'), 'cost', v=>usd(v));
 
 // ---- tab navigation ----
 const TABS = ['activity','projects','tools','health'];

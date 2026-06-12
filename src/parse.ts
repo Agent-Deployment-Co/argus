@@ -595,7 +595,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
 
           // Assistant messages with usage are the unit of token + skill attribution.
-          if (o.type === "assistant" && o.message?.usage) {
+          if (o.type === "assistant" && o.message?.usage && o.message?.model !== "<synthetic>") {
             const msgId: string | undefined = o.message?.id;
             // Continuation line of the message we're already building: merge its tool_uses,
             // but don't re-count the (repeated) usage. stop_reason streams as null until the
