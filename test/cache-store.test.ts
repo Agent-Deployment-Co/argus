@@ -92,6 +92,57 @@ function transcript(
   };
 }
 
+function transcriptWithFacts(id: string): ParsedFileFragment {
+  const fragment = transcript("claude", id);
+  const position = (recordIndex: number) => ({ originKey: `file:${id}`, recordIndex, itemIndex: 0 });
+  fragment.facts = {
+    sessions: [
+      {
+        id: `sess:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        kind: "main",
+        transcriptPath: `/private/claude/${id}.jsonl`,
+        position: position(0),
+      },
+    ],
+    messages: [
+      {
+        id: `msg:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        providerMessageId: `pm-${id}`,
+        timestampMs: 1_717_600_000_000,
+        model: "claude-opus-4",
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        position: position(1),
+      },
+    ],
+    invocations: [
+      {
+        id: `inv:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        messageId: `msg:${id}`,
+        name: "Bash",
+        position: position(2),
+      },
+    ],
+    toolResults: [
+      {
+        id: `tr:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        approxTokens: 10,
+        position: position(3),
+      },
+    ],
+    relationships: [],
+  };
+  return fragment;
+}
+
 function auxiliary(id: string): ParsedAuxiliaryFragment {
   return {
     kind: "auxiliary",
@@ -369,6 +420,49 @@ describe("SQLite fragment cache", () => {
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
     expect(version?.user_version).toBe(CACHE_SCHEMA_VERSION);
+  });
+
+  test("backfills the fact tables and envelopes when upgrading an existing cache", async () => {
+    const path = cachePath();
+    const original = transcriptWithFacts("claude:backfill");
+    const seed = await openFragmentCache({ path });
+    await seed.replace(original);
+    await seed.close();
+
+    // Simulate a pre-v3 database: the fragment blob remains, but the queryable read model
+    // (fact_* tables + envelope_json) does not yet exist.
+    await withRawDatabase(path, async (db) => {
+      for (const table of [
+        "fact_sessions",
+        "fact_messages",
+        "fact_invocations",
+        "fact_tool_results",
+        "fact_relationships",
+        "fact_auxiliary",
+      ]) {
+        await rawExec(db, `DROP TABLE ${table}`);
+      }
+      await rawExec(db, "ALTER TABLE cache_fragments DROP COLUMN envelope_json");
+      await rawExec(db, "DELETE FROM cache_schema_migrations WHERE version = 3");
+      await rawExec(db, "PRAGMA user_version = 2");
+    });
+
+    const upgraded = await openFragmentCache({ path });
+    try {
+      const reconstructed = await upgraded.reconstructFromRows([original.id]);
+      expect(reconstructed.nativeFragments).toHaveLength(1);
+      expect(reconstructed.nativeFragments[0]).toEqual(original);
+    } finally {
+      await upgraded.close();
+    }
+
+    const messageRows = await withRawDatabase(path, (db) =>
+      rawGet<{ count: number }>(
+        db,
+        "SELECT COUNT(*) AS count FROM fact_messages WHERE fragment_id = 'claude:backfill'",
+      ),
+    );
+    expect(messageRows?.count).toBe(1);
   });
 
   test("reports newer schemas as incompatible without modifying them", async () => {

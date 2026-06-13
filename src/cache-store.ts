@@ -10,16 +10,27 @@ import {
 import { dirname } from "node:path";
 import sqlite3, { type Database, type RunResult } from "sqlite3";
 import type {
+  AuxiliaryFact,
   CacheFragment,
   CacheInvalidationReason,
   CachedFragmentMetadata,
   CompleteDiscovery,
   FragmentCache,
+  ImportedFragment,
+  InvocationFact,
+  MessageFact,
+  NormalizedFacts,
+  ParsedAuxiliaryFragment,
+  ParsedFileFragment,
+  ReconstructedFragments,
+  SessionFact,
+  SessionRelationshipFact,
+  ToolResultFact,
 } from "./cache-contract.ts";
 import type { AgentSource } from "./types.ts";
 import { FRAGMENT_CACHE_FILE } from "./paths.ts";
 
-export const CACHE_SCHEMA_VERSION = 2;
+export const CACHE_SCHEMA_VERSION = 3;
 export const CACHE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_CACHE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -100,6 +111,7 @@ interface FragmentStorage {
   parserVersion: string | null;
   diagnosticsJson: string;
   importProvenanceJson: string | null;
+  envelopeJson: string;
 }
 
 const CREATE_V1_SQL = `
@@ -147,18 +159,115 @@ const CREATE_V1_SQL = `
   );
 `;
 
+// v3 — the queryable read model. Each fragment's NormalizedFacts (or AuxiliaryFact[]) are exploded
+// into per-fact rows tagged with their owning fragment_id (CASCADE-deleted with the fragment) and
+// an `origin` marking native parsing vs external/AgentsView imports. Indexed dimensions support
+// future direct-SQL analyses; `fact_json` preserves the full fact for lossless reconstruction.
+// `cache_fragments.envelope_json` holds the fragment minus its facts, so reconstructFromRows can
+// rebuild the exact fragment from (envelope + rows) without touching the opaque `fragment_json`.
+const CREATE_V3_SQL = `
+  CREATE TABLE IF NOT EXISTS fact_sessions (
+    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
+    source TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    kind TEXT,
+    transcript_path TEXT,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (fragment_id, seq)
+  );
+  CREATE INDEX IF NOT EXISTS fact_sessions_source_session
+    ON fact_sessions(source, source_session_id);
+
+  CREATE TABLE IF NOT EXISTS fact_messages (
+    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
+    source TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    provider_message_id TEXT,
+    timestamp_ms INTEGER NOT NULL,
+    model TEXT,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (fragment_id, seq)
+  );
+  CREATE INDEX IF NOT EXISTS fact_messages_source_session
+    ON fact_messages(source, source_session_id);
+  CREATE INDEX IF NOT EXISTS fact_messages_timestamp
+    ON fact_messages(timestamp_ms);
+
+  CREATE TABLE IF NOT EXISTS fact_invocations (
+    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
+    source TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    name TEXT,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (fragment_id, seq)
+  );
+  CREATE INDEX IF NOT EXISTS fact_invocations_message
+    ON fact_invocations(message_id);
+
+  CREATE TABLE IF NOT EXISTS fact_tool_results (
+    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
+    source TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (fragment_id, seq)
+  );
+  CREATE INDEX IF NOT EXISTS fact_tool_results_source_session
+    ON fact_tool_results(source, source_session_id);
+
+  CREATE TABLE IF NOT EXISTS fact_relationships (
+    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
+    source TEXT NOT NULL,
+    child_source_session_id TEXT NOT NULL,
+    parent_source_session_id TEXT NOT NULL,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (fragment_id, seq)
+  );
+
+  CREATE TABLE IF NOT EXISTS fact_auxiliary (
+    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    selector TEXT,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (fragment_id, seq)
+  );
+`;
+
+/** Fact tables in the order their rows are cleared when a fragment is re-materialized. */
+const FACT_TABLES = [
+  "fact_sessions",
+  "fact_messages",
+  "fact_invocations",
+  "fact_tool_results",
+  "fact_relationships",
+  "fact_auxiliary",
+] as const;
+
 const INSERT_FRAGMENT_SQL = `
   INSERT INTO cache_fragments (
     id, kind, source, file_id, root_id, role, relative_path, observed_path,
     size_bytes, mtime_ns, ctime_ns, physical_id_scheme, physical_id_value,
     contract_version, parser_name, parser_version, status, invalidation_reason,
-    fragment_json, diagnostics_json, import_provenance_json,
+    fragment_json, diagnostics_json, import_provenance_json, envelope_json,
     last_success_at_ms, updated_at_ms
   ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?,
     ?, ?, ?, 'success', NULL,
-    ?, ?, ?,
+    ?, ?, ?, ?,
     ?, ?
   )
   ON CONFLICT(id) DO UPDATE SET
@@ -182,6 +291,7 @@ const INSERT_FRAGMENT_SQL = `
     fragment_json = excluded.fragment_json,
     diagnostics_json = excluded.diagnostics_json,
     import_provenance_json = excluded.import_provenance_json,
+    envelope_json = excluded.envelope_json,
     last_success_at_ms = excluded.last_success_at_ms,
     updated_at_ms = excluded.updated_at_ms
 `;
@@ -362,6 +472,27 @@ async function pragmaNumber(db: Database, name: "application_id" | "user_version
   return row?.[name] ?? 0;
 }
 
+async function columnExists(db: Database, table: string, column: string): Promise<boolean> {
+  const cols = await all<{ name: string }>(db, `PRAGMA table_info(${table})`);
+  return cols.some((col) => col.name === column);
+}
+
+/** Populate the v3 `fact_*` rows + envelope_json for fragments already in the cache (one-time). */
+async function backfillFactRows(db: Database): Promise<void> {
+  const rows = await all<{ id: string; fragment_json: string }>(
+    db,
+    "SELECT id, fragment_json FROM cache_fragments WHERE status = 'success'",
+  );
+  for (const row of rows) {
+    const fragment = JSON.parse(row.fragment_json) as CacheFragment;
+    await materializeFactRows(db, fragment);
+    await run(db, "UPDATE cache_fragments SET envelope_json = ? WHERE id = ?", [
+      envelopeJson(fragment),
+      row.id,
+    ]);
+  }
+}
+
 async function validateOwnership(db: Database, path: string): Promise<number> {
   const applicationId = await pragmaNumber(db, "application_id");
   const userVersion = await pragmaNumber(db, "user_version");
@@ -408,6 +539,18 @@ async function migrate(db: Database, fromVersion: number, now: () => number): Pr
           "INSERT INTO cache_schema_migrations(version, applied_at_ms) VALUES (?, ?)",
           [version, now()],
         );
+      } else if (version === 3) {
+        // Idempotent so partial/interrupted upgrades (and synthetic downgrades in tests) recover.
+        if (!(await columnExists(db, "cache_fragments", "envelope_json"))) {
+          await exec(db, "ALTER TABLE cache_fragments ADD COLUMN envelope_json TEXT");
+        }
+        await exec(db, CREATE_V3_SQL);
+        await backfillFactRows(db);
+        await run(
+          db,
+          "INSERT OR IGNORE INTO cache_schema_migrations(version, applied_at_ms) VALUES (?, ?)",
+          [version, now()],
+        );
       }
       await exec(db, `PRAGMA application_id = ${CACHE_APPLICATION_ID}`);
       await exec(db, `PRAGMA user_version = ${version}`);
@@ -450,7 +593,8 @@ async function initializeDatabase(
 
   // Verify the expected current schema rather than trusting user_version alone.
   try {
-    await get(db, "SELECT id, import_provenance_json FROM cache_fragments LIMIT 1");
+    await get(db, "SELECT id, import_provenance_json, envelope_json FROM cache_fragments LIMIT 1");
+    await get(db, "SELECT fragment_id FROM fact_sessions LIMIT 1");
   } catch (error) {
     if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
     throw new CacheStoreError(
@@ -482,6 +626,7 @@ function fragmentStorage(fragment: CacheFragment): FragmentStorage {
       parserVersion: fragment.provenance.adapter.version,
       diagnosticsJson: JSON.stringify(fragment.diagnostics),
       importProvenanceJson: JSON.stringify(fragment.provenance),
+      envelopeJson: envelopeJson(fragment),
     };
   }
 
@@ -502,7 +647,111 @@ function fragmentStorage(fragment: CacheFragment): FragmentStorage {
     parserVersion: fragment.parser.version,
     diagnosticsJson: JSON.stringify(fragment.diagnostics),
     importProvenanceJson: null,
+    envelopeJson: envelopeJson(fragment),
   };
+}
+
+function emptyNormalizedFacts(): NormalizedFacts {
+  return { sessions: [], messages: [], invocations: [], toolResults: [], relationships: [] };
+}
+
+/** The fragment minus its facts — enough to rebuild the exact fragment once rows are reattached. */
+function envelopeJson(fragment: CacheFragment): string {
+  if (fragment.kind === "auxiliary") {
+    return JSON.stringify({ ...fragment, facts: [] });
+  }
+  return JSON.stringify({ ...fragment, facts: emptyNormalizedFacts() });
+}
+
+function factOrigin(fragment: CacheFragment): "native" | "external" {
+  return fragment.kind === "external" ? "external" : "native";
+}
+
+/**
+ * Explode a fragment's facts into the queryable `fact_*` rows (replacing any prior rows for this
+ * fragment). Runs inside the same transaction as the fragment upsert. `seq` preserves array order
+ * so reconstruction is byte-faithful (e.g. friction turn-duration ordering).
+ */
+async function materializeFactRows(db: Database, fragment: CacheFragment): Promise<void> {
+  for (const table of FACT_TABLES) {
+    await run(db, `DELETE FROM ${table} WHERE fragment_id = ?`, [fragment.id]);
+  }
+  const origin = factOrigin(fragment);
+
+  if (fragment.kind === "auxiliary") {
+    let seq = 0;
+    for (const fact of fragment.facts) {
+      const selector =
+        fact.kind === "session_first_prompt" ? fact.sourceSessionId : fact.selector;
+      await run(
+        db,
+        `INSERT INTO fact_auxiliary(fragment_id, seq, origin, kind, source, selector, fact_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [fragment.id, seq++, origin, fact.kind, fact.source, selector, JSON.stringify(fact)],
+      );
+    }
+    return;
+  }
+
+  const facts = fragment.facts;
+  let seq = 0;
+  for (const s of facts.sessions) {
+    await run(
+      db,
+      `INSERT INTO fact_sessions(fragment_id, seq, origin, source, source_session_id, kind, transcript_path, fact_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, s.source, s.sourceSessionId, s.kind, s.transcriptPath ?? null, JSON.stringify(s)],
+    );
+  }
+  seq = 0;
+  for (const m of facts.messages) {
+    await run(
+      db,
+      `INSERT INTO fact_messages(fragment_id, seq, origin, source, source_session_id, provider_message_id, timestamp_ms, model, fact_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, m.source, m.sourceSessionId, m.providerMessageId ?? null, m.timestampMs, m.model ?? null, JSON.stringify(m)],
+    );
+  }
+  seq = 0;
+  for (const inv of facts.invocations) {
+    await run(
+      db,
+      `INSERT INTO fact_invocations(fragment_id, seq, origin, source, source_session_id, message_id, name, fact_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, inv.source, inv.sourceSessionId, inv.messageId, inv.name ?? null, JSON.stringify(inv)],
+    );
+  }
+  seq = 0;
+  for (const tr of facts.toolResults) {
+    await run(
+      db,
+      `INSERT INTO fact_tool_results(fragment_id, seq, origin, source, source_session_id, fact_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, tr.source, tr.sourceSessionId, JSON.stringify(tr)],
+    );
+  }
+  seq = 0;
+  for (const rel of facts.relationships) {
+    await run(
+      db,
+      `INSERT INTO fact_relationships(fragment_id, seq, origin, source, child_source_session_id, parent_source_session_id, fact_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, rel.source, rel.childSourceSessionId, rel.parentSourceSessionId, JSON.stringify(rel)],
+    );
+  }
+}
+
+interface FactJsonRow {
+  fact_json: string;
+}
+
+async function loadFactArray<T>(db: Database, table: string, fragmentId: string): Promise<T[]> {
+  const rows = await all<FactJsonRow>(
+    db,
+    `SELECT fact_json FROM ${table} WHERE fragment_id = ? ORDER BY seq`,
+    [fragmentId],
+  );
+  return rows.map((row) => JSON.parse(row.fact_json) as T);
 }
 
 function parseFragment(row: FragmentRow, path: string): CacheFragment {
@@ -622,6 +871,7 @@ export class SqliteFragmentCache implements FragmentCache {
           JSON.stringify(fragment),
           storage.diagnosticsJson,
           storage.importProvenanceJson,
+          storage.envelopeJson,
           timestamp,
           timestamp,
         ]);
@@ -643,6 +893,7 @@ export class SqliteFragmentCache implements FragmentCache {
             );
           }
         }
+        await materializeFactRows(this.db, fragment);
       });
       secureSqliteFiles(this.path);
     });
@@ -685,6 +936,58 @@ export class SqliteFragmentCache implements FragmentCache {
           );
         }
       });
+    });
+  }
+
+  reconstructFromRows(ids: string[]): Promise<ReconstructedFragments> {
+    return this.schedule(async () => {
+      const result: ReconstructedFragments = {
+        nativeFragments: [],
+        auxiliaryFragments: [],
+        importedFragments: [],
+      };
+      const orderedUnique = [...new Set(ids)];
+      if (orderedUnique.length === 0) return result;
+
+      const envelopeById = new Map<string, { kind: CacheFragment["kind"]; envelope: CacheFragment }>();
+      for (const id of orderedUnique) {
+        const row = await get<{ kind: CacheFragment["kind"]; envelope_json: string | null }>(
+          this.db,
+          "SELECT kind, envelope_json FROM cache_fragments WHERE id = ? AND status = 'success'",
+          [id],
+        );
+        if (!row || row.envelope_json == null) continue;
+        envelopeById.set(id, {
+          kind: row.kind,
+          envelope: JSON.parse(row.envelope_json) as CacheFragment,
+        });
+      }
+
+      for (const id of orderedUnique) {
+        const entry = envelopeById.get(id);
+        if (!entry) continue;
+        if (entry.kind === "auxiliary") {
+          const fragment = entry.envelope as ParsedAuxiliaryFragment;
+          fragment.facts = await loadFactArray<AuxiliaryFact>(this.db, "fact_auxiliary", id);
+          result.auxiliaryFragments.push(fragment);
+        } else {
+          const fragment = entry.envelope as ParsedFileFragment | ImportedFragment;
+          fragment.facts = {
+            sessions: await loadFactArray<SessionFact>(this.db, "fact_sessions", id),
+            messages: await loadFactArray<MessageFact>(this.db, "fact_messages", id),
+            invocations: await loadFactArray<InvocationFact>(this.db, "fact_invocations", id),
+            toolResults: await loadFactArray<ToolResultFact>(this.db, "fact_tool_results", id),
+            relationships: await loadFactArray<SessionRelationshipFact>(
+              this.db,
+              "fact_relationships",
+              id,
+            ),
+          };
+          if (entry.kind === "external") result.importedFragments.push(fragment as ImportedFragment);
+          else result.nativeFragments.push(fragment as ParsedFileFragment);
+        }
+      }
+      return result;
     });
   }
 
