@@ -18,11 +18,9 @@ import { vendoredBrandFontsCss } from "./brand.ts";
 import { vendoredChartJs } from "./chartjs.ts";
 import { consoleOverview, isBareInvocation } from "./console-report.ts";
 import { loadPlugins } from "./inventory.ts";
-import { parseAll, type TranscriptSource } from "./parse.ts";
-import {
-  cacheStatsSummary,
-  parseAllIncrementalDetailed,
-} from "./parse-incremental.ts";
+import type { TranscriptSource } from "./parse.ts";
+import { cacheStatsSummary } from "./parse-incremental.ts";
+import { openSessionStore } from "./session-store.ts";
 import { renderHtml } from "./report.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
@@ -152,12 +150,6 @@ Reads transcripts from ~/.claude/projects (override dir via CLAUDE_CONFIG_DIR),
 ~/.gemini/tmp (override home via GEMINI_CLI_HOME).
 `;
 
-function withinRange(date: string, since?: string, until?: string): boolean {
-  if (since && date < since) return false;
-  if (until && date > until) return false;
-  return true;
-}
-
 type Log = (s: string) => void;
 
 function diagnosticKey(entry: ParserDiagnostic): string {
@@ -206,35 +198,27 @@ function logCacheDiagnostics(
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
 async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
   log("Parsing transcripts…");
-  const parsed = flags.cache
-    ? (await parseAllIncrementalDetailed({
-        sources: sourcesFor(flags.source),
-        agentsView: flags.agentsView,
-        agentsViewDatabasePath: flags.agentsViewDatabasePath,
-      }))
-    : { parsed: parseAll({ sources: sourcesFor(flags.source) }), stats: undefined };
-  if (flags.cache && parsed.stats && "diagnostics" in parsed) {
-    log(`  Cache: ${cacheStatsSummary(parsed.stats, parsed.diagnostics)}`);
-  } else if (flags.cache && parsed.stats) {
-    log(`  Cache: ${cacheStatsSummary(parsed.stats)}`);
+  const store = openSessionStore({
+    sources: sourcesFor(flags.source),
+    cache: flags.cache,
+    agentsView: flags.agentsView,
+    agentsViewDatabasePath: flags.agentsViewDatabasePath,
+  });
+  let parseResult;
+  try {
+    parseResult = await store.read({
+      since: flags.since,
+      until: flags.until,
+      projectSubstring: flags.project,
+    });
+  } finally {
+    await store.close();
   }
-  if (flags.cache && "diagnostics" in parsed) {
-    logCacheDiagnostics(parsed.diagnostics, flags, log);
-  }
-  if (!flags.cache) log("  Cache: disabled.");
-  const parseResult = parsed.parsed;
-
-  // Apply filters.
-  if (flags.since || flags.until || flags.project) {
-    parseResult.messages = parseResult.messages.filter(
-      (m) =>
-        withinRange(m.date, flags.since, flags.until) &&
-        (!flags.project || m.cwd.includes(flags.project)),
-    );
-    const keep = new Set(parseResult.messages.map((m) => m.sessionId));
-    for (const sid of [...parseResult.sessions.keys()]) {
-      if (!keep.has(sid)) parseResult.sessions.delete(sid);
-    }
+  if (flags.cache) {
+    if (store.stats) log(`  Cache: ${cacheStatsSummary(store.stats, store.diagnostics)}`);
+    logCacheDiagnostics(store.diagnostics, flags, log);
+  } else {
+    log("  Cache: disabled.");
   }
 
   log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);

@@ -353,12 +353,28 @@ export type CacheInvalidationReason =
   | "external_import_changed"
   | "manual_rebuild";
 
+/**
+ * Fragments rebuilt from the materialized `fact_*` tables (the queryable read model) rather than
+ * from the opaque `fragment_json` blob. Round-trips losslessly with the stored fragments, so the
+ * reconciler can run over either source — this is what proves the rows are a faithful projection.
+ */
+export interface ReconstructedFragments {
+  nativeFragments: ParsedFileFragment[];
+  auxiliaryFragments: ParsedAuxiliaryFragment[];
+  importedFragments: ImportedFragment[];
+}
+
 export interface FragmentCache {
   load(id: string): Promise<CacheFragment | undefined>;
   list(source?: AgentSource): Promise<CachedFragmentMetadata[]>;
   replace(fragment: CacheFragment): Promise<void>;
   removeMissing(discovery: CompleteDiscovery): Promise<void>;
   invalidate(ids: string[], reason: CacheInvalidationReason): Promise<void>;
+  /**
+   * Rebuild the given fragments (by id, in the order supplied, grouped by kind) from the
+   * materialized `fact_*` rows + per-fragment envelope. Unknown or non-success ids are skipped.
+   */
+  reconstructFromRows(ids: string[]): Promise<ReconstructedFragments>;
   close(): Promise<void>;
 }
 
