@@ -354,3 +354,82 @@ describe("parseAllIncrementalDetailed", () => {
     expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_import_used")).toBe(true);
   });
 });
+
+describe("reconcileSource: rows reproduces the in-memory reconciliation", () => {
+  // Full ParseResult equality (messages, sessions incl. friction, toolResults) — the safety net
+  // proving the materialized fact_* rows are a byte-faithful projection of the gathered fragments.
+  function canonical(result: ParseResult) {
+    return {
+      messages: result.messages,
+      sessions: [...result.sessions.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      toolResults: [...result.toolResults.entries()].sort(([a], [b]) => a.localeCompare(b)),
+    };
+  }
+
+  test("matches across all native sources plus an overlapping AgentsView import", async () => {
+    const root = tempRoot();
+    const dbPath = join(root, "agentsview.db");
+    await createAgentsViewCodexDb(dbPath);
+    const base = {
+      projectsDir: copyFixture("projects", root),
+      historyFile: join(copyFixture("history.jsonl", root)),
+      codexSessionsDir: copyFixture("codex-sessions", root),
+      geminiDir: copyFixture("gemini", root),
+      sources: ["claude", "codex", "gemini"] as AgentSource[],
+      agentsViewDatabasePath: dbPath,
+    };
+
+    const memory = await parseAllIncrementalDetailed({
+      ...base,
+      cachePath: cachePath(join(root, "mem")),
+      reconcileSource: "memory",
+    });
+    const rows = await parseAllIncrementalDetailed({
+      ...base,
+      cachePath: cachePath(join(root, "rows")),
+      reconcileSource: "rows",
+    });
+
+    expect(canonical(rows.parsed)).toEqual(canonical(memory.parsed));
+    // The codex overlap must still resolve to native precedence on the rows path.
+    expect(rows.diagnostics.some((e) => e.code === "agentsview_native_precedence")).toBe(true);
+  });
+
+  test("round-trips AgentsView-only facts and materializes them with origin='external'", async () => {
+    const root = tempRoot();
+    const dbPath = join(root, "agentsview.db");
+    await createAgentsViewCodexDb(dbPath);
+    const base = {
+      codexSessionsDir: join(root, "missing-codex"),
+      sources: ["codex"] as AgentSource[],
+      agentsViewDatabasePath: dbPath,
+    };
+
+    const memory = await parseAllIncrementalDetailed({
+      ...base,
+      cachePath: cachePath(join(root, "mem")),
+      reconcileSource: "memory",
+    });
+    const rowsCachePath = cachePath(join(root, "rows"));
+    const rows = await parseAllIncrementalDetailed({
+      ...base,
+      cachePath: rowsCachePath,
+      reconcileSource: "rows",
+    });
+
+    expect(canonical(rows.parsed)).toEqual(canonical(memory.parsed));
+    expect(rows.parsed.messages).toHaveLength(1);
+
+    const db = await openDatabase(rowsCachePath);
+    try {
+      const row = await new Promise<{ n: number }>((resolve, reject) =>
+        db.get("SELECT COUNT(*) AS n FROM fact_messages WHERE origin = 'external'", (e, r) =>
+          e ? reject(e) : resolve(r as { n: number }),
+        ),
+      );
+      expect(row.n).toBeGreaterThan(0);
+    } finally {
+      await close(db);
+    }
+  });
+});
