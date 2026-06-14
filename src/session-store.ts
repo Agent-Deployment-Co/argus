@@ -27,7 +27,7 @@ export interface SessionStoreOptions {
   /** Sources to collect. Omit to use the parse defaults. */
   sources?: TranscriptSource[];
   /** Override the store path. */
-  cachePath?: string;
+  storePath?: string;
   /** AgentsView import behavior. */
   agentsView?: "auto" | "off";
   /** Read a specific AgentsView sessions.db. */
@@ -54,7 +54,7 @@ class StoreBackedSessionStore implements SessionStore {
   async read(query?: SessionQuery): Promise<ParseResult> {
     const details = await parseAllIncrementalDetailed({
       sources: this.opts.sources,
-      cachePath: this.opts.cachePath,
+      storePath: this.opts.storePath,
       agentsView: this.opts.agentsView,
       agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
       query,

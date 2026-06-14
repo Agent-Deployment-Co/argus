@@ -214,7 +214,7 @@ describe("Claude fragment friction (incremental path)", () => {
     const opts = {
       projectsDir,
       historyFile: join(root, "history.jsonl"),
-      cachePath: join(root, "cache", "fragments.sqlite3"),
+      storePath: join(root, "cache", "fragments.sqlite3"),
       agentsView: "off" as const,
     };
 

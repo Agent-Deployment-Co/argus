@@ -293,7 +293,7 @@ export interface ImportedFragment {
   diagnostics: ParserDiagnostic[];
 }
 
-export type CacheFragment = ParsedFileFragment | ParsedAuxiliaryFragment | ImportedFragment;
+export type StoredFragment = ParsedFileFragment | ParsedAuxiliaryFragment | ImportedFragment;
 
 export type FileParseResult =
   | {
@@ -334,9 +334,9 @@ export interface AuxiliaryParserAdapter {
   parseFile(file: DiscoveredFile): AuxiliaryParseResult;
 }
 
-export interface CachedFragmentMetadata {
+export interface FragmentMetadata {
   id: string;
-  kind: CacheFragment["kind"];
+  kind: StoredFragment["kind"];
   source?: AgentSource;
   fileId?: string;
   contractVersion: number;
@@ -345,7 +345,7 @@ export interface CachedFragmentMetadata {
   status: "success" | "failed" | "unstable";
 }
 
-export type CacheInvalidationReason =
+export type InvalidationReason =
   | "contract_version"
   | "parser_version"
   | "file_changed"
@@ -394,7 +394,7 @@ export interface TranscriptIndexEntry {
   fingerprint: FileFingerprint;
   parserName: string | null;
   parserVersion: string | null;
-  status: CachedFragmentMetadata["status"];
+  status: FragmentMetadata["status"];
   /** Source session ids this fragment contributes (pre-canonicalization). */
   sourceSessionIds: string[];
 }
@@ -408,11 +408,11 @@ export interface TranscriptIndex {
 export interface Store {
   /** Reconstruct an auxiliary fragment from its envelope + rows (transcripts/imports are re-parsed
    *  from disk, not reconstructed, so they return undefined). */
-  load(id: string): Promise<CacheFragment | undefined>;
-  list(source?: AgentSource): Promise<CachedFragmentMetadata[]>;
-  replace(fragment: CacheFragment): Promise<void>;
+  load(id: string): Promise<StoredFragment | undefined>;
+  list(source?: AgentSource): Promise<FragmentMetadata[]>;
+  replace(fragment: StoredFragment): Promise<void>;
   removeMissing(discovery: CompleteDiscovery): Promise<void>;
-  invalidate(ids: string[], reason: CacheInvalidationReason): Promise<void>;
+  invalidate(ids: string[], reason: InvalidationReason): Promise<void>;
   /** The structural index for a source: which sessions each transcript file maps to (+ fingerprints
    *  for change detection). Heavy content is re-parsed from disk, not reconstructed. */
   transcriptIndex(source: AgentSource): Promise<TranscriptIndex>;
@@ -492,7 +492,7 @@ function compareText(a: string, b: string): number {
  * Length-prefix every part before hashing so identities remain unambiguous when values contain
  * separators. Callers must pass normalized, source-owned values rather than display labels.
  */
-export function stableCacheId(namespace: string, parts: readonly (string | number)[]): string {
+export function stableId(namespace: string, parts: readonly (string | number)[]): string {
   const hash = createHash("sha256");
   hash.update(`${namespace.length}:${namespace}`);
   for (const part of parts) {
@@ -505,7 +505,7 @@ export function stableCacheId(namespace: string, parts: readonly (string | numbe
 export function createFileIdentity(input: FileIdentityInput): FileIdentity {
   return {
     ...input,
-    id: stableCacheId("file", [
+    id: stableId("file", [
       input.source ?? "",
       input.rootId,
       input.role,
@@ -521,7 +521,7 @@ export function createFactId(
   position: SourcePosition,
   sourceIdentity = "",
 ): string {
-  return stableCacheId(`fact:${kind}`, [
+  return stableId(`fact:${kind}`, [
     source,
     sourceSessionId,
     position.originKey,
