@@ -422,16 +422,24 @@ describe("SQLite fragment cache", () => {
     expect(version?.user_version).toBe(CACHE_SCHEMA_VERSION);
   });
 
-  test("backfills the fact tables and envelopes when upgrading an existing cache", async () => {
+  test("backfills the fact tables from the v2 blob then drops the blob on upgrade", async () => {
     const path = cachePath();
     const original = transcriptWithFacts("claude:backfill");
     const seed = await openFragmentCache({ path });
     await seed.replace(original);
     await seed.close();
 
-    // Simulate a pre-v3 database: the fragment blob remains, but the queryable read model
-    // (fact_* tables + envelope_json) does not yet exist.
+    // Reconstruct a genuine pre-v3 (v2) database: a `fragment_json` blob, and none of the v3
+    // read model (fact_* tables + envelope_json) — the shape this PR migrates away from.
     await withRawDatabase(path, async (db) => {
+      await rawExec(db, "ALTER TABLE cache_fragments ADD COLUMN fragment_json TEXT");
+      await new Promise<void>((resolve, reject) =>
+        db.run(
+          "UPDATE cache_fragments SET fragment_json = ? WHERE id = ?",
+          [JSON.stringify(original), original.id],
+          (error) => (error ? reject(error) : resolve()),
+        ),
+      );
       for (const table of [
         "fact_sessions",
         "fact_messages",
@@ -456,13 +464,22 @@ describe("SQLite fragment cache", () => {
       await upgraded.close();
     }
 
-    const messageRows = await withRawDatabase(path, (db) =>
-      rawGet<{ count: number }>(
-        db,
-        "SELECT COUNT(*) AS count FROM fact_messages WHERE fragment_id = 'claude:backfill'",
-      ),
-    );
-    expect(messageRows?.count).toBe(1);
+    const schema = await withRawDatabase(path, async (db) => ({
+      messages: (
+        await rawGet<{ count: number }>(
+          db,
+          "SELECT COUNT(*) AS count FROM fact_messages WHERE fragment_id = 'claude:backfill'",
+        )
+      )?.count,
+      blobColumns: (
+        await rawGet<{ count: number }>(
+          db,
+          "SELECT COUNT(*) AS count FROM pragma_table_info('cache_fragments') WHERE name = 'fragment_json'",
+        )
+      )?.count,
+    }));
+    expect(schema.messages).toBe(1);
+    expect(schema.blobColumns).toBe(0); // blob dropped after backfill
   });
 
   test("reports newer schemas as incompatible without modifying them", async () => {

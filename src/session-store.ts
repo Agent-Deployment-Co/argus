@@ -92,8 +92,6 @@ class FragmentBackedSessionStore implements SessionStore {
       cachePath: this.opts.cachePath,
       agentsView: this.opts.agentsView,
       agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
-      // Serve reads from the materialized queryable model (the Phase 1b read seam).
-      reconcileSource: "rows",
     });
     this.stats = details.stats;
     this.diagnostics = details.diagnostics;
