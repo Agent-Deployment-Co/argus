@@ -369,53 +369,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
   return { messages, sessions, toolResults, toolResultsBySession };
 }
 
-/** A producer's reconciled output plus whether it yields sessions a native producer owns. */
-export interface ReconciledPart {
-  result: ParseResult;
-  /** Dependent producers (agentsview) only materialize sessions no native producer owns. */
-  dependsOnNative: boolean;
-}
-
-/**
- * Merge per-producer results into one ParseResult: native producers own their sessions; dependent
- * producers drop any session/message whose canonical id a native already owns; messages are globally
- * ordered and tool-result stats summed.
- */
-export function mergeReconciled(parts: ReconciledPart[]): ParseResult {
-  const ownedByNative = new Set<string>();
-  for (const part of parts) {
-    if (part.dependsOnNative) continue;
-    for (const sid of part.result.sessions.keys()) ownedByNative.add(sid);
-  }
-
-  const sessions = new Map<string, SessionMeta>();
-  const messages: MessageRecord[] = [];
-  const toolResults = new Map<string, ToolResultStat>();
-
-  for (const part of parts) {
-    const dependent = part.dependsOnNative;
-    for (const [sid, meta] of part.result.sessions) {
-      if (dependent && ownedByNative.has(sid)) continue;
-      sessions.set(sid, meta);
-    }
-    for (const message of part.result.messages) {
-      if (dependent && ownedByNative.has(message.sessionId)) continue;
-      messages.push(message);
-    }
-    for (const [name, stat] of part.result.toolResults) {
-      const existing = toolResults.get(name) ?? { count: 0, approxTokens: 0 };
-      existing.count += stat.count;
-      existing.approxTokens += stat.approxTokens;
-      toolResults.set(name, existing);
-    }
-  }
-
-  messages.sort(
-    (a, b) => a.ts - b.ts || a.source.localeCompare(b.source) || a.sessionId.localeCompare(b.sessionId),
-  );
-  return { messages, sessions, toolResults };
-}
-
 /** Convert an external import fragment into transcript shape so the engine treats it uniformly. */
 export function convertImported(fragment: ImportedFragment): ParsedFileFragment | undefined {
   const source = fragment.provenance.coverage[0]?.source;

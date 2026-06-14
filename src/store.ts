@@ -19,16 +19,11 @@ import type {
   FileFingerprint,
   FileIdentity,
   FileRole,
-  ImportedFragment,
   MaterializeSession,
-  NormalizedFacts,
   ParsedAuxiliaryFragment,
-  ParsedFileFragment,
   PhysicalFileIdentity,
   ReconstructedFragments,
   ResolvedQuery,
-  SessionFact,
-  SessionRelationshipFact,
   SourceCoverageRow,
   TranscriptIndex,
 } from "./store-contract.ts";
@@ -113,7 +108,7 @@ interface FragmentStorage {
   parserVersion: string | null;
   diagnosticsJson: string;
   importProvenanceJson: string | null;
-  envelopeJson: string;
+  envelopeJson: string | null;
 }
 
 // The store has a single, fresh schema (no migrations): it is fully derivable from disk, so on any
@@ -172,7 +167,6 @@ const CREATE_SCHEMA_SQL = `
     source_session_id TEXT NOT NULL,
     kind TEXT,
     transcript_path TEXT,
-    fact_json TEXT NOT NULL,
     PRIMARY KEY (file_id, seq)
   );
   CREATE INDEX IF NOT EXISTS index_sessions_source_session
@@ -187,7 +181,6 @@ const CREATE_SCHEMA_SQL = `
     source TEXT NOT NULL,
     child_source_session_id TEXT NOT NULL,
     parent_source_session_id TEXT NOT NULL,
-    fact_json TEXT NOT NULL,
     PRIMARY KEY (file_id, seq)
   );
 
@@ -259,7 +252,7 @@ const CREATE_SCHEMA_SQL = `
 `;
 
 /** Fact tables in the order their rows are cleared when a fragment is re-materialized. */
-const FACT_TABLES = ["index_sessions", "index_relationships", "index_auxiliary"] as const;
+const INDEX_TABLES = ["index_sessions", "index_relationships", "index_auxiliary"] as const;
 
 const INSERT_FRAGMENT_SQL = `
   INSERT INTO index_files (
@@ -606,16 +599,14 @@ function fragmentStorage(fragment: CacheFragment): FragmentStorage {
   };
 }
 
-function emptyNormalizedFacts(): NormalizedFacts {
-  return { sessions: [], messages: [], invocations: [], toolResults: [], relationships: [] };
-}
-
-/** The fragment minus its facts — enough to rebuild the exact fragment once rows are reattached. */
-function envelopeJson(fragment: CacheFragment): string {
-  if (fragment.kind === "auxiliary") {
-    return JSON.stringify({ ...fragment, facts: [] });
-  }
-  return JSON.stringify({ ...fragment, facts: emptyNormalizedFacts() });
+/**
+ * The fragment minus its facts — enough to rebuild it once rows are reattached. Only auxiliary
+ * fragments are reconstructed from rows (transcripts/imports are re-parsed from disk), so everything
+ * else stores a null envelope.
+ */
+function envelopeJson(fragment: CacheFragment): string | null {
+  if (fragment.kind !== "auxiliary") return null;
+  return JSON.stringify({ ...fragment, facts: [] });
 }
 
 function factOrigin(fragment: CacheFragment): "native" | "external" {
@@ -628,7 +619,7 @@ function factOrigin(fragment: CacheFragment): "native" | "external" {
  * so reconstruction is byte-faithful (e.g. friction turn-duration ordering).
  */
 async function materializeFactRows(db: Database, fragment: CacheFragment): Promise<void> {
-  for (const table of FACT_TABLES) {
+  for (const table of INDEX_TABLES) {
     await run(db, `DELETE FROM ${table} WHERE file_id = ?`, [fragment.id]);
   }
   const origin = factOrigin(fragment);
@@ -649,23 +640,24 @@ async function materializeFactRows(db: Database, fragment: CacheFragment): Promi
   }
 
   const facts = fragment.facts;
+  // Only the structural columns are stored (file -> session map + subagent links). The full facts
+  // and all message/invocation/tool-result content are re-parsed from disk on demand.
   let seq = 0;
   for (const s of facts.sessions) {
     await run(
       db,
-      `INSERT INTO index_sessions(file_id, seq, origin, source, source_session_id, kind, transcript_path, fact_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, s.source, s.sourceSessionId, s.kind, s.transcriptPath ?? null, JSON.stringify(s)],
+      `INSERT INTO index_sessions(file_id, seq, origin, source, source_session_id, kind, transcript_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, s.source, s.sourceSessionId, s.kind, s.transcriptPath ?? null],
     );
   }
-  // Messages / invocations / tool-results are NOT stored — they are re-parsed from disk on demand.
   seq = 0;
   for (const rel of facts.relationships) {
     await run(
       db,
-      `INSERT INTO index_relationships(file_id, seq, origin, source, child_source_session_id, parent_source_session_id, fact_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, rel.source, rel.childSourceSessionId, rel.parentSourceSessionId, JSON.stringify(rel)],
+      `INSERT INTO index_relationships(file_id, seq, origin, source, child_source_session_id, parent_source_session_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [fragment.id, seq++, origin, rel.source, rel.childSourceSessionId, rel.parentSourceSessionId],
     );
   }
 }
@@ -876,10 +868,6 @@ export class SqliteStore implements Store {
     });
   }
 
-  reconstructFromRows(ids: string[]): Promise<ReconstructedFragments> {
-    return this.schedule(() => this.reconstructCore(ids));
-  }
-
   transcriptIndex(source: AgentSource): Promise<TranscriptIndex> {
     return this.schedule(async () => {
       const fragmentRows = await all<{
@@ -966,62 +954,27 @@ export class SqliteStore implements Store {
     });
   }
 
-  // Rebuild fragments from envelope + fact rows — the store's only read path (load() and the
-  // incremental reconciler both go through here). Unscheduled so callers compose it under one
-  // queue slot.
+  // Reconstruct auxiliary fragments from their envelope + index_auxiliary rows. Transcript/import
+  // fragments store a null envelope (their content is re-parsed from disk), so they aren't
+  // reconstructed here. Unscheduled so callers compose it under one queue slot.
   private async reconstructCore(ids: string[]): Promise<ReconstructedFragments> {
-    {
-      const result: ReconstructedFragments = {
-        nativeFragments: [],
-        auxiliaryFragments: [],
-        importedFragments: [],
-      };
-      const orderedUnique = [...new Set(ids)];
-      if (orderedUnique.length === 0) return result;
-
-      const envelopeById = new Map<string, { kind: CacheFragment["kind"]; envelope: CacheFragment }>();
-      for (const id of orderedUnique) {
-        const row = await get<{ kind: CacheFragment["kind"]; envelope_json: string | null }>(
-          this.db,
-          "SELECT kind, envelope_json FROM index_files WHERE id = ? AND status = 'success'",
-          [id],
-        );
-        if (!row || row.envelope_json == null) continue;
-        envelopeById.set(id, {
-          kind: row.kind,
-          envelope: JSON.parse(row.envelope_json) as CacheFragment,
-        });
-      }
-
-      for (const id of orderedUnique) {
-        const entry = envelopeById.get(id);
-        if (!entry) continue;
-        if (entry.kind === "auxiliary") {
-          const fragment = entry.envelope as ParsedAuxiliaryFragment;
-          fragment.facts = await loadFactArray<AuxiliaryFact>(this.db, "index_auxiliary", id);
-          result.auxiliaryFragments.push(fragment);
-        } else {
-          // Only the structural facts (sessions/relationships) are stored; messages/invocations/
-          // tool-results are re-parsed from disk, so they are empty here. Transcript fragments are
-          // never reconstructed for content in the normal flow — this keeps `load` total/safe.
-          const fragment = entry.envelope as ParsedFileFragment | ImportedFragment;
-          fragment.facts = {
-            sessions: await loadFactArray<SessionFact>(this.db, "index_sessions", id),
-            messages: [],
-            invocations: [],
-            toolResults: [],
-            relationships: await loadFactArray<SessionRelationshipFact>(
-              this.db,
-              "index_relationships",
-              id,
-            ),
-          };
-          if (entry.kind === "external") result.importedFragments.push(fragment as ImportedFragment);
-          else result.nativeFragments.push(fragment as ParsedFileFragment);
-        }
-      }
-      return result;
+    const result: ReconstructedFragments = {
+      nativeFragments: [],
+      auxiliaryFragments: [],
+      importedFragments: [],
+    };
+    for (const id of new Set(ids)) {
+      const row = await get<{ kind: CacheFragment["kind"]; envelope_json: string | null }>(
+        this.db,
+        "SELECT kind, envelope_json FROM index_files WHERE id = ? AND status = 'success'",
+        [id],
+      );
+      if (!row || row.envelope_json == null || row.kind !== "auxiliary") continue;
+      const fragment = JSON.parse(row.envelope_json) as ParsedAuxiliaryFragment;
+      fragment.facts = await loadFactArray<AuxiliaryFact>(this.db, "index_auxiliary", id);
+      result.auxiliaryFragments.push(fragment);
     }
+    return result;
   }
 
   // --- Trusted read model ---------------------------------------------------------------------

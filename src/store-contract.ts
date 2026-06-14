@@ -406,16 +406,13 @@ export interface TranscriptIndex {
 }
 
 export interface Store {
+  /** Reconstruct an auxiliary fragment from its envelope + rows (transcripts/imports are re-parsed
+   *  from disk, not reconstructed, so they return undefined). */
   load(id: string): Promise<CacheFragment | undefined>;
   list(source?: AgentSource): Promise<CachedFragmentMetadata[]>;
   replace(fragment: CacheFragment): Promise<void>;
   removeMissing(discovery: CompleteDiscovery): Promise<void>;
   invalidate(ids: string[], reason: CacheInvalidationReason): Promise<void>;
-  /**
-   * Rebuild the given fragments (by id, in the order supplied, grouped by kind) from the
-   * materialized `fact_*` rows + per-fragment envelope. Unknown or non-success ids are skipped.
-   */
-  reconstructFromRows(ids: string[]): Promise<ReconstructedFragments>;
   /** The structural index for a source: which sessions each transcript file maps to (+ fingerprints
    *  for change detection). Heavy content is re-parsed from disk, not reconstructed. */
   transcriptIndex(source: AgentSource): Promise<TranscriptIndex>;
