@@ -9,7 +9,7 @@ import type {
   FileParseResult,
   ParsedAuxiliaryFragment,
   ParsedFileFragment,
-} from "../src/cache-contract.ts";
+} from "../src/store-contract.ts";
 import {
   GEMINI_AUXILIARY_PARSER,
   GEMINI_TRANSCRIPT_PARSER,

@@ -22,7 +22,7 @@ import {
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
-} from "./cache-contract.ts";
+} from "./store-contract.ts";
 import { CODEX_SESSIONS_DIR } from "./paths.ts";
 import { parseMcpTool } from "./tool-categories.ts";
 import { emptyUsage, totalTokens, type Usage } from "./types.ts";

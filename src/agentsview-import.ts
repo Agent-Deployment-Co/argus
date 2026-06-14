@@ -22,7 +22,7 @@ import {
   type SourcePosition,
   type StableFileSnapshot,
   type ToolResultFact,
-} from "./cache-contract.ts";
+} from "./store-contract.ts";
 import { parseMcpTool } from "./tool-categories.ts";
 import { emptyUsage, totalTokens, type AgentSource, type Usage } from "./types.ts";
 

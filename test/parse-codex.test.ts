@@ -7,7 +7,7 @@ import {
   parseCodexTranscript,
   parseCodexTranscriptFile,
 } from "../src/parse-codex.ts";
-import { createFileIdentity } from "../src/cache-contract.ts";
+import { createFileIdentity } from "../src/store-contract.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const FRAGMENT_ROOT = join(FIXTURES, "codex-fragments");
