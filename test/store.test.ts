@@ -21,7 +21,7 @@ import {
 } from "../src/store.ts";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
-  type CacheFragment,
+  type StoredFragment,
   type CompleteDiscovery,
   type ImportedFragment,
   type ParsedAuxiliaryFragment,
@@ -35,7 +35,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function cachePath(): string {
+function storePath(): string {
   const dir = mkdtempSync(join(tmpdir(), "argus-cache-store-"));
   tempDirs.push(dir);
   return join(dir, "private", "fragments.sqlite3");
@@ -210,7 +210,7 @@ function imported(id: string): ImportedFragment {
 // so load() returns undefined for them and their presence is verified via list().
 async function expectStored(
   cache: Awaited<ReturnType<typeof openStore>>,
-  fragment: CacheFragment,
+  fragment: StoredFragment,
 ): Promise<void> {
   if (fragment.kind === "auxiliary") {
     expect(await cache.load(fragment.id)).toEqual(fragment);
@@ -267,9 +267,9 @@ async function withRawDatabase<T>(path: string, operation: (db: Database) => Pro
 
 describe("SQLite store", () => {
   test("creates a private versioned database and round-trips every fragment kind", async () => {
-    const path = cachePath();
+    const path = storePath();
     const cache = await openStore({ path, now: () => 100 });
-    const fragments: CacheFragment[] = [
+    const fragments: StoredFragment[] = [
       transcript("claude", "claude:one"),
       transcript("codex", "codex:one"),
       transcript("gemini", "gemini:one"),
@@ -321,7 +321,7 @@ describe("SQLite store", () => {
   });
 
   test("keeps the last successful fragment when a transactional replace fails", async () => {
-    const path = cachePath();
+    const path = storePath();
     const cache = await openStore({ path });
     const original = transcript("claude", "claude:atomic", "claude-root", "1");
     await cache.replace(original);
@@ -340,7 +340,7 @@ describe("SQLite store", () => {
   });
 
   test("invalidates without exposing stale JSON and can replace it successfully", async () => {
-    const path = cachePath();
+    const path = storePath();
     let now = 10;
     const cache = await openStore({ path, now: () => now++ });
     const first = transcript("gemini", "gemini:invalidate", "gemini-root", "1");
@@ -365,7 +365,7 @@ describe("SQLite store", () => {
   });
 
   test("removes missing files only for the authoritative source and root", async () => {
-    const path = cachePath();
+    const path = storePath();
     const cache = await openStore({ path });
     const keep = transcript("claude", "claude:keep", "shared-root");
     const missing = transcript("claude", "claude:missing", "shared-root");
@@ -396,7 +396,7 @@ describe("SQLite store", () => {
   });
 
   test("rejects non-authoritative cleanup even when forced through the type boundary", async () => {
-    const path = cachePath();
+    const path = storePath();
     const cache = await openStore({ path });
     const fragment = transcript("claude", "claude:not-authoritative");
     await cache.replace(fragment);
@@ -416,7 +416,7 @@ describe("SQLite store", () => {
   });
 
   test("rebuilds an older-schema store from scratch (no migration path)", async () => {
-    const path = cachePath();
+    const path = storePath();
     const initial = await openStore({ path });
     await initial.replace(imported("external:old"));
     await initial.close();
@@ -440,20 +440,20 @@ describe("SQLite store", () => {
   });
 
   test("reports newer schemas as incompatible without modifying them", async () => {
-    const path = cachePath();
+    const path = storePath();
     const initial = await openStore({ path });
     await initial.close();
     await withRawDatabase(path, (db) => rawExec(db, "PRAGMA user_version = 999"));
 
     await expect(openStore({ path })).rejects.toMatchObject({
       code: "incompatible_schema",
-      cachePath: path,
+      storePath: path,
     });
     expect(readFileSync(path).subarray(0, 15).toString()).toBe("SQLite format 3");
   });
 
   test("reports a malformed current schema as incompatible", async () => {
-    const path = cachePath();
+    const path = storePath();
     const initial = await openStore({ path });
     await initial.close();
     await withRawDatabase(path, (db) =>
@@ -462,19 +462,19 @@ describe("SQLite store", () => {
 
     await expect(openStore({ path })).rejects.toMatchObject({
       code: "incompatible_schema",
-      cachePath: path,
+      storePath: path,
     });
   });
 
   test("provides an explicit rebuild path for corrupt databases", async () => {
-    const path = cachePath();
+    const path = storePath();
     const initial = await openStore({ path });
     await initial.close();
     writeFileSync(path, "not sqlite", { mode: 0o600 });
 
     await expect(openStore({ path })).rejects.toMatchObject({
       code: "corrupt",
-      cachePath: path,
+      storePath: path,
     });
 
     const rebuilt = await rebuildStore({ path });
@@ -485,7 +485,7 @@ describe("SQLite store", () => {
   });
 
   test("uses a bounded busy timeout and succeeds after contention clears", async () => {
-    const path = cachePath();
+    const path = storePath();
     const cache = await openStore({ path, busyTimeoutMs: 25 });
     const locker = await rawOpen(path);
     await rawExec(locker, "BEGIN IMMEDIATE");
@@ -505,7 +505,7 @@ describe("SQLite store", () => {
 
   test("refuses a cache database symlink", async () => {
     if (process.platform === "win32") return;
-    const path = cachePath();
+    const path = storePath();
     const initial = await openStore({ path });
     await initial.close();
     rmSync(path);
@@ -521,7 +521,7 @@ describe("SQLite store", () => {
 
   test("refuses a dangling cache database symlink", async () => {
     if (process.platform === "win32") return;
-    const path = cachePath();
+    const path = storePath();
     const initial = await openStore({ path });
     await initial.close();
     rmSync(path);

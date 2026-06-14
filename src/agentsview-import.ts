@@ -7,7 +7,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type CompatibleExternalImportProbe,
   type ExternalFragmentImporter,
   type ExternalImportProbe,
@@ -155,7 +155,7 @@ function schemaHash(schema: SchemaColumns): string {
   const entries = [...schema.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .flatMap(([table, columns]) => [table, ...[...columns].sort()]);
-  return stableCacheId("agentsview-schema", entries);
+  return stableId("agentsview-schema", entries);
 }
 
 function missingRequiredSchema(schema: SchemaColumns): string[] {
@@ -686,10 +686,10 @@ function buildFragments(
     );
     return {
       kind: "external",
-      id: stableCacheId("agentsview-fragment", [probe.schemaFingerprint, source]),
+      id: stableId("agentsview-fragment", [probe.schemaFingerprint, source]),
       contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
       provenance: {
-        importId: stableCacheId("agentsview-import", [
+        importId: stableId("agentsview-import", [
           probe.database.file.id,
           probe.database.fingerprint.sizeBytes,
           probe.database.fingerprint.mtimeNs,

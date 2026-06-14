@@ -11,9 +11,9 @@ import { dirname } from "node:path";
 import sqlite3, { type Database, type RunResult } from "sqlite3";
 import type {
   AuxiliaryFact,
-  CacheFragment,
-  CacheInvalidationReason,
-  CachedFragmentMetadata,
+  StoredFragment,
+  InvalidationReason,
+  FragmentMetadata,
   CompleteDiscovery,
   Store,
   FileFingerprint,
@@ -44,7 +44,7 @@ export type StoreErrorCode =
 export class StoreError extends Error {
   constructor(
     readonly code: StoreErrorCode,
-    readonly cachePath: string,
+    readonly storePath: string,
     message: string,
     options?: ErrorOptions,
     /** Older owned schema with no migration path — safe to rebuild from disk. */
@@ -70,13 +70,13 @@ interface SqliteError extends Error {
 
 interface MetadataRow {
   id: string;
-  kind: CacheFragment["kind"];
+  kind: StoredFragment["kind"];
   source: AgentSource | null;
   file_identity: string | null;
   contract_version: number;
   parser_version: string | null;
   updated_at_ms: number;
-  status: CachedFragmentMetadata["status"];
+  status: FragmentMetadata["status"];
 }
 
 interface PragmaNumberRow {
@@ -354,7 +354,7 @@ function ensureNotSymlink(path: string): ReturnType<typeof lstatSync> | undefine
     throw new StoreError(
       "unsafe_path",
       path,
-      `Refusing to use Argus cache path because it is a symbolic link: ${path}`,
+      `Refusing to use Argus store path because it is a symbolic link: ${path}`,
     );
   }
   return stat;
@@ -366,7 +366,7 @@ function ensurePrivateDirectory(path: string): void {
   ensureNotSymlink(path);
   const stat = lstatSync(path);
   if (!stat.isDirectory()) {
-    throw new StoreError("unsafe_path", path, `Argus cache directory is not a directory: ${path}`);
+    throw new StoreError("unsafe_path", path, `Argus store directory is not a directory: ${path}`);
   }
   if (process.platform !== "win32") chmodSync(path, 0o700);
 }
@@ -378,7 +378,7 @@ function prepareDatabaseFile(path: string): void {
 
   if (stat) {
     if (!stat.isFile()) {
-      throw new StoreError("unsafe_path", path, `Argus cache path is not a regular file: ${path}`);
+      throw new StoreError("unsafe_path", path, `Argus store path is not a regular file: ${path}`);
     }
   } else {
     const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
@@ -419,7 +419,7 @@ function openDatabase(path: string, busyTimeoutMs: number): Promise<Database> {
 }
 
 function rebuildHint(path: string): string {
-  return `Delete ${path} (and its -wal/-shm files) to rebuild the local Argus cache.`;
+  return `Delete ${path} (and its -wal/-shm files) to rebuild the local Argus store.`;
 }
 
 function asStoreError(
@@ -434,7 +434,7 @@ function asStoreError(
     return new StoreError(
       "busy",
       path,
-      `Argus cache remained locked for ${busyTimeoutMs}ms. Close other Argus processes and retry.`,
+      `Argus store remained locked for ${busyTimeoutMs}ms. Close other Argus processes and retry.`,
       { cause: error },
     );
   }
@@ -442,12 +442,12 @@ function asStoreError(
     return new StoreError(
       "corrupt",
       path,
-      `Argus cache is corrupt or is not a SQLite database. ${rebuildHint(path)}`,
+      `Argus store is corrupt or is not a SQLite database. ${rebuildHint(path)}`,
       { cause: error },
     );
   }
   const message = sqliteError?.message || String(error);
-  return new StoreError(fallbackCode, path, `Unable to use Argus cache at ${path}: ${message}`, {
+  return new StoreError(fallbackCode, path, `Unable to use Argus store at ${path}: ${message}`, {
     cause: error,
   });
 }
@@ -482,14 +482,14 @@ async function validateOwnership(db: Database, path: string): Promise<number> {
     throw new StoreError(
       "incompatible_schema",
       path,
-      `Refusing to use ${path}: it is not an Argus-owned cache database. Choose another cache path.`,
+      `Refusing to use ${path}: it is not an Argus-owned store database. Choose another store path.`,
     );
   }
   if (userVersion > STORE_SCHEMA_VERSION) {
     throw new StoreError(
       "incompatible_schema",
       path,
-      `Argus cache schema ${userVersion} is newer than supported schema ${STORE_SCHEMA_VERSION}. Upgrade Argus or use a different cache path.`,
+      `Argus store schema ${userVersion} is newer than supported schema ${STORE_SCHEMA_VERSION}. Upgrade Argus or use a different store path.`,
     );
   }
   return userVersion;
@@ -555,7 +555,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
   secureSqliteFiles(path);
 }
 
-function fragmentStorage(fragment: CacheFragment): FragmentStorage {
+function fragmentStorage(fragment: StoredFragment): FragmentStorage {
   if (fragment.kind === "external") {
     const snapshot = fragment.provenance.database;
     return {
@@ -604,12 +604,12 @@ function fragmentStorage(fragment: CacheFragment): FragmentStorage {
  * fragments are reconstructed from rows (transcripts/imports are re-parsed from disk), so everything
  * else stores a null envelope.
  */
-function envelopeJson(fragment: CacheFragment): string | null {
+function envelopeJson(fragment: StoredFragment): string | null {
   if (fragment.kind !== "auxiliary") return null;
   return JSON.stringify({ ...fragment, facts: [] });
 }
 
-function factOrigin(fragment: CacheFragment): "native" | "external" {
+function factOrigin(fragment: StoredFragment): "native" | "external" {
   return fragment.kind === "external" ? "external" : "native";
 }
 
@@ -618,7 +618,7 @@ function factOrigin(fragment: CacheFragment): "native" | "external" {
  * fragment). Runs inside the same transaction as the fragment upsert. `seq` preserves array order
  * so reconstruction is byte-faithful (e.g. friction turn-duration ordering).
  */
-async function materializeFactRows(db: Database, fragment: CacheFragment): Promise<void> {
+async function materializeFactRows(db: Database, fragment: StoredFragment): Promise<void> {
   for (const table of INDEX_TABLES) {
     await run(db, `DELETE FROM ${table} WHERE file_id = ?`, [fragment.id]);
   }
@@ -675,7 +675,7 @@ async function loadFactArray<T>(db: Database, table: string, fragmentId: string)
   return rows.map((row) => JSON.parse(row.fact_json) as T);
 }
 
-function invalidatedStatus(reason: CacheInvalidationReason): CachedFragmentMetadata["status"] {
+function invalidatedStatus(reason: InvalidationReason): FragmentMetadata["status"] {
   return reason === "file_changed" ? "unstable" : "failed";
 }
 
@@ -734,7 +734,7 @@ export class SqliteStore implements Store {
   ) {}
 
   private schedule<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.closePromise) return Promise.reject(new Error("Argus cache is closed"));
+    if (this.closePromise) return Promise.reject(new Error("Argus store is closed"));
     const result = this.queue.then(operation, operation).catch((error) => {
       throw asStoreError(error, this.path, this.busyTimeoutMs);
     });
@@ -745,7 +745,7 @@ export class SqliteStore implements Store {
     return result;
   }
 
-  load(id: string): Promise<CacheFragment | undefined> {
+  load(id: string): Promise<StoredFragment | undefined> {
     return this.schedule(async () => {
       const { nativeFragments, auxiliaryFragments, importedFragments } =
         await this.reconstructCore([id]);
@@ -753,7 +753,7 @@ export class SqliteStore implements Store {
     });
   }
 
-  list(source?: AgentSource): Promise<CachedFragmentMetadata[]> {
+  list(source?: AgentSource): Promise<FragmentMetadata[]> {
     return this.schedule(async () => {
       const rows = await all<MetadataRow>(
         this.db,
@@ -776,7 +776,7 @@ export class SqliteStore implements Store {
     });
   }
 
-  replace(fragment: CacheFragment): Promise<void> {
+  replace(fragment: StoredFragment): Promise<void> {
     return this.schedule(async () => {
       const storage = fragmentStorage(fragment);
       const timestamp = this.now();
@@ -851,7 +851,7 @@ export class SqliteStore implements Store {
     });
   }
 
-  invalidate(ids: string[], reason: CacheInvalidationReason): Promise<void> {
+  invalidate(ids: string[], reason: InvalidationReason): Promise<void> {
     return this.schedule(async () => {
       if (ids.length === 0) return;
       await transaction(this.db, async () => {
@@ -884,7 +884,7 @@ export class SqliteStore implements Store {
         physical_id_value: string | null;
         parser_name: string | null;
         parser_version: string | null;
-        status: CachedFragmentMetadata["status"];
+        status: FragmentMetadata["status"];
       }>(
         this.db,
         `SELECT id, file_identity, root_id, role, relative_path, observed_path, size_bytes, mtime_ns,
@@ -964,7 +964,7 @@ export class SqliteStore implements Store {
       importedFragments: [],
     };
     for (const id of new Set(ids)) {
-      const row = await get<{ kind: CacheFragment["kind"]; envelope_json: string | null }>(
+      const row = await get<{ kind: StoredFragment["kind"]; envelope_json: string | null }>(
         this.db,
         "SELECT kind, envelope_json FROM index_files WHERE id = ? AND status = 'success'",
         [id],
@@ -1201,26 +1201,26 @@ export async function openStore(
   }
 }
 
-function removeRegularCacheFile(path: string): void {
+function removeRegularStoreFile(path: string): void {
   const stat = ensureNotSymlink(path);
   if (!stat) return;
   if (!stat.isFile()) {
-    throw new StoreError("unsafe_path", path, `Refusing to remove non-file cache path: ${path}`);
+    throw new StoreError("unsafe_path", path, `Refusing to remove non-file store path: ${path}`);
   }
   unlinkSync(path);
 }
 
 /**
- * Explicit destructive recovery path. Call only after every connection to this cache is closed.
+ * Explicit destructive recovery path. Call only after every connection to this store is closed.
  */
 export async function rebuildStore(
   options: OpenStoreOptions = {},
 ): Promise<SqliteStore> {
   const path = options.path ?? STORE_FILE;
   try {
-    removeRegularCacheFile(`${path}-wal`);
-    removeRegularCacheFile(`${path}-shm`);
-    removeRegularCacheFile(path);
+    removeRegularStoreFile(`${path}-wal`);
+    removeRegularStoreFile(`${path}-shm`);
+    removeRegularStoreFile(path);
   } catch (error) {
     throw asStoreError(
       error,

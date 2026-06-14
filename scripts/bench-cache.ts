@@ -93,7 +93,7 @@ interface Workspace {
   root: string;
   opts: IncrementalParseOptions;
   changedFile: string;
-  cachePath: string;
+  storePath: string;
   allInputFiles: string[];
   allInputBytes: number;
 }
@@ -175,7 +175,7 @@ function copyFixtureWorkspace(fixtureRoot: string): Workspace {
   });
   cpSync(join(fixtureRoot, "gemini"), join(fixtures, "gemini"), { recursive: true });
 
-  const cachePath = join(root, "cache", "fragments.sqlite3");
+  const storePath = join(root, "cache", "fragments.sqlite3");
   const changedFile = join(
     fixtures,
     "codex-sessions",
@@ -193,7 +193,7 @@ function copyFixtureWorkspace(fixtureRoot: string): Workspace {
 
   return {
     root,
-    cachePath,
+    storePath,
     changedFile,
     allInputFiles,
     allInputBytes: sumFileSizes(allInputFiles),
@@ -203,7 +203,7 @@ function copyFixtureWorkspace(fixtureRoot: string): Workspace {
       codexSessionsDir: join(fixtures, "codex-sessions"),
       geminiDir: join(fixtures, "gemini"),
       sources: SOURCES,
-      cachePath,
+      storePath,
       agentsView: "off",
     },
   };
@@ -243,10 +243,10 @@ function mutateOneTranscript(path: string): void {
   appendFileSync(path, `\n${JSON.stringify(event)}`);
 }
 
-function cacheDbBytes(cachePath: string): CacheDbBytes {
-  const main = fileSize(cachePath);
-  const wal = fileSize(`${cachePath}-wal`);
-  const shm = fileSize(`${cachePath}-shm`);
+function cacheDbBytes(storePath: string): CacheDbBytes {
+  const main = fileSize(storePath);
+  const wal = fileSize(`${storePath}-wal`);
+  const shm = fileSize(`${storePath}-shm`);
   const sizes = [main, wal, shm].filter((value): value is number => typeof value === "number");
   return {
     main,
@@ -327,7 +327,7 @@ async function runScenario(
     stats,
     estimatedWork: estimateWork(scenario, workspace, stats),
     memory: memorySample(beforeRssBytes, afterRssBytes),
-    cacheDbBytes: cacheDbBytes(workspace.cachePath),
+    cacheDbBytes: cacheDbBytes(workspace.storePath),
     counts: {
       messages: details.parsed.messages.length,
       sessions: details.parsed.sessions.size,

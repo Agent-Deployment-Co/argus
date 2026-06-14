@@ -164,7 +164,7 @@ function uniqueDiagnostics(entries: ParserDiagnostic[]): ParserDiagnostic[] {
   return out;
 }
 
-function logCacheDiagnostics(
+function logSyncDiagnostics(
   diagnostics: ParserDiagnostic[],
   flags: Flags,
   log: Log,
@@ -172,10 +172,10 @@ function logCacheDiagnostics(
   const surfacedInfo = new Set([
     "agentsview_import_used",
     "agentsview_import_merged",
-    "cache_file_changed",
-    "cache_parser_version_changed",
-    "cache_contract_version_changed",
-    "cache_fragment_unavailable",
+    "reindex_file_changed",
+    "reindex_parser_version_changed",
+    "reindex_contract_version_changed",
+    "reindex_fragment_unavailable",
   ]);
   if (flags.agentsView === "off") surfacedInfo.add("agentsview_disabled");
   if (flags.agentsViewDatabasePath) surfacedInfo.add("agentsview_unavailable");
@@ -188,7 +188,7 @@ function logCacheDiagnostics(
   for (const entry of important) log(`  ! ${entry.message}`);
   for (const entry of info) log(`  i ${entry.message}`);
   const omitted = surfaced.length - important.length - info.length;
-  if (omitted > 0) log(`  i ${omitted} additional cache diagnostics omitted.`);
+  if (omitted > 0) log(`  i ${omitted} additional store diagnostics omitted.`);
 }
 
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
@@ -210,7 +210,7 @@ async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
     await store.close();
   }
   if (store.stats) log(`  ${syncStatsSummary(store.stats, store.diagnostics)}`);
-  logCacheDiagnostics(store.diagnostics, flags, log);
+  logSyncDiagnostics(store.diagnostics, flags, log);
 
   log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);
 

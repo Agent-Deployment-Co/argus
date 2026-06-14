@@ -11,7 +11,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type AuxiliaryParseResult,
   type AuxiliaryParserAdapter,
   type DiscoveredFile,
@@ -891,7 +891,7 @@ export function parseClaudeTranscriptFile(
       status: "current",
       fragment: {
         kind: "transcript",
-        id: stableCacheId("fragment", [file.file.id]),
+        id: stableId("fragment", [file.file.id]),
         contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
         parser: CLAUDE_TRANSCRIPT_PARSER,
         snapshot: {
@@ -984,7 +984,7 @@ export function parseClaudeHistoryFile(
             : a[1].position.recordIndex - b[1].position.recordIndex,
       )
       .map(([sourceSessionId, prompt]) => ({
-        id: stableCacheId("fact:session_first_prompt", [
+        id: stableId("fact:session_first_prompt", [
           sourceSessionId,
           prompt.position.originKey,
           prompt.position.recordIndex,
@@ -1002,7 +1002,7 @@ export function parseClaudeHistoryFile(
       status: "current",
       fragment: {
         kind: "auxiliary",
-        id: stableCacheId("auxiliary-fragment", [file.file.id]),
+        id: stableId("auxiliary-fragment", [file.file.id]),
         contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
         parser: CLAUDE_HISTORY_PARSER,
         snapshot: {

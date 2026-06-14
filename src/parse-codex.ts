@@ -5,7 +5,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type CompleteDiscovery,
   type DiscoveredFile,
   type DiscoveryResult,
@@ -673,7 +673,7 @@ export function parseCodexTranscript(
 
   return {
     kind: "transcript",
-    id: stableCacheId("fragment", [snapshot.file.id]),
+    id: stableId("fragment", [snapshot.file.id]),
     contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
     parser: CODEX_PARSER,
     snapshot,

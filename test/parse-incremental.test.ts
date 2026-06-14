@@ -35,7 +35,7 @@ function copyFixture(name: string, root: string): string {
   return target;
 }
 
-function cachePath(root: string): string {
+function storePath(root: string): string {
   return join(root, "cache", "fragments.sqlite3");
 }
 
@@ -197,7 +197,7 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir: copyFixture("codex-sessions", root),
       geminiDir: copyFixture("gemini", root),
       sources: ["claude", "codex", "gemini"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
@@ -217,7 +217,7 @@ describe("parseAllIncrementalDetailed", () => {
     const opts = {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
@@ -250,7 +250,7 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir,
       historyFile: join(copyFixture("history.jsonl", root)),
       sources: ["claude", "codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
@@ -264,7 +264,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(codexOnly.parsed.messages).toEqual([]);
     expect(codexOnly.stats.deleted).toBe(1);
 
-    const cache = await openStore({ path: opts.cachePath });
+    const cache = await openStore({ path: opts.storePath });
     try {
       expect((await cache.list("claude")).filter((row) => row.status === "success").length).toBeGreaterThan(0);
       expect((await cache.list("codex")).filter((row) => row.status === "success")).toEqual([]);
@@ -276,18 +276,18 @@ describe("parseAllIncrementalDetailed", () => {
   test("falls back to direct parsing when the cache cannot be opened", async () => {
     const root = tempRoot();
     mkdirSync(join(root, "cache"), { recursive: true });
-    const path = cachePath(root);
+    const path = storePath(root);
     writeFileSync(path, "not sqlite");
 
     const parsed = await parseAllIncrementalDetailed({
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
-      cachePath: path,
+      storePath: path,
       ...NO_AGENTSVIEW,
     });
 
     expect(parsed.stats.fallback).toBe(true);
-    expect(parsed.diagnostics[0]?.code).toBe("cache_fallback");
+    expect(parsed.diagnostics[0]?.code).toBe("store_fallback");
     expect(parsed.parsed.messages).toHaveLength(2);
   });
 
@@ -298,7 +298,7 @@ describe("parseAllIncrementalDetailed", () => {
     const opts = {
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       agentsViewDatabasePath: dbPath,
     };
 
@@ -316,7 +316,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(assisted.parsed.messages.length).toBe(native.messages.length + 1);
     expect(assisted.stats.imported).toBe(1);
 
-    const cache = await openStore({ path: opts.cachePath });
+    const cache = await openStore({ path: opts.storePath });
     try {
       expect((await cache.list()).some((row) => row.kind === "external" && row.status === "success")).toBe(true);
     } finally {
@@ -332,7 +332,7 @@ describe("parseAllIncrementalDetailed", () => {
     const assisted = await parseAllIncrementalDetailed({
       codexSessionsDir: join(root, "missing-codex"),
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       agentsViewDatabasePath: dbPath,
     });
 
@@ -352,12 +352,12 @@ describe("materialized fact rows", () => {
     const root = tempRoot();
     const dbPath = join(root, "agentsview.db");
     await createAgentsViewCodexDb(dbPath);
-    const cp = cachePath(root);
+    const cp = storePath(root);
 
     const assisted = await parseAllIncrementalDetailed({
       codexSessionsDir: join(root, "missing-codex"),
       sources: ["codex"] as AgentSource[],
-      cachePath: cp,
+      storePath: cp,
       agentsViewDatabasePath: dbPath,
     });
     expect(assisted.parsed.messages).toHaveLength(1);
@@ -390,7 +390,7 @@ describe("materialized read model", () => {
     projectsDir: copyFixture("projects", root),
     historyFile: join(copyFixture("history.jsonl", root)),
     sources: ["claude"] as AgentSource[],
-    cachePath: cachePath(root),
+    storePath: storePath(root),
     ...NO_AGENTSVIEW,
   });
 
@@ -429,7 +429,7 @@ describe("materialized read model", () => {
     const opts = {
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
     const first = (await parseAllIncrementalDetailed(opts)).parsed;
@@ -443,13 +443,13 @@ describe("materialized read model", () => {
     const codexSessionsDir = copyFixture("codex-sessions", root);
     const base = { codexSessionsDir, sources: ["codex"] as AgentSource[], ...NO_AGENTSVIEW };
 
-    const incrementalPath = cachePath(root);
-    await parseAllIncrementalDetailed({ ...base, cachePath: incrementalPath });
+    const incrementalPath = storePath(root);
+    await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath });
     rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
-    const incremental = (await parseAllIncrementalDetailed({ ...base, cachePath: incrementalPath })).parsed;
+    const incremental = (await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath })).parsed;
 
     const rebuilt = (
-      await parseAllIncrementalDetailed({ ...base, cachePath: join(root, "cache", "fresh.sqlite3") })
+      await parseAllIncrementalDetailed({ ...base, storePath: join(root, "cache", "fresh.sqlite3") })
     ).parsed;
 
     expect(comparable(incremental)).toEqual(comparable(rebuilt));

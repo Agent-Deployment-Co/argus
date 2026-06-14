@@ -3,8 +3,8 @@ import {
   isAuthoritativeDiscovery,
   sameFileFingerprint,
   type AuxiliaryParserAdapter,
-  type CachedFragmentMetadata,
-  type CacheFragment,
+  type FragmentMetadata,
+  type StoredFragment,
   type CompleteDiscovery,
   type DiscoveredFile,
   type DiscoveryResult,
@@ -47,9 +47,9 @@ export interface IncrementalParseDetails {
 }
 
 export interface IncrementalParseOptions extends ParseOptions {
-  cachePath?: string;
-  cache?: Store;
-  rebuildCache?: boolean;
+  storePath?: string;
+  store?: Store;
+  rebuild?: boolean;
   agentsView?: "auto" | "off";
   agentsViewDatabasePath?: string;
   /** SQL-pushdown filters applied when reading the materialized model. */
@@ -97,7 +97,7 @@ function diagnostic(
 }
 
 function auxiliaryStoreable(
-  fragment: CacheFragment | undefined,
+  fragment: StoredFragment | undefined,
   parser: AuxiliaryParserAdapter,
   file: CompleteDiscovery["files"][number],
 ): fragment is ParsedAuxiliaryFragment {
@@ -111,9 +111,9 @@ function auxiliaryStoreable(
   );
 }
 
-function cacheMissDiagnostic(
-  metadata: CachedFragmentMetadata | undefined,
-  fragment: CacheFragment | undefined,
+function reparseReason(
+  metadata: FragmentMetadata | undefined,
+  fragment: StoredFragment | undefined,
   parser: { name: string; source: AgentSource; version: string },
   file: CompleteDiscovery["files"][number],
   kind: "transcript" | "auxiliary",
@@ -122,29 +122,29 @@ function cacheMissDiagnostic(
   const label = `${parser.source} ${kind} ${file.file.relativePath}`;
   if (metadata.status !== "success") {
     return diagnostic(
-      "cache_previous_fragment_not_successful",
-      `Reparsing ${label} because the previous cached fragment is ${metadata.status}.`,
+      "reindex_previous_not_successful",
+      `Reparsing ${label} because the previous stored fragment is ${metadata.status}.`,
       "info",
     );
   }
   if (!fragment) {
     return diagnostic(
-      "cache_fragment_unavailable",
-      `Reparsing ${label} because cached metadata exists but the fragment could not be loaded.`,
+      "reindex_fragment_unavailable",
+      `Reparsing ${label} because stored metadata exists but the fragment could not be loaded.`,
       "warning",
     );
   }
   if (fragment.kind !== kind) {
     return diagnostic(
-      "cache_fragment_kind_changed",
-      `Reparsing ${label} because the cached fragment kind changed from ${fragment.kind}.`,
+      "reindex_kind_changed",
+      `Reparsing ${label} because the stored fragment kind changed from ${fragment.kind}.`,
       "info",
     );
   }
   if (fragment.contractVersion !== 1) {
     return diagnostic(
-      "cache_contract_version_changed",
-      `Reparsing ${label} because the cached contract version is ${fragment.contractVersion}.`,
+      "reindex_contract_version_changed",
+      `Reparsing ${label} because the stored contract version is ${fragment.contractVersion}.`,
       "info",
     );
   }
@@ -154,34 +154,34 @@ function cacheMissDiagnostic(
     fragment.parser.version !== parser.version
   ) {
     return diagnostic(
-      "cache_parser_version_changed",
+      "reindex_parser_version_changed",
       `Reparsing ${label} because the parser changed from ${fragment.parser.name}@${fragment.parser.version} to ${parser.name}@${parser.version}.`,
       "info",
     );
   }
   if (!sameFileFingerprint(fragment.snapshot.fingerprint, file.fingerprint)) {
     return diagnostic(
-      "cache_file_changed",
+      "reindex_file_changed",
       `Reparsing ${label} because its filesystem fingerprint changed.`,
       "info",
     );
   }
   return diagnostic(
-    "cache_fragment_not_reusable",
-    `Reparsing ${label} because the cached fragment was not reusable.`,
+    "reindex_not_reusable",
+    `Reparsing ${label} because the stored fragment was not reusable.`,
     "info",
   );
 }
 
-async function cachedFragmentsForRoot(
-  cache: Store,
+async function storedFragmentsForRoot(
+  store: Store,
   source: AgentSource,
   rootId: string,
 ): Promise<Array<ParsedFileFragment | ParsedAuxiliaryFragment>> {
   const out: Array<ParsedFileFragment | ParsedAuxiliaryFragment> = [];
-  for (const metadata of await cache.list(source)) {
+  for (const metadata of await store.list(source)) {
     if (metadata.status !== "success") continue;
-    const fragment = await cache.load(metadata.id);
+    const fragment = await store.load(metadata.id);
     if (
       fragment?.kind !== "transcript" &&
       fragment?.kind !== "auxiliary"
@@ -194,7 +194,7 @@ async function cachedFragmentsForRoot(
 }
 
 async function collectAuxiliaryFragments(
-  cache: Store,
+  store: Store,
   discovery: DiscoveryResult,
   parser: AuxiliaryParserAdapter,
   stats: SyncStats,
@@ -206,29 +206,29 @@ async function collectAuxiliaryFragments(
     stats.incompleteDiscoveries++;
     diagnostics.push(
       diagnostic(
-        "incomplete_auxiliary_discovery_using_cached_fragments",
-        `Using cached auxiliary fragments because discovery was ${discovery.status}: ${discovery.rootPath}`,
+        "incomplete_auxiliary_discovery_using_stored_fragments",
+        `Using stored auxiliary fragments because discovery was ${discovery.status}: ${discovery.rootPath}`,
       ),
     );
-    return (await cachedFragmentsForRoot(cache, discovery.source, discovery.rootId))
+    return (await storedFragmentsForRoot(store, discovery.source, discovery.rootId))
       .filter((fragment): fragment is ParsedAuxiliaryFragment => fragment.kind === "auxiliary");
   }
 
   const metadataByFile = new Map(
-    (await cache.list(discovery.source))
+    (await store.list(discovery.source))
       .filter((metadata) => metadata.fileId)
       .map((metadata) => [metadata.fileId!, metadata]),
   );
   const fragments: ParsedAuxiliaryFragment[] = [];
   for (const file of discovery.files) {
     const metadata = metadataByFile.get(file.file.id);
-    const cached = metadata?.status === "success" ? await cache.load(metadata.id) : undefined;
-    if (auxiliaryStoreable(cached, parser, file)) {
+    const stored = metadata?.status === "success" ? await store.load(metadata.id) : undefined;
+    if (auxiliaryStoreable(stored, parser, file)) {
       stats.hits++;
-      fragments.push(cached);
+      fragments.push(stored);
       continue;
     }
-    const miss = cacheMissDiagnostic(metadata, cached, parser.parser, file, "auxiliary");
+    const miss = reparseReason(metadata, stored, parser.parser, file, "auxiliary");
     if (miss) diagnostics.push(miss);
 
     const result = parser.parseFile(file);
@@ -236,17 +236,17 @@ async function collectAuxiliaryFragments(
       diagnostics.push(...result.fragment.diagnostics);
       stats.parsed++;
       stats.replaced++;
-      await cache.replace(result.fragment);
+      await store.replace(result.fragment);
       fragments.push(result.fragment);
       changed?.add(result.fragment.id);
     } else {
       diagnostics.push(...result.diagnostics);
-      if (metadata) await cache.invalidate([metadata.id], "auxiliary_input_changed");
+      if (metadata) await store.invalidate([metadata.id], "auxiliary_input_changed");
       if (result.status === "unstable") stats.unstable++;
       else stats.failed++;
     }
   }
-  await cache.removeMissing(discovery);
+  await store.removeMissing(discovery);
   return fragments;
 }
 
@@ -304,7 +304,7 @@ function canonicalizer(
  */
 async function syncStore(
   opts: IncrementalParseOptions,
-  cache: Store,
+  store: Store,
   stats: SyncStats,
   diagnostics: ParserDiagnostic[],
 ): Promise<void> {
@@ -326,7 +326,7 @@ async function syncStore(
     const aux =
       producer.discoverAuxiliary && producer.auxiliaryParser
         ? await collectAuxiliaryFragments(
-            cache,
+            store,
             producer.discoverAuxiliary(ctx),
             producer.auxiliaryParser(),
             stats,
@@ -345,14 +345,14 @@ async function syncStore(
           `Keeping existing ${discovery.source} sessions because discovery was ${discovery.status}: ${discovery.rootPath}`,
         ),
       );
-      const existing = await cache.resolvedSessionIdsForOwner(producer.id);
+      const existing = await store.resolvedSessionIdsForOwner(producer.id);
       nativeFragmentCount += existing.length;
       if (existing.length) nativeSources.add(producer.source);
       continue;
     }
 
     const parser = producer.transcriptParser();
-    const before = await cache.transcriptIndex(producer.source);
+    const before = await store.transcriptIndex(producer.source);
     const storedByFileId = new Map(before.fragments.map((entry) => [entry.file.id, entry]));
     const parsedById = new Map<string, ParsedFileFragment>();
     const changedFragments: ParsedFileFragment[] = [];
@@ -373,7 +373,7 @@ async function syncStore(
       if (stored) {
         diagnostics.push(
           diagnostic(
-            "cache_file_changed",
+            "reindex_file_changed",
             `Reparsing ${producer.source} transcript ${file.file.relativePath} because it changed.`,
             "info",
           ),
@@ -384,19 +384,19 @@ async function syncStore(
         stats.parsed++;
         stats.replaced++;
         diagnostics.push(...result.fragment.diagnostics);
-        await cache.replace(result.fragment); // writes the light index only
+        await store.replace(result.fragment); // writes the light index only
         changedFragments.push(result.fragment);
         parsedById.set(result.fragment.id, result.fragment);
       } else {
         diagnostics.push(...result.diagnostics);
-        if (stored) await cache.invalidate([stored.fragmentId], "file_changed");
+        if (stored) await store.invalidate([stored.fragmentId], "file_changed");
         if (result.status === "unstable") stats.unstable++;
         else stats.failed++;
       }
     }
 
-    await cache.removeMissing(discovery);
-    const after = await cache.transcriptIndex(producer.source);
+    await store.removeMissing(discovery);
+    const after = await store.transcriptIndex(producer.source);
     const afterIds = new Set(after.fragments.map((entry) => entry.fragmentId));
     const deletions = before.fragments.some(
       (entry) => entry.status === "success" && !afterIds.has(entry.fragmentId),
@@ -441,19 +441,19 @@ async function syncStore(
         auxiliaryFragments: aux,
         canonicalIds: touched,
       });
-      await cache.materializeSessions(producer.id, toMaterializeSessions(output));
+      await store.materializeSessions(producer.id, toMaterializeSessions(output));
     }
 
-    const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
-    await cache.retractSessions(prevOwned.filter((id) => !currentCanonical.has(id)));
-    await cache.setCoverage(producer.id, filesDigest(discovery.files), currentCanonical.size);
+    const prevOwned = await store.resolvedSessionIdsForOwner(producer.id);
+    await store.retractSessions(prevOwned.filter((id) => !currentCanonical.has(id)));
+    await store.setCoverage(producer.id, filesDigest(discovery.files), currentCanonical.size);
   }
 
   for (const producer of IMPORT_PRODUCERS) {
     const imported = await gatherImportedFragments(
       producer,
       ctx,
-      cache,
+      store,
       stats,
       diagnostics,
       requested,
@@ -461,8 +461,8 @@ async function syncStore(
     );
     importedCount += imported.length;
     // Read ownership *after* natives materialized, so handed-off sessions are excluded.
-    const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
-    const nativeOwned = await cache.ownedSessionIdsExcept(producer.id);
+    const prevOwned = await store.resolvedSessionIdsForOwner(producer.id);
+    const nativeOwned = await store.ownedSessionIdsExcept(producer.id);
     const converted = imported
       .map(convertImported)
       .filter((fragment): fragment is ParsedFileFragment => !!fragment);
@@ -483,9 +483,9 @@ async function syncStore(
               auxiliaryFragments: allAuxiliary,
               canonicalIds: unowned,
             });
-      await cache.materializeSessions(producer.id, toMaterializeSessions(output));
+      await store.materializeSessions(producer.id, toMaterializeSessions(output));
     }
-    await cache.retractSessions(prevOwned.filter((id) => !unowned.has(id)));
+    await store.retractSessions(prevOwned.filter((id) => !unowned.has(id)));
   }
 
   if (
@@ -500,7 +500,7 @@ async function syncStore(
 async function gatherImportedFragments(
   producer: ImportProducer,
   ctx: ProducerContext,
-  cache: Store,
+  store: Store,
   stats: SyncStats,
   diagnostics: ParserDiagnostic[],
   requestedSources: Set<string>,
@@ -526,16 +526,16 @@ async function gatherImportedFragments(
     return [];
   }
 
-  const staleExternal = (await cache.list())
+  const staleExternal = (await store.list())
     .filter((metadata) => metadata.kind === "external" && metadata.status === "success")
     .map((metadata) => metadata.id);
-  if (staleExternal.length) await cache.invalidate(staleExternal, "external_import_changed");
+  if (staleExternal.length) await store.invalidate(staleExternal, "external_import_changed");
 
   const imported = (await importer.importFragments(probe)).filter((fragment) => {
     const source = fragment.provenance.coverage[0]?.source;
     return !!source && requestedSources.has(source);
   });
-  for (const fragment of imported) await cache.replace(fragment);
+  for (const fragment of imported) await store.replace(fragment);
   stats.imported += imported.length;
 
   for (const fragment of imported) {
@@ -559,20 +559,20 @@ export async function parseAllIncrementalDetailed(
 ): Promise<IncrementalParseDetails> {
   const stats = cloneStats();
   const diagnostics: ParserDiagnostic[] = [];
-  let cache = opts.cache;
-  let ownsCache = false;
+  let store = opts.store;
+  let ownsStore = false;
   try {
-    if (!cache) {
-      cache = opts.rebuildCache
-        ? await rebuildStore({ path: opts.cachePath })
-        : await openStore({ path: opts.cachePath });
-      ownsCache = true;
+    if (!store) {
+      store = opts.rebuild
+        ? await rebuildStore({ path: opts.storePath })
+        : await openStore({ path: opts.storePath });
+      ownsStore = true;
     }
     // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with
     // optional SQL pushdown). `parseAll` (direct disk parse) is the test oracle.
-    await syncStore(opts, cache, stats, diagnostics);
+    await syncStore(opts, store, stats, diagnostics);
     return {
-      parsed: await cache.readResolved({
+      parsed: await store.readResolved({
         sources: normalizeSources(opts.sources) as AgentSource[],
         since: opts.query?.since,
         until: opts.query?.until,
@@ -584,8 +584,8 @@ export async function parseAllIncrementalDetailed(
   } catch (error) {
     diagnostics.push(
       diagnostic(
-        "cache_fallback",
-        `Falling back to uncached parsing because the store failed: ${
+        "store_fallback",
+        `Falling back to unstored parsing because the store failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "error",
@@ -597,7 +597,7 @@ export async function parseAllIncrementalDetailed(
       diagnostics,
     };
   } finally {
-    if (ownsCache && cache) await cache.close();
+    if (ownsStore && store) await store.close();
   }
 }
 
@@ -623,12 +623,12 @@ export interface SourceScan {
 export async function scanStore(opts: IncrementalParseOptions = {}): Promise<SourceScan[]> {
   const ctx = producerContext(opts);
   const requested = new Set<string>(normalizeSources(opts.sources));
-  const cache = opts.cache ?? (await openStore({ path: opts.cachePath }));
+  const store = opts.store ?? (await openStore({ path: opts.storePath }));
   try {
     const out: SourceScan[] = [];
     for (const producer of NATIVE_PRODUCERS) {
       if (!requested.has(producer.source)) continue;
-      const coverage = await cache.getCoverage(producer.id);
+      const coverage = await store.getCoverage(producer.id);
       const discovery = producer.discoverTranscripts(ctx);
       const currentDigest = isAuthoritativeDiscovery(discovery)
         ? filesDigest(discovery.files)
@@ -642,7 +642,7 @@ export async function scanStore(opts: IncrementalParseOptions = {}): Promise<Sou
     }
     return out;
   } finally {
-    if (!opts.cache) await cache.close();
+    if (!opts.store) await store.close();
   }
 }
 
