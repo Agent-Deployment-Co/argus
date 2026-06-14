@@ -95,7 +95,7 @@ function fingerprintFromStat(stat: BigIntStats): FileFingerprint {
     mtimeNs: stat.mtimeNs.toString(),
     ctimeNs: stat.ctimeNs.toString(),
     physicalId: {
-      scheme: process.platform === "win32" ? "windows_file_id" : "posix_dev_inode",
+      scheme: process.platform === "win32" ? "windows_file_identity" : "posix_dev_inode",
       value: `${stat.dev}:${stat.ino}`,
     },
   };

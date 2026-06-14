@@ -32,7 +32,7 @@ export interface FileIdentity {
 export type FileIdentityInput = Omit<FileIdentity, "id">;
 
 export interface PhysicalFileIdentity {
-  scheme: "posix_dev_inode" | "windows_file_id";
+  scheme: "posix_dev_inode" | "windows_file_identity";
   value: string;
 }
 
@@ -387,7 +387,25 @@ export interface SourceCoverageRow {
   sessionCount: number;
 }
 
-export interface FactStore {
+/** A transcript fragment's structural index entry — enough to detect change and re-parse its file. */
+export interface TranscriptIndexEntry {
+  fragmentId: string;
+  file: FileIdentity;
+  fingerprint: FileFingerprint;
+  parserName: string | null;
+  parserVersion: string | null;
+  status: CachedFragmentMetadata["status"];
+  /** Source session ids this fragment contributes (pre-canonicalization). */
+  sourceSessionIds: string[];
+}
+
+/** The structural index for one source: per-fragment session mapping + subagent relationships. */
+export interface TranscriptIndex {
+  fragments: TranscriptIndexEntry[];
+  relationships: Array<{ child: string; parent: string }>;
+}
+
+export interface Store {
   load(id: string): Promise<CacheFragment | undefined>;
   list(source?: AgentSource): Promise<CachedFragmentMetadata[]>;
   replace(fragment: CacheFragment): Promise<void>;
@@ -398,6 +416,9 @@ export interface FactStore {
    * materialized `fact_*` rows + per-fragment envelope. Unknown or non-success ids are skipped.
    */
   reconstructFromRows(ids: string[]): Promise<ReconstructedFragments>;
+  /** The structural index for a source: which sessions each transcript file maps to (+ fingerprints
+   *  for change detection). Heavy content is re-parsed from disk, not reconstructed. */
+  transcriptIndex(source: AgentSource): Promise<TranscriptIndex>;
 
   // --- Trusted read model (reconciled rows; the reader SELECTs these without reconciling) ---
   /** Read the reconciled sessions/messages/tool-results, with optional SQL-pushdown filters. */

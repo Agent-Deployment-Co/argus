@@ -9,7 +9,7 @@ import {
   type CacheFragment,
   type CompleteDiscovery,
   type DiscoveryResult,
-  type FactStore,
+  type Store,
   type ImportedFragment,
   type MaterializeSession,
   type ParsedAuxiliaryFragment,
@@ -19,7 +19,7 @@ import {
   type ResolvedQuery,
   type TranscriptParserAdapter,
 } from "./store-contract.ts";
-import { openFactStore, rebuildFactStore } from "./store.ts";
+import { openStore, rebuildStore } from "./store.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import {
   CLAUDE_TRANSCRIPT_PARSER,
@@ -77,7 +77,7 @@ export interface IncrementalParseDetails {
 
 export interface IncrementalParseOptions extends ParseOptions {
   cachePath?: string;
-  cache?: FactStore;
+  cache?: Store;
   noCache?: boolean;
   rebuildCache?: boolean;
   agentsView?: "auto" | "off";
@@ -123,7 +123,7 @@ function diagnostic(
   return { code, severity, phase: "reconcile", message };
 }
 
-function transcriptFactStoreable(
+function transcriptStoreable(
   fragment: CacheFragment | undefined,
   parser: TranscriptParserAdapter,
   file: CompleteDiscovery["files"][number],
@@ -138,7 +138,7 @@ function transcriptFactStoreable(
   );
 }
 
-function auxiliaryFactStoreable(
+function auxiliaryStoreable(
   fragment: CacheFragment | undefined,
   parser: AuxiliaryParserAdapter,
   file: CompleteDiscovery["files"][number],
@@ -216,7 +216,7 @@ function cacheMissDiagnostic(
 }
 
 async function cachedFragmentsForRoot(
-  cache: FactStore,
+  cache: Store,
   source: AgentSource,
   rootId: string,
 ): Promise<Array<ParsedFileFragment | ParsedAuxiliaryFragment>> {
@@ -236,7 +236,7 @@ async function cachedFragmentsForRoot(
 }
 
 async function collectTranscriptFragments(
-  cache: FactStore,
+  cache: Store,
   discovery: DiscoveryResult,
   parser: TranscriptParserAdapter,
   stats: IncrementalCacheStats,
@@ -265,7 +265,7 @@ async function collectTranscriptFragments(
   for (const file of discovery.files) {
     const metadata = metadataByFile.get(file.file.id);
     const cached = metadata?.status === "success" ? await cache.load(metadata.id) : undefined;
-    if (transcriptFactStoreable(cached, parser, file)) {
+    if (transcriptStoreable(cached, parser, file)) {
       stats.hits++;
       fragments.push(cached);
       continue;
@@ -299,7 +299,7 @@ async function collectTranscriptFragments(
 }
 
 async function collectAuxiliaryFragments(
-  cache: FactStore,
+  cache: Store,
   discovery: DiscoveryResult,
   parser: AuxiliaryParserAdapter,
   stats: IncrementalCacheStats,
@@ -328,7 +328,7 @@ async function collectAuxiliaryFragments(
   for (const file of discovery.files) {
     const metadata = metadataByFile.get(file.file.id);
     const cached = metadata?.status === "success" ? await cache.load(metadata.id) : undefined;
-    if (auxiliaryFactStoreable(cached, parser, file)) {
+    if (auxiliaryStoreable(cached, parser, file)) {
       stats.hits++;
       fragments.push(cached);
       continue;
@@ -671,6 +671,16 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   return sessions;
 }
 
+/** Map a source session id to its canonical id (subagent child -> parent) for a producer. */
+function canonicalizer(
+  caps: { canonicalizeSubagents: boolean },
+  relationships: Array<{ child: string; parent: string }>,
+): (sourceSessionId: string) => string {
+  if (!caps.canonicalizeSubagents) return (sid) => sid;
+  const parentByChild = new Map(relationships.map((r) => [r.child, r.parent]));
+  return (sid) => parentByChild.get(sid) ?? sid;
+}
+
 /**
  * The coordinator: each native producer discovers + parses its sessions and re-materializes the
  * **touched** canonical sessions into the trusted read model; dependent import producers then fill
@@ -678,7 +688,7 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
  */
 async function syncStore(
   opts: IncrementalParseOptions,
-  cache: FactStore,
+  cache: Store,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
 ): Promise<void> {
@@ -686,21 +696,16 @@ async function syncStore(
   const requested = new Set<string>(normalizeSources(opts.sources));
   let nativeFragmentCount = 0;
   let importedCount = 0;
-  const allNativeFragments: ParsedFileFragment[] = [];
+  const nativeSources = new Set<string>();
   const allAuxiliary: ParsedAuxiliaryFragment[] = [];
 
   for (const producer of NATIVE_PRODUCERS) {
     if (!requested.has(producer.source)) continue;
     const discovery = producer.discoverTranscripts(ctx);
-    const transcriptChanged = new Set<string>();
-    const transcripts = await collectTranscriptFragments(
-      cache,
-      discovery,
-      producer.transcriptParser(),
-      stats,
-      diagnostics,
-      transcriptChanged,
-    );
+    diagnostics.push(...discovery.diagnostics);
+
+    // Auxiliary facts are small and still reconstructed from rows (re-parsing history.jsonl every
+    // run would be costly). They feed reconcile (cwd/first-prompt) and the auxChanged signal.
     const auxChanged = new Set<string>();
     const aux =
       producer.discoverAuxiliary && producer.auxiliaryParser
@@ -713,41 +718,119 @@ async function syncStore(
             auxChanged,
           )
         : [];
-    nativeFragmentCount += transcripts.length;
-    allNativeFragments.push(...transcripts);
     allAuxiliary.push(...aux);
 
-    const currentCanonical = canonicalSessionIds(
-      producer.capabilities,
-      selectAlternateRepresentations(transcripts),
-    );
-    const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
-    const deletionsOccurred = prevOwned.some((id) => !currentCanonical.has(id));
-
-    // Re-materialize the touched sessions. A deletion can shrink a multi-file session and aux
-    // changes can refill cwd/first-prompt across sessions, so both widen "touched" to everything
-    // (rare; keeps the result identical to a full reindex). Likewise an incomplete discovery.
-    let touched: Set<string>;
-    if (!isAuthoritativeDiscovery(discovery) || auxChanged.size > 0 || deletionsOccurred) {
-      touched = currentCanonical;
-    } else {
-      const changedFragments = transcripts.filter((fragment) => transcriptChanged.has(fragment.id));
-      touched = canonicalSessionIds(producer.capabilities, changedFragments);
+    if (!isAuthoritativeDiscovery(discovery)) {
+      // Can't re-parse reliably or detect deletions; keep existing resolved sessions (last-known).
+      stats.incompleteDiscoveries++;
+      diagnostics.push(
+        diagnostic(
+          "incomplete_discovery_keeps_resolved",
+          `Keeping existing ${discovery.source} sessions because discovery was ${discovery.status}: ${discovery.rootPath}`,
+        ),
+      );
+      const existing = await cache.resolvedSessionIdsForOwner(producer.id);
+      nativeFragmentCount += existing.length;
+      if (existing.length) nativeSources.add(producer.source);
+      continue;
     }
 
+    const parser = producer.transcriptParser();
+    const before = await cache.transcriptIndex(producer.source);
+    const storedByFileId = new Map(before.fragments.map((entry) => [entry.file.id, entry]));
+    const parsedById = new Map<string, ParsedFileFragment>();
+    const changedFragments: ParsedFileFragment[] = [];
+
+    // Scan: parse only files whose fingerprint changed (no reconstruct of unchanged files).
+    for (const file of discovery.files) {
+      const stored = storedByFileId.get(file.file.id);
+      const hit =
+        !!stored &&
+        stored.status === "success" &&
+        stored.parserName === parser.parser.name &&
+        stored.parserVersion === parser.parser.version &&
+        sameFileFingerprint(stored.fingerprint, file.fingerprint);
+      if (hit) {
+        stats.hits++;
+        continue;
+      }
+      if (stored) {
+        diagnostics.push(
+          diagnostic(
+            "cache_file_changed",
+            `Reparsing ${producer.source} transcript ${file.file.relativePath} because it changed.`,
+            "info",
+          ),
+        );
+      }
+      const result = parser.parseFile(file);
+      if (result.status === "current") {
+        stats.parsed++;
+        stats.replaced++;
+        diagnostics.push(...result.fragment.diagnostics);
+        await cache.replace(result.fragment); // writes the light index only
+        changedFragments.push(result.fragment);
+        parsedById.set(result.fragment.id, result.fragment);
+      } else {
+        diagnostics.push(...result.diagnostics);
+        if (stored) await cache.invalidate([stored.fragmentId], "file_changed");
+        if (result.status === "unstable") stats.unstable++;
+        else stats.failed++;
+      }
+    }
+
+    await cache.removeMissing(discovery);
+    const after = await cache.transcriptIndex(producer.source);
+    const afterIds = new Set(after.fragments.map((entry) => entry.fragmentId));
+    const deletions = before.fragments.some(
+      (entry) => entry.status === "success" && !afterIds.has(entry.fragmentId),
+    );
+    if (deletions) {
+      stats.deleted += before.fragments.filter(
+        (entry) => entry.status === "success" && !afterIds.has(entry.fragmentId),
+      ).length;
+    }
+    nativeFragmentCount += after.fragments.length;
+    if (after.fragments.length) nativeSources.add(producer.source);
+
+    const canon = canonicalizer(producer.capabilities, after.relationships);
+    const currentCanonical = new Set<string>();
+    for (const entry of after.fragments) {
+      for (const sid of entry.sourceSessionIds) currentCanonical.add(canon(sid));
+    }
+
+    // Touched = canonical sessions of changed files; widen to everything on deletion / aux change
+    // (both can affect sessions whose own files didn't change). Keeps results == a full reindex.
+    const touched =
+      auxChanged.size > 0 || deletions
+        ? currentCanonical
+        : canonicalSessionIds(producer.capabilities, changedFragments);
+
     if (touched.size) {
+      // Re-parse every file of each touched session from disk (reuse already-parsed changed files).
+      const fragments: ParsedFileFragment[] = [];
+      for (const entry of after.fragments) {
+        if (!entry.sourceSessionIds.some((sid) => touched.has(canon(sid)))) continue;
+        const existing = parsedById.get(entry.fragmentId);
+        if (existing) {
+          fragments.push(existing);
+          continue;
+        }
+        const result = parser.parseFile({ file: entry.file, fingerprint: entry.fingerprint });
+        if (result.status === "current") fragments.push(result.fragment);
+      }
       const output = reconcileSessions({
         caps: producer.capabilities,
-        fragments: transcripts,
+        fragments,
         auxiliaryFragments: aux,
         canonicalIds: touched,
       });
       await cache.materializeSessions(producer.id, toMaterializeSessions(output));
     }
+
+    const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
     await cache.retractSessions(prevOwned.filter((id) => !currentCanonical.has(id)));
-    if (isAuthoritativeDiscovery(discovery)) {
-      await cache.setCoverage(producer.id, null, currentCanonical.size);
-    }
+    await cache.setCoverage(producer.id, null, currentCanonical.size);
   }
 
   for (const producer of IMPORT_PRODUCERS) {
@@ -758,7 +841,7 @@ async function syncStore(
       stats,
       diagnostics,
       requested,
-      allNativeFragments,
+      nativeSources,
     );
     importedCount += imported.length;
     // Read ownership *after* natives materialized, so handed-off sessions are excluded.
@@ -801,11 +884,11 @@ async function syncStore(
 async function gatherImportedFragments(
   producer: ImportProducer,
   ctx: ProducerContext,
-  cache: FactStore,
+  cache: Store,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
   requestedSources: Set<string>,
-  nativeFragments: ParsedFileFragment[],
+  nativeSources: Set<string>,
 ): Promise<ImportedFragment[]> {
   const importer = producer.importer(ctx);
   if (!importer) {
@@ -839,7 +922,6 @@ async function gatherImportedFragments(
   for (const fragment of imported) await cache.replace(fragment);
   stats.imported += imported.length;
 
-  const nativeSources = new Set(nativeFragments.map((fragment) => fragment.parser.source));
   for (const fragment of imported) {
     const source = fragment.provenance.coverage[0]?.source;
     if (!source) continue;
@@ -874,8 +956,8 @@ export async function parseAllIncrementalDetailed(
   try {
     if (!cache) {
       cache = opts.rebuildCache
-        ? await rebuildFactStore({ path: opts.cachePath })
-        : await openFactStore({ path: opts.cachePath });
+        ? await rebuildStore({ path: opts.cachePath })
+        : await openStore({ path: opts.cachePath });
       ownsCache = true;
     }
     // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with

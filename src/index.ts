@@ -27,7 +27,7 @@ import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
-import { openFactStore, rebuildFactStore } from "./store.ts";
+import { openStore, rebuildStore } from "./store.ts";
 
 interface Flags {
   command: "report" | "push" | "login" | "cache-status" | "cache-rebuild";
@@ -384,7 +384,7 @@ async function runCacheStatus(log: Log): Promise<void> {
   log(`Cache path: ${STORE_FILE}`);
   let cache;
   try {
-    cache = await openFactStore();
+    cache = await openStore();
   } catch (err) {
     log(`Cache unavailable: ${err instanceof Error ? err.message : String(err)}`);
     log("Run `argus cache-rebuild` to recreate the local fragment cache.");
@@ -425,7 +425,7 @@ async function runCacheStatus(log: Log): Promise<void> {
 }
 
 async function runCacheRebuild(log: Log): Promise<void> {
-  const cache = await rebuildFactStore();
+  const cache = await rebuildStore();
   await cache.close();
   log("Rebuilt local Argus fragment cache.");
 }
