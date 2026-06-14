@@ -37,6 +37,14 @@ import {
   discoverGeminiAuxiliaryFiles,
 } from "./parse-gemini.ts";
 import { parseAll, projectLabel, type ParseOptions, type TranscriptSource } from "./parse.ts";
+import {
+  convertImported,
+  mergeReconciled,
+  reconcileSessions,
+  type ReconciledPart,
+} from "./reconcile.ts";
+import type { ImportProducer, ProducerContext } from "./producer.ts";
+import { IMPORT_PRODUCERS, NATIVE_PRODUCERS } from "./producers/index.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import type {
   AgentSource,
@@ -618,94 +626,134 @@ export function reconcileFragments(input: ReconciliationInput): ParseResult {
   };
 }
 
-async function gatherNativeFragments(
+function producerContext(opts: IncrementalParseOptions): ProducerContext {
+  return {
+    projectsDir: opts.projectsDir,
+    historyFile: opts.historyFile,
+    codexSessionsDir: opts.codexSessionsDir,
+    geminiDir: opts.geminiDir,
+    agentsViewDatabasePath: opts.agentsViewDatabasePath,
+    agentsView: opts.agentsView,
+  };
+}
+
+/**
+ * The coordinator: each native producer discovers + parses + reconciles its own sessions (with its
+ * own capabilities), then dependent import producers materialize only sessions no native owns. The
+ * merged result is the trusted, fully reconciled `ParseResult` — the reader never reconciles.
+ */
+async function collectAndReconcile(
   opts: IncrementalParseOptions,
   cache: FragmentCache,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
-): Promise<{ nativeFragments: ParsedFileFragment[]; auxiliaryFragments: ParsedAuxiliaryFragment[] }> {
-  const sources = normalizeSources(opts.sources);
+): Promise<ParseResult> {
+  const ctx = producerContext(opts);
+  const requested = new Set<string>(normalizeSources(opts.sources));
+  const parts: ReconciledPart[] = [];
+  const owned = new Set<string>();
   const nativeFragments: ParsedFileFragment[] = [];
   const auxiliaryFragments: ParsedAuxiliaryFragment[] = [];
 
-  if (sources.includes("claude")) {
-    nativeFragments.push(
-      ...(await collectTranscriptFragments(
-        cache,
-        createClaudeTranscriptDiscoveryAdapter(opts.projectsDir).discover(),
-        createClaudeTranscriptParserAdapter(),
-        stats,
-        diagnostics,
-      )),
+  for (const producer of NATIVE_PRODUCERS) {
+    if (!requested.has(producer.source)) continue;
+    const transcripts = await collectTranscriptFragments(
+      cache,
+      producer.discoverTranscripts(ctx),
+      producer.transcriptParser(),
+      stats,
+      diagnostics,
     );
-    auxiliaryFragments.push(
-      ...(await collectAuxiliaryFragments(
-        cache,
-        discoverClaudeHistory(opts.historyFile),
-        createClaudeHistoryParserAdapter(),
-        stats,
-        diagnostics,
-      )),
-    );
+    const aux =
+      producer.discoverAuxiliary && producer.auxiliaryParser
+        ? await collectAuxiliaryFragments(
+            cache,
+            producer.discoverAuxiliary(ctx),
+            producer.auxiliaryParser(),
+            stats,
+            diagnostics,
+          )
+        : [];
+    nativeFragments.push(...transcripts);
+    auxiliaryFragments.push(...aux);
+    const result = reconcileSessions({
+      caps: producer.capabilities,
+      fragments: transcripts,
+      auxiliaryFragments: aux,
+    });
+    for (const sid of result.sessions.keys()) owned.add(sid);
+    parts.push({ result, dependsOnNative: false });
   }
 
-  if (sources.includes("codex")) {
-    nativeFragments.push(
-      ...(await collectTranscriptFragments(
-        cache,
-        createCodexTranscriptDiscoveryAdapter(opts.codexSessionsDir).discover(),
-        createCodexTranscriptParserAdapter(),
-        stats,
-        diagnostics,
-      )),
+  let importedCount = 0;
+  for (const producer of IMPORT_PRODUCERS) {
+    const imported = await gatherImportedFragments(
+      producer,
+      ctx,
+      cache,
+      stats,
+      diagnostics,
+      requested,
+      nativeFragments,
     );
+    importedCount += imported.length;
+    const converted = imported
+      .map(convertImported)
+      .filter((fragment): fragment is ParsedFileFragment => !!fragment);
+    if (!converted.length) continue;
+    const full = reconcileSessions({
+      caps: producer.capabilities,
+      fragments: converted,
+      auxiliaryFragments,
+    });
+    const unowned = new Set([...full.sessions.keys()].filter((id) => !owned.has(id)));
+    const result =
+      unowned.size === full.sessions.size
+        ? full
+        : reconcileSessions({
+            caps: producer.capabilities,
+            fragments: converted,
+            auxiliaryFragments,
+            canonicalIds: unowned,
+          });
+    for (const sid of result.sessions.keys()) owned.add(sid);
+    parts.push({ result, dependsOnNative: true });
   }
 
-  if (sources.includes("gemini")) {
-    nativeFragments.push(
-      ...(await collectTranscriptFragments(
-        cache,
-        createGeminiTranscriptDiscoveryAdapter(opts.geminiDir).discover(),
-        createGeminiTranscriptParserAdapter(),
-        stats,
-        diagnostics,
-      )),
-    );
-    auxiliaryFragments.push(
-      ...(await collectAuxiliaryFragments(
-        cache,
-        discoverGeminiAuxiliaryFiles(opts.geminiDir),
-        createGeminiAuxiliaryParserAdapter(),
-        stats,
-        diagnostics,
-      )),
-    );
+  if (
+    nativeFragments.length === 0 &&
+    importedCount === 0 &&
+    diagnostics.some((entry) => entry.phase === "discovery" && entry.code === "missing_root")
+  ) {
+    throw new Error("No transcript roots were available for incremental parsing");
   }
 
-  return { nativeFragments, auxiliaryFragments };
+  return mergeReconciled(parts);
 }
 
-async function gatherAgentsViewFragments(
-  opts: IncrementalParseOptions,
+async function gatherImportedFragments(
+  producer: ImportProducer,
+  ctx: ProducerContext,
   cache: FragmentCache,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
+  requestedSources: Set<string>,
   nativeFragments: ParsedFileFragment[],
 ): Promise<ImportedFragment[]> {
-  if (opts.agentsView === "off") {
+  const importer = producer.importer(ctx);
+  if (!importer) {
     diagnostics.push(
-      diagnostic("agentsview_disabled", "AgentsView import disabled by user control.", "info"),
+      diagnostic(`${producer.id}_disabled`, `${producer.id} import disabled by user control.`, "info"),
     );
     return [];
   }
 
-  const importer = new AgentsViewImporter({ databasePath: opts.agentsViewDatabasePath });
   const probe = await importer.probe();
   if (!probe.compatible) {
     diagnostics.push(
       diagnostic(
-        "agentsview_unavailable",
-        `AgentsView import unavailable: ${probe.reason}`,
+        `${producer.id}_unavailable`,
+        `${producer.id} import unavailable: ${probe.reason}`,
         "info",
       ),
     );
@@ -717,7 +765,6 @@ async function gatherAgentsViewFragments(
     .map((metadata) => metadata.id);
   if (staleExternal.length) await cache.invalidate(staleExternal, "external_import_changed");
 
-  const requestedSources = new Set(normalizeSources(opts.sources));
   const imported = (await importer.importFragments(probe)).filter((fragment) => {
     const source = fragment.provenance.coverage[0]?.source;
     return !!source && requestedSources.has(source);
@@ -731,12 +778,10 @@ async function gatherAgentsViewFragments(
     if (!source) continue;
     diagnostics.push(
       diagnostic(
+        nativeSources.has(source) ? "agentsview_native_precedence" : "agentsview_import_used",
         nativeSources.has(source)
-          ? "agentsview_native_precedence"
-          : "agentsview_import_used",
-        nativeSources.has(source)
-          ? `AgentsView ${source} facts imported for provenance; native Argus fragments remain authoritative.`
-          : `AgentsView ${source} facts used because no native Argus fragments were available for that source.`,
+          ? `AgentsView ${source} facts imported; native sessions take precedence per session.`
+          : `AgentsView ${source} facts used because no native fragments were available for that source.`,
         "info",
       ),
     );
@@ -766,38 +811,11 @@ export async function parseAllIncrementalDetailed(
         : await openFragmentCache({ path: opts.cachePath });
       ownsCache = true;
     }
-    const { nativeFragments, auxiliaryFragments } = await gatherNativeFragments(
-      opts,
-      cache,
-      stats,
-      diagnostics,
-    );
-    const importedFragments = await gatherAgentsViewFragments(
-      opts,
-      cache,
-      stats,
-      diagnostics,
-      nativeFragments,
-    );
-    if (
-      nativeFragments.length === 0 &&
-      importedFragments.length === 0 &&
-      diagnostics.some(
-        (entry) => entry.phase === "discovery" && entry.code === "missing_root",
-      )
-    ) {
-      throw new Error("No transcript roots were available for incremental parsing");
-    }
-    // Reconcile once over the gathered fragments. Cache hits arrive already reconstructed from the
-    // fact rows (via cache.load), changed files from a fresh parse — so reads source from the rows
-    // (the store) with no second reconcile pass.
+    // Each producer discovers + parses + reconciles its own sessions; dependent import producers
+    // fill in only sessions no native owns. The legacy monolithic `reconcileFragments` is retained
+    // (in this module, exported) solely as the test oracle.
     return {
-      parsed: reconcileFragments({
-        nativeFragments,
-        auxiliaryFragments,
-        importedFragments,
-        diagnostics,
-      }),
+      parsed: await collectAndReconcile(opts, cache, stats, diagnostics),
       stats,
       diagnostics,
     };
