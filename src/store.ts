@@ -15,20 +15,22 @@ import type {
   CacheInvalidationReason,
   CachedFragmentMetadata,
   CompleteDiscovery,
-  FactStore,
+  Store,
+  FileFingerprint,
+  FileIdentity,
+  FileRole,
   ImportedFragment,
-  InvocationFact,
   MaterializeSession,
-  MessageFact,
   NormalizedFacts,
   ParsedAuxiliaryFragment,
   ParsedFileFragment,
+  PhysicalFileIdentity,
   ReconstructedFragments,
   ResolvedQuery,
   SessionFact,
   SessionRelationshipFact,
   SourceCoverageRow,
-  ToolResultFact,
+  TranscriptIndex,
 } from "./store-contract.ts";
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
@@ -58,7 +60,7 @@ export class StoreError extends Error {
   }
 }
 
-export interface OpenFactStoreOptions {
+export interface OpenStoreOptions {
   path?: string;
   busyTimeoutMs?: number;
   now?: () => number;
@@ -75,7 +77,7 @@ interface MetadataRow {
   id: string;
   kind: CacheFragment["kind"];
   source: AgentSource | null;
-  file_id: string | null;
+  file_identity: string | null;
   contract_version: number;
   parser_version: string | null;
   updated_at_ms: number;
@@ -116,15 +118,15 @@ interface FragmentStorage {
 
 // The store has a single, fresh schema (no migrations): it is fully derivable from disk, so on any
 // version/ownership mismatch the caller rebuilds it from source rather than migrating. Three layers:
-//   1. cache_fragments + fact_* — the per-file substrate producers write while indexing.
+//   1. index_files + index_* — the per-file structural index producers write while indexing.
 //   2. resolved_* — the trusted, reconciled read model the reader SELECTs (no reconcile on read).
 //   3. source_coverage + session_ownership — freshness attestation and per-session ownership.
 const CREATE_SCHEMA_SQL = `
-  CREATE TABLE cache_fragments (
+  CREATE TABLE index_files (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('transcript', 'auxiliary', 'external')),
     source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini')),
-    file_id TEXT,
+    file_identity TEXT,
     root_id TEXT,
     role TEXT,
     relative_path TEXT,
@@ -146,21 +148,24 @@ const CREATE_SCHEMA_SQL = `
     updated_at_ms INTEGER NOT NULL
   );
 
-  CREATE INDEX cache_fragments_source_root
-    ON cache_fragments(source, root_id);
-  CREATE INDEX cache_fragments_file_id
-    ON cache_fragments(file_id);
+  CREATE INDEX index_files_source_root
+    ON index_files(source, root_id);
+  CREATE INDEX index_files_identity
+    ON index_files(file_identity);
 
-  CREATE TABLE auxiliary_dependencies (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+  CREATE TABLE index_dependencies (
+    file_id TEXT NOT NULL REFERENCES index_files(id) ON DELETE CASCADE,
     input_id TEXT NOT NULL,
     selector TEXT NOT NULL,
     affects_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, input_id, selector)
+    PRIMARY KEY (file_id, input_id, selector)
   );
 
-  CREATE TABLE IF NOT EXISTS fact_sessions (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+  -- index_* is a thin structural index only: enough to detect change and map files -> sessions.
+  -- Heavy per-message content (messages/invocations/tool-results) is NOT stored — a touched session
+  -- is re-materialized by re-parsing its files from disk. resolved_* below is the single content store.
+  CREATE TABLE IF NOT EXISTS index_sessions (
+    file_id TEXT NOT NULL REFERENCES index_files(id) ON DELETE CASCADE,
     seq INTEGER NOT NULL,
     origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
     source TEXT NOT NULL,
@@ -168,74 +173,33 @@ const CREATE_SCHEMA_SQL = `
     kind TEXT,
     transcript_path TEXT,
     fact_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, seq)
+    PRIMARY KEY (file_id, seq)
   );
-  CREATE INDEX IF NOT EXISTS fact_sessions_source_session
-    ON fact_sessions(source, source_session_id);
+  CREATE INDEX IF NOT EXISTS index_sessions_source_session
+    ON index_sessions(source, source_session_id);
+  CREATE INDEX IF NOT EXISTS index_sessions_file
+    ON index_sessions(file_id);
 
-  CREATE TABLE IF NOT EXISTS fact_messages (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
-    source TEXT NOT NULL,
-    source_session_id TEXT NOT NULL,
-    provider_message_id TEXT,
-    timestamp_ms INTEGER NOT NULL,
-    model TEXT,
-    fact_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, seq)
-  );
-  CREATE INDEX IF NOT EXISTS fact_messages_source_session
-    ON fact_messages(source, source_session_id);
-  CREATE INDEX IF NOT EXISTS fact_messages_timestamp
-    ON fact_messages(timestamp_ms);
-
-  CREATE TABLE IF NOT EXISTS fact_invocations (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
-    source TEXT NOT NULL,
-    source_session_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    name TEXT,
-    fact_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, seq)
-  );
-  CREATE INDEX IF NOT EXISTS fact_invocations_message
-    ON fact_invocations(message_id);
-
-  CREATE TABLE IF NOT EXISTS fact_tool_results (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
-    source TEXT NOT NULL,
-    source_session_id TEXT NOT NULL,
-    fact_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, seq)
-  );
-  CREATE INDEX IF NOT EXISTS fact_tool_results_source_session
-    ON fact_tool_results(source, source_session_id);
-
-  CREATE TABLE IF NOT EXISTS fact_relationships (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+  CREATE TABLE IF NOT EXISTS index_relationships (
+    file_id TEXT NOT NULL REFERENCES index_files(id) ON DELETE CASCADE,
     seq INTEGER NOT NULL,
     origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
     source TEXT NOT NULL,
     child_source_session_id TEXT NOT NULL,
     parent_source_session_id TEXT NOT NULL,
     fact_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, seq)
+    PRIMARY KEY (file_id, seq)
   );
 
-  CREATE TABLE IF NOT EXISTS fact_auxiliary (
-    fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
+  CREATE TABLE IF NOT EXISTS index_auxiliary (
+    file_id TEXT NOT NULL REFERENCES index_files(id) ON DELETE CASCADE,
     seq INTEGER NOT NULL,
     origin TEXT NOT NULL CHECK (origin IN ('native', 'external')),
     kind TEXT NOT NULL,
     source TEXT NOT NULL,
     selector TEXT,
     fact_json TEXT NOT NULL,
-    PRIMARY KEY (fragment_id, seq)
+    PRIMARY KEY (file_id, seq)
   );
 
   -- The trusted read model: reconciled session rows the reader SELECTs directly.
@@ -295,18 +259,11 @@ const CREATE_SCHEMA_SQL = `
 `;
 
 /** Fact tables in the order their rows are cleared when a fragment is re-materialized. */
-const FACT_TABLES = [
-  "fact_sessions",
-  "fact_messages",
-  "fact_invocations",
-  "fact_tool_results",
-  "fact_relationships",
-  "fact_auxiliary",
-] as const;
+const FACT_TABLES = ["index_sessions", "index_relationships", "index_auxiliary"] as const;
 
 const INSERT_FRAGMENT_SQL = `
-  INSERT INTO cache_fragments (
-    id, kind, source, file_id, root_id, role, relative_path, observed_path,
+  INSERT INTO index_files (
+    id, kind, source, file_identity, root_id, role, relative_path, observed_path,
     size_bytes, mtime_ns, ctime_ns, physical_id_scheme, physical_id_value,
     contract_version, parser_name, parser_version, status, invalidation_reason,
     diagnostics_json, import_provenance_json, envelope_json,
@@ -321,7 +278,7 @@ const INSERT_FRAGMENT_SQL = `
   ON CONFLICT(id) DO UPDATE SET
     kind = excluded.kind,
     source = excluded.source,
-    file_id = excluded.file_id,
+    file_identity = excluded.file_identity,
     root_id = excluded.root_id,
     role = excluded.role,
     relative_path = excluded.relative_path,
@@ -567,7 +524,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
   }
 
   // No migrations: the store is derived from disk. Create it fresh when empty; any other version is
-  // a mismatch the caller resolves by rebuilding (openFactStore catches this and recreates).
+  // a mismatch the caller resolves by rebuilding (openStore catches this and recreates).
   if (currentVersion === 0) {
     await createSchema(db);
   } else if (currentVersion !== STORE_SCHEMA_VERSION) {
@@ -589,8 +546,8 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
 
   // Verify the expected schema rather than trusting user_version alone.
   try {
-    await get(db, "SELECT id, import_provenance_json, envelope_json FROM cache_fragments LIMIT 1");
-    await get(db, "SELECT fragment_id FROM fact_sessions LIMIT 1");
+    await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
+    await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id FROM resolved_sessions LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
@@ -672,7 +629,7 @@ function factOrigin(fragment: CacheFragment): "native" | "external" {
  */
 async function materializeFactRows(db: Database, fragment: CacheFragment): Promise<void> {
   for (const table of FACT_TABLES) {
-    await run(db, `DELETE FROM ${table} WHERE fragment_id = ?`, [fragment.id]);
+    await run(db, `DELETE FROM ${table} WHERE file_id = ?`, [fragment.id]);
   }
   const origin = factOrigin(fragment);
 
@@ -683,7 +640,7 @@ async function materializeFactRows(db: Database, fragment: CacheFragment): Promi
         fact.kind === "session_first_prompt" ? fact.sourceSessionId : fact.selector;
       await run(
         db,
-        `INSERT INTO fact_auxiliary(fragment_id, seq, origin, kind, source, selector, fact_json)
+        `INSERT INTO index_auxiliary(file_id, seq, origin, kind, source, selector, fact_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [fragment.id, seq++, origin, fact.kind, fact.source, selector, JSON.stringify(fact)],
       );
@@ -696,43 +653,17 @@ async function materializeFactRows(db: Database, fragment: CacheFragment): Promi
   for (const s of facts.sessions) {
     await run(
       db,
-      `INSERT INTO fact_sessions(fragment_id, seq, origin, source, source_session_id, kind, transcript_path, fact_json)
+      `INSERT INTO index_sessions(file_id, seq, origin, source, source_session_id, kind, transcript_path, fact_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [fragment.id, seq++, origin, s.source, s.sourceSessionId, s.kind, s.transcriptPath ?? null, JSON.stringify(s)],
     );
   }
-  seq = 0;
-  for (const m of facts.messages) {
-    await run(
-      db,
-      `INSERT INTO fact_messages(fragment_id, seq, origin, source, source_session_id, provider_message_id, timestamp_ms, model, fact_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, m.source, m.sourceSessionId, m.providerMessageId ?? null, m.timestampMs, m.model ?? null, JSON.stringify(m)],
-    );
-  }
-  seq = 0;
-  for (const inv of facts.invocations) {
-    await run(
-      db,
-      `INSERT INTO fact_invocations(fragment_id, seq, origin, source, source_session_id, message_id, name, fact_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, inv.source, inv.sourceSessionId, inv.messageId, inv.name ?? null, JSON.stringify(inv)],
-    );
-  }
-  seq = 0;
-  for (const tr of facts.toolResults) {
-    await run(
-      db,
-      `INSERT INTO fact_tool_results(fragment_id, seq, origin, source, source_session_id, fact_json)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, tr.source, tr.sourceSessionId, JSON.stringify(tr)],
-    );
-  }
+  // Messages / invocations / tool-results are NOT stored — they are re-parsed from disk on demand.
   seq = 0;
   for (const rel of facts.relationships) {
     await run(
       db,
-      `INSERT INTO fact_relationships(fragment_id, seq, origin, source, child_source_session_id, parent_source_session_id, fact_json)
+      `INSERT INTO index_relationships(file_id, seq, origin, source, child_source_session_id, parent_source_session_id, fact_json)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [fragment.id, seq++, origin, rel.source, rel.childSourceSessionId, rel.parentSourceSessionId, JSON.stringify(rel)],
     );
@@ -746,7 +677,7 @@ interface FactJsonRow {
 async function loadFactArray<T>(db: Database, table: string, fragmentId: string): Promise<T[]> {
   const rows = await all<FactJsonRow>(
     db,
-    `SELECT fact_json FROM ${table} WHERE fragment_id = ? ORDER BY seq`,
+    `SELECT fact_json FROM ${table} WHERE file_id = ? ORDER BY seq`,
     [fragmentId],
   );
   return rows.map((row) => JSON.parse(row.fact_json) as T);
@@ -799,7 +730,7 @@ function buildResolvedFilters(query?: ResolvedQuery, sourceColumn = "source"): {
   };
 }
 
-export class SqliteFactStore implements FactStore {
+export class SqliteStore implements Store {
   private queue: Promise<void> = Promise.resolve();
   private closePromise: Promise<void> | undefined;
 
@@ -834,8 +765,8 @@ export class SqliteFactStore implements FactStore {
     return this.schedule(async () => {
       const rows = await all<MetadataRow>(
         this.db,
-        `SELECT id, kind, source, file_id, contract_version, parser_version, updated_at_ms, status
-         FROM cache_fragments
+        `SELECT id, kind, source, file_identity, contract_version, parser_version, updated_at_ms, status
+         FROM index_files
          ${source ? "WHERE source = ?" : ""}
          ORDER BY id`,
         source ? [source] : [],
@@ -844,7 +775,7 @@ export class SqliteFactStore implements FactStore {
         id: row.id,
         kind: row.kind,
         source: row.source ?? undefined,
-        fileId: row.file_id ?? undefined,
+        fileId: row.file_identity ?? undefined,
         contractVersion: row.contract_version,
         parserVersion: row.parser_version ?? undefined,
         updatedAtMs: row.updated_at_ms,
@@ -881,14 +812,14 @@ export class SqliteFactStore implements FactStore {
           timestamp,
           timestamp,
         ]);
-        await run(this.db, "DELETE FROM auxiliary_dependencies WHERE fragment_id = ?", [
+        await run(this.db, "DELETE FROM index_dependencies WHERE file_id = ?", [
           fragment.id,
         ]);
         if (fragment.kind === "transcript") {
           for (const dependency of fragment.dependencies) {
             await run(
               this.db,
-              `INSERT INTO auxiliary_dependencies(fragment_id, input_id, selector, affects_json)
+              `INSERT INTO index_dependencies(file_id, input_id, selector, affects_json)
                VALUES (?, ?, ?, ?)`,
               [
                 fragment.id,
@@ -912,16 +843,16 @@ export class SqliteFactStore implements FactStore {
       }
       const observedFileIds = new Set(discovery.files.map(({ file }) => file.id));
       await transaction(this.db, async () => {
-        const rows = await all<{ id: string; file_id: string }>(
+        const rows = await all<{ id: string; file_identity: string }>(
           this.db,
-          `SELECT id, file_id
-           FROM cache_fragments
-           WHERE source = ? AND root_id = ? AND file_id IS NOT NULL`,
+          `SELECT id, file_identity
+           FROM index_files
+           WHERE source = ? AND root_id = ? AND file_identity IS NOT NULL`,
           [discovery.source, discovery.rootId],
         );
         for (const row of rows) {
-          if (!observedFileIds.has(row.file_id)) {
-            await run(this.db, "DELETE FROM cache_fragments WHERE id = ?", [row.id]);
+          if (!observedFileIds.has(row.file_identity)) {
+            await run(this.db, "DELETE FROM index_files WHERE id = ?", [row.id]);
           }
         }
       });
@@ -935,7 +866,7 @@ export class SqliteFactStore implements FactStore {
         for (const id of new Set(ids)) {
           await run(
             this.db,
-            `UPDATE cache_fragments
+            `UPDATE index_files
              SET status = ?, invalidation_reason = ?, updated_at_ms = ?
              WHERE id = ?`,
             [invalidatedStatus(reason), reason, this.now(), id],
@@ -947,6 +878,92 @@ export class SqliteFactStore implements FactStore {
 
   reconstructFromRows(ids: string[]): Promise<ReconstructedFragments> {
     return this.schedule(() => this.reconstructCore(ids));
+  }
+
+  transcriptIndex(source: AgentSource): Promise<TranscriptIndex> {
+    return this.schedule(async () => {
+      const fragmentRows = await all<{
+        id: string;
+        file_identity: string | null;
+        root_id: string | null;
+        role: string | null;
+        relative_path: string | null;
+        observed_path: string | null;
+        size_bytes: string | null;
+        mtime_ns: string | null;
+        ctime_ns: string | null;
+        physical_id_scheme: string | null;
+        physical_id_value: string | null;
+        parser_name: string | null;
+        parser_version: string | null;
+        status: CachedFragmentMetadata["status"];
+      }>(
+        this.db,
+        `SELECT id, file_identity, root_id, role, relative_path, observed_path, size_bytes, mtime_ns,
+                ctime_ns, physical_id_scheme, physical_id_value, parser_name, parser_version, status
+         FROM index_files WHERE source = ? AND kind = 'transcript'`,
+        [source],
+      );
+      const sessionRows = await all<{ file_id: string; source_session_id: string }>(
+        this.db,
+        "SELECT file_id, source_session_id FROM index_sessions WHERE source = ?",
+        [source],
+      );
+      const relationshipRows = await all<{ child: string; parent: string }>(
+        this.db,
+        `SELECT child_source_session_id AS child, parent_source_session_id AS parent
+         FROM index_relationships WHERE source = ?`,
+        [source],
+      );
+
+      const sessionsByFragment = new Map<string, string[]>();
+      for (const row of sessionRows) {
+        let list = sessionsByFragment.get(row.file_id);
+        if (!list) {
+          list = [];
+          sessionsByFragment.set(row.file_id, list);
+        }
+        list.push(row.source_session_id);
+      }
+
+      const fragments = fragmentRows.map((row) => {
+        const physicalId: PhysicalFileIdentity | undefined =
+          row.physical_id_scheme && row.physical_id_value
+            ? {
+                scheme: row.physical_id_scheme as PhysicalFileIdentity["scheme"],
+                value: row.physical_id_value,
+              }
+            : undefined;
+        const file: FileIdentity = {
+          id: row.file_identity ?? row.id,
+          source,
+          rootId: row.root_id ?? "",
+          role: (row.role ?? "transcript") as FileRole,
+          relativePath: row.relative_path ?? "",
+          path: row.observed_path ?? "",
+        };
+        const fingerprint: FileFingerprint = {
+          sizeBytes: row.size_bytes ?? "0",
+          mtimeNs: row.mtime_ns ?? "0",
+          ...(row.ctime_ns != null ? { ctimeNs: row.ctime_ns } : {}),
+          ...(physicalId ? { physicalId } : {}),
+        };
+        return {
+          fragmentId: row.id,
+          file,
+          fingerprint,
+          parserName: row.parser_name,
+          parserVersion: row.parser_version,
+          status: row.status,
+          sourceSessionIds: sessionsByFragment.get(row.id) ?? [],
+        };
+      });
+
+      return {
+        fragments,
+        relationships: relationshipRows.map((row) => ({ child: row.child, parent: row.parent })),
+      };
+    });
   }
 
   // Rebuild fragments from envelope + fact rows — the store's only read path (load() and the
@@ -966,7 +983,7 @@ export class SqliteFactStore implements FactStore {
       for (const id of orderedUnique) {
         const row = await get<{ kind: CacheFragment["kind"]; envelope_json: string | null }>(
           this.db,
-          "SELECT kind, envelope_json FROM cache_fragments WHERE id = ? AND status = 'success'",
+          "SELECT kind, envelope_json FROM index_files WHERE id = ? AND status = 'success'",
           [id],
         );
         if (!row || row.envelope_json == null) continue;
@@ -981,18 +998,21 @@ export class SqliteFactStore implements FactStore {
         if (!entry) continue;
         if (entry.kind === "auxiliary") {
           const fragment = entry.envelope as ParsedAuxiliaryFragment;
-          fragment.facts = await loadFactArray<AuxiliaryFact>(this.db, "fact_auxiliary", id);
+          fragment.facts = await loadFactArray<AuxiliaryFact>(this.db, "index_auxiliary", id);
           result.auxiliaryFragments.push(fragment);
         } else {
+          // Only the structural facts (sessions/relationships) are stored; messages/invocations/
+          // tool-results are re-parsed from disk, so they are empty here. Transcript fragments are
+          // never reconstructed for content in the normal flow — this keeps `load` total/safe.
           const fragment = entry.envelope as ParsedFileFragment | ImportedFragment;
           fragment.facts = {
-            sessions: await loadFactArray<SessionFact>(this.db, "fact_sessions", id),
-            messages: await loadFactArray<MessageFact>(this.db, "fact_messages", id),
-            invocations: await loadFactArray<InvocationFact>(this.db, "fact_invocations", id),
-            toolResults: await loadFactArray<ToolResultFact>(this.db, "fact_tool_results", id),
+            sessions: await loadFactArray<SessionFact>(this.db, "index_sessions", id),
+            messages: [],
+            invocations: [],
+            toolResults: [],
             relationships: await loadFactArray<SessionRelationshipFact>(
               this.db,
-              "fact_relationships",
+              "index_relationships",
               id,
             ),
           };
@@ -1194,9 +1214,9 @@ export class SqliteFactStore implements FactStore {
   }
 }
 
-export async function openFactStore(
-  options: OpenFactStoreOptions = {},
-): Promise<SqliteFactStore> {
+export async function openStore(
+  options: OpenStoreOptions = {},
+): Promise<SqliteStore> {
   const path = options.path ?? STORE_FILE;
   const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_STORE_BUSY_TIMEOUT_MS;
   const now = options.now ?? Date.now;
@@ -1215,14 +1235,14 @@ export async function openFactStore(
   try {
     db = await openDatabase(path, busyTimeoutMs);
     await initializeDatabase(db, path);
-    return new SqliteFactStore(db, path, busyTimeoutMs, now);
+    return new SqliteStore(db, path, busyTimeoutMs, now);
   } catch (error) {
     if (db) await closeDatabase(db).catch(() => undefined);
     const storeError = asStoreError(error, path, busyTimeoutMs);
     // No migrations: an older owned schema is rebuilt from disk (it is fully derivable). Newer or
     // malformed schemas are NOT rebuilt — they propagate so a newer store is never destroyed.
     if (!options.rebuilding && storeError.rebuildable) {
-      return rebuildFactStore({ ...options, rebuilding: true });
+      return rebuildStore({ ...options, rebuilding: true });
     }
     throw storeError;
   }
@@ -1240,9 +1260,9 @@ function removeRegularCacheFile(path: string): void {
 /**
  * Explicit destructive recovery path. Call only after every connection to this cache is closed.
  */
-export async function rebuildFactStore(
-  options: OpenFactStoreOptions = {},
-): Promise<SqliteFactStore> {
+export async function rebuildStore(
+  options: OpenStoreOptions = {},
+): Promise<SqliteStore> {
   const path = options.path ?? STORE_FILE;
   try {
     removeRegularCacheFile(`${path}-wal`);
@@ -1255,5 +1275,5 @@ export async function rebuildFactStore(
       options.busyTimeoutMs ?? DEFAULT_STORE_BUSY_TIMEOUT_MS,
     );
   }
-  return openFactStore(options);
+  return openStore(options);
 }

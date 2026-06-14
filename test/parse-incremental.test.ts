@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sqlite3 from "sqlite3";
-import { openFactStore } from "../src/store.ts";
+import { openStore } from "../src/store.ts";
 import { parseAll } from "../src/parse.ts";
 import { cacheStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
 import type { IncrementalCacheStats } from "../src/parse-incremental.ts";
@@ -264,7 +264,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(codexOnly.parsed.messages).toEqual([]);
     expect(codexOnly.stats.deleted).toBe(1);
 
-    const cache = await openFactStore({ path: opts.cachePath });
+    const cache = await openStore({ path: opts.cachePath });
     try {
       expect((await cache.list("claude")).filter((row) => row.status === "success").length).toBeGreaterThan(0);
       expect((await cache.list("codex")).filter((row) => row.status === "success")).toEqual([]);
@@ -332,7 +332,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(assisted.parsed.messages.length).toBe(native.messages.length + 1);
     expect(assisted.stats.imported).toBe(1);
 
-    const cache = await openFactStore({ path: opts.cachePath });
+    const cache = await openStore({ path: opts.cachePath });
     try {
       expect((await cache.list()).some((row) => row.kind === "external" && row.status === "success")).toBe(true);
     } finally {
@@ -364,7 +364,7 @@ describe("parseAllIncrementalDetailed", () => {
 });
 
 describe("materialized fact rows", () => {
-  test("AgentsView-only facts round-trip and are tagged origin='external'", async () => {
+  test("AgentsView-only facts are indexed (origin='external') and materialized", async () => {
     const root = tempRoot();
     const dbPath = join(root, "agentsview.db");
     await createAgentsViewCodexDb(dbPath);
@@ -380,12 +380,21 @@ describe("materialized fact rows", () => {
 
     const db = await openDatabase(cp);
     try {
-      const row = await new Promise<{ n: number }>((resolve, reject) =>
-        db.get("SELECT COUNT(*) AS n FROM fact_messages WHERE origin = 'external'", (e, r) =>
+      // Heavy message content isn't stored; the structural index tags imports origin='external',
+      // and the reconciled session lands in the read model.
+      const idx = await new Promise<{ n: number }>((resolve, reject) =>
+        db.get("SELECT COUNT(*) AS n FROM index_sessions WHERE origin = 'external'", (e, r) =>
           e ? reject(e) : resolve(r as { n: number }),
         ),
       );
-      expect(row.n).toBeGreaterThan(0);
+      expect(idx.n).toBeGreaterThan(0);
+      const resolved = await new Promise<{ n: number }>((resolve, reject) =>
+        db.get(
+          "SELECT COUNT(*) AS n FROM resolved_messages WHERE session_id = 'codex:codex-db'",
+          (e, r) => (e ? reject(e) : resolve(r as { n: number })),
+        ),
+      );
+      expect(resolved.n).toBe(1);
     } finally {
       await close(db);
     }
