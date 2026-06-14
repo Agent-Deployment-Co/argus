@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   parseAllIncrementalDetailed,
-  type IncrementalCacheStats,
+  type SyncStats,
   type IncrementalParseOptions,
 } from "../src/parse-incremental.ts";
 import type { AgentSource } from "../src/types.ts";
@@ -264,7 +264,7 @@ function fileSize(path: string): number | null {
   }
 }
 
-function statsFrom(raw: IncrementalCacheStats): BenchStats {
+function statsFrom(raw: SyncStats): BenchStats {
   return {
     hits: raw.hits,
     parsed: raw.parsed,
