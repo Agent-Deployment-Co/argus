@@ -64,13 +64,6 @@ interface SqliteError extends Error {
   errno?: number;
 }
 
-interface FragmentRow {
-  fragment_json: string;
-  id: string;
-  kind: CacheFragment["kind"];
-  contract_version: number;
-}
-
 interface MetadataRow {
   id: string;
   kind: CacheFragment["kind"];
@@ -261,13 +254,13 @@ const INSERT_FRAGMENT_SQL = `
     id, kind, source, file_id, root_id, role, relative_path, observed_path,
     size_bytes, mtime_ns, ctime_ns, physical_id_scheme, physical_id_value,
     contract_version, parser_name, parser_version, status, invalidation_reason,
-    fragment_json, diagnostics_json, import_provenance_json, envelope_json,
+    diagnostics_json, import_provenance_json, envelope_json,
     last_success_at_ms, updated_at_ms
   ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?,
     ?, ?, ?, 'success', NULL,
-    ?, ?, ?, ?,
+    ?, ?, ?,
     ?, ?
   )
   ON CONFLICT(id) DO UPDATE SET
@@ -288,7 +281,6 @@ const INSERT_FRAGMENT_SQL = `
     parser_version = excluded.parser_version,
     status = 'success',
     invalidation_reason = NULL,
-    fragment_json = excluded.fragment_json,
     diagnostics_json = excluded.diagnostics_json,
     import_provenance_json = excluded.import_provenance_json,
     envelope_json = excluded.envelope_json,
@@ -540,12 +532,17 @@ async function migrate(db: Database, fromVersion: number, now: () => number): Pr
           [version, now()],
         );
       } else if (version === 3) {
-        // Idempotent so partial/interrupted upgrades (and synthetic downgrades in tests) recover.
+        // The queryable fact_* rows + envelope_json become the single representation: backfill
+        // them from the v2 `fragment_json` blobs, then drop the blob column. Idempotent so
+        // partial/interrupted upgrades (and synthetic downgrades in tests) recover.
         if (!(await columnExists(db, "cache_fragments", "envelope_json"))) {
           await exec(db, "ALTER TABLE cache_fragments ADD COLUMN envelope_json TEXT");
         }
         await exec(db, CREATE_V3_SQL);
-        await backfillFactRows(db);
+        if (await columnExists(db, "cache_fragments", "fragment_json")) {
+          await backfillFactRows(db);
+          await exec(db, "ALTER TABLE cache_fragments DROP COLUMN fragment_json");
+        }
         await run(
           db,
           "INSERT OR IGNORE INTO cache_schema_migrations(version, applied_at_ms) VALUES (?, ?)",
@@ -754,35 +751,6 @@ async function loadFactArray<T>(db: Database, table: string, fragmentId: string)
   return rows.map((row) => JSON.parse(row.fact_json) as T);
 }
 
-function parseFragment(row: FragmentRow, path: string): CacheFragment {
-  let value: unknown;
-  try {
-    value = JSON.parse(row.fragment_json);
-  } catch (error) {
-    throw new CacheStoreError(
-      "corrupt",
-      path,
-      `Cached fragment ${row.id} contains invalid JSON. ${rebuildHint(path)}`,
-      { cause: error },
-    );
-  }
-
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    (value as { id?: unknown }).id !== row.id ||
-    (value as { kind?: unknown }).kind !== row.kind ||
-    (value as { contractVersion?: unknown }).contractVersion !== row.contract_version
-  ) {
-    throw new CacheStoreError(
-      "corrupt",
-      path,
-      `Cached fragment ${row.id} does not match its storage metadata. ${rebuildHint(path)}`,
-    );
-  }
-  return value as CacheFragment;
-}
-
 function invalidatedStatus(reason: CacheInvalidationReason): CachedFragmentMetadata["status"] {
   return reason === "file_changed" ? "unstable" : "failed";
 }
@@ -812,14 +780,9 @@ export class SqliteFragmentCache implements FragmentCache {
 
   load(id: string): Promise<CacheFragment | undefined> {
     return this.schedule(async () => {
-      const row = await get<FragmentRow>(
-        this.db,
-        `SELECT fragment_json, id, kind, contract_version
-         FROM cache_fragments
-         WHERE id = ? AND status = 'success'`,
-        [id],
-      );
-      return row ? parseFragment(row, this.path) : undefined;
+      const { nativeFragments, auxiliaryFragments, importedFragments } =
+        await this.reconstructCore([id]);
+      return nativeFragments[0] ?? importedFragments[0] ?? auxiliaryFragments[0];
     });
   }
 
@@ -868,7 +831,6 @@ export class SqliteFragmentCache implements FragmentCache {
           fragment.contractVersion,
           storage.parserName,
           storage.parserVersion,
-          JSON.stringify(fragment),
           storage.diagnosticsJson,
           storage.importProvenanceJson,
           storage.envelopeJson,
@@ -940,7 +902,14 @@ export class SqliteFragmentCache implements FragmentCache {
   }
 
   reconstructFromRows(ids: string[]): Promise<ReconstructedFragments> {
-    return this.schedule(async () => {
+    return this.schedule(() => this.reconstructCore(ids));
+  }
+
+  // Rebuild fragments from envelope + fact rows — the store's only read path (load() and the
+  // incremental reconciler both go through here). Unscheduled so callers compose it under one
+  // queue slot.
+  private async reconstructCore(ids: string[]): Promise<ReconstructedFragments> {
+    {
       const result: ReconstructedFragments = {
         nativeFragments: [],
         auxiliaryFragments: [],
@@ -988,7 +957,7 @@ export class SqliteFragmentCache implements FragmentCache {
         }
       }
       return result;
-    });
+    }
   }
 
   close(): Promise<void> {

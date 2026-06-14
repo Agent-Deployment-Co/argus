@@ -14,14 +14,12 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { printBanner } from "./banner.ts";
-import { vendoredBrandFontsCss } from "./brand.ts";
-import { vendoredChartJs } from "./chartjs.ts";
-import { consoleOverview, isBareInvocation } from "./console-report.ts";
+import { isBareInvocation } from "./console-report.ts";
 import { loadPlugins } from "./inventory.ts";
 import type { TranscriptSource } from "./parse.ts";
 import { cacheStatsSummary } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
-import { renderHtml } from "./report.ts";
+import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
@@ -291,19 +289,17 @@ function formatBytes(value: number): string {
 
 async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<void> {
   const dash = await buildDashboard(flags, log);
-  if (consoleOnly) {
-    process.stdout.write(consoleOverview(dash));
+  const format: OutputFormat = consoleOnly ? "console" : flags.json ? "json" : "html";
+  const rendered = RENDERERS[format](dash);
+  if (rendered.toStdout) {
+    process.stdout.write(rendered.content);
     return;
   }
   const outPath = resolve(flags.out);
-  if (flags.json) {
-    writeFileSync(outPath, JSON.stringify(dash, null, 2));
-  } else {
-    writeFileSync(outPath, renderHtml(dash, { chartJs: vendoredChartJs(), fontCss: vendoredBrandFontsCss() }));
-  }
+  writeFileSync(outPath, rendered.content);
   log(`Wrote ${outPath}`);
   log(`Totals: ${summary(dash)}`);
-  if (flags.open && !flags.json) spawnSync("open", [outPath]);
+  if (flags.open && format === "html") spawnSync("open", [outPath]);
 }
 
 async function runLogin(flags: Flags, log: Log): Promise<void> {

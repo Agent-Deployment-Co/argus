@@ -72,12 +72,6 @@ export interface IncrementalParseOptions extends ParseOptions {
   rebuildCache?: boolean;
   agentsView?: "auto" | "off";
   agentsViewDatabasePath?: string;
-  /**
-   * Where reconciliation reads its facts. "memory" (default) reconciles the freshly gathered
-   * fragments; "rows" rebuilds them from the materialized `fact_*` tables first — proving the
-   * queryable read model is a faithful projection. Both paths produce an identical ParseResult.
-   */
-  reconcileSource?: "memory" | "rows";
 }
 
 const EMPTY_STATS: IncrementalCacheStats = {
@@ -794,25 +788,16 @@ export async function parseAllIncrementalDetailed(
     ) {
       throw new Error("No transcript roots were available for incremental parsing");
     }
-    let reconciliationInput: ReconciliationInput = {
-      nativeFragments,
-      auxiliaryFragments,
-      importedFragments,
-      diagnostics,
-    };
-    if (opts.reconcileSource === "rows") {
-      // Rebuild the just-gathered fragments from the materialized rows (same set, same order)
-      // and reconcile those instead — exercising the queryable read model end to end.
-      const ids = [
-        ...nativeFragments.map((fragment) => fragment.id),
-        ...auxiliaryFragments.map((fragment) => fragment.id),
-        ...importedFragments.map((fragment) => fragment.id),
-      ];
-      const reconstructed = await cache.reconstructFromRows(ids);
-      reconciliationInput = { ...reconstructed, diagnostics };
-    }
+    // Reconcile once over the gathered fragments. Cache hits arrive already reconstructed from the
+    // fact rows (via cache.load), changed files from a fresh parse — so reads source from the rows
+    // (the store) with no second reconcile pass.
     return {
-      parsed: reconcileFragments(reconciliationInput),
+      parsed: reconcileFragments({
+        nativeFragments,
+        auxiliaryFragments,
+        importedFragments,
+        diagnostics,
+      }),
       stats,
       diagnostics,
     };
