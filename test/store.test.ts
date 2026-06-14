@@ -206,6 +206,20 @@ function imported(id: string): ImportedFragment {
   };
 }
 
+// Only auxiliary fragments round-trip through load() — transcripts/imports are re-parsed from disk,
+// so load() returns undefined for them and their presence is verified via list().
+async function expectStored(
+  cache: Awaited<ReturnType<typeof openStore>>,
+  fragment: CacheFragment,
+): Promise<void> {
+  if (fragment.kind === "auxiliary") {
+    expect(await cache.load(fragment.id)).toEqual(fragment);
+  } else {
+    expect(await cache.load(fragment.id)).toBeUndefined();
+    expect((await cache.list()).some((m) => m.id === fragment.id && m.status === "success")).toBe(true);
+  }
+}
+
 function rawOpen(path: string): Promise<Database> {
   return new Promise((resolve, reject) => {
     const db = new sqlite3.Database(path, (error) => {
@@ -251,7 +265,7 @@ async function withRawDatabase<T>(path: string, operation: (db: Database) => Pro
   }
 }
 
-describe("SQLite fragment cache", () => {
+describe("SQLite store", () => {
   test("creates a private versioned database and round-trips every fragment kind", async () => {
     const path = cachePath();
     const cache = await openStore({ path, now: () => 100 });
@@ -265,7 +279,7 @@ describe("SQLite fragment cache", () => {
 
     for (const fragment of fragments) {
       await cache.replace(fragment);
-      expect(await cache.load(fragment.id)).toEqual(fragment);
+      await expectStored(cache, fragment);
     }
 
     expect((await cache.list("codex")).map(({ id }) => id)).toEqual(["codex:one"]);
@@ -316,7 +330,7 @@ describe("SQLite fragment cache", () => {
     broken.dependencies[0]!.inputId = null as unknown as string;
     await expect(cache.replace(broken)).rejects.toBeInstanceOf(StoreError);
 
-    expect(await cache.load(original.id)).toEqual(original);
+    await expectStored(cache, original);
     expect((await cache.list())[0]).toMatchObject({
       id: original.id,
       parserVersion: "1",
@@ -342,7 +356,7 @@ describe("SQLite fragment cache", () => {
 
     const second = transcript("gemini", first.id, "gemini-root", "2");
     await cache.replace(second);
-    expect(await cache.load(first.id)).toEqual(second);
+    await expectStored(cache, second);
     expect((await cache.list())[0]).toMatchObject({ status: "success", parserVersion: "2" });
 
     await cache.invalidate([first.id], "file_changed");
@@ -372,11 +386,12 @@ describe("SQLite fragment cache", () => {
     };
     await cache.removeMissing(discovery);
 
-    expect(await cache.load(keep.id)).toEqual(keep);
-    expect(await cache.load(missing.id)).toBeUndefined();
-    expect(await cache.load(otherRoot.id)).toEqual(otherRoot);
-    expect(await cache.load(otherSource.id)).toEqual(otherSource);
-    expect(await cache.load(external.id)).toEqual(external);
+    const ids = new Set((await cache.list()).map((m) => m.id));
+    expect(ids.has(keep.id)).toBe(true);
+    expect(ids.has(missing.id)).toBe(false);
+    expect(ids.has(otherRoot.id)).toBe(true);
+    expect(ids.has(otherSource.id)).toBe(true);
+    expect(ids.has(external.id)).toBe(true);
     await cache.close();
   });
 
@@ -396,7 +411,7 @@ describe("SQLite fragment cache", () => {
         diagnostics: [],
       } as unknown as CompleteDiscovery),
     ).rejects.toThrow("complete authoritative");
-    expect(await cache.load(fragment.id)).toEqual(fragment);
+    await expectStored(cache, fragment);
     await cache.close();
   });
 
@@ -411,9 +426,9 @@ describe("SQLite fragment cache", () => {
 
     const rebuilt = await openStore({ path });
     try {
-      expect(await rebuilt.load("external:old")).toBeUndefined(); // prior data gone — rebuilt fresh
+      expect(await rebuilt.list()).toHaveLength(0); // prior data gone — rebuilt fresh
       await rebuilt.replace(imported("external:new"));
-      expect(await rebuilt.load("external:new")).toEqual(imported("external:new"));
+      expect((await rebuilt.list()).map((m) => m.id)).toEqual(["external:new"]);
     } finally {
       await rebuilt.close();
     }
@@ -465,7 +480,7 @@ describe("SQLite fragment cache", () => {
     const rebuilt = await rebuildStore({ path });
     const fragment = transcript("codex", "codex:rebuilt");
     await rebuilt.replace(fragment);
-    expect(await rebuilt.load(fragment.id)).toEqual(fragment);
+    await expectStored(rebuilt, fragment);
     await rebuilt.close();
   });
 
@@ -484,7 +499,7 @@ describe("SQLite fragment cache", () => {
     await rawExec(locker, "ROLLBACK");
     await rawClose(locker);
     await cache.replace(transcript("claude", "claude:after-busy"));
-    expect(await cache.load("claude:after-busy")).toBeDefined();
+    expect((await cache.list()).some((m) => m.id === "claude:after-busy")).toBe(true);
     await cache.close();
   });
 

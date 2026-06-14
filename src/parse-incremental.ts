@@ -1,7 +1,4 @@
-import { basename } from "node:path";
-import { AgentsViewImporter } from "./agentsview-import.ts";
 import {
-  compareReconciliationOrder,
   isAuthoritativeDiscovery,
   sameFileFingerprint,
   type AuxiliaryParserAdapter,
@@ -9,36 +6,16 @@ import {
   type CacheFragment,
   type CompleteDiscovery,
   type DiscoveryResult,
-  type Store,
   type ImportedFragment,
   type MaterializeSession,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type ParserDiagnostic,
-  type ReconciliationInput,
   type ResolvedQuery,
-  type TranscriptParserAdapter,
+  type Store,
 } from "./store-contract.ts";
 import { openStore, rebuildStore } from "./store.ts";
-import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
-import {
-  CLAUDE_TRANSCRIPT_PARSER,
-  createClaudeHistoryParserAdapter,
-  createClaudeTranscriptDiscoveryAdapter,
-  createClaudeTranscriptParserAdapter,
-  discoverClaudeHistory,
-} from "./parse-claude.ts";
-import {
-  createCodexTranscriptDiscoveryAdapter,
-  createCodexTranscriptParserAdapter,
-} from "./parse-codex.ts";
-import {
-  createGeminiAuxiliaryParserAdapter,
-  createGeminiTranscriptDiscoveryAdapter,
-  createGeminiTranscriptParserAdapter,
-  discoverGeminiAuxiliaryFiles,
-} from "./parse-gemini.ts";
-import { parseAll, projectLabel, type ParseOptions, type TranscriptSource } from "./parse.ts";
+import { parseAll, type ParseOptions, type TranscriptSource } from "./parse.ts";
 import {
   canonicalSessionIds,
   convertImported,
@@ -47,15 +24,7 @@ import {
 } from "./reconcile.ts";
 import type { ImportProducer, ProducerContext } from "./producer.ts";
 import { IMPORT_PRODUCERS, NATIVE_PRODUCERS } from "./producers/index.ts";
-import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
-import type {
-  AgentSource,
-  MessageRecord,
-  ParseResult,
-  SessionMeta,
-  ToolResultStat,
-  ToolUse,
-} from "./types.ts";
+import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
 
 export interface IncrementalCacheStats {
   hits: number;
@@ -102,14 +71,6 @@ function cloneStats(): IncrementalCacheStats {
   return { ...EMPTY_STATS };
 }
 
-function localDate(ts: number): string {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 function normalizeSources(sources: TranscriptSource[] | undefined): TranscriptSource[] {
   if (!sources?.length) return ["claude"];
   return [...new Set(sources)];
@@ -121,21 +82,6 @@ function diagnostic(
   severity: ParserDiagnostic["severity"] = "warning",
 ): ParserDiagnostic {
   return { code, severity, phase: "reconcile", message };
-}
-
-function transcriptStoreable(
-  fragment: CacheFragment | undefined,
-  parser: TranscriptParserAdapter,
-  file: CompleteDiscovery["files"][number],
-): fragment is ParsedFileFragment {
-  return (
-    fragment?.kind === "transcript" &&
-    fragment.contractVersion === 1 &&
-    fragment.parser.name === parser.parser.name &&
-    fragment.parser.source === parser.parser.source &&
-    fragment.parser.version === parser.parser.version &&
-    sameFileFingerprint(fragment.snapshot.fingerprint, file.fingerprint)
-  );
 }
 
 function auxiliaryStoreable(
@@ -235,69 +181,6 @@ async function cachedFragmentsForRoot(
   return out;
 }
 
-async function collectTranscriptFragments(
-  cache: Store,
-  discovery: DiscoveryResult,
-  parser: TranscriptParserAdapter,
-  stats: IncrementalCacheStats,
-  diagnostics: ParserDiagnostic[],
-  changed?: Set<string>,
-): Promise<ParsedFileFragment[]> {
-  diagnostics.push(...discovery.diagnostics);
-  if (!isAuthoritativeDiscovery(discovery)) {
-    stats.incompleteDiscoveries++;
-    diagnostics.push(
-      diagnostic(
-        "incomplete_discovery_using_cached_fragments",
-        `Using cached ${discovery.source} fragments because discovery was ${discovery.status}: ${discovery.rootPath}`,
-      ),
-    );
-    return (await cachedFragmentsForRoot(cache, discovery.source, discovery.rootId))
-      .filter((fragment): fragment is ParsedFileFragment => fragment.kind === "transcript");
-  }
-
-  const metadataByFile = new Map(
-    (await cache.list(discovery.source))
-      .filter((metadata) => metadata.fileId)
-      .map((metadata) => [metadata.fileId!, metadata]),
-  );
-  const fragments: ParsedFileFragment[] = [];
-  for (const file of discovery.files) {
-    const metadata = metadataByFile.get(file.file.id);
-    const cached = metadata?.status === "success" ? await cache.load(metadata.id) : undefined;
-    if (transcriptStoreable(cached, parser, file)) {
-      stats.hits++;
-      fragments.push(cached);
-      continue;
-    }
-    const miss = cacheMissDiagnostic(metadata, cached, parser.parser, file, "transcript");
-    if (miss) diagnostics.push(miss);
-
-    const result = parser.parseFile(file);
-    if (result.status === "current") {
-      diagnostics.push(...result.fragment.diagnostics);
-      stats.parsed++;
-      stats.replaced++;
-      await cache.replace(result.fragment);
-      fragments.push(result.fragment);
-      changed?.add(result.fragment.id);
-    } else {
-      diagnostics.push(...result.diagnostics);
-      if (metadata) await cache.invalidate([metadata.id], "file_changed");
-      if (result.status === "unstable") stats.unstable++;
-      else stats.failed++;
-    }
-  }
-
-  const before = await cache.list(discovery.source);
-  await cache.removeMissing(discovery);
-  const afterIds = new Set((await cache.list(discovery.source)).map((metadata) => metadata.id));
-  stats.deleted += before.filter(
-    (metadata) => metadata.status === "success" && !afterIds.has(metadata.id),
-  ).length;
-  return fragments;
-}
-
 async function collectAuxiliaryFragments(
   cache: Store,
   discovery: DiscoveryResult,
@@ -353,285 +236,6 @@ async function collectAuxiliaryFragments(
   }
   await cache.removeMissing(discovery);
   return fragments;
-}
-
-function selectAlternateRepresentations(fragments: ParsedFileFragment[]): ParsedFileFragment[] {
-  const selected = new Map<string, ParsedFileFragment>();
-  const out: ParsedFileFragment[] = [];
-  for (const fragment of fragments) {
-    const alternate = fragment.alternateRepresentation;
-    if (!alternate) {
-      out.push(fragment);
-      continue;
-    }
-    const previous = selected.get(alternate.logicalId);
-    if (
-      !previous ||
-      alternate.preference > previous.alternateRepresentation!.preference ||
-      (alternate.preference === previous.alternateRepresentation!.preference &&
-        (alternate.updatedAtMs ?? -Infinity) >
-          (previous.alternateRepresentation!.updatedAtMs ?? -Infinity)) ||
-      (alternate.preference === previous.alternateRepresentation!.preference &&
-        (alternate.updatedAtMs ?? -Infinity) ===
-          (previous.alternateRepresentation!.updatedAtMs ?? -Infinity) &&
-        fragment.id > previous.id)
-    ) {
-      selected.set(alternate.logicalId, fragment);
-    }
-  }
-  out.push(...selected.values());
-  return out;
-}
-
-function toolUseFromInvocation(invocation: ParsedFileFragment["facts"]["invocations"][number]): ToolUse {
-  const toolUse: ToolUse = {
-    name: invocation.name,
-    category: categorizeTool(invocation.name),
-  };
-  if (invocation.skill) toolUse.skill = invocation.skill;
-  if (invocation.args) toolUse.args = invocation.args;
-  const mcp = parseMcpTool(invocation.name);
-  if (invocation.mcpServer || mcp) toolUse.mcpServer = invocation.mcpServer ?? mcp?.server;
-  if (invocation.mcpTool || mcp) toolUse.mcpTool = invocation.mcpTool ?? mcp?.tool;
-  if (invocation.filePath) toolUse.filePath = invocation.filePath;
-  return toolUse;
-}
-
-function orderedMessages(fragments: ParsedFileFragment[]) {
-  return fragments
-    .flatMap((fragment) => fragment.facts.messages)
-    .sort((a, b) =>
-      compareReconciliationOrder(
-        {
-          timestampMs: a.timestampMs,
-          source: a.source,
-          sourceSessionId: a.sourceSessionId,
-          position: a.position,
-          stableId: a.id,
-        },
-        {
-          timestampMs: b.timestampMs,
-          source: b.source,
-          sourceSessionId: b.sourceSessionId,
-          position: b.position,
-          stableId: b.id,
-        },
-      ),
-    );
-}
-
-export function reconcileFragments(input: ReconciliationInput): ParseResult {
-  const nativeSources = new Set(input.nativeFragments.map((fragment) => fragment.parser.source));
-  const importedFragments = input.importedFragments.flatMap((fragment) => {
-    const source = fragment.provenance.coverage[0]?.source;
-    if (!source || nativeSources.has(source)) return [];
-    const converted: ParsedFileFragment = {
-      kind: "transcript",
-      id: fragment.id,
-      contractVersion: fragment.contractVersion,
-      parser: { name: "agentsview", source, version: fragment.provenance.adapter.version },
-      snapshot: fragment.provenance.database,
-      facts: fragment.facts,
-      dependencies: [],
-      diagnostics: fragment.diagnostics,
-    };
-    return [converted];
-  });
-  const fragments = selectAlternateRepresentations([...input.nativeFragments, ...importedFragments]);
-  const sessions = new Map<string, SessionMeta>();
-  const firstPrompts = new Map<string, { text: string; timestampMs: number }>();
-  const projectRoots = new Map<string, string>();
-  const dependencySelectorsBySession = new Map<string, string[]>();
-  const parentByClaudeChild = new Map<string, string>();
-
-  for (const fragment of input.auxiliaryFragments) {
-    for (const fact of fragment.facts) {
-      if (fact.kind === "session_first_prompt") {
-        const previous = firstPrompts.get(fact.sourceSessionId);
-        if (!previous || fact.timestampMs < previous.timestampMs) {
-          firstPrompts.set(fact.sourceSessionId, {
-            text: fact.firstPrompt,
-            timestampMs: fact.timestampMs,
-          });
-        }
-      } else if (fact.kind === "project_root") {
-        if (!projectRoots.has(fact.selector)) projectRoots.set(fact.selector, fact.cwd);
-      }
-    }
-  }
-
-  for (const fragment of fragments) {
-    for (const session of fragment.facts.sessions) {
-      const selectors = dependencySelectorsBySession.get(session.sourceSessionId) ?? [];
-      for (const dependency of fragment.dependencies) selectors.push(dependency.selector);
-      dependencySelectorsBySession.set(session.sourceSessionId, selectors);
-    }
-    for (const relationship of fragment.facts.relationships) {
-      if (relationship.source === "claude") {
-        parentByClaudeChild.set(
-          relationship.childSourceSessionId,
-          relationship.parentSourceSessionId,
-        );
-      }
-    }
-  }
-
-  const canonicalSessionId = (source: AgentSource, sourceSessionId: string): string =>
-    source === "claude" ? parentByClaudeChild.get(sourceSessionId) ?? sourceSessionId : sourceSessionId;
-
-  const cwdForSession = (session: ParsedFileFragment["facts"]["sessions"][number]): string => {
-    if (session.source === "gemini") {
-      const selectors = [
-        session.rawProjectId,
-        ...(dependencySelectorsBySession.get(session.sourceSessionId) ?? []),
-      ].filter((value): value is string => !!value);
-      for (const selector of selectors) {
-        const cwd = projectRoots.get(selector);
-        if (cwd) return cwd;
-      }
-    }
-    return session.cwd ?? "";
-  };
-
-  const sessionFacts = fragments
-    .flatMap((fragment) => fragment.facts.sessions)
-    .sort((a, b) =>
-      compareReconciliationOrder(
-        {
-          timestampMs: 0,
-          source: a.source,
-          sourceSessionId: a.sourceSessionId,
-          position: a.position,
-          stableId: a.id,
-        },
-        {
-          timestampMs: 0,
-          source: b.source,
-          sourceSessionId: b.sourceSessionId,
-          position: b.position,
-          stableId: b.id,
-        },
-      ),
-    );
-
-  for (const fact of sessionFacts) {
-    const sid = canonicalSessionId(fact.source, fact.sourceSessionId);
-    if (sid !== fact.sourceSessionId && sessions.has(sid)) continue;
-    const cwd = cwdForSession(fact);
-    const firstPrompt =
-      firstPrompts.get(sid)?.text ??
-      firstPrompts.get(fact.sourceSessionId)?.text ??
-      fact.firstPrompt;
-    const existing = sessions.get(sid);
-    if (!existing) {
-      sessions.set(sid, {
-        source: fact.source,
-        sessionId: sid,
-        project: cwd ? projectLabel(cwd) : fact.source === "gemini" ? `gemini/${basename(fact.transcriptPath)}` : "(unknown)",
-        cwd,
-        filePath: fact.transcriptPath,
-        ...(firstPrompt ? { firstPrompt } : {}),
-      });
-      continue;
-    }
-    if (!existing.cwd && cwd) {
-      existing.cwd = cwd;
-      existing.project = projectLabel(cwd);
-    }
-    if (!existing.firstPrompt && firstPrompt) existing.firstPrompt = firstPrompt;
-  }
-
-  // Session friction (#37): only native Claude transcript fragments observe friction, so
-  // AgentsView-imported sessions stay undefined (unknown) rather than a misleading zero.
-  // Events are identified stably (record uuid / tool_use_id), so a resumed session that
-  // replays records into a second file dedupes here instead of double-counting.
-  const frictionEventsBySession = new Map<string, FrictionEvent[]>();
-  const seenFrictionEventIds = new Set<string>();
-  for (const fragment of fragments) {
-    if (fragment.parser.name !== CLAUDE_TRANSCRIPT_PARSER.name) continue;
-    for (const fact of fragment.facts.sessions) {
-      const sid = canonicalSessionId(fact.source, fact.sourceSessionId);
-      const events = frictionEventsBySession.get(sid) ?? [];
-      if (!frictionEventsBySession.has(sid)) frictionEventsBySession.set(sid, events);
-      for (const event of fact.frictionEvents ?? []) {
-        const key = `${event.kind} ${event.eventId}`;
-        if (seenFrictionEventIds.has(key)) continue;
-        seenFrictionEventIds.add(key);
-        events.push(event);
-      }
-    }
-  }
-  for (const [sid, events] of frictionEventsBySession) {
-    const session = sessions.get(sid);
-    if (session) session.friction = foldFrictionEvents(events);
-  }
-
-  const invocationByMessage = new Map<string, ParsedFileFragment["facts"]["invocations"]>();
-  const invocationByFactId = new Map<string, ParsedFileFragment["facts"]["invocations"][number]>();
-  for (const invocation of fragments.flatMap((fragment) => fragment.facts.invocations)) {
-    const list = invocationByMessage.get(invocation.messageId) ?? [];
-    list.push(invocation);
-    invocationByMessage.set(invocation.messageId, list);
-    invocationByFactId.set(invocation.id, invocation);
-  }
-
-  const messages: MessageRecord[] = [];
-  const seenClaudeProviderMessages = new Set<string>();
-  for (const fact of orderedMessages(fragments)) {
-    if (fact.source === "claude" && fact.providerMessageId) {
-      if (seenClaudeProviderMessages.has(fact.providerMessageId)) continue;
-      seenClaudeProviderMessages.add(fact.providerMessageId);
-    }
-    const sessionId = canonicalSessionId(fact.source, fact.sourceSessionId);
-    const session = sessions.get(sessionId);
-    if (fact.stopReason && session?.friction) {
-      session.friction.stopReasons[fact.stopReason] =
-        (session.friction.stopReasons[fact.stopReason] ?? 0) + 1;
-    }
-    const cwd = fact.cwd ?? session?.cwd ?? "";
-    const toolUses = (invocationByMessage.get(fact.id) ?? [])
-      .sort((a, b) =>
-        a.position.recordIndex - b.position.recordIndex ||
-        a.position.itemIndex - b.position.itemIndex ||
-        a.id.localeCompare(b.id),
-      )
-      .map(toolUseFromInvocation);
-    messages.push({
-      source: fact.source,
-      sessionId,
-      project: cwd ? projectLabel(cwd) : session?.project ?? "(unknown)",
-      cwd,
-      gitBranch: fact.gitBranch ?? "",
-      ts: fact.timestampMs,
-      date: localDate(fact.timestampMs),
-      model: fact.model,
-      usage: fact.usage,
-      attributionSkill: fact.attributionSkill,
-      ...(fact.stopReason ? { stopReason: fact.stopReason } : {}),
-      toolUses,
-    });
-  }
-
-  const toolResults = new Map<string, ToolResultStat>();
-  for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
-    const name =
-      result.observedToolName ??
-      (result.resolvedInvocationFactId
-        ? invocationByFactId.get(result.resolvedInvocationFactId)?.name
-        : undefined);
-    if (!name) continue;
-    const stat = toolResults.get(name) ?? { count: 0, approxTokens: 0 };
-    stat.count += 1;
-    stat.approxTokens += result.approxTokens;
-    toolResults.set(name, stat);
-  }
-
-  messages.sort((a, b) => a.ts - b.ts || a.source.localeCompare(b.source) || a.sessionId.localeCompare(b.sessionId));
-  return {
-    messages,
-    sessions,
-    toolResults,
-  };
 }
 
 function producerContext(opts: IncrementalParseOptions): ProducerContext {
@@ -961,8 +565,7 @@ export async function parseAllIncrementalDetailed(
       ownsCache = true;
     }
     // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with
-    // optional SQL pushdown). The legacy monolithic `reconcileFragments` is retained (exported) only
-    // as the test oracle.
+    // optional SQL pushdown). `parseAll` (direct disk parse) is the test oracle.
     await syncStore(opts, cache, stats, diagnostics);
     return {
       parsed: await cache.readResolved({
@@ -978,7 +581,7 @@ export async function parseAllIncrementalDetailed(
     diagnostics.push(
       diagnostic(
         "cache_fallback",
-        `Falling back to uncached parsing because the fragment cache failed: ${
+        `Falling back to uncached parsing because the store failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "error",
