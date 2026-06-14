@@ -12,8 +12,8 @@ import { join } from "node:path";
 import sqlite3 from "sqlite3";
 import { openStore } from "../src/store.ts";
 import { parseAll } from "../src/parse.ts";
-import { cacheStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
-import type { IncrementalCacheStats } from "../src/parse-incremental.ts";
+import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
+import type { SyncStats } from "../src/parse-incremental.ts";
 import type { AgentSource, MessageRecord, ParseResult, ToolUse } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -41,7 +41,7 @@ function cachePath(root: string): string {
 
 const NO_AGENTSVIEW = { agentsView: "off" as const };
 
-function stats(overrides: Partial<IncrementalCacheStats> = {}): IncrementalCacheStats {
+function stats(overrides: Partial<SyncStats> = {}): SyncStats {
   return {
     hits: 0,
     parsed: 0,
@@ -164,10 +164,10 @@ function comparable(result: ParseResult) {
 }
 
 describe("parseAllIncrementalDetailed", () => {
-  test("describes cache execution modes from stats and diagnostics", () => {
-    expect(cacheStatsSummary(stats({ hits: 2 }))).toStartWith("native cache:");
+  test("describes index execution modes from stats and diagnostics", () => {
+    expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("native index:");
     expect(
-      cacheStatsSummary(stats({ imported: 1 }), [
+      syncStatsSummary(stats({ imported: 1 }), [
         {
           code: "agentsview_import_used",
           severity: "info",
@@ -175,9 +175,9 @@ describe("parseAllIncrementalDetailed", () => {
           message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
         },
       ]),
-    ).toStartWith("AgentsView-assisted cache:");
+    ).toStartWith("AgentsView-assisted index:");
     expect(
-      cacheStatsSummary(stats({ hits: 2, imported: 1 }), [
+      syncStatsSummary(stats({ hits: 2, imported: 1 }), [
         {
           code: "agentsview_import_used",
           severity: "info",
@@ -185,8 +185,8 @@ describe("parseAllIncrementalDetailed", () => {
           message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
         },
       ]),
-    ).toStartWith("mixed native + AgentsView cache:");
-    expect(cacheStatsSummary(stats({ fallback: true }))).toBe("raw parser fallback");
+    ).toStartWith("mixed native + AgentsView index:");
+    expect(syncStatsSummary(stats({ fallback: true }))).toBe("raw parser fallback");
   });
 
   test("matches the native parser and reuses unchanged fragments on a second run", async () => {
@@ -271,22 +271,6 @@ describe("parseAllIncrementalDetailed", () => {
     } finally {
       await cache.close();
     }
-  });
-
-  test("--no-cache uses the compatibility parser and does not create a cache", async () => {
-    const root = tempRoot();
-    mkdirSync(join(root, "cache"), { recursive: true });
-    const opts = {
-      codexSessionsDir: copyFixture("codex-sessions", root),
-      sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
-      noCache: true,
-      ...NO_AGENTSVIEW,
-    };
-
-    const parsed = await parseAllIncrementalDetailed(opts);
-    expect(parsed.stats.fallback).toBe(true);
-    expect(parsed.parsed.messages).toHaveLength(2);
   });
 
   test("falls back to direct parsing when the cache cannot be opened", async () => {

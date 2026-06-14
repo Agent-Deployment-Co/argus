@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   isAuthoritativeDiscovery,
   sameFileFingerprint,
@@ -5,6 +6,7 @@ import {
   type CachedFragmentMetadata,
   type CacheFragment,
   type CompleteDiscovery,
+  type DiscoveredFile,
   type DiscoveryResult,
   type ImportedFragment,
   type MaterializeSession,
@@ -26,7 +28,7 @@ import type { ImportProducer, ProducerContext } from "./producer.ts";
 import { IMPORT_PRODUCERS, NATIVE_PRODUCERS } from "./producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
 
-export interface IncrementalCacheStats {
+export interface SyncStats {
   hits: number;
   parsed: number;
   replaced: number;
@@ -40,14 +42,13 @@ export interface IncrementalCacheStats {
 
 export interface IncrementalParseDetails {
   parsed: ParseResult;
-  stats: IncrementalCacheStats;
+  stats: SyncStats;
   diagnostics: ParserDiagnostic[];
 }
 
 export interface IncrementalParseOptions extends ParseOptions {
   cachePath?: string;
   cache?: Store;
-  noCache?: boolean;
   rebuildCache?: boolean;
   agentsView?: "auto" | "off";
   agentsViewDatabasePath?: string;
@@ -55,7 +56,7 @@ export interface IncrementalParseOptions extends ParseOptions {
   query?: ResolvedQuery;
 }
 
-const EMPTY_STATS: IncrementalCacheStats = {
+const EMPTY_STATS: SyncStats = {
   hits: 0,
   parsed: 0,
   replaced: 0,
@@ -67,13 +68,24 @@ const EMPTY_STATS: IncrementalCacheStats = {
   fallback: false,
 };
 
-function cloneStats(): IncrementalCacheStats {
+function cloneStats(): SyncStats {
   return { ...EMPTY_STATS };
 }
 
 function normalizeSources(sources: TranscriptSource[] | undefined): TranscriptSource[] {
   if (!sources?.length) return ["claude"];
   return [...new Set(sources)];
+}
+
+/** Stable digest of a source's discovered files + fingerprints, for freshness attestation. */
+function filesDigest(files: DiscoveredFile[]): string {
+  const hash = createHash("sha256");
+  for (const { file, fingerprint } of [...files].sort((a, b) => (a.file.id < b.file.id ? -1 : 1))) {
+    hash.update(
+      `${file.id}${fingerprint.sizeBytes}${fingerprint.mtimeNs}${fingerprint.ctimeNs ?? ""}\n`,
+    );
+  }
+  return hash.digest("hex");
 }
 
 function diagnostic(
@@ -185,7 +197,7 @@ async function collectAuxiliaryFragments(
   cache: Store,
   discovery: DiscoveryResult,
   parser: AuxiliaryParserAdapter,
-  stats: IncrementalCacheStats,
+  stats: SyncStats,
   diagnostics: ParserDiagnostic[],
   changed?: Set<string>,
 ): Promise<ParsedAuxiliaryFragment[]> {
@@ -293,7 +305,7 @@ function canonicalizer(
 async function syncStore(
   opts: IncrementalParseOptions,
   cache: Store,
-  stats: IncrementalCacheStats,
+  stats: SyncStats,
   diagnostics: ParserDiagnostic[],
 ): Promise<void> {
   const ctx = producerContext(opts);
@@ -434,7 +446,7 @@ async function syncStore(
 
     const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
     await cache.retractSessions(prevOwned.filter((id) => !currentCanonical.has(id)));
-    await cache.setCoverage(producer.id, null, currentCanonical.size);
+    await cache.setCoverage(producer.id, filesDigest(discovery.files), currentCanonical.size);
   }
 
   for (const producer of IMPORT_PRODUCERS) {
@@ -489,7 +501,7 @@ async function gatherImportedFragments(
   producer: ImportProducer,
   ctx: ProducerContext,
   cache: Store,
-  stats: IncrementalCacheStats,
+  stats: SyncStats,
   diagnostics: ParserDiagnostic[],
   requestedSources: Set<string>,
   nativeSources: Set<string>,
@@ -531,7 +543,7 @@ async function gatherImportedFragments(
     if (!source) continue;
     diagnostics.push(
       diagnostic(
-        nativeSources.has(source) ? "agentsview_native_precedence" : "agentsview_import_used",
+        nativeSources.has(source) ? "agentsview_import_merged" : "agentsview_import_used",
         nativeSources.has(source)
           ? `AgentsView ${source} facts imported; native sessions take precedence per session.`
           : `AgentsView ${source} facts used because no native fragments were available for that source.`,
@@ -545,14 +557,6 @@ async function gatherImportedFragments(
 export async function parseAllIncrementalDetailed(
   opts: IncrementalParseOptions = {},
 ): Promise<IncrementalParseDetails> {
-  if (opts.noCache) {
-    return {
-      parsed: parseAll(opts),
-      stats: { ...cloneStats(), fallback: true },
-      diagnostics: [],
-    };
-  }
-
   const stats = cloneStats();
   const diagnostics: ParserDiagnostic[] = [];
   let cache = opts.cache;
@@ -603,14 +607,53 @@ export async function parseAllIncremental(
   return (await parseAllIncrementalDetailed(opts)).parsed;
 }
 
-export function cacheRunModeSummary(
-  stats: IncrementalCacheStats,
+/** Per-source freshness attestation: what the store has indexed vs. what's currently on disk. */
+export interface SourceScan {
+  source: string;
+  sessionCount: number;
+  lastSyncAtMs: number | null;
+  /** True when the store's indexed file set matches the current discovery (nothing pending). */
+  upToDate: boolean;
+}
+
+/**
+ * Read-only scan: compares each native source's current on-disk discovery digest to the stored
+ * coverage digest, without materializing. Answers "is the store current / anything non-indexed?".
+ */
+export async function scanStore(opts: IncrementalParseOptions = {}): Promise<SourceScan[]> {
+  const ctx = producerContext(opts);
+  const requested = new Set<string>(normalizeSources(opts.sources));
+  const cache = opts.cache ?? (await openStore({ path: opts.cachePath }));
+  try {
+    const out: SourceScan[] = [];
+    for (const producer of NATIVE_PRODUCERS) {
+      if (!requested.has(producer.source)) continue;
+      const coverage = await cache.getCoverage(producer.id);
+      const discovery = producer.discoverTranscripts(ctx);
+      const currentDigest = isAuthoritativeDiscovery(discovery)
+        ? filesDigest(discovery.files)
+        : null;
+      out.push({
+        source: producer.id,
+        sessionCount: coverage?.sessionCount ?? 0,
+        lastSyncAtMs: coverage?.lastSyncAtMs ?? null,
+        upToDate: !!coverage && currentDigest != null && coverage.filesDigest === currentDigest,
+      });
+    }
+    return out;
+  } finally {
+    if (!opts.cache) await cache.close();
+  }
+}
+
+export function syncModeSummary(
+  stats: SyncStats,
   diagnostics: ParserDiagnostic[] = [],
 ): string {
   if (stats.fallback) return "raw parser fallback";
   const agentsViewUsed = diagnostics.some((entry) => entry.code === "agentsview_import_used");
   const agentsViewProvenance = diagnostics.some(
-    (entry) => entry.code === "agentsview_native_precedence",
+    (entry) => entry.code === "agentsview_import_merged",
   );
   const nativeTouched =
     stats.hits > 0 ||
@@ -620,16 +663,16 @@ export function cacheRunModeSummary(
     stats.unstable > 0 ||
     stats.failed > 0 ||
     stats.incompleteDiscoveries > 0;
-  if (agentsViewUsed && nativeTouched) return "mixed native + AgentsView cache";
-  if (agentsViewUsed || (stats.imported > 0 && !nativeTouched)) return "AgentsView-assisted cache";
-  if (agentsViewProvenance || stats.imported > 0) return "native cache with AgentsView provenance";
-  return "native cache";
+  if (agentsViewUsed && nativeTouched) return "mixed native + AgentsView index";
+  if (agentsViewUsed || (stats.imported > 0 && !nativeTouched)) return "AgentsView-assisted index";
+  if (agentsViewProvenance || stats.imported > 0) return "native index with AgentsView provenance";
+  return "native index";
 }
 
-export function cacheStatsSummary(
-  stats: IncrementalCacheStats,
+export function syncStatsSummary(
+  stats: SyncStats,
   diagnostics: ParserDiagnostic[] = [],
 ): string {
-  if (stats.fallback) return cacheRunModeSummary(stats, diagnostics);
-  return `${cacheRunModeSummary(stats, diagnostics)}: ${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
+  if (stats.fallback) return syncModeSummary(stats, diagnostics);
+  return `${syncModeSummary(stats, diagnostics)}: ${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
 }
