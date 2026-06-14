@@ -8,7 +8,7 @@ import type {
   DiscoveryResult,
   ExternalFragmentImporter,
   TranscriptParserAdapter,
-} from "./cache-contract.ts";
+} from "./store-contract.ts";
 import type { ProducerCapabilities } from "./reconcile.ts";
 import type { AgentSource } from "./types.ts";
 

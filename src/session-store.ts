@@ -6,7 +6,7 @@
 // Phase 1a: thin wrappers over the existing parse paths so behavior is unchanged. The richer
 // query methods (listSessions/getSession/messagesForSession) and SQL-backed reads land in
 // later steps; the interface intentionally leaves room for them.
-import type { ParserDiagnostic } from "./cache-contract.ts";
+import type { ParserDiagnostic } from "./store-contract.ts";
 import {
   parseAllIncrementalDetailed,
   type IncrementalCacheStats,
@@ -87,15 +87,18 @@ class FragmentBackedSessionStore implements SessionStore {
   constructor(private readonly opts: SessionStoreOptions) {}
 
   async read(query?: SessionQuery): Promise<ParseResult> {
+    // Filters are pushed down to the materialized read model (SQL WHERE), so the reader never
+    // reconciles or post-filters in memory.
     const details = await parseAllIncrementalDetailed({
       sources: this.opts.sources,
       cachePath: this.opts.cachePath,
       agentsView: this.opts.agentsView,
       agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
+      query,
     });
     this.stats = details.stats;
     this.diagnostics = details.diagnostics;
-    return applySessionQuery(details.parsed, query);
+    return details.parsed;
   }
 
   async close(): Promise<void> {

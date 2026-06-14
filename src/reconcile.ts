@@ -18,7 +18,7 @@ import {
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type SessionFact,
-} from "./cache-contract.ts";
+} from "./store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { projectLabel } from "./parse.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
@@ -51,6 +51,40 @@ export interface ReconcileInput {
   auxiliaryFragments: ParsedAuxiliaryFragment[];
   /** Restrict output to these canonical session ids (session-incremental). Omit for all. */
   canonicalIds?: Set<string>;
+}
+
+/** reconcileSessions output: a ParseResult plus tool-result stats attributed per session. */
+export interface ReconcileResult extends ParseResult {
+  toolResultsBySession: Map<string, Map<string, ToolResultStat>>;
+}
+
+/**
+ * The canonical session ids a producer's fragments resolve to (subagent children fold onto parents
+ * when the producer canonicalizes). Used to compute touched/current session sets for materialization.
+ */
+export function canonicalSessionIds(
+  caps: ProducerCapabilities,
+  fragments: ParsedFileFragment[],
+): Set<string> {
+  const parentByChild = new Map<string, string>();
+  if (caps.canonicalizeSubagents) {
+    for (const fragment of fragments) {
+      for (const relationship of fragment.facts.relationships) {
+        parentByChild.set(relationship.childSourceSessionId, relationship.parentSourceSessionId);
+      }
+    }
+  }
+  const ids = new Set<string>();
+  for (const fragment of fragments) {
+    for (const session of fragment.facts.sessions) {
+      ids.add(
+        caps.canonicalizeSubagents
+          ? parentByChild.get(session.sourceSessionId) ?? session.sourceSessionId
+          : session.sourceSessionId,
+      );
+    }
+  }
+  return ids;
 }
 
 /** Label for a session with no resolvable cwd; gemini falls back to its transcript basename. */
@@ -140,7 +174,7 @@ function orderedMessages(fragments: ParsedFileFragment[]) {
  * `caps`; optionally scoped to `canonicalIds`. Mirrors the legacy monolithic reconciler for a single
  * source, with source conditionals replaced by capability checks.
  */
-export function reconcileSessions(input: ReconcileInput): ParseResult {
+export function reconcileSessions(input: ReconcileInput): ReconcileResult {
   const { caps, auxiliaryFragments, canonicalIds } = input;
   const fragments = selectAlternateRepresentations(input.fragments);
   const sessions = new Map<string, SessionMeta>();
@@ -307,8 +341,10 @@ export function reconcileSessions(input: ReconcileInput): ParseResult {
   }
 
   const toolResults = new Map<string, ToolResultStat>();
+  const toolResultsBySession = new Map<string, Map<string, ToolResultStat>>();
   for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
-    if (canonicalIds && !canonicalIds.has(canonicalSessionId(result.sourceSessionId))) continue;
+    const sid = canonicalSessionId(result.sourceSessionId);
+    if (canonicalIds && !canonicalIds.has(sid)) continue;
     const name =
       result.observedToolName ??
       (result.resolvedInvocationFactId
@@ -319,9 +355,18 @@ export function reconcileSessions(input: ReconcileInput): ParseResult {
     stat.count += 1;
     stat.approxTokens += result.approxTokens;
     toolResults.set(name, stat);
+    let perSession = toolResultsBySession.get(sid);
+    if (!perSession) {
+      perSession = new Map<string, ToolResultStat>();
+      toolResultsBySession.set(sid, perSession);
+    }
+    const sessionStat = perSession.get(name) ?? { count: 0, approxTokens: 0 };
+    sessionStat.count += 1;
+    sessionStat.approxTokens += result.approxTokens;
+    perSession.set(name, sessionStat);
   }
 
-  return { messages, sessions, toolResults };
+  return { messages, sessions, toolResults, toolResultsBySession };
 }
 
 /** A producer's reconciled output plus whether it yields sessions a native producer owns. */

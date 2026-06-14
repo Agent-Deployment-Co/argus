@@ -15,48 +15,55 @@ import type {
   CacheInvalidationReason,
   CachedFragmentMetadata,
   CompleteDiscovery,
-  FragmentCache,
+  FactStore,
   ImportedFragment,
   InvocationFact,
+  MaterializeSession,
   MessageFact,
   NormalizedFacts,
   ParsedAuxiliaryFragment,
   ParsedFileFragment,
   ReconstructedFragments,
+  ResolvedQuery,
   SessionFact,
   SessionRelationshipFact,
+  SourceCoverageRow,
   ToolResultFact,
-} from "./cache-contract.ts";
-import type { AgentSource } from "./types.ts";
-import { FRAGMENT_CACHE_FILE } from "./paths.ts";
+} from "./store-contract.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
+import { STORE_FILE } from "./paths.ts";
 
-export const CACHE_SCHEMA_VERSION = 3;
-export const CACHE_APPLICATION_ID = 0x41524753; // "ARGS"
-export const DEFAULT_CACHE_BUSY_TIMEOUT_MS = 2_000;
+export const STORE_SCHEMA_VERSION = 4;
+export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
+export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
-export type CacheStoreErrorCode =
+export type StoreErrorCode =
   | "busy"
   | "corrupt"
   | "incompatible_schema"
   | "unsafe_path"
   | "io";
 
-export class CacheStoreError extends Error {
+export class StoreError extends Error {
   constructor(
-    readonly code: CacheStoreErrorCode,
+    readonly code: StoreErrorCode,
     readonly cachePath: string,
     message: string,
     options?: ErrorOptions,
+    /** Older owned schema with no migration path — safe to rebuild from disk. */
+    readonly rebuildable = false,
   ) {
     super(message, options);
-    this.name = "CacheStoreError";
+    this.name = "StoreError";
   }
 }
 
-export interface OpenFragmentCacheOptions {
+export interface OpenFactStoreOptions {
   path?: string;
   busyTimeoutMs?: number;
   now?: () => number;
+  /** Internal: set when reopening after a rebuild so a second failure propagates. */
+  rebuilding?: boolean;
 }
 
 interface SqliteError extends Error {
@@ -107,12 +114,12 @@ interface FragmentStorage {
   envelopeJson: string;
 }
 
-const CREATE_V1_SQL = `
-  CREATE TABLE cache_schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at_ms INTEGER NOT NULL
-  );
-
+// The store has a single, fresh schema (no migrations): it is fully derivable from disk, so on any
+// version/ownership mismatch the caller rebuilds it from source rather than migrating. Three layers:
+//   1. cache_fragments + fact_* — the per-file substrate producers write while indexing.
+//   2. resolved_* — the trusted, reconciled read model the reader SELECTs (no reconcile on read).
+//   3. source_coverage + session_ownership — freshness attestation and per-session ownership.
+const CREATE_SCHEMA_SQL = `
   CREATE TABLE cache_fragments (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('transcript', 'auxiliary', 'external')),
@@ -132,8 +139,9 @@ const CREATE_V1_SQL = `
     parser_version TEXT,
     status TEXT NOT NULL CHECK (status IN ('success', 'failed', 'unstable')),
     invalidation_reason TEXT,
-    fragment_json TEXT NOT NULL,
     diagnostics_json TEXT NOT NULL,
+    import_provenance_json TEXT,
+    envelope_json TEXT,
     last_success_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
   );
@@ -150,15 +158,7 @@ const CREATE_V1_SQL = `
     affects_json TEXT NOT NULL,
     PRIMARY KEY (fragment_id, input_id, selector)
   );
-`;
 
-// v3 — the queryable read model. Each fragment's NormalizedFacts (or AuxiliaryFact[]) are exploded
-// into per-fact rows tagged with their owning fragment_id (CASCADE-deleted with the fragment) and
-// an `origin` marking native parsing vs external/AgentsView imports. Indexed dimensions support
-// future direct-SQL analyses; `fact_json` preserves the full fact for lossless reconstruction.
-// `cache_fragments.envelope_json` holds the fragment minus its facts, so reconstructFromRows can
-// rebuild the exact fragment from (envelope + rows) without touching the opaque `fragment_json`.
-const CREATE_V3_SQL = `
   CREATE TABLE IF NOT EXISTS fact_sessions (
     fragment_id TEXT NOT NULL REFERENCES cache_fragments(id) ON DELETE CASCADE,
     seq INTEGER NOT NULL,
@@ -236,6 +236,61 @@ const CREATE_V3_SQL = `
     selector TEXT,
     fact_json TEXT NOT NULL,
     PRIMARY KEY (fragment_id, seq)
+  );
+
+  -- The trusted read model: reconciled session rows the reader SELECTs directly.
+  CREATE TABLE resolved_sessions (
+    session_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    source TEXT NOT NULL,
+    project TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    first_ts INTEGER,
+    last_ts INTEGER,
+    message_count INTEGER NOT NULL,
+    first_prompt TEXT,
+    meta_json TEXT NOT NULL
+  );
+  CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
+  CREATE INDEX resolved_sessions_last_ts ON resolved_sessions(last_ts);
+  CREATE INDEX resolved_sessions_source ON resolved_sessions(source);
+
+  CREATE TABLE resolved_messages (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    project TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  );
+  CREATE INDEX resolved_messages_date ON resolved_messages(date);
+  CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
+  CREATE INDEX resolved_messages_source ON resolved_messages(source);
+
+  -- Tool-result stats per session (global dashboard total = SUM across all sessions).
+  CREATE TABLE resolved_tool_results (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    approx_tokens INTEGER NOT NULL,
+    PRIMARY KEY (session_id, name)
+  );
+
+  -- Per-source freshness attestation: lets a consumer know whether the store is current.
+  CREATE TABLE source_coverage (
+    source TEXT PRIMARY KEY,
+    files_digest TEXT,
+    last_sync_at_ms INTEGER,
+    session_count INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- Which producer owns each canonical session (native wins over dependent importers).
+  CREATE TABLE session_ownership (
+    session_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL
   );
 `;
 
@@ -346,7 +401,7 @@ function ensureNotSymlink(path: string): ReturnType<typeof lstatSync> | undefine
   const stat = lstatIfExists(path);
   if (!stat) return undefined;
   if (stat.isSymbolicLink()) {
-    throw new CacheStoreError(
+    throw new StoreError(
       "unsafe_path",
       path,
       `Refusing to use Argus cache path because it is a symbolic link: ${path}`,
@@ -361,7 +416,7 @@ function ensurePrivateDirectory(path: string): void {
   ensureNotSymlink(path);
   const stat = lstatSync(path);
   if (!stat.isDirectory()) {
-    throw new CacheStoreError("unsafe_path", path, `Argus cache directory is not a directory: ${path}`);
+    throw new StoreError("unsafe_path", path, `Argus cache directory is not a directory: ${path}`);
   }
   if (process.platform !== "win32") chmodSync(path, 0o700);
 }
@@ -373,7 +428,7 @@ function prepareDatabaseFile(path: string): void {
 
   if (stat) {
     if (!stat.isFile()) {
-      throw new CacheStoreError("unsafe_path", path, `Argus cache path is not a regular file: ${path}`);
+      throw new StoreError("unsafe_path", path, `Argus cache path is not a regular file: ${path}`);
     }
   } else {
     const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
@@ -421,12 +476,12 @@ function asStoreError(
   error: unknown,
   path: string,
   busyTimeoutMs: number,
-  fallbackCode: CacheStoreErrorCode = "io",
-): CacheStoreError {
-  if (error instanceof CacheStoreError) return error;
+  fallbackCode: StoreErrorCode = "io",
+): StoreError {
+  if (error instanceof StoreError) return error;
   const sqliteError = error as SqliteError;
   if (sqliteError?.code === "SQLITE_BUSY" || sqliteError?.code === "SQLITE_LOCKED") {
-    return new CacheStoreError(
+    return new StoreError(
       "busy",
       path,
       `Argus cache remained locked for ${busyTimeoutMs}ms. Close other Argus processes and retry.`,
@@ -434,7 +489,7 @@ function asStoreError(
     );
   }
   if (sqliteError?.code === "SQLITE_CORRUPT" || sqliteError?.code === "SQLITE_NOTADB") {
-    return new CacheStoreError(
+    return new StoreError(
       "corrupt",
       path,
       `Argus cache is corrupt or is not a SQLite database. ${rebuildHint(path)}`,
@@ -442,7 +497,7 @@ function asStoreError(
     );
   }
   const message = sqliteError?.message || String(error);
-  return new CacheStoreError(fallbackCode, path, `Unable to use Argus cache at ${path}: ${message}`, {
+  return new StoreError(fallbackCode, path, `Unable to use Argus cache at ${path}: ${message}`, {
     cause: error,
   });
 }
@@ -464,27 +519,6 @@ async function pragmaNumber(db: Database, name: "application_id" | "user_version
   return row?.[name] ?? 0;
 }
 
-async function columnExists(db: Database, table: string, column: string): Promise<boolean> {
-  const cols = await all<{ name: string }>(db, `PRAGMA table_info(${table})`);
-  return cols.some((col) => col.name === column);
-}
-
-/** Populate the v3 `fact_*` rows + envelope_json for fragments already in the cache (one-time). */
-async function backfillFactRows(db: Database): Promise<void> {
-  const rows = await all<{ id: string; fragment_json: string }>(
-    db,
-    "SELECT id, fragment_json FROM cache_fragments WHERE status = 'success'",
-  );
-  for (const row of rows) {
-    const fragment = JSON.parse(row.fragment_json) as CacheFragment;
-    await materializeFactRows(db, fragment);
-    await run(db, "UPDATE cache_fragments SET envelope_json = ? WHERE id = ?", [
-      envelopeJson(fragment),
-      row.id,
-    ]);
-  }
-}
-
 async function validateOwnership(db: Database, path: string): Promise<number> {
   const applicationId = await pragmaNumber(db, "application_id");
   const userVersion = await pragmaNumber(db, "user_version");
@@ -494,110 +528,77 @@ async function validateOwnership(db: Database, path: string): Promise<number> {
   );
 
   if (applicationId === 0 && userVersion === 0 && tables.length === 0) return 0;
-  if (applicationId !== CACHE_APPLICATION_ID) {
-    throw new CacheStoreError(
+  if (applicationId !== STORE_APPLICATION_ID) {
+    throw new StoreError(
       "incompatible_schema",
       path,
       `Refusing to use ${path}: it is not an Argus-owned cache database. Choose another cache path.`,
     );
   }
-  if (userVersion > CACHE_SCHEMA_VERSION) {
-    throw new CacheStoreError(
+  if (userVersion > STORE_SCHEMA_VERSION) {
+    throw new StoreError(
       "incompatible_schema",
       path,
-      `Argus cache schema ${userVersion} is newer than supported schema ${CACHE_SCHEMA_VERSION}. Upgrade Argus or use a different cache path.`,
+      `Argus cache schema ${userVersion} is newer than supported schema ${STORE_SCHEMA_VERSION}. Upgrade Argus or use a different cache path.`,
     );
   }
   return userVersion;
 }
 
-async function migrate(db: Database, fromVersion: number, now: () => number): Promise<void> {
-  for (let version = fromVersion + 1; version <= CACHE_SCHEMA_VERSION; version++) {
-    await transaction(db, async () => {
-      if (version === 1) {
-        await exec(db, CREATE_V1_SQL);
-        await run(
-          db,
-          "INSERT INTO cache_schema_migrations(version, applied_at_ms) VALUES (?, ?)",
-          [version, now()],
-        );
-      } else if (version === 2) {
-        await exec(
-          db,
-          "ALTER TABLE cache_fragments ADD COLUMN import_provenance_json TEXT",
-        );
-        await run(
-          db,
-          "INSERT INTO cache_schema_migrations(version, applied_at_ms) VALUES (?, ?)",
-          [version, now()],
-        );
-      } else if (version === 3) {
-        // The queryable fact_* rows + envelope_json become the single representation: backfill
-        // them from the v2 `fragment_json` blobs, then drop the blob column. Idempotent so
-        // partial/interrupted upgrades (and synthetic downgrades in tests) recover.
-        if (!(await columnExists(db, "cache_fragments", "envelope_json"))) {
-          await exec(db, "ALTER TABLE cache_fragments ADD COLUMN envelope_json TEXT");
-        }
-        await exec(db, CREATE_V3_SQL);
-        if (await columnExists(db, "cache_fragments", "fragment_json")) {
-          await backfillFactRows(db);
-          await exec(db, "ALTER TABLE cache_fragments DROP COLUMN fragment_json");
-        }
-        await run(
-          db,
-          "INSERT OR IGNORE INTO cache_schema_migrations(version, applied_at_ms) VALUES (?, ?)",
-          [version, now()],
-        );
-      }
-      await exec(db, `PRAGMA application_id = ${CACHE_APPLICATION_ID}`);
-      await exec(db, `PRAGMA user_version = ${version}`);
-    });
-  }
+async function createSchema(db: Database): Promise<void> {
+  await transaction(db, async () => {
+    await exec(db, CREATE_SCHEMA_SQL);
+    await exec(db, `PRAGMA application_id = ${STORE_APPLICATION_ID}`);
+    await exec(db, `PRAGMA user_version = ${STORE_SCHEMA_VERSION}`);
+  });
 }
 
-async function initializeDatabase(
-  db: Database,
-  path: string,
-  now: () => number,
-): Promise<void> {
+async function initializeDatabase(db: Database, path: string): Promise<void> {
   await exec(db, "PRAGMA foreign_keys = ON");
   const currentVersion = await validateOwnership(db, path);
 
   const check = await get<QuickCheckRow>(db, "PRAGMA quick_check(1)");
   if (check?.quick_check !== "ok") {
-    throw new CacheStoreError(
+    throw new StoreError(
       "corrupt",
       path,
-      `Argus cache failed SQLite integrity checks: ${check?.quick_check ?? "unknown error"}. ${rebuildHint(path)}`,
+      `Argus store failed SQLite integrity checks: ${check?.quick_check ?? "unknown error"}. ${rebuildHint(path)}`,
     );
   }
 
-  try {
-    await migrate(db, currentVersion, now);
-  } catch (error) {
-    if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
-    throw new CacheStoreError(
+  // No migrations: the store is derived from disk. Create it fresh when empty; any other version is
+  // a mismatch the caller resolves by rebuilding (openFactStore catches this and recreates).
+  if (currentVersion === 0) {
+    await createSchema(db);
+  } else if (currentVersion !== STORE_SCHEMA_VERSION) {
+    // Older owned schema: no migration path, but the store is derived from disk, so it is safe to
+    // rebuild. (validateOwnership already rejected *newer* schemas, which must not be destroyed.)
+    throw new StoreError(
       "incompatible_schema",
       path,
-      `Argus cache schema ${currentVersion} cannot be migrated safely. ${rebuildHint(path)}`,
-      { cause: error },
+      `Argus store schema ${currentVersion} != ${STORE_SCHEMA_VERSION}. ${rebuildHint(path)}`,
+      undefined,
+      true,
     );
   }
+
   await exec(db, "PRAGMA journal_mode = WAL");
   await exec(db, "PRAGMA synchronous = NORMAL");
   await exec(db, "PRAGMA wal_autocheckpoint = 1000");
   await exec(db, "PRAGMA trusted_schema = OFF");
 
-  // Verify the expected current schema rather than trusting user_version alone.
+  // Verify the expected schema rather than trusting user_version alone.
   try {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM cache_fragments LIMIT 1");
     await get(db, "SELECT fragment_id FROM fact_sessions LIMIT 1");
+    await get(db, "SELECT session_id FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
     if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
-    throw new CacheStoreError(
+    throw new StoreError(
       "incompatible_schema",
       path,
-      `Argus cache claims schema ${CACHE_SCHEMA_VERSION} but is missing required storage fields. ${rebuildHint(path)}`,
+      `Argus store claims schema ${STORE_SCHEMA_VERSION} but is missing required storage. ${rebuildHint(path)}`,
       { cause: error },
     );
   }
@@ -755,7 +756,50 @@ function invalidatedStatus(reason: CacheInvalidationReason): CachedFragmentMetad
   return reason === "file_changed" ? "unstable" : "failed";
 }
 
-export class SqliteFragmentCache implements FragmentCache {
+/**
+ * Resolve a query into SQL fragments. `source` is a collection *scope* (which sources this run
+ * materialized) applied to every table but never dropping empty sessions; `since/until/project` are
+ * content filters whose presence (`active`) makes the reader drop sessions with no surviving message.
+ * `--project` matches cwd via `instr` (not LIKE) to avoid wildcard injection.
+ */
+function buildResolvedFilters(query?: ResolvedQuery, sourceColumn = "source"): {
+  messageWhere: string;
+  messageParams: unknown[];
+  sourceWhere: string;
+  sourceParams: unknown[];
+  active: boolean;
+} {
+  const sourceConditions: string[] = [];
+  const sourceParams: unknown[] = [];
+  if (query?.sources?.length) {
+    sourceConditions.push(`${sourceColumn} IN (${query.sources.map(() => "?").join(", ")})`);
+    sourceParams.push(...query.sources);
+  }
+  const contentConditions: string[] = [];
+  const contentParams: unknown[] = [];
+  if (query?.since) {
+    contentConditions.push("date >= ?");
+    contentParams.push(query.since);
+  }
+  if (query?.until) {
+    contentConditions.push("date <= ?");
+    contentParams.push(query.until);
+  }
+  if (query?.projectSubstring) {
+    contentConditions.push("instr(cwd, ?) > 0");
+    contentParams.push(query.projectSubstring);
+  }
+  const all = [...sourceConditions, ...contentConditions];
+  return {
+    messageWhere: all.length ? `WHERE ${all.join(" AND ")}` : "",
+    messageParams: [...sourceParams, ...contentParams],
+    sourceWhere: sourceConditions.length ? `WHERE ${sourceConditions.join(" AND ")}` : "",
+    sourceParams,
+    active: contentConditions.length > 0,
+  };
+}
+
+export class SqliteFactStore implements FactStore {
   private queue: Promise<void> = Promise.resolve();
   private closePromise: Promise<void> | undefined;
 
@@ -960,6 +1004,182 @@ export class SqliteFragmentCache implements FragmentCache {
     }
   }
 
+  // --- Trusted read model ---------------------------------------------------------------------
+
+  readResolved(query?: ResolvedQuery): Promise<ParseResult> {
+    return this.schedule(() => this.readResolvedCore(query));
+  }
+
+  private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
+    const filters = buildResolvedFilters(query);
+    const messageRows = await all<{ session_id: string; record_json: string }>(
+      this.db,
+      `SELECT session_id, record_json FROM resolved_messages ${filters.messageWhere}
+       ORDER BY ts, source, session_id, seq`,
+      filters.messageParams,
+    );
+    const messages = messageRows.map((row) => JSON.parse(row.record_json) as MessageRecord);
+
+    const sessions = new Map<string, SessionMeta>();
+    const sessionRows = await all<{ session_id: string; meta_json: string }>(
+      this.db,
+      `SELECT session_id, meta_json FROM resolved_sessions ${filters.sourceWhere} ORDER BY rowid`,
+      filters.sourceParams,
+    );
+    if (filters.active) {
+      // Content filters drop sessions with no surviving message (matches the old in-memory filter).
+      const keep = new Set(messageRows.map((row) => row.session_id));
+      for (const row of sessionRows) {
+        if (keep.has(row.session_id)) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
+      }
+    } else {
+      for (const row of sessionRows) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
+    }
+
+    // Tool-result totals are unfiltered by date/project but scoped to the requested sources.
+    const sourceJoin = buildResolvedFilters(query, "s.source");
+    const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
+      this.db,
+      `SELECT tr.name AS name, SUM(tr.count) AS count, SUM(tr.approx_tokens) AS approx_tokens
+       FROM resolved_tool_results tr
+       JOIN resolved_sessions s ON s.session_id = tr.session_id
+       ${sourceJoin.sourceWhere}
+       GROUP BY tr.name`,
+      sourceJoin.sourceParams,
+    );
+    const toolResults = new Map<string, ToolResultStat>();
+    for (const row of toolRows) toolResults.set(row.name, { count: row.count, approxTokens: row.approx_tokens });
+
+    return { messages, sessions, toolResults };
+  }
+
+  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<void> {
+    return this.schedule(async () => {
+      if (!sessions.length) return;
+      await transaction(this.db, async () => {
+        for (const session of sessions) {
+          const sid = session.meta.sessionId;
+          // Replace this session wholesale (messages + tool results cascade via FK).
+          await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
+          const timestamps = session.messages.map((message) => message.ts);
+          const firstTs = timestamps.length ? Math.min(...timestamps) : null;
+          const lastTs = timestamps.length ? Math.max(...timestamps) : null;
+          await run(
+            this.db,
+            `INSERT INTO resolved_sessions(
+               session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              sid,
+              owner,
+              session.meta.source,
+              session.meta.project,
+              session.meta.cwd ?? "",
+              firstTs,
+              lastTs,
+              session.messages.length,
+              session.meta.firstPrompt ?? null,
+              JSON.stringify(session.meta),
+            ],
+          );
+          let seq = 0;
+          for (const message of session.messages) {
+            await run(
+              this.db,
+              `INSERT INTO resolved_messages(session_id, seq, source, ts, date, cwd, project, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [sid, seq++, message.source, message.ts, message.date, message.cwd ?? "", message.project, JSON.stringify(message)],
+            );
+          }
+          for (const tr of session.toolResults) {
+            await run(
+              this.db,
+              `INSERT INTO resolved_tool_results(session_id, name, count, approx_tokens) VALUES (?, ?, ?, ?)`,
+              [sid, tr.name, tr.count, tr.approxTokens],
+            );
+          }
+          await run(
+            this.db,
+            "INSERT OR REPLACE INTO session_ownership(session_id, owner) VALUES (?, ?)",
+            [sid, owner],
+          );
+        }
+      });
+      secureSqliteFiles(this.path);
+    });
+  }
+
+  retractSessions(sessionIds: string[]): Promise<void> {
+    return this.schedule(async () => {
+      if (!sessionIds.length) return;
+      await transaction(this.db, async () => {
+        for (const id of new Set(sessionIds)) {
+          await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [id]);
+          await run(this.db, "DELETE FROM session_ownership WHERE session_id = ?", [id]);
+        }
+      });
+    });
+  }
+
+  resolvedSessionIdsForOwner(owner: string): Promise<string[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        "SELECT session_id FROM resolved_sessions WHERE owner = ?",
+        [owner],
+      );
+      return rows.map((row) => row.session_id);
+    });
+  }
+
+  ownedSessionIdsExcept(owner: string): Promise<Set<string>> {
+    return this.schedule(async () => {
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        "SELECT session_id FROM session_ownership WHERE owner != ?",
+        [owner],
+      );
+      return new Set(rows.map((row) => row.session_id));
+    });
+  }
+
+  getCoverage(source: string): Promise<SourceCoverageRow | undefined> {
+    return this.schedule(async () => {
+      const row = await get<{
+        source: string;
+        files_digest: string | null;
+        last_sync_at_ms: number | null;
+        session_count: number;
+      }>(
+        this.db,
+        "SELECT source, files_digest, last_sync_at_ms, session_count FROM source_coverage WHERE source = ?",
+        [source],
+      );
+      if (!row) return undefined;
+      return {
+        source: row.source,
+        filesDigest: row.files_digest,
+        lastSyncAtMs: row.last_sync_at_ms,
+        sessionCount: row.session_count,
+      };
+    });
+  }
+
+  setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void> {
+    return this.schedule(async () => {
+      await run(
+        this.db,
+        `INSERT INTO source_coverage(source, files_digest, last_sync_at_ms, session_count)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(source) DO UPDATE SET
+           files_digest = excluded.files_digest,
+           last_sync_at_ms = excluded.last_sync_at_ms,
+           session_count = excluded.session_count`,
+        [source, filesDigest, this.now(), sessionCount],
+      );
+    });
+  }
+
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closePromise = this.queue
@@ -974,11 +1194,11 @@ export class SqliteFragmentCache implements FragmentCache {
   }
 }
 
-export async function openFragmentCache(
-  options: OpenFragmentCacheOptions = {},
-): Promise<SqliteFragmentCache> {
-  const path = options.path ?? FRAGMENT_CACHE_FILE;
-  const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_CACHE_BUSY_TIMEOUT_MS;
+export async function openFactStore(
+  options: OpenFactStoreOptions = {},
+): Promise<SqliteFactStore> {
+  const path = options.path ?? STORE_FILE;
+  const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_STORE_BUSY_TIMEOUT_MS;
   const now = options.now ?? Date.now;
 
   if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 60_000) {
@@ -994,11 +1214,17 @@ export async function openFragmentCache(
   let db: Database | undefined;
   try {
     db = await openDatabase(path, busyTimeoutMs);
-    await initializeDatabase(db, path, now);
-    return new SqliteFragmentCache(db, path, busyTimeoutMs, now);
+    await initializeDatabase(db, path);
+    return new SqliteFactStore(db, path, busyTimeoutMs, now);
   } catch (error) {
     if (db) await closeDatabase(db).catch(() => undefined);
-    throw asStoreError(error, path, busyTimeoutMs);
+    const storeError = asStoreError(error, path, busyTimeoutMs);
+    // No migrations: an older owned schema is rebuilt from disk (it is fully derivable). Newer or
+    // malformed schemas are NOT rebuilt — they propagate so a newer store is never destroyed.
+    if (!options.rebuilding && storeError.rebuildable) {
+      return rebuildFactStore({ ...options, rebuilding: true });
+    }
+    throw storeError;
   }
 }
 
@@ -1006,7 +1232,7 @@ function removeRegularCacheFile(path: string): void {
   const stat = ensureNotSymlink(path);
   if (!stat) return;
   if (!stat.isFile()) {
-    throw new CacheStoreError("unsafe_path", path, `Refusing to remove non-file cache path: ${path}`);
+    throw new StoreError("unsafe_path", path, `Refusing to remove non-file cache path: ${path}`);
   }
   unlinkSync(path);
 }
@@ -1014,10 +1240,10 @@ function removeRegularCacheFile(path: string): void {
 /**
  * Explicit destructive recovery path. Call only after every connection to this cache is closed.
  */
-export async function rebuildFragmentCache(
-  options: OpenFragmentCacheOptions = {},
-): Promise<SqliteFragmentCache> {
-  const path = options.path ?? FRAGMENT_CACHE_FILE;
+export async function rebuildFactStore(
+  options: OpenFactStoreOptions = {},
+): Promise<SqliteFactStore> {
+  const path = options.path ?? STORE_FILE;
   try {
     removeRegularCacheFile(`${path}-wal`);
     removeRegularCacheFile(`${path}-shm`);
@@ -1026,8 +1252,8 @@ export async function rebuildFragmentCache(
     throw asStoreError(
       error,
       path,
-      options.busyTimeoutMs ?? DEFAULT_CACHE_BUSY_TIMEOUT_MS,
+      options.busyTimeoutMs ?? DEFAULT_STORE_BUSY_TIMEOUT_MS,
     );
   }
-  return openFragmentCache(options);
+  return openFactStore(options);
 }

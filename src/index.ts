@@ -23,11 +23,11 @@ import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
-import { ACCESS_TOKEN_FILE, FRAGMENT_CACHE_FILE } from "./paths.ts";
+import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
-import type { ParserDiagnostic } from "./cache-contract.ts";
-import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
+import type { ParserDiagnostic } from "./store-contract.ts";
+import { openFactStore, rebuildFactStore } from "./store.ts";
 
 interface Flags {
   command: "report" | "push" | "login" | "cache-status" | "cache-rebuild";
@@ -381,10 +381,10 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
 }
 
 async function runCacheStatus(log: Log): Promise<void> {
-  log(`Cache path: ${FRAGMENT_CACHE_FILE}`);
+  log(`Cache path: ${STORE_FILE}`);
   let cache;
   try {
-    cache = await openFragmentCache();
+    cache = await openFactStore();
   } catch (err) {
     log(`Cache unavailable: ${err instanceof Error ? err.message : String(err)}`);
     log("Run `argus cache-rebuild` to recreate the local fragment cache.");
@@ -402,7 +402,7 @@ async function runCacheStatus(log: Log): Promise<void> {
     }
     for (const row of rows) byStatus.set(row.status, (byStatus.get(row.status) ?? 0) + 1);
     try {
-      log(`Cache size: ${formatBytes(statSync(FRAGMENT_CACHE_FILE).size)}`);
+      log(`Cache size: ${formatBytes(statSync(STORE_FILE).size)}`);
     } catch {
       log("Cache size: unavailable");
     }
@@ -425,7 +425,7 @@ async function runCacheStatus(log: Log): Promise<void> {
 }
 
 async function runCacheRebuild(log: Log): Promise<void> {
-  const cache = await rebuildFragmentCache();
+  const cache = await rebuildFactStore();
   await cache.close();
   log("Rebuilt local Argus fragment cache.");
 }

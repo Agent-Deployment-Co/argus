@@ -35,7 +35,7 @@ import {
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
   type AuxiliaryParserAdapter,
-} from "./cache-contract.ts";
+} from "./store-contract.ts";
 import { GEMINI_DIR } from "./paths.ts";
 import { parseMcpTool } from "./tool-categories.ts";
 import { emptyUsage, totalTokens, type Usage } from "./types.ts";

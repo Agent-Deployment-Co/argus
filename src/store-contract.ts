@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FrictionEvent } from "./friction.ts";
-import type { AgentSource, ParseResult, Usage } from "./types.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from "./types.ts";
 
 /**
  * Increment when serialized fragment semantics change incompatibly.
@@ -364,7 +364,30 @@ export interface ReconstructedFragments {
   importedFragments: ImportedFragment[];
 }
 
-export interface FragmentCache {
+/** Filters applied to the materialized read model at read time (SQL pushdown). */
+export interface ResolvedQuery {
+  sources?: AgentSource[];
+  since?: string;
+  until?: string;
+  projectSubstring?: string;
+}
+
+/** One reconciled session ready to materialize: its meta, messages, and tool-result stats. */
+export interface MaterializeSession {
+  meta: SessionMeta;
+  messages: MessageRecord[];
+  toolResults: Array<{ name: string; count: number; approxTokens: number }>;
+}
+
+/** Per-source freshness attestation. */
+export interface SourceCoverageRow {
+  source: string;
+  filesDigest: string | null;
+  lastSyncAtMs: number | null;
+  sessionCount: number;
+}
+
+export interface FactStore {
   load(id: string): Promise<CacheFragment | undefined>;
   list(source?: AgentSource): Promise<CachedFragmentMetadata[]>;
   replace(fragment: CacheFragment): Promise<void>;
@@ -375,6 +398,21 @@ export interface FragmentCache {
    * materialized `fact_*` rows + per-fragment envelope. Unknown or non-success ids are skipped.
    */
   reconstructFromRows(ids: string[]): Promise<ReconstructedFragments>;
+
+  // --- Trusted read model (reconciled rows; the reader SELECTs these without reconciling) ---
+  /** Read the reconciled sessions/messages/tool-results, with optional SQL-pushdown filters. */
+  readResolved(query?: ResolvedQuery): Promise<ParseResult>;
+  /** Upsert the given reconciled sessions for `owner` (replacing any prior rows per session). */
+  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<void>;
+  /** Remove reconciled sessions (deleted or handed off to another owner). */
+  retractSessions(sessionIds: string[]): Promise<void>;
+  /** Canonical session ids currently materialized for `owner`. */
+  resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
+  /** Canonical session ids owned by some producer other than `owner`. */
+  ownedSessionIdsExcept(owner: string): Promise<Set<string>>;
+  getCoverage(source: string): Promise<SourceCoverageRow | undefined>;
+  setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void>;
+
   close(): Promise<void>;
 }
 

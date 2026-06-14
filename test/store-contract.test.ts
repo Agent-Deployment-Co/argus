@@ -10,7 +10,7 @@ import {
   type ImportedFragment,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
-} from "../src/cache-contract.ts";
+} from "../src/store-contract.ts";
 
 const transcriptFile = {
   id: "claude:projects:transcript:session.jsonl",

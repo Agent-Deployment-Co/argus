@@ -9,15 +9,17 @@ import {
   type CacheFragment,
   type CompleteDiscovery,
   type DiscoveryResult,
-  type FragmentCache,
+  type FactStore,
   type ImportedFragment,
+  type MaterializeSession,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type ParserDiagnostic,
   type ReconciliationInput,
+  type ResolvedQuery,
   type TranscriptParserAdapter,
-} from "./cache-contract.ts";
-import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
+} from "./store-contract.ts";
+import { openFactStore, rebuildFactStore } from "./store.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import {
   CLAUDE_TRANSCRIPT_PARSER,
@@ -38,10 +40,10 @@ import {
 } from "./parse-gemini.ts";
 import { parseAll, projectLabel, type ParseOptions, type TranscriptSource } from "./parse.ts";
 import {
+  canonicalSessionIds,
   convertImported,
-  mergeReconciled,
   reconcileSessions,
-  type ReconciledPart,
+  type ReconcileResult,
 } from "./reconcile.ts";
 import type { ImportProducer, ProducerContext } from "./producer.ts";
 import { IMPORT_PRODUCERS, NATIVE_PRODUCERS } from "./producers/index.ts";
@@ -75,11 +77,13 @@ export interface IncrementalParseDetails {
 
 export interface IncrementalParseOptions extends ParseOptions {
   cachePath?: string;
-  cache?: FragmentCache;
+  cache?: FactStore;
   noCache?: boolean;
   rebuildCache?: boolean;
   agentsView?: "auto" | "off";
   agentsViewDatabasePath?: string;
+  /** SQL-pushdown filters applied when reading the materialized model. */
+  query?: ResolvedQuery;
 }
 
 const EMPTY_STATS: IncrementalCacheStats = {
@@ -119,7 +123,7 @@ function diagnostic(
   return { code, severity, phase: "reconcile", message };
 }
 
-function transcriptFragmentCacheable(
+function transcriptFactStoreable(
   fragment: CacheFragment | undefined,
   parser: TranscriptParserAdapter,
   file: CompleteDiscovery["files"][number],
@@ -134,7 +138,7 @@ function transcriptFragmentCacheable(
   );
 }
 
-function auxiliaryFragmentCacheable(
+function auxiliaryFactStoreable(
   fragment: CacheFragment | undefined,
   parser: AuxiliaryParserAdapter,
   file: CompleteDiscovery["files"][number],
@@ -212,7 +216,7 @@ function cacheMissDiagnostic(
 }
 
 async function cachedFragmentsForRoot(
-  cache: FragmentCache,
+  cache: FactStore,
   source: AgentSource,
   rootId: string,
 ): Promise<Array<ParsedFileFragment | ParsedAuxiliaryFragment>> {
@@ -232,11 +236,12 @@ async function cachedFragmentsForRoot(
 }
 
 async function collectTranscriptFragments(
-  cache: FragmentCache,
+  cache: FactStore,
   discovery: DiscoveryResult,
   parser: TranscriptParserAdapter,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
+  changed?: Set<string>,
 ): Promise<ParsedFileFragment[]> {
   diagnostics.push(...discovery.diagnostics);
   if (!isAuthoritativeDiscovery(discovery)) {
@@ -260,7 +265,7 @@ async function collectTranscriptFragments(
   for (const file of discovery.files) {
     const metadata = metadataByFile.get(file.file.id);
     const cached = metadata?.status === "success" ? await cache.load(metadata.id) : undefined;
-    if (transcriptFragmentCacheable(cached, parser, file)) {
+    if (transcriptFactStoreable(cached, parser, file)) {
       stats.hits++;
       fragments.push(cached);
       continue;
@@ -275,6 +280,7 @@ async function collectTranscriptFragments(
       stats.replaced++;
       await cache.replace(result.fragment);
       fragments.push(result.fragment);
+      changed?.add(result.fragment.id);
     } else {
       diagnostics.push(...result.diagnostics);
       if (metadata) await cache.invalidate([metadata.id], "file_changed");
@@ -293,11 +299,12 @@ async function collectTranscriptFragments(
 }
 
 async function collectAuxiliaryFragments(
-  cache: FragmentCache,
+  cache: FactStore,
   discovery: DiscoveryResult,
   parser: AuxiliaryParserAdapter,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
+  changed?: Set<string>,
 ): Promise<ParsedAuxiliaryFragment[]> {
   diagnostics.push(...discovery.diagnostics);
   if (!isAuthoritativeDiscovery(discovery)) {
@@ -321,7 +328,7 @@ async function collectAuxiliaryFragments(
   for (const file of discovery.files) {
     const metadata = metadataByFile.get(file.file.id);
     const cached = metadata?.status === "success" ? await cache.load(metadata.id) : undefined;
-    if (auxiliaryFragmentCacheable(cached, parser, file)) {
+    if (auxiliaryFactStoreable(cached, parser, file)) {
       stats.hits++;
       fragments.push(cached);
       continue;
@@ -336,6 +343,7 @@ async function collectAuxiliaryFragments(
       stats.replaced++;
       await cache.replace(result.fragment);
       fragments.push(result.fragment);
+      changed?.add(result.fragment.id);
     } else {
       diagnostics.push(...result.diagnostics);
       if (metadata) await cache.invalidate([metadata.id], "auxiliary_input_changed");
@@ -637,33 +645,63 @@ function producerContext(opts: IncrementalParseOptions): ProducerContext {
   };
 }
 
+/** Group a reconcile result into per-session payloads ready to materialize. */
+function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
+  const messagesBySession = new Map<string, MessageRecord[]>();
+  for (const message of output.messages) {
+    let list = messagesBySession.get(message.sessionId);
+    if (!list) {
+      list = [];
+      messagesBySession.set(message.sessionId, list);
+    }
+    list.push(message);
+  }
+  const sessions: MaterializeSession[] = [];
+  for (const [sid, meta] of output.sessions) {
+    const perSession = output.toolResultsBySession.get(sid);
+    const toolResults = perSession
+      ? [...perSession].map(([name, stat]) => ({
+          name,
+          count: stat.count,
+          approxTokens: stat.approxTokens,
+        }))
+      : [];
+    sessions.push({ meta, messages: messagesBySession.get(sid) ?? [], toolResults });
+  }
+  return sessions;
+}
+
 /**
- * The coordinator: each native producer discovers + parses + reconciles its own sessions (with its
- * own capabilities), then dependent import producers materialize only sessions no native owns. The
- * merged result is the trusted, fully reconciled `ParseResult` — the reader never reconciles.
+ * The coordinator: each native producer discovers + parses its sessions and re-materializes the
+ * **touched** canonical sessions into the trusted read model; dependent import producers then fill
+ * in only sessions no native owns. Reconciliation happens here (the producer), never at read.
  */
-async function collectAndReconcile(
+async function syncStore(
   opts: IncrementalParseOptions,
-  cache: FragmentCache,
+  cache: FactStore,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
-): Promise<ParseResult> {
+): Promise<void> {
   const ctx = producerContext(opts);
   const requested = new Set<string>(normalizeSources(opts.sources));
-  const parts: ReconciledPart[] = [];
-  const owned = new Set<string>();
-  const nativeFragments: ParsedFileFragment[] = [];
-  const auxiliaryFragments: ParsedAuxiliaryFragment[] = [];
+  let nativeFragmentCount = 0;
+  let importedCount = 0;
+  const allNativeFragments: ParsedFileFragment[] = [];
+  const allAuxiliary: ParsedAuxiliaryFragment[] = [];
 
   for (const producer of NATIVE_PRODUCERS) {
     if (!requested.has(producer.source)) continue;
+    const discovery = producer.discoverTranscripts(ctx);
+    const transcriptChanged = new Set<string>();
     const transcripts = await collectTranscriptFragments(
       cache,
-      producer.discoverTranscripts(ctx),
+      discovery,
       producer.transcriptParser(),
       stats,
       diagnostics,
+      transcriptChanged,
     );
+    const auxChanged = new Set<string>();
     const aux =
       producer.discoverAuxiliary && producer.auxiliaryParser
         ? await collectAuxiliaryFragments(
@@ -672,20 +710,46 @@ async function collectAndReconcile(
             producer.auxiliaryParser(),
             stats,
             diagnostics,
+            auxChanged,
           )
         : [];
-    nativeFragments.push(...transcripts);
-    auxiliaryFragments.push(...aux);
-    const result = reconcileSessions({
-      caps: producer.capabilities,
-      fragments: transcripts,
-      auxiliaryFragments: aux,
-    });
-    for (const sid of result.sessions.keys()) owned.add(sid);
-    parts.push({ result, dependsOnNative: false });
+    nativeFragmentCount += transcripts.length;
+    allNativeFragments.push(...transcripts);
+    allAuxiliary.push(...aux);
+
+    const currentCanonical = canonicalSessionIds(
+      producer.capabilities,
+      selectAlternateRepresentations(transcripts),
+    );
+    const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
+    const deletionsOccurred = prevOwned.some((id) => !currentCanonical.has(id));
+
+    // Re-materialize the touched sessions. A deletion can shrink a multi-file session and aux
+    // changes can refill cwd/first-prompt across sessions, so both widen "touched" to everything
+    // (rare; keeps the result identical to a full reindex). Likewise an incomplete discovery.
+    let touched: Set<string>;
+    if (!isAuthoritativeDiscovery(discovery) || auxChanged.size > 0 || deletionsOccurred) {
+      touched = currentCanonical;
+    } else {
+      const changedFragments = transcripts.filter((fragment) => transcriptChanged.has(fragment.id));
+      touched = canonicalSessionIds(producer.capabilities, changedFragments);
+    }
+
+    if (touched.size) {
+      const output = reconcileSessions({
+        caps: producer.capabilities,
+        fragments: transcripts,
+        auxiliaryFragments: aux,
+        canonicalIds: touched,
+      });
+      await cache.materializeSessions(producer.id, toMaterializeSessions(output));
+    }
+    await cache.retractSessions(prevOwned.filter((id) => !currentCanonical.has(id)));
+    if (isAuthoritativeDiscovery(discovery)) {
+      await cache.setCoverage(producer.id, null, currentCanonical.size);
+    }
   }
 
-  let importedCount = 0;
   for (const producer of IMPORT_PRODUCERS) {
     const imported = await gatherImportedFragments(
       producer,
@@ -694,47 +758,50 @@ async function collectAndReconcile(
       stats,
       diagnostics,
       requested,
-      nativeFragments,
+      allNativeFragments,
     );
     importedCount += imported.length;
+    // Read ownership *after* natives materialized, so handed-off sessions are excluded.
+    const prevOwned = await cache.resolvedSessionIdsForOwner(producer.id);
+    const nativeOwned = await cache.ownedSessionIdsExcept(producer.id);
     const converted = imported
       .map(convertImported)
       .filter((fragment): fragment is ParsedFileFragment => !!fragment);
-    if (!converted.length) continue;
-    const full = reconcileSessions({
-      caps: producer.capabilities,
-      fragments: converted,
-      auxiliaryFragments,
-    });
-    const unowned = new Set([...full.sessions.keys()].filter((id) => !owned.has(id)));
-    const result =
-      unowned.size === full.sessions.size
-        ? full
-        : reconcileSessions({
-            caps: producer.capabilities,
-            fragments: converted,
-            auxiliaryFragments,
-            canonicalIds: unowned,
-          });
-    for (const sid of result.sessions.keys()) owned.add(sid);
-    parts.push({ result, dependsOnNative: true });
+    let unowned = new Set<string>();
+    if (converted.length) {
+      const full = reconcileSessions({
+        caps: producer.capabilities,
+        fragments: converted,
+        auxiliaryFragments: allAuxiliary,
+      });
+      unowned = new Set([...full.sessions.keys()].filter((id) => !nativeOwned.has(id)));
+      const output =
+        unowned.size === full.sessions.size
+          ? full
+          : reconcileSessions({
+              caps: producer.capabilities,
+              fragments: converted,
+              auxiliaryFragments: allAuxiliary,
+              canonicalIds: unowned,
+            });
+      await cache.materializeSessions(producer.id, toMaterializeSessions(output));
+    }
+    await cache.retractSessions(prevOwned.filter((id) => !unowned.has(id)));
   }
 
   if (
-    nativeFragments.length === 0 &&
+    nativeFragmentCount === 0 &&
     importedCount === 0 &&
     diagnostics.some((entry) => entry.phase === "discovery" && entry.code === "missing_root")
   ) {
     throw new Error("No transcript roots were available for incremental parsing");
   }
-
-  return mergeReconciled(parts);
 }
 
 async function gatherImportedFragments(
   producer: ImportProducer,
   ctx: ProducerContext,
-  cache: FragmentCache,
+  cache: FactStore,
   stats: IncrementalCacheStats,
   diagnostics: ParserDiagnostic[],
   requestedSources: Set<string>,
@@ -807,15 +874,21 @@ export async function parseAllIncrementalDetailed(
   try {
     if (!cache) {
       cache = opts.rebuildCache
-        ? await rebuildFragmentCache({ path: opts.cachePath })
-        : await openFragmentCache({ path: opts.cachePath });
+        ? await rebuildFactStore({ path: opts.cachePath })
+        : await openFactStore({ path: opts.cachePath });
       ownsCache = true;
     }
-    // Each producer discovers + parses + reconciles its own sessions; dependent import producers
-    // fill in only sessions no native owns. The legacy monolithic `reconcileFragments` is retained
-    // (in this module, exported) solely as the test oracle.
+    // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with
+    // optional SQL pushdown). The legacy monolithic `reconcileFragments` is retained (exported) only
+    // as the test oracle.
+    await syncStore(opts, cache, stats, diagnostics);
     return {
-      parsed: await collectAndReconcile(opts, cache, stats, diagnostics),
+      parsed: await cache.readResolved({
+        sources: normalizeSources(opts.sources) as AgentSource[],
+        since: opts.query?.since,
+        until: opts.query?.until,
+        projectSubstring: opts.query?.projectSubstring,
+      }),
       stats,
       diagnostics,
     };
