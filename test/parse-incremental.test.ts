@@ -307,7 +307,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(parsed.parsed.messages).toHaveLength(2);
   });
 
-  test("imports AgentsView provenance without duplicating native source facts", async () => {
+  test("imports AgentsView per session: surfaces unowned sessions, never duplicates native-owned ones", async () => {
     const root = tempRoot();
     const dbPath = join(root, "agentsview.db");
     await createAgentsViewCodexDb(dbPath);
@@ -320,9 +320,17 @@ describe("parseAllIncrementalDetailed", () => {
 
     const native = parseAll(opts);
     const assisted = await parseAllIncrementalDetailed(opts);
-    expect(comparable(assisted.parsed)).toEqual(comparable(native));
+
+    // Per-session ownership (replaces the old per-source suppression): every native-owned session is
+    // preserved exactly — AgentsView never duplicates it — while the AgentsView-only session that no
+    // native producer owns is now surfaced.
+    expect(native.sessions.has("codex:codex-db")).toBe(false);
+    for (const [sid, meta] of native.sessions) {
+      expect(assisted.parsed.sessions.get(sid)).toEqual(meta);
+    }
+    expect(assisted.parsed.sessions.has("codex:codex-db")).toBe(true);
+    expect(assisted.parsed.messages.length).toBe(native.messages.length + 1);
     expect(assisted.stats.imported).toBe(1);
-    expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_native_precedence")).toBe(true);
 
     const cache = await openFragmentCache({ path: opts.cachePath });
     try {
