@@ -10,10 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sqlite3 from "sqlite3";
-import { openFragmentCache } from "../src/cache-store.ts";
+import { openStore } from "../src/store.ts";
 import { parseAll } from "../src/parse.ts";
-import { cacheStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
-import type { IncrementalCacheStats } from "../src/parse-incremental.ts";
+import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
+import type { SyncStats } from "../src/parse-incremental.ts";
 import type { AgentSource, MessageRecord, ParseResult, ToolUse } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -35,19 +35,20 @@ function copyFixture(name: string, root: string): string {
   return target;
 }
 
-function cachePath(root: string): string {
+function storePath(root: string): string {
   return join(root, "cache", "fragments.sqlite3");
 }
 
 const NO_AGENTSVIEW = { agentsView: "off" as const };
 
-function stats(overrides: Partial<IncrementalCacheStats> = {}): IncrementalCacheStats {
+function stats(overrides: Partial<SyncStats> = {}): SyncStats {
   return {
     hits: 0,
     parsed: 0,
     replaced: 0,
     imported: 0,
     deleted: 0,
+    archived: 0,
     unstable: 0,
     failed: 0,
     incompleteDiscoveries: 0,
@@ -164,29 +165,32 @@ function comparable(result: ParseResult) {
 }
 
 describe("parseAllIncrementalDetailed", () => {
-  test("describes cache execution modes from stats and diagnostics", () => {
-    expect(cacheStatsSummary(stats({ hits: 2 }))).toStartWith("native cache:");
+  test("describes sync modes in plain language from stats and diagnostics", () => {
+    expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("Read transcripts —");
     expect(
-      cacheStatsSummary(stats({ imported: 1 }), [
+      syncStatsSummary(stats({ imported: 1 }), [
         {
           code: "agentsview_import_used",
           severity: "info",
           phase: "import",
-          message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
+          message: "Loaded codex sessions from AgentsView (no codex transcripts found on disk).",
         },
       ]),
-    ).toStartWith("AgentsView-assisted cache:");
+    ).toStartWith("Loaded sessions from AgentsView —");
     expect(
-      cacheStatsSummary(stats({ hits: 2, imported: 1 }), [
+      syncStatsSummary(stats({ hits: 2, imported: 1 }), [
         {
           code: "agentsview_import_used",
           severity: "info",
           phase: "import",
-          message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
+          message: "Loaded codex sessions from AgentsView (no codex transcripts found on disk).",
         },
       ]),
-    ).toStartWith("mixed native + AgentsView cache:");
-    expect(cacheStatsSummary(stats({ fallback: true }))).toBe("raw parser fallback");
+    ).toStartWith("Read transcripts and filled gaps from AgentsView —");
+    expect(syncStatsSummary(stats({ archived: 3 }))).toContain("3 kept after leaving disk");
+    expect(syncStatsSummary(stats({ fallback: true }))).toBe(
+      "Read transcripts directly (couldn't open the local store)",
+    );
   });
 
   test("matches the native parser and reuses unchanged fragments on a second run", async () => {
@@ -197,7 +201,7 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir: copyFixture("codex-sessions", root),
       geminiDir: copyFixture("gemini", root),
       sources: ["claude", "codex", "gemini"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
@@ -217,7 +221,7 @@ describe("parseAllIncrementalDetailed", () => {
     const opts = {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
@@ -241,7 +245,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(changed.parsed.messages.at(-1)?.usage).toMatchObject({ input: 3, output: 1 });
   });
 
-  test("a complete scan tombstones deleted files only for the selected source", async () => {
+  test("a deleted transcript is tombstoned in the index but its session is retained (archived)", async () => {
     const root = tempRoot();
     const projectsDir = copyFixture("projects", root);
     const codexSessionsDir = copyFixture("codex-sessions", root);
@@ -250,81 +254,108 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir,
       historyFile: join(copyFixture("history.jsonl", root)),
       sources: ["claude", "codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
-    await parseAllIncrementalDetailed(opts);
+    const before = await parseAllIncrementalDetailed(opts);
+    const codexBefore = before.parsed.messages.filter((m) => m.source === "codex");
+    const codexSessionIds = new Set(codexBefore.map((m) => m.sessionId));
+    expect(codexBefore.length).toBeGreaterThan(0);
     rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
 
     const codexOnly = await parseAllIncrementalDetailed({
       ...opts,
       sources: ["codex"],
     });
-    expect(codexOnly.parsed.messages).toEqual([]);
-    expect(codexOnly.stats.deleted).toBe(1);
 
-    const cache = await openFragmentCache({ path: opts.cachePath });
+    // Durable archive: the session's content is RETAINED even though its transcript is gone from disk.
+    expect(codexOnly.parsed.messages).toEqual(codexBefore);
+    expect(codexOnly.stats.deleted).toBe(1); // index fragment tombstoned (the index mirrors disk)
+    expect(codexOnly.stats.archived).toBe(codexSessionIds.size); // session retained + flagged archived
+
+    const cache = await openStore({ path: opts.storePath });
     try {
+      // The structural index reflects disk (codex fragment gone); claude index untouched.
       expect((await cache.list("claude")).filter((row) => row.status === "success").length).toBeGreaterThan(0);
       expect((await cache.list("codex")).filter((row) => row.status === "success")).toEqual([]);
+      // The resolved session survives, flagged archived.
+      expect(new Set(await cache.listArchived("codex"))).toEqual(codexSessionIds);
     } finally {
       await cache.close();
     }
   });
 
-  test("--no-cache uses the compatibility parser and does not create a cache", async () => {
+  test("forget permanently removes a retained (archived) session", async () => {
     const root = tempRoot();
-    mkdirSync(join(root, "cache"), { recursive: true });
+    const codexSessionsDir = copyFixture("codex-sessions", root);
     const opts = {
-      codexSessionsDir: copyFixture("codex-sessions", root),
+      codexSessionsDir,
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
-      noCache: true,
+      storePath: storePath(root),
       ...NO_AGENTSVIEW,
     };
 
-    const parsed = await parseAllIncrementalDetailed(opts);
-    expect(parsed.stats.fallback).toBe(true);
-    expect(parsed.parsed.messages).toHaveLength(2);
+    await parseAllIncrementalDetailed(opts);
+    rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
+    await parseAllIncrementalDetailed(opts); // archives the now-off-disk session
+
+    const cache = await openStore({ path: opts.storePath });
+    try {
+      const archived = await cache.listArchived();
+      expect(archived.length).toBeGreaterThan(0);
+      await cache.retractSessions(archived);
+      expect(await cache.listArchived()).toEqual([]);
+      expect((await cache.readResolved()).messages).toEqual([]);
+    } finally {
+      await cache.close();
+    }
   });
 
   test("falls back to direct parsing when the cache cannot be opened", async () => {
     const root = tempRoot();
     mkdirSync(join(root, "cache"), { recursive: true });
-    const path = cachePath(root);
+    const path = storePath(root);
     writeFileSync(path, "not sqlite");
 
     const parsed = await parseAllIncrementalDetailed({
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
-      cachePath: path,
+      storePath: path,
       ...NO_AGENTSVIEW,
     });
 
     expect(parsed.stats.fallback).toBe(true);
-    expect(parsed.diagnostics[0]?.code).toBe("cache_fallback");
+    expect(parsed.diagnostics[0]?.code).toBe("store_fallback");
     expect(parsed.parsed.messages).toHaveLength(2);
   });
 
-  test("imports AgentsView provenance without duplicating native source facts", async () => {
+  test("imports AgentsView per session: surfaces unowned sessions, never duplicates native-owned ones", async () => {
     const root = tempRoot();
     const dbPath = join(root, "agentsview.db");
     await createAgentsViewCodexDb(dbPath);
     const opts = {
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       agentsViewDatabasePath: dbPath,
     };
 
     const native = parseAll(opts);
     const assisted = await parseAllIncrementalDetailed(opts);
-    expect(comparable(assisted.parsed)).toEqual(comparable(native));
-    expect(assisted.stats.imported).toBe(1);
-    expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_native_precedence")).toBe(true);
 
-    const cache = await openFragmentCache({ path: opts.cachePath });
+    // Per-session ownership (replaces the old per-source suppression): every native-owned session is
+    // preserved exactly — AgentsView never duplicates it — while the AgentsView-only session that no
+    // native producer owns is now surfaced.
+    expect(native.sessions.has("codex:codex-db")).toBe(false);
+    for (const [sid, meta] of native.sessions) {
+      expect(assisted.parsed.sessions.get(sid)).toEqual(meta);
+    }
+    expect(assisted.parsed.sessions.has("codex:codex-db")).toBe(true);
+    expect(assisted.parsed.messages.length).toBe(native.messages.length + 1);
+    expect(assisted.stats.imported).toBe(1);
+
+    const cache = await openStore({ path: opts.storePath });
     try {
       expect((await cache.list()).some((row) => row.kind === "external" && row.status === "success")).toBe(true);
     } finally {
@@ -340,7 +371,7 @@ describe("parseAllIncrementalDetailed", () => {
     const assisted = await parseAllIncrementalDetailed({
       codexSessionsDir: join(root, "missing-codex"),
       sources: ["codex"] as AgentSource[],
-      cachePath: cachePath(root),
+      storePath: storePath(root),
       agentsViewDatabasePath: dbPath,
     });
 
@@ -352,5 +383,121 @@ describe("parseAllIncrementalDetailed", () => {
       usage: expect.objectContaining({ input: 999, output: 1 }),
     });
     expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_import_used")).toBe(true);
+  });
+});
+
+describe("materialized fact rows", () => {
+  test("AgentsView-only facts are indexed (origin='external') and materialized", async () => {
+    const root = tempRoot();
+    const dbPath = join(root, "agentsview.db");
+    await createAgentsViewCodexDb(dbPath);
+    const cp = storePath(root);
+
+    const assisted = await parseAllIncrementalDetailed({
+      codexSessionsDir: join(root, "missing-codex"),
+      sources: ["codex"] as AgentSource[],
+      storePath: cp,
+      agentsViewDatabasePath: dbPath,
+    });
+    expect(assisted.parsed.messages).toHaveLength(1);
+
+    const db = await openDatabase(cp);
+    try {
+      // Heavy message content isn't stored; the structural index tags imports origin='external',
+      // and the reconciled session lands in the read model.
+      const idx = await new Promise<{ n: number }>((resolve, reject) =>
+        db.get("SELECT COUNT(*) AS n FROM index_sessions WHERE origin = 'external'", (e, r) =>
+          e ? reject(e) : resolve(r as { n: number }),
+        ),
+      );
+      expect(idx.n).toBeGreaterThan(0);
+      const resolved = await new Promise<{ n: number }>((resolve, reject) =>
+        db.get(
+          "SELECT COUNT(*) AS n FROM resolved_messages WHERE session_id = 'codex:codex-db'",
+          (e, r) => (e ? reject(e) : resolve(r as { n: number })),
+        ),
+      );
+      expect(resolved.n).toBe(1);
+    } finally {
+      await close(db);
+    }
+  });
+});
+
+describe("materialized read model", () => {
+  const claudeOpts = (root: string) => ({
+    projectsDir: copyFixture("projects", root),
+    historyFile: join(copyFixture("history.jsonl", root)),
+    sources: ["claude"] as AgentSource[],
+    storePath: storePath(root),
+    ...NO_AGENTSVIEW,
+  });
+
+  test("--since pushes down to SQL and returns the same subset as a date filter", async () => {
+    const root = tempRoot();
+    const opts = claudeOpts(root);
+    const full = (await parseAllIncrementalDetailed(opts)).parsed;
+    const dates = [...new Set(full.messages.map((m) => m.date))].sort();
+    const since = dates[dates.length - 1]!; // latest day only
+
+    const filtered = (await parseAllIncrementalDetailed({ ...opts, query: { since } })).parsed;
+    const expected = full.messages.filter((m) => m.date >= since);
+    expect(filtered.messages.map((m) => `${m.ts}:${m.sessionId}`)).toEqual(
+      expected.map((m) => `${m.ts}:${m.sessionId}`),
+    );
+    // Only sessions with a surviving message remain.
+    expect(new Set(filtered.sessions.keys())).toEqual(new Set(expected.map((m) => m.sessionId)));
+  });
+
+  test("--project pushes down to SQL and matches a cwd-substring filter", async () => {
+    const root = tempRoot();
+    const opts = claudeOpts(root);
+    const full = (await parseAllIncrementalDetailed(opts)).parsed;
+    const cwd = full.messages.find((m) => m.cwd)?.cwd ?? "";
+    const substring = cwd.slice(0, Math.max(1, Math.floor(cwd.length / 2)));
+
+    const filtered = (await parseAllIncrementalDetailed({ ...opts, query: { projectSubstring: substring } })).parsed;
+    const expected = full.messages.filter((m) => m.cwd.includes(substring));
+    expect(filtered.messages.map((m) => `${m.ts}:${m.sessionId}`)).toEqual(
+      expected.map((m) => `${m.ts}:${m.sessionId}`),
+    );
+  });
+
+  test("re-syncing an unchanged store is idempotent and parses nothing", async () => {
+    const root = tempRoot();
+    const opts = {
+      codexSessionsDir: copyFixture("codex-sessions", root),
+      sources: ["codex"] as AgentSource[],
+      storePath: storePath(root),
+      ...NO_AGENTSVIEW,
+    };
+    const first = (await parseAllIncrementalDetailed(opts)).parsed;
+    const second = await parseAllIncrementalDetailed(opts);
+    expect(comparable(second.parsed)).toEqual(comparable(first));
+    expect(second.stats.parsed).toBe(0); // every fragment was a cache hit
+  });
+
+  test("deleting a transcript retains its session — the store is a superset of a fresh rebuild", async () => {
+    const root = tempRoot();
+    const codexSessionsDir = copyFixture("codex-sessions", root);
+    const base = { codexSessionsDir, sources: ["codex"] as AgentSource[], ...NO_AGENTSVIEW };
+
+    const incrementalPath = storePath(root);
+    const original = (await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath })).parsed;
+    rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
+    const incremental = (await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath })).parsed;
+
+    // A fresh store sees only what's on disk now (the deleted transcript is gone).
+    const rebuilt = (
+      await parseAllIncrementalDetailed({ ...base, storePath: join(root, "cache", "fresh.sqlite3") })
+    ).parsed;
+
+    // Durable archive: the incremental store still holds the deleted session in full…
+    expect(comparable(incremental)).toEqual(comparable(original));
+    // …while the fresh rebuild, derived only from disk, has dropped it.
+    expect(rebuilt.messages.length).toBeLessThan(incremental.messages.length);
+    const rebuiltIds = new Set(rebuilt.messages.map((m) => m.sessionId));
+    const incrementalIds = new Set(incremental.messages.map((m) => m.sessionId));
+    for (const id of rebuiltIds) expect(incrementalIds.has(id)).toBe(true);
   });
 });

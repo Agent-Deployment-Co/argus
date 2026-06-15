@@ -7,7 +7,7 @@ import {
   claudeHistoryFileIdentity,
   discoverClaudeTranscripts,
   parseClaudeTranscriptFile,
-} from "../src/parse-claude.ts";
+} from "../src/producers/claude/parser.ts";
 import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
 import { parseAll } from "../src/parse.ts";
 import { aggregate } from "../src/aggregate.ts";
@@ -214,7 +214,7 @@ describe("Claude fragment friction (incremental path)", () => {
     const opts = {
       projectsDir,
       historyFile: join(root, "history.jsonl"),
-      cachePath: join(root, "cache", "fragments.sqlite3"),
+      storePath: join(root, "cache", "fragments.sqlite3"),
       agentsView: "off" as const,
     };
 

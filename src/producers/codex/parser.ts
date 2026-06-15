@@ -5,7 +5,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type CompleteDiscovery,
   type DiscoveredFile,
   type DiscoveryResult,
@@ -22,10 +22,10 @@ import {
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
-} from "./cache-contract.ts";
-import { CODEX_SESSIONS_DIR } from "./paths.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, totalTokens, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { CODEX_SESSIONS_DIR } from "../../paths.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
 export const CODEX_SESSIONS_ROOT_ID = "codex-sessions";
 export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
@@ -673,7 +673,7 @@ export function parseCodexTranscript(
 
   return {
     kind: "transcript",
-    id: stableCacheId("fragment", [snapshot.file.id]),
+    id: stableId("fragment", [snapshot.file.id]),
     contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
     parser: CODEX_PARSER,
     snapshot,

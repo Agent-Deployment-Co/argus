@@ -11,7 +11,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type AuxiliaryParseResult,
   type AuxiliaryParserAdapter,
   type DiscoveredFile,
@@ -29,11 +29,11 @@ import {
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
-} from "./cache-contract.ts";
-import { claudeFrictionEvents } from "./friction.ts";
-import { HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { claudeFrictionEvents } from "../../friction.ts";
+import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, type Usage } from "../../types.ts";
 
 export const CLAUDE_PROJECTS_ROOT_ID = "claude-projects";
 export const CLAUDE_CONFIG_ROOT_ID = "claude-config";
@@ -95,7 +95,7 @@ function fingerprintFromStat(stat: BigIntStats): FileFingerprint {
     mtimeNs: stat.mtimeNs.toString(),
     ctimeNs: stat.ctimeNs.toString(),
     physicalId: {
-      scheme: process.platform === "win32" ? "windows_file_id" : "posix_dev_inode",
+      scheme: process.platform === "win32" ? "windows_file_identity" : "posix_dev_inode",
       value: `${stat.dev}:${stat.ino}`,
     },
   };
@@ -891,7 +891,7 @@ export function parseClaudeTranscriptFile(
       status: "current",
       fragment: {
         kind: "transcript",
-        id: stableCacheId("fragment", [file.file.id]),
+        id: stableId("fragment", [file.file.id]),
         contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
         parser: CLAUDE_TRANSCRIPT_PARSER,
         snapshot: {
@@ -984,7 +984,7 @@ export function parseClaudeHistoryFile(
             : a[1].position.recordIndex - b[1].position.recordIndex,
       )
       .map(([sourceSessionId, prompt]) => ({
-        id: stableCacheId("fact:session_first_prompt", [
+        id: stableId("fact:session_first_prompt", [
           sourceSessionId,
           prompt.position.originKey,
           prompt.position.recordIndex,
@@ -1002,7 +1002,7 @@ export function parseClaudeHistoryFile(
       status: "current",
       fragment: {
         kind: "auxiliary",
-        id: stableCacheId("auxiliary-fragment", [file.file.id]),
+        id: stableId("auxiliary-fragment", [file.file.id]),
         contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
         parser: CLAUDE_HISTORY_PARSER,
         snapshot: {

@@ -7,7 +7,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type CompatibleExternalImportProbe,
   type ExternalFragmentImporter,
   type ExternalImportProbe,
@@ -22,9 +22,9 @@ import {
   type SourcePosition,
   type StableFileSnapshot,
   type ToolResultFact,
-} from "./cache-contract.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, totalTokens, type AgentSource, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, totalTokens, type AgentSource, type Usage } from "../../types.ts";
 
 const SUPPORTED_AGENTS = new Set<AgentSource>(["claude", "codex", "gemini"]);
 const REQUIRED_SCHEMA: Record<string, string[]> = {
@@ -155,7 +155,7 @@ function schemaHash(schema: SchemaColumns): string {
   const entries = [...schema.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .flatMap(([table, columns]) => [table, ...[...columns].sort()]);
-  return stableCacheId("agentsview-schema", entries);
+  return stableId("agentsview-schema", entries);
 }
 
 function missingRequiredSchema(schema: SchemaColumns): string[] {
@@ -686,10 +686,10 @@ function buildFragments(
     );
     return {
       kind: "external",
-      id: stableCacheId("agentsview-fragment", [probe.schemaFingerprint, source]),
+      id: stableId("agentsview-fragment", [probe.schemaFingerprint, source]),
       contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
       provenance: {
-        importId: stableCacheId("agentsview-import", [
+        importId: stableId("agentsview-import", [
           probe.database.file.id,
           probe.database.fingerprint.sizeBytes,
           probe.database.fingerprint.mtimeNs,

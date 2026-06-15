@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FrictionEvent } from "./friction.ts";
-import type { AgentSource, ParseResult, Usage } from "./types.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from "./types.ts";
 
 /**
  * Increment when serialized fragment semantics change incompatibly.
@@ -32,7 +32,7 @@ export interface FileIdentity {
 export type FileIdentityInput = Omit<FileIdentity, "id">;
 
 export interface PhysicalFileIdentity {
-  scheme: "posix_dev_inode" | "windows_file_id";
+  scheme: "posix_dev_inode" | "windows_file_identity";
   value: string;
 }
 
@@ -293,7 +293,7 @@ export interface ImportedFragment {
   diagnostics: ParserDiagnostic[];
 }
 
-export type CacheFragment = ParsedFileFragment | ParsedAuxiliaryFragment | ImportedFragment;
+export type StoredFragment = ParsedFileFragment | ParsedAuxiliaryFragment | ImportedFragment;
 
 export type FileParseResult =
   | {
@@ -334,9 +334,9 @@ export interface AuxiliaryParserAdapter {
   parseFile(file: DiscoveredFile): AuxiliaryParseResult;
 }
 
-export interface CachedFragmentMetadata {
+export interface FragmentMetadata {
   id: string;
-  kind: CacheFragment["kind"];
+  kind: StoredFragment["kind"];
   source?: AgentSource;
   fileId?: string;
   contractVersion: number;
@@ -345,7 +345,7 @@ export interface CachedFragmentMetadata {
   status: "success" | "failed" | "unstable";
 }
 
-export type CacheInvalidationReason =
+export type InvalidationReason =
   | "contract_version"
   | "parser_version"
   | "file_changed"
@@ -353,12 +353,104 @@ export type CacheInvalidationReason =
   | "external_import_changed"
   | "manual_rebuild";
 
-export interface FragmentCache {
-  load(id: string): Promise<CacheFragment | undefined>;
-  list(source?: AgentSource): Promise<CachedFragmentMetadata[]>;
-  replace(fragment: CacheFragment): Promise<void>;
+/**
+ * Fragments rebuilt from the materialized `fact_*` tables (the queryable read model) rather than
+ * from the opaque `fragment_json` blob. Round-trips losslessly with the stored fragments, so the
+ * reconciler can run over either source — this is what proves the rows are a faithful projection.
+ */
+export interface ReconstructedFragments {
+  nativeFragments: ParsedFileFragment[];
+  auxiliaryFragments: ParsedAuxiliaryFragment[];
+  importedFragments: ImportedFragment[];
+}
+
+/** Filters applied to the materialized read model at read time (SQL pushdown). */
+export interface ResolvedQuery {
+  sources?: AgentSource[];
+  since?: string;
+  until?: string;
+  projectSubstring?: string;
+}
+
+/** One reconciled session ready to materialize: its meta, messages, and tool-result stats. */
+export interface MaterializeSession {
+  meta: SessionMeta;
+  messages: MessageRecord[];
+  toolResults: Array<{ name: string; count: number; approxTokens: number }>;
+}
+
+/** Per-source freshness attestation. */
+export interface SourceCoverageRow {
+  source: string;
+  filesDigest: string | null;
+  lastSyncAtMs: number | null;
+  sessionCount: number;
+}
+
+/** A transcript fragment's structural index entry — enough to detect change and re-parse its file. */
+export interface TranscriptIndexEntry {
+  fragmentId: string;
+  file: FileIdentity;
+  fingerprint: FileFingerprint;
+  parserName: string | null;
+  parserVersion: string | null;
+  status: FragmentMetadata["status"];
+  /** Source session ids this fragment contributes (pre-canonicalization). */
+  sourceSessionIds: string[];
+}
+
+/** The structural index for one source: per-fragment session mapping + subagent relationships. */
+export interface TranscriptIndex {
+  fragments: TranscriptIndexEntry[];
+  relationships: Array<{ child: string; parent: string }>;
+}
+
+export interface Store {
+  /** Reconstruct an auxiliary fragment from its envelope + rows (transcripts/imports are re-parsed
+   *  from disk, not reconstructed, so they return undefined). */
+  load(id: string): Promise<StoredFragment | undefined>;
+  list(source?: AgentSource): Promise<FragmentMetadata[]>;
+  replace(fragment: StoredFragment): Promise<void>;
   removeMissing(discovery: CompleteDiscovery): Promise<void>;
-  invalidate(ids: string[], reason: CacheInvalidationReason): Promise<void>;
+  invalidate(ids: string[], reason: InvalidationReason): Promise<void>;
+  /** The structural index for a source: which sessions each transcript file maps to (+ fingerprints
+   *  for change detection). Heavy content is re-parsed from disk, not reconstructed. */
+  transcriptIndex(source: AgentSource): Promise<TranscriptIndex>;
+
+  // --- Trusted read model (reconciled rows; the reader SELECTs these without reconciling) ---
+  /** Read the reconciled sessions/messages/tool-results, with optional SQL-pushdown filters.
+   *  Includes archived (off-disk, retained) sessions — the store is a durable archive, not a
+   *  mirror of disk. */
+  readResolved(query?: ResolvedQuery): Promise<ParseResult>;
+  /**
+   * Upsert the given reconciled sessions for `owner` (replacing any prior rows per session) and
+   * mark them present (on-disk). Don't-regress guard: a re-materialization with *fewer* messages than
+   * already stored (files missing/unreadable this run, or another producer holds a richer copy) keeps
+   * the fuller stored row instead of overwriting it — regardless of owner, so a handoff can't regress
+   * the count. The archived flag is left untouched (whether a session truly left disk is decided by
+   * discovery, not a count dip). Returns the ids it kept (skipped) that way.
+   */
+  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
+  /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
+  retractSessions(sessionIds: string[]): Promise<void>;
+  /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */
+  setSessionsArchived(sessionIds: string[], archived: boolean): Promise<void>;
+  /** Canonical ids of archived (off-disk, retained) sessions, optionally restricted by source. */
+  listArchived(source?: AgentSource): Promise<string[]>;
+  /** Count of archived (off-disk, retained) sessions currently owned by `owner`. */
+  archivedCountForOwner(owner: string): Promise<number>;
+  /** Resolved session counts grouped by owning producer (present on disk vs archived). */
+  resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>>;
+  /** Canonical session ids currently materialized for `owner` (present and archived). */
+  resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
+  /** Canonical session ids owned by some producer other than `owner`. */
+  ownedSessionIdsExcept(owner: string): Promise<Set<string>>;
+  /** Drop the whole structural index + coverage (re-derivable from disk). Leaves the trusted
+   *  read model (resolved_*) and ownership intact — used by non-destructive `reindex`. */
+  clearIndex(): Promise<void>;
+  getCoverage(source: string): Promise<SourceCoverageRow | undefined>;
+  setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void>;
+
   close(): Promise<void>;
 }
 
@@ -420,7 +512,7 @@ function compareText(a: string, b: string): number {
  * Length-prefix every part before hashing so identities remain unambiguous when values contain
  * separators. Callers must pass normalized, source-owned values rather than display labels.
  */
-export function stableCacheId(namespace: string, parts: readonly (string | number)[]): string {
+export function stableId(namespace: string, parts: readonly (string | number)[]): string {
   const hash = createHash("sha256");
   hash.update(`${namespace.length}:${namespace}`);
   for (const part of parts) {
@@ -433,7 +525,7 @@ export function stableCacheId(namespace: string, parts: readonly (string | numbe
 export function createFileIdentity(input: FileIdentityInput): FileIdentity {
   return {
     ...input,
-    id: stableCacheId("file", [
+    id: stableId("file", [
       input.source ?? "",
       input.rootId,
       input.role,
@@ -449,7 +541,7 @@ export function createFactId(
   position: SourcePosition,
   sourceIdentity = "",
 ): string {
-  return stableCacheId(`fact:${kind}`, [
+  return stableId(`fact:${kind}`, [
     source,
     sourceSessionId,
     position.originKey,

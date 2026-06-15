@@ -12,7 +12,7 @@ import {
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
-  stableCacheId,
+  stableId,
   type AuxiliaryDependency,
   type AuxiliaryParseResult,
   type DiscoveredFile,
@@ -35,10 +35,10 @@ import {
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
   type AuxiliaryParserAdapter,
-} from "./cache-contract.ts";
-import { GEMINI_DIR } from "./paths.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, totalTokens, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { GEMINI_DIR } from "../../paths.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
 export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
 export const GEMINI_AUXILIARY_ROOT_ID = "gemini-config";
@@ -1083,7 +1083,7 @@ export function parseGeminiTranscriptFile(
   const representation = file.file.path.endsWith(".jsonl") ? "jsonl" : "json";
   const fragment: ParsedFileFragment = {
     kind: "transcript",
-    id: stableCacheId("fragment", [file.file.id]),
+    id: stableId("fragment", [file.file.id]),
     contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
     parser: GEMINI_TRANSCRIPT_PARSER,
     snapshot: {
@@ -1111,7 +1111,7 @@ function projectRootFact(
   itemIndex: number,
 ): ProjectRootFact {
   return {
-    id: stableCacheId("fact:project_root", [file.id, selector, cwd]),
+    id: stableId("fact:project_root", [file.id, selector, cwd]),
     kind: "project_root",
     source: "gemini",
     selector,
@@ -1239,7 +1239,7 @@ export function parseGeminiAuxiliaryFile(
 
   const fragment: ParsedAuxiliaryFragment = {
     kind: "auxiliary",
-    id: stableCacheId("auxiliary-fragment", [file.file.id]),
+    id: stableId("auxiliary-fragment", [file.file.id]),
     contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
     parser: GEMINI_AUXILIARY_PARSER,
     snapshot: {
