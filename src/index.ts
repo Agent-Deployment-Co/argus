@@ -123,16 +123,16 @@ const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 Usage:
   argus                       terminal overview (no options; just run it)
   argus report [options]      build the local HTML (or --json) dashboard
-  argus sync [options]        index new/changed sessions into the local store
-  argus reindex [options]     re-derive the index from disk (preserves archived); --force to wipe
-  argus status                show the local store path + per-source coverage
+  argus sync [options]        read new and changed sessions into the local store
+  argus reindex [options]     re-read all transcripts from disk (keeps archived); --force to wipe
+  argus status                show the local store path + per-source counts
   argus forget <id>… | --archived   permanently remove sessions from the local store
   argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
 
-The local store is a durable archive: once a session is indexed it is retained even after its
-transcript ages off disk (Claude Code keeps ~30 days), flagged "archived" rather than deleted.
-\`argus forget\` is the only thing that removes retained sessions.
+Sessions stay in the local store even after their transcripts age off disk (Claude Code keeps
+~30 days): they're kept and marked "archived" rather than deleted. \`argus forget\` is the only
+thing that removes them.
 
 Source selection (report, push, sync, reindex, forget --archived):
   --source <claude|codex|gemini|all>   transcript source(s) (default: all)
@@ -218,7 +218,7 @@ function logSyncDiagnostics(
 
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
 async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
-  log("Parsing transcripts…");
+  log("Reading transcripts…");
   const store = openSessionStore({
     sources: sourcesFor(flags.source),
     agentsView: flags.agentsView,
@@ -426,7 +426,8 @@ async function runStatus(log: Log): Promise<void> {
     try {
       const archivedAll = await store.listArchived();
       if (archivedAll.length) {
-        log(`Archived (retained, off disk): ${archivedAll.length} sessions · prune with \`argus forget --archived\``);
+        const n = archivedAll.length;
+        log(`Kept after leaving disk: ${n} session${n === 1 ? "" : "s"} · remove with \`argus forget --archived\``);
       }
     } finally {
       await store.close();
@@ -434,7 +435,7 @@ async function runStatus(log: Log): Promise<void> {
   } catch {
     // best-effort; the scan above already reported store availability
   }
-  if (scans.some((scan) => !scan.upToDate)) log("Run `argus sync` to index pending changes.");
+  if (scans.some((scan) => !scan.upToDate)) log("Run `argus sync` to pick up new and changed sessions.");
 }
 
 /** Bring the store up to date for the requested sources (producers reconcile + materialize). */
@@ -447,7 +448,7 @@ async function runSync(flags: Flags, log: Log): Promise<void> {
   try {
     const parsed = await store.read({});
     if (store.stats) log(syncStatsSummary(store.stats, store.diagnostics));
-    log(`Store now holds ${parsed.sessions.size} sessions · ${parsed.messages.length} messages.`);
+    log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
   } finally {
     await store.close();
   }
@@ -456,20 +457,25 @@ async function runSync(flags: Flags, log: Log): Promise<void> {
 async function runReindex(flags: Flags, log: Log): Promise<void> {
   if (flags.force) {
     // Destructive: drop the entire store, including archived (off-disk) sessions that cannot be
-    // re-derived from disk. Gated behind --force and announced before we delete anything.
-    const store = await openStore();
+    // re-derived from disk. Gated behind --force and announced before we delete anything. Counting
+    // archived sessions is best-effort — a damaged store can't be read, but --force still rebuilds it.
     let archived: string[] = [];
     try {
-      archived = await store.listArchived();
-    } finally {
-      await store.close();
+      const store = await openStore();
+      try {
+        archived = await store.listArchived();
+      } finally {
+        await store.close();
+      }
+    } catch {
+      // store unreadable; the rebuild below replaces it regardless
     }
     if (archived.length) {
       log(`! --force will permanently delete ${archived.length} archived session(s) no longer on disk.`);
     }
     const rebuilt = await rebuildStore();
     await rebuilt.close();
-    log("Rebuilt the local Argus store from scratch. Indexing…");
+    log("Rebuilt the local store from scratch. Re-reading all transcripts from disk…");
   } else {
     // Non-destructive: re-derive the structural index from disk while preserving the trusted read
     // model (resolved_*), so aged-out archived sessions survive a reindex.
@@ -494,7 +500,7 @@ async function runForget(flags: Flags, log: Log): Promise<void> {
       log(
         flags.archived
           ? "No archived sessions to forget."
-          : "Usage: argus forget <session-id>… (or --archived to prune all off-disk sessions).",
+          : "Usage: argus forget <session-id>… (or --archived to remove every session no longer on disk).",
       );
       return;
     }

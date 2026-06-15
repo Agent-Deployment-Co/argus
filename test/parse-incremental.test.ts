@@ -165,29 +165,32 @@ function comparable(result: ParseResult) {
 }
 
 describe("parseAllIncrementalDetailed", () => {
-  test("describes index execution modes from stats and diagnostics", () => {
-    expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("native index:");
+  test("describes sync modes in plain language from stats and diagnostics", () => {
+    expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("Read transcripts —");
     expect(
       syncStatsSummary(stats({ imported: 1 }), [
         {
           code: "agentsview_import_used",
           severity: "info",
           phase: "import",
-          message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
+          message: "Loaded codex sessions from AgentsView (no codex transcripts found on disk).",
         },
       ]),
-    ).toStartWith("AgentsView-assisted index:");
+    ).toStartWith("Loaded sessions from AgentsView —");
     expect(
       syncStatsSummary(stats({ hits: 2, imported: 1 }), [
         {
           code: "agentsview_import_used",
           severity: "info",
           phase: "import",
-          message: "AgentsView codex facts used because no native Argus fragments were available for that source.",
+          message: "Loaded codex sessions from AgentsView (no codex transcripts found on disk).",
         },
       ]),
-    ).toStartWith("mixed native + AgentsView index:");
-    expect(syncStatsSummary(stats({ fallback: true }))).toBe("raw parser fallback");
+    ).toStartWith("Read transcripts and filled gaps from AgentsView —");
+    expect(syncStatsSummary(stats({ archived: 3 }))).toContain("3 kept after leaving disk");
+    expect(syncStatsSummary(stats({ fallback: true }))).toBe(
+      "Read transcripts directly (couldn't open the local store)",
+    );
   });
 
   test("matches the native parser and reuses unchanged fragments on a second run", async () => {

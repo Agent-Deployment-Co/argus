@@ -357,7 +357,7 @@ function ensureNotSymlink(path: string): ReturnType<typeof lstatSync> | undefine
     throw new StoreError(
       "unsafe_path",
       path,
-      `Refusing to use Argus store path because it is a symbolic link: ${path}`,
+      `Won't use the store path because it's a symbolic link: ${path}`,
     );
   }
   return stat;
@@ -369,7 +369,7 @@ function ensurePrivateDirectory(path: string): void {
   ensureNotSymlink(path);
   const stat = lstatSync(path);
   if (!stat.isDirectory()) {
-    throw new StoreError("unsafe_path", path, `Argus store directory is not a directory: ${path}`);
+    throw new StoreError("unsafe_path", path, `The store folder isn't a directory: ${path}`);
   }
   if (process.platform !== "win32") chmodSync(path, 0o700);
 }
@@ -381,7 +381,7 @@ function prepareDatabaseFile(path: string): void {
 
   if (stat) {
     if (!stat.isFile()) {
-      throw new StoreError("unsafe_path", path, `Argus store path is not a regular file: ${path}`);
+      throw new StoreError("unsafe_path", path, `The store path isn't a regular file: ${path}`);
     }
   } else {
     const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
@@ -421,8 +421,8 @@ function openDatabase(path: string, busyTimeoutMs: number): Promise<Database> {
   });
 }
 
-function rebuildHint(path: string): string {
-  return `Delete ${path} (and its -wal/-shm files) to rebuild the local Argus store.`;
+function rebuildHint(_path: string): string {
+  return "Run `argus reindex --force` to rebuild the local store from your transcripts.";
 }
 
 function asStoreError(
@@ -437,7 +437,7 @@ function asStoreError(
     return new StoreError(
       "busy",
       path,
-      `Argus store remained locked for ${busyTimeoutMs}ms. Close other Argus processes and retry.`,
+      `The local store is in use by another Argus command (waited ${busyTimeoutMs}ms). Close it and try again.`,
       { cause: error },
     );
   }
@@ -445,12 +445,12 @@ function asStoreError(
     return new StoreError(
       "corrupt",
       path,
-      `Argus store is corrupt or is not a SQLite database. ${rebuildHint(path)}`,
+      `The local store is damaged or isn't a valid database. ${rebuildHint(path)}`,
       { cause: error },
     );
   }
   const message = sqliteError?.message || String(error);
-  return new StoreError(fallbackCode, path, `Unable to use Argus store at ${path}: ${message}`, {
+  return new StoreError(fallbackCode, path, `Couldn't use the local store at ${path}: ${message}`, {
     cause: error,
   });
 }
@@ -485,14 +485,14 @@ async function validateOwnership(db: Database, path: string): Promise<number> {
     throw new StoreError(
       "incompatible_schema",
       path,
-      `Refusing to use ${path}: it is not an Argus-owned store database. Choose another store path.`,
+      `${path} isn't an Argus store. Point Argus at a different location, or remove that file.`,
     );
   }
   if (userVersion > STORE_SCHEMA_VERSION) {
     throw new StoreError(
       "incompatible_schema",
       path,
-      `Argus store schema ${userVersion} is newer than supported schema ${STORE_SCHEMA_VERSION}. Upgrade Argus or use a different store path.`,
+      `The local store was written by a newer version of Argus. Update Argus to read it.`,
     );
   }
   return userVersion;
@@ -532,8 +532,8 @@ async function migrateSchema(db: Database, path: string, fromVersion: number): P
       throw new StoreError(
         "incompatible_schema",
         path,
-        `Argus store schema ${version} has no migration path to ${STORE_SCHEMA_VERSION}. ` +
-          `Run \`argus reindex --force\` to rebuild from disk (this drops aged-out archived sessions).`,
+        `Argus can't upgrade the local store from this older version. ` +
+          `Run \`argus reindex --force\` to rebuild it from your transcripts (this drops sessions no longer on disk).`,
       );
     }
     await transaction(db, async () => {
@@ -553,7 +553,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     throw new StoreError(
       "corrupt",
       path,
-      `Argus store failed SQLite integrity checks: ${check?.quick_check ?? "unknown error"}. ${rebuildHint(path)}`,
+      `The local store failed an integrity check (${check?.quick_check ?? "unknown error"}). ${rebuildHint(path)}`,
     );
   }
 
@@ -583,7 +583,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     throw new StoreError(
       "incompatible_schema",
       path,
-      `Argus store claims schema ${STORE_SCHEMA_VERSION} but is missing required storage. ${rebuildHint(path)}`,
+      `The local store is missing data Argus expects. ${rebuildHint(path)}`,
       { cause: error },
     );
   }
@@ -1306,7 +1306,7 @@ function removeRegularStoreFile(path: string): void {
   const stat = ensureNotSymlink(path);
   if (!stat) return;
   if (!stat.isFile()) {
-    throw new StoreError("unsafe_path", path, `Refusing to remove non-file store path: ${path}`);
+    throw new StoreError("unsafe_path", path, `Won't remove the store path because it isn't a regular file: ${path}`);
   }
   unlinkSync(path);
 }
