@@ -189,31 +189,13 @@ function uniqueDiagnostics(entries: ParserDiagnostic[]): ParserDiagnostic[] {
   return out;
 }
 
-function logSyncDiagnostics(
-  diagnostics: ParserDiagnostic[],
-  flags: Flags,
-  log: Log,
-): void {
-  const surfacedInfo = new Set([
-    "agentsview_import_used",
-    "agentsview_import_merged",
-    "reindex_file_changed",
-    "reindex_parser_version_changed",
-    "reindex_contract_version_changed",
-    "reindex_fragment_unavailable",
-  ]);
-  if (flags.agentsView === "off") surfacedInfo.add("agentsview_disabled");
-  if (flags.agentsViewDatabasePath) surfacedInfo.add("agentsview_unavailable");
-
-  const surfaced = uniqueDiagnostics(diagnostics).filter(
-    (entry) => entry.severity !== "info" || surfacedInfo.has(entry.code),
-  );
-  const important = surfaced.filter((entry) => entry.severity !== "info").slice(0, 5);
-  const info = surfaced.filter((entry) => entry.severity === "info").slice(0, 5);
-  for (const entry of important) log(`  ! ${entry.message}`);
-  for (const entry of info) log(`  i ${entry.message}`);
-  const omitted = surfaced.length - important.length - info.length;
-  if (omitted > 0) log(`  i ${omitted} additional store diagnostics omitted.`);
+/** Diagnostics worth interrupting a report for: something that makes the result wrong or incomplete.
+ *  A missing source root just means the user doesn't use that tool — not a problem to report.
+ *  Routine notes (re-read files, AgentsView provenance) are left for `argus sync`. */
+function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
+  return uniqueDiagnostics(diagnostics)
+    .filter((entry) => entry.severity === "error" && entry.code !== "missing_root")
+    .slice(0, 5);
 }
 
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
@@ -234,8 +216,9 @@ async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
   } finally {
     await store.close();
   }
-  if (store.stats) log(`  ${syncStatsSummary(store.stats, store.diagnostics)}`);
-  logSyncDiagnostics(store.diagnostics, flags, log);
+  // Keep reports quiet: only call out problems that affect the result (and explain a degraded read).
+  if (store.stats?.fallback) log(`  ${syncStatsSummary(store.stats, store.diagnostics)}`);
+  for (const entry of reportProblems(store.diagnostics)) log(`  ! ${entry.message}`);
 
   log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);
 
