@@ -123,32 +123,32 @@ function reparseReason(
   kind: "transcript" | "auxiliary",
 ): ParserDiagnostic | undefined {
   if (!metadata) return undefined;
-  const label = `${parser.source} ${kind} ${file.file.relativePath}`;
+  const label = `${parser.source} ${file.file.relativePath}`;
   if (metadata.status !== "success") {
     return diagnostic(
       "reindex_previous_not_successful",
-      `Reparsing ${label} because the previous stored fragment is ${metadata.status}.`,
+      `Re-reading ${label} (the last read didn't finish).`,
       "info",
     );
   }
   if (!fragment) {
     return diagnostic(
       "reindex_fragment_unavailable",
-      `Reparsing ${label} because stored metadata exists but the fragment could not be loaded.`,
+      `Re-reading ${label} (couldn't reuse the saved copy).`,
       "warning",
     );
   }
   if (fragment.kind !== kind) {
     return diagnostic(
       "reindex_kind_changed",
-      `Reparsing ${label} because the stored fragment kind changed from ${fragment.kind}.`,
+      `Re-reading ${label} (the file's type changed).`,
       "info",
     );
   }
   if (fragment.contractVersion !== 1) {
     return diagnostic(
       "reindex_contract_version_changed",
-      `Reparsing ${label} because the stored contract version is ${fragment.contractVersion}.`,
+      `Re-reading ${label} (Argus changed how it stores this data).`,
       "info",
     );
   }
@@ -159,20 +159,20 @@ function reparseReason(
   ) {
     return diagnostic(
       "reindex_parser_version_changed",
-      `Reparsing ${label} because the parser changed from ${fragment.parser.name}@${fragment.parser.version} to ${parser.name}@${parser.version}.`,
+      `Re-reading ${label} (Argus updated how it reads this file).`,
       "info",
     );
   }
   if (!sameFileFingerprint(fragment.snapshot.fingerprint, file.fingerprint)) {
     return diagnostic(
       "reindex_file_changed",
-      `Reparsing ${label} because its filesystem fingerprint changed.`,
+      `Re-reading ${label} (the file changed).`,
       "info",
     );
   }
   return diagnostic(
     "reindex_not_reusable",
-    `Reparsing ${label} because the stored fragment was not reusable.`,
+    `Re-reading ${label} (couldn't reuse the saved copy).`,
     "info",
   );
 }
@@ -211,7 +211,7 @@ async function collectAuxiliaryFragments(
     diagnostics.push(
       diagnostic(
         "incomplete_auxiliary_discovery_using_stored_fragments",
-        `Using stored auxiliary fragments because discovery was ${discovery.status}: ${discovery.rootPath}`,
+        `Couldn't fully read supporting data (${discovery.status}); used the saved copy: ${discovery.rootPath}`,
       ),
     );
     return (await storedFragmentsForRoot(store, discovery.source, discovery.rootId))
@@ -350,7 +350,7 @@ async function syncStore(
       diagnostics.push(
         diagnostic(
           "incomplete_discovery_keeps_resolved",
-          `Keeping existing ${discovery.source} sessions because discovery was ${discovery.status}: ${discovery.rootPath}`,
+          `Couldn't fully read ${discovery.source} sessions (${discovery.status}); kept what's already saved: ${discovery.rootPath}`,
         ),
       );
       const existing = await store.resolvedSessionIdsForOwner(producer.id);
@@ -382,7 +382,7 @@ async function syncStore(
         diagnostics.push(
           diagnostic(
             "reindex_file_changed",
-            `Reparsing ${producer.source} transcript ${file.file.relativePath} because it changed.`,
+            `Re-reading ${producer.source} ${file.file.relativePath} (the file changed).`,
             "info",
           ),
         );
@@ -515,7 +515,7 @@ async function syncStore(
     importedCount === 0 &&
     diagnostics.some((entry) => entry.phase === "discovery" && entry.code === "missing_root")
   ) {
-    throw new Error("No transcript roots were available for incremental parsing");
+    throw new Error("No transcripts were found to read.");
   }
 }
 
@@ -531,7 +531,7 @@ async function gatherImportedFragments(
   const importer = producer.importer(ctx);
   if (!importer) {
     diagnostics.push(
-      diagnostic(`${producer.id}_disabled`, `${producer.id} import disabled by user control.`, "info"),
+      diagnostic(`${producer.id}_disabled`, `AgentsView import is turned off.`, "info"),
     );
     return [];
   }
@@ -541,7 +541,7 @@ async function gatherImportedFragments(
     diagnostics.push(
       diagnostic(
         `${producer.id}_unavailable`,
-        `${producer.id} import unavailable: ${probe.reason}`,
+        `Can't use AgentsView: ${probe.reason}`,
         "info",
       ),
     );
@@ -567,8 +567,8 @@ async function gatherImportedFragments(
       diagnostic(
         nativeSources.has(source) ? "agentsview_import_merged" : "agentsview_import_used",
         nativeSources.has(source)
-          ? `AgentsView ${source} facts imported; native sessions take precedence per session.`
-          : `AgentsView ${source} facts used because no native fragments were available for that source.`,
+          ? `Loaded extra ${source} sessions from AgentsView; your on-disk sessions take precedence.`
+          : `Loaded ${source} sessions from AgentsView (no ${source} transcripts found on disk).`,
         "info",
       ),
     );
@@ -607,7 +607,7 @@ export async function parseAllIncrementalDetailed(
     diagnostics.push(
       diagnostic(
         "store_fallback",
-        `Falling back to unstored parsing because the store failed: ${
+        `Couldn't open the local store; read transcripts directly instead: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "error",
@@ -672,11 +672,12 @@ export async function scanStore(opts: IncrementalParseOptions = {}): Promise<Sou
   }
 }
 
+/** A plain-language phrase describing where this sync's data came from. */
 export function syncModeSummary(
   stats: SyncStats,
   diagnostics: ParserDiagnostic[] = [],
 ): string {
-  if (stats.fallback) return "raw parser fallback";
+  if (stats.fallback) return "Read transcripts directly (couldn't open the local store)";
   const agentsViewUsed = diagnostics.some((entry) => entry.code === "agentsview_import_used");
   const agentsViewProvenance = diagnostics.some(
     (entry) => entry.code === "agentsview_import_merged",
@@ -690,16 +691,24 @@ export function syncModeSummary(
     stats.unstable > 0 ||
     stats.failed > 0 ||
     stats.incompleteDiscoveries > 0;
-  if (agentsViewUsed && nativeTouched) return "mixed native + AgentsView index";
-  if (agentsViewUsed || (stats.imported > 0 && !nativeTouched)) return "AgentsView-assisted index";
-  if (agentsViewProvenance || stats.imported > 0) return "native index with AgentsView provenance";
-  return "native index";
+  if (agentsViewUsed && nativeTouched) return "Read transcripts and filled gaps from AgentsView";
+  if (agentsViewUsed || (stats.imported > 0 && !nativeTouched)) return "Loaded sessions from AgentsView";
+  if (agentsViewProvenance || stats.imported > 0) return "Read transcripts (AgentsView also available)";
+  return "Read transcripts";
 }
 
+/** One-line, plain-language summary of what a sync did, for the user. */
 export function syncStatsSummary(
   stats: SyncStats,
   diagnostics: ParserDiagnostic[] = [],
 ): string {
-  if (stats.fallback) return syncModeSummary(stats, diagnostics);
-  return `${syncModeSummary(stats, diagnostics)}: ${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.archived} archived, ${stats.unstable} unstable, ${stats.failed} failed`;
+  const mode = syncModeSummary(stats, diagnostics);
+  if (stats.fallback) return mode;
+  const parts = [`${stats.parsed} new or changed`];
+  if (stats.hits) parts.push(`${stats.hits} unchanged`);
+  if (stats.imported) parts.push(`${stats.imported} from AgentsView`);
+  if (stats.archived) parts.push(`${stats.archived} kept after leaving disk`);
+  const unreadable = stats.unstable + stats.failed;
+  if (unreadable) parts.push(`${unreadable} couldn't be read`);
+  return `${mode} — ${parts.join(", ")}`;
 }
