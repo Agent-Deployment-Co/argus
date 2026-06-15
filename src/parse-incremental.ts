@@ -318,8 +318,6 @@ async function syncStore(
 ): Promise<void> {
   const ctx = producerContext(opts);
   const requested = new Set<string>(normalizeSources(opts.sources));
-  let nativeFragmentCount = 0;
-  let importedCount = 0;
   const nativeSources = new Set<string>();
   const allAuxiliary: ParsedAuxiliaryFragment[] = [];
 
@@ -354,7 +352,6 @@ async function syncStore(
         ),
       );
       const existing = await store.resolvedSessionIdsForOwner(producer.id);
-      nativeFragmentCount += existing.length;
       if (existing.length) nativeSources.add(producer.source);
       continue;
     }
@@ -414,7 +411,6 @@ async function syncStore(
         (entry) => entry.status === "success" && !afterIds.has(entry.fragmentId),
       ).length;
     }
-    nativeFragmentCount += after.fragments.length;
     if (after.fragments.length) nativeSources.add(producer.source);
 
     const canon = canonicalizer(producer.capabilities, after.relationships);
@@ -430,7 +426,6 @@ async function syncStore(
         ? currentCanonical
         : canonicalSessionIds(producer.capabilities, changedFragments);
 
-    let guardedArchived: string[] = [];
     if (touched.size) {
       // Re-parse every file of each touched session from disk (reuse already-parsed changed files).
       const fragments: ParsedFileFragment[] = [];
@@ -450,9 +445,9 @@ async function syncStore(
         auxiliaryFragments: aux,
         canonicalIds: touched,
       });
-      // materializeSessions marks these present (archived = 0), except sessions whose files partially
-      // aged out — it keeps the fuller stored copy and flags them archived (returned here).
-      guardedArchived = await store.materializeSessions(producer.id, toMaterializeSessions(output));
+      // Marks these present (archived = 0); the store's don't-regress guard keeps the fuller stored
+      // copy if a re-parse came back short (e.g. a file partly aged out or failed to parse this run).
+      await store.materializeSessions(producer.id, toMaterializeSessions(output));
     }
 
     // Durable archive: sessions we owned that are no longer discoverable on disk are RETAINED and
@@ -461,12 +456,12 @@ async function syncStore(
     const prevOwned = await store.resolvedSessionIdsForOwner(producer.id);
     const disappeared = prevOwned.filter((id) => !currentCanonical.has(id));
     await store.setSessionsArchived(disappeared, true);
-    stats.archived += disappeared.length + guardedArchived.length;
+    stats.archived += disappeared.length;
     await store.setCoverage(producer.id, filesDigest(discovery.files), currentCanonical.size);
   }
 
   for (const producer of IMPORT_PRODUCERS) {
-    const imported = await gatherImportedFragments(
+    const result = await gatherImportedFragments(
       producer,
       ctx,
       store,
@@ -475,47 +470,36 @@ async function syncStore(
       requested,
       nativeSources,
     );
-    importedCount += imported.length;
+    // If we couldn't actually read the import source (disabled / locked / incompatible), we have NO
+    // information about what it currently holds — keep prior imported sessions as last-known and do
+    // NOT archive, exactly like an incomplete native discovery. Only an authoritative read archives.
+    if (!result.authoritative) continue;
+
     // Read ownership *after* natives materialized, so handed-off sessions are excluded.
     const prevOwned = await store.resolvedSessionIdsForOwner(producer.id);
     const nativeOwned = await store.ownedSessionIdsExcept(producer.id);
-    const converted = imported
+    const converted = result.fragments
       .map(convertImported)
       .filter((fragment): fragment is ParsedFileFragment => !!fragment);
     let unowned = new Set<string>();
-    let importGuard: string[] = [];
     if (converted.length) {
+      // Reconcile once to learn the canonical session set, then materialize only the sessions no
+      // native producer owns (filtering the result is equivalent to re-reconciling scoped to them).
       const full = reconcileSessions({
         caps: producer.capabilities,
         fragments: converted,
         auxiliaryFragments: allAuxiliary,
       });
       unowned = new Set([...full.sessions.keys()].filter((id) => !nativeOwned.has(id)));
-      const output =
-        unowned.size === full.sessions.size
-          ? full
-          : reconcileSessions({
-              caps: producer.capabilities,
-              fragments: converted,
-              auxiliaryFragments: allAuxiliary,
-              canonicalIds: unowned,
-            });
-      importGuard = await store.materializeSessions(producer.id, toMaterializeSessions(output));
+      const sessions = toMaterializeSessions(full).filter((s) => unowned.has(s.meta.sessionId));
+      await store.materializeSessions(producer.id, sessions);
     }
     // Sessions we owned that vanished from the import source (e.g. AgentsView aged them out) but that
     // no native producer has taken over: RETAIN as archived, never delete. A genuine handoff to a
     // native owner already replaced the resolved row, so it no longer appears in prevOwned.
     const vanished = prevOwned.filter((id) => !unowned.has(id));
     await store.setSessionsArchived(vanished, true);
-    stats.archived += vanished.length + importGuard.length;
-  }
-
-  if (
-    nativeFragmentCount === 0 &&
-    importedCount === 0 &&
-    diagnostics.some((entry) => entry.phase === "discovery" && entry.code === "missing_root")
-  ) {
-    throw new Error("No transcripts were found to read.");
+    stats.archived += vanished.length;
   }
 }
 
@@ -527,13 +511,14 @@ async function gatherImportedFragments(
   diagnostics: ParserDiagnostic[],
   requestedSources: Set<string>,
   nativeSources: Set<string>,
-): Promise<ImportedFragment[]> {
+): Promise<{ fragments: ImportedFragment[]; authoritative: boolean }> {
   const importer = producer.importer(ctx);
   if (!importer) {
     diagnostics.push(
       diagnostic(`${producer.id}_disabled`, `AgentsView import is turned off.`, "info"),
     );
-    return [];
+    // Disabled is not "the source has no sessions" — it's "we didn't look". Not authoritative.
+    return { fragments: [], authoritative: false };
   }
 
   const probe = await importer.probe();
@@ -545,7 +530,8 @@ async function gatherImportedFragments(
         "info",
       ),
     );
-    return [];
+    // Couldn't read the database (locked / missing / schema mismatch) — no information, not authoritative.
+    return { fragments: [], authoritative: false };
   }
 
   const staleExternal = (await store.list())
@@ -573,7 +559,8 @@ async function gatherImportedFragments(
       ),
     );
   }
-  return imported;
+  // We successfully read the import source: its current contents are authoritative (even if empty).
+  return { fragments: imported, authoritative: true };
 }
 
 export async function parseAllIncrementalDetailed(

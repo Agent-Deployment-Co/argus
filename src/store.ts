@@ -341,6 +341,33 @@ function closeDatabase(db: Database): Promise<void> {
   });
 }
 
+/** Stay well under sqlite3's default bound-parameter limit (999) when batching. */
+const MAX_BOUND_PARAMS = 900;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** Insert many rows in as few statements as possible (multi-row INSERT, chunked by param limit). */
+async function insertRows(
+  db: Database,
+  table: string,
+  columns: readonly string[],
+  rows: unknown[][],
+): Promise<void> {
+  if (!rows.length) return;
+  const perRowPlaceholder = `(${columns.map(() => "?").join(", ")})`;
+  const rowsPerStatement = Math.max(1, Math.floor(MAX_BOUND_PARAMS / columns.length));
+  for (const part of chunk(rows, rowsPerStatement)) {
+    const sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES ${part
+      .map(() => perRowPlaceholder)
+      .join(", ")}`;
+    await run(db, sql, part.flat());
+  }
+}
+
 function lstatIfExists(path: string): ReturnType<typeof lstatSync> | undefined {
   try {
     return lstatSync(path);
@@ -660,41 +687,54 @@ async function materializeFactRows(db: Database, fragment: StoredFragment): Prom
   const origin = factOrigin(fragment);
 
   if (fragment.kind === "auxiliary") {
-    let seq = 0;
-    for (const fact of fragment.facts) {
-      const selector =
-        fact.kind === "session_first_prompt" ? fact.sourceSessionId : fact.selector;
-      await run(
-        db,
-        `INSERT INTO index_auxiliary(file_id, seq, origin, kind, source, selector, fact_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [fragment.id, seq++, origin, fact.kind, fact.source, selector, JSON.stringify(fact)],
-      );
-    }
+    await insertRows(
+      db,
+      "index_auxiliary",
+      ["file_id", "seq", "origin", "kind", "source", "selector", "fact_json"],
+      fragment.facts.map((fact, seq) => [
+        fragment.id,
+        seq,
+        origin,
+        fact.kind,
+        fact.source,
+        fact.kind === "session_first_prompt" ? fact.sourceSessionId : fact.selector,
+        JSON.stringify(fact),
+      ]),
+    );
     return;
   }
 
   const facts = fragment.facts;
   // Only the structural columns are stored (file -> session map + subagent links). The full facts
-  // and all message/invocation/tool-result content are re-parsed from disk on demand.
-  let seq = 0;
-  for (const s of facts.sessions) {
-    await run(
-      db,
-      `INSERT INTO index_sessions(file_id, seq, origin, source, source_session_id, kind, transcript_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, s.source, s.sourceSessionId, s.kind, s.transcriptPath ?? null],
-    );
-  }
-  seq = 0;
-  for (const rel of facts.relationships) {
-    await run(
-      db,
-      `INSERT INTO index_relationships(file_id, seq, origin, source, child_source_session_id, parent_source_session_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [fragment.id, seq++, origin, rel.source, rel.childSourceSessionId, rel.parentSourceSessionId],
-    );
-  }
+  // and all message/invocation/tool-result content are re-parsed from disk on demand. `seq` (the
+  // array index) preserves order so reconstruction stays byte-faithful.
+  await insertRows(
+    db,
+    "index_sessions",
+    ["file_id", "seq", "origin", "source", "source_session_id", "kind", "transcript_path"],
+    facts.sessions.map((s, seq) => [
+      fragment.id,
+      seq,
+      origin,
+      s.source,
+      s.sourceSessionId,
+      s.kind,
+      s.transcriptPath ?? null,
+    ]),
+  );
+  await insertRows(
+    db,
+    "index_relationships",
+    ["file_id", "seq", "origin", "source", "child_source_session_id", "parent_source_session_id"],
+    facts.relationships.map((rel, seq) => [
+      fragment.id,
+      seq,
+      origin,
+      rel.source,
+      rel.childSourceSessionId,
+      rel.parentSourceSessionId,
+    ]),
+  );
 }
 
 interface FactJsonRow {
@@ -888,15 +928,20 @@ export class SqliteStore implements Store {
 
   invalidate(ids: string[], reason: InvalidationReason): Promise<void> {
     return this.schedule(async () => {
-      if (ids.length === 0) return;
+      const unique = [...new Set(ids)];
+      if (!unique.length) return;
+      const status = invalidatedStatus(reason);
+      const now = this.now();
       await transaction(this.db, async () => {
-        for (const id of new Set(ids)) {
+        // Three bound slots are fixed (status, reason, updated_at); the rest are ids.
+        for (const part of chunk(unique, MAX_BOUND_PARAMS - 3)) {
+          const placeholders = part.map(() => "?").join(", ");
           await run(
             this.db,
             `UPDATE index_files
              SET status = ?, invalidation_reason = ?, updated_at_ms = ?
-             WHERE id = ?`,
-            [invalidatedStatus(reason), reason, this.now(), id],
+             WHERE id IN (${placeholders})`,
+            [status, reason, now, ...part],
           );
         }
       });
@@ -1064,25 +1109,24 @@ export class SqliteStore implements Store {
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]> {
     return this.schedule(async () => {
       if (!sessions.length) return [];
-      const archivedByGuard: string[] = [];
+      const keptFuller: string[] = [];
       await transaction(this.db, async () => {
         for (const session of sessions) {
           const sid = session.meta.sessionId;
-          // Don't-regress guard: transcripts are append-only, so a same-owner re-parse that yields
-          // FEWER messages than already stored means some of the session's files aged off disk.
-          // Keep the fuller stored copy and flag it archived rather than overwriting with a partial.
-          const existing = await get<{ owner: string; message_count: number }>(
+          // Don't-regress guard: transcripts are append-only, so a re-parse yielding FEWER messages
+          // than already stored means some of the session's files are missing/unreadable this run, or
+          // another producer already holds a richer copy. Keep the fuller stored row rather than
+          // overwriting real history with a partial read — regardless of which producer owns it (a
+          // handoff must not regress the count). We do NOT flag archived here: the file may still be
+          // on disk (e.g. a transient parse failure); whether a session has truly left disk is decided
+          // by the coordinator's discovery, not by a message-count dip.
+          const existing = await get<{ message_count: number }>(
             this.db,
-            "SELECT owner, message_count FROM resolved_sessions WHERE session_id = ?",
+            "SELECT message_count FROM resolved_sessions WHERE session_id = ?",
             [sid],
           );
-          if (
-            existing &&
-            existing.owner === owner &&
-            session.messages.length < existing.message_count
-          ) {
-            await run(this.db, "UPDATE resolved_sessions SET archived = 1 WHERE session_id = ?", [sid]);
-            archivedByGuard.push(sid);
+          if (existing && session.messages.length < existing.message_count) {
+            keptFuller.push(sid);
             continue;
           }
           // Replace this session wholesale (messages + tool results cascade via FK). A freshly
@@ -1109,22 +1153,27 @@ export class SqliteStore implements Store {
               JSON.stringify(session.meta),
             ],
           );
-          let seq = 0;
-          for (const message of session.messages) {
-            await run(
-              this.db,
-              `INSERT INTO resolved_messages(session_id, seq, source, ts, date, cwd, project, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [sid, seq++, message.source, message.ts, message.date, message.cwd ?? "", message.project, JSON.stringify(message)],
-            );
-          }
-          for (const tr of session.toolResults) {
-            await run(
-              this.db,
-              `INSERT INTO resolved_tool_results(session_id, name, count, approx_tokens) VALUES (?, ?, ?, ?)`,
-              [sid, tr.name, tr.count, tr.approxTokens],
-            );
-          }
+          await insertRows(
+            this.db,
+            "resolved_messages",
+            ["session_id", "seq", "source", "ts", "date", "cwd", "project", "record_json"],
+            session.messages.map((message, seq) => [
+              sid,
+              seq,
+              message.source,
+              message.ts,
+              message.date,
+              message.cwd ?? "",
+              message.project,
+              JSON.stringify(message),
+            ]),
+          );
+          await insertRows(
+            this.db,
+            "resolved_tool_results",
+            ["session_id", "name", "count", "approx_tokens"],
+            session.toolResults.map((tr) => [sid, tr.name, tr.count, tr.approxTokens]),
+          );
           await run(
             this.db,
             "INSERT OR REPLACE INTO session_ownership(session_id, owner) VALUES (?, ?)",
@@ -1133,17 +1182,19 @@ export class SqliteStore implements Store {
         }
       });
       secureSqliteFiles(this.path);
-      return archivedByGuard;
+      return keptFuller;
     });
   }
 
   retractSessions(sessionIds: string[]): Promise<void> {
     return this.schedule(async () => {
-      if (!sessionIds.length) return;
+      const ids = [...new Set(sessionIds)];
+      if (!ids.length) return;
       await transaction(this.db, async () => {
-        for (const id of new Set(sessionIds)) {
-          await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [id]);
-          await run(this.db, "DELETE FROM session_ownership WHERE session_id = ?", [id]);
+        for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+          const placeholders = part.map(() => "?").join(", ");
+          await run(this.db, `DELETE FROM resolved_sessions WHERE session_id IN (${placeholders})`, part);
+          await run(this.db, `DELETE FROM session_ownership WHERE session_id IN (${placeholders})`, part);
         }
       });
     });
@@ -1151,13 +1202,18 @@ export class SqliteStore implements Store {
 
   setSessionsArchived(sessionIds: string[], archived: boolean): Promise<void> {
     return this.schedule(async () => {
-      if (!sessionIds.length) return;
+      const ids = [...new Set(sessionIds)];
+      if (!ids.length) return;
+      const value = archived ? 1 : 0;
       await transaction(this.db, async () => {
-        for (const id of new Set(sessionIds)) {
-          await run(this.db, "UPDATE resolved_sessions SET archived = ? WHERE session_id = ?", [
-            archived ? 1 : 0,
-            id,
-          ]);
+        // One bound slot is taken by `value`, so leave room for it in each chunk of ids.
+        for (const part of chunk(ids, MAX_BOUND_PARAMS - 1)) {
+          const placeholders = part.map(() => "?").join(", ");
+          await run(
+            this.db,
+            `UPDATE resolved_sessions SET archived = ? WHERE session_id IN (${placeholders})`,
+            [value, ...part],
+          );
         }
       });
     });

@@ -424,9 +424,11 @@ export interface Store {
   readResolved(query?: ResolvedQuery): Promise<ParseResult>;
   /**
    * Upsert the given reconciled sessions for `owner` (replacing any prior rows per session) and
-   * mark them present (on-disk). Guards against a partial re-parse — a same-owner re-materialization
-   * with *fewer* messages than already stored, i.e. some of the session's files aged off disk —
-   * by keeping the fuller stored copy and flagging it archived. Returns the ids it guarded that way.
+   * mark them present (on-disk). Don't-regress guard: a re-materialization with *fewer* messages than
+   * already stored (files missing/unreadable this run, or another producer holds a richer copy) keeps
+   * the fuller stored row instead of overwriting it — regardless of owner, so a handoff can't regress
+   * the count. The archived flag is left untouched (whether a session truly left disk is decided by
+   * discovery, not a count dip). Returns the ids it kept (skipped) that way.
    */
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
