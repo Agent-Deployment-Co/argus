@@ -35,10 +35,10 @@ import {
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
   type AuxiliaryParserAdapter,
-} from "./store-contract.ts";
-import { GEMINI_DIR } from "./paths.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, totalTokens, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { GEMINI_DIR } from "../../paths.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
 export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
 export const GEMINI_AUXILIARY_ROOT_ID = "gemini-config";

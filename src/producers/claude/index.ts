@@ -3,8 +3,8 @@ import {
   createClaudeTranscriptDiscoveryAdapter,
   createClaudeTranscriptParserAdapter,
   discoverClaudeHistory,
-} from "../parse-claude.ts";
-import type { NativeProducer, ProducerContext } from "../producer.ts";
+} from "./parser.ts";
+import type { NativeProducer, ProducerContext } from "../../producer.ts";
 
 // Claude observes everything: subagent canonicalization, provider-id dedup, and friction.
 export const claudeProducer: NativeProducer = {

@@ -11,7 +11,7 @@ import {
   discoverClaudeTranscripts,
   parseClaudeHistoryFile,
   parseClaudeTranscriptFile,
-} from "../src/parse-claude.ts";
+} from "../src/producers/claude/parser.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const PROJECTS = join(FIXTURES, "projects");

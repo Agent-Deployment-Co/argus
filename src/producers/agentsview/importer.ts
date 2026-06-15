@@ -22,9 +22,9 @@ import {
   type SourcePosition,
   type StableFileSnapshot,
   type ToolResultFact,
-} from "./store-contract.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, totalTokens, type AgentSource, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, totalTokens, type AgentSource, type Usage } from "../../types.ts";
 
 const SUPPORTED_AGENTS = new Set<AgentSource>(["claude", "codex", "gemini"]);
 const REQUIRED_SCHEMA: Record<string, string[]> = {

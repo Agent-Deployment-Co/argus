@@ -1,8 +1,8 @@
 import {
   createCodexTranscriptDiscoveryAdapter,
   createCodexTranscriptParserAdapter,
-} from "../parse-codex.ts";
-import type { NativeProducer, ProducerContext } from "../producer.ts";
+} from "./parser.ts";
+import type { NativeProducer, ProducerContext } from "../../producer.ts";
 
 // Codex emits no relationships, provider ids, or friction events.
 export const codexProducer: NativeProducer = {

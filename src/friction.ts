@@ -1,5 +1,5 @@
 // Session-level friction signals (#37): the per-record detection and per-session fold
-// shared by both parse paths (parse.ts directly, parse-claude.ts via SessionFact fragments).
+// shared by both parse paths (parse.ts directly, producers/claude/parser.ts via SessionFact fragments).
 //
 // Per-source support matrix:
 // - claude: interruptions, permission rejections, compactions, turn durations, stop reasons —

@@ -1,6 +1,6 @@
-import { AgentsViewImporter } from "../agentsview-import.ts";
-import type { ImportProducer, ProducerContext } from "../producer.ts";
-import { defaultUnknownProjectLabel } from "../reconcile.ts";
+import { AgentsViewImporter } from "./importer.ts";
+import type { ImportProducer, ProducerContext } from "../../producer.ts";
+import { defaultUnknownProjectLabel } from "../../reconcile.ts";
 
 // AgentsView is a dependent import producer: it materializes only sessions no native producer owns.
 // Imports carry claude relationships + provider ids (so canonicalize + dedupe) but never friction.

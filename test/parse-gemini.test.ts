@@ -21,7 +21,7 @@ import {
   normalizeGeminiUsage,
   parseGeminiAuxiliaryFile,
   parseGeminiTranscriptFile,
-} from "../src/parse-gemini.ts";
+} from "../src/producers/gemini/parser.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "gemini");
 

@@ -6,7 +6,7 @@ import {
   discoverCodexTranscripts,
   parseCodexTranscript,
   parseCodexTranscriptFile,
-} from "../src/parse-codex.ts";
+} from "../src/producers/codex/parser.ts";
 import { createFileIdentity } from "../src/store-contract.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
