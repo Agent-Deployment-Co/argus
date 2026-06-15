@@ -639,6 +639,9 @@ export interface SourceScan {
   lastSyncAtMs: number | null;
   /** True when the store's indexed file set matches the current discovery (nothing pending). */
   upToDate: boolean;
+  /** True when this source has any data — transcripts on disk, a prior sync, or archived sessions.
+   *  False means the user doesn't use this tool (nothing on disk and nothing stored). */
+  inUse: boolean;
 }
 
 /**
@@ -655,15 +658,17 @@ export async function scanStore(opts: IncrementalParseOptions = {}): Promise<Sou
       if (!requested.has(producer.source)) continue;
       const coverage = await store.getCoverage(producer.id);
       const discovery = producer.discoverTranscripts(ctx);
-      const currentDigest = isAuthoritativeDiscovery(discovery)
-        ? filesDigest(discovery.files)
-        : null;
+      const authoritative = isAuthoritativeDiscovery(discovery);
+      const currentDigest = authoritative ? filesDigest(discovery.files) : null;
+      const discoveredFiles = authoritative ? discovery.files.length : 0;
+      const archivedCount = await store.archivedCountForOwner(producer.id);
       out.push({
         source: producer.id,
         sessionCount: coverage?.sessionCount ?? 0,
-        archivedCount: await store.archivedCountForOwner(producer.id),
+        archivedCount,
         lastSyncAtMs: coverage?.lastSyncAtMs ?? null,
         upToDate: !!coverage && currentDigest != null && coverage.filesDigest === currentDigest,
+        inUse: !!coverage || discoveredFiles > 0 || archivedCount > 0,
       });
     }
     return out;

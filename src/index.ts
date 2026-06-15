@@ -392,33 +392,64 @@ async function runStatus(log: Log): Promise<void> {
   try {
     scans = await scanStore({ sources: ["claude", "codex", "gemini"] });
   } catch (err) {
-    log(`Store unavailable: ${err instanceof Error ? err.message : String(err)}`);
-    log("Run `argus reindex` to rebuild the local store.");
+    log(`Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`);
+    log("Run `argus reindex --force` to rebuild it from your transcripts.");
     process.exit(1);
   }
-  for (const scan of scans) {
-    const when = scan.lastSyncAtMs ? new Date(scan.lastSyncAtMs).toISOString() : "never";
-    const state = scan.upToDate ? "up to date" : "pending changes";
-    const archived = scan.archivedCount ? ` (+${scan.archivedCount} archived)` : "";
-    log(`  ${scan.source}: ${scan.sessionCount} sessions${archived} · last synced ${when} · ${state}`);
-  }
-  // Total archived across all owners (includes import producers like AgentsView, which `scanStore`
-  // doesn't cover). These are retained, off-disk sessions that re-deriving from disk can't recover.
+
+  // Count every session the store actually holds, grouped by where it came from, so the per-source
+  // lines and the total reconcile with what `argus sync` reports (which counts the whole store).
+  let counts: Array<{ owner: string; present: number; archived: number }> = [];
   try {
     const store = await openStore();
     try {
-      const archivedAll = await store.listArchived();
-      if (archivedAll.length) {
-        const n = archivedAll.length;
-        log(`Kept after leaving disk: ${n} session${n === 1 ? "" : "s"} · remove with \`argus forget --archived\``);
-      }
+      counts = await store.resolvedSessionCounts();
     } finally {
       await store.close();
     }
   } catch {
     // best-effort; the scan above already reported store availability
   }
-  if (scans.some((scan) => !scan.upToDate)) log("Run `argus sync` to pick up new and changed sessions.");
+  const byOwner = new Map(counts.map((c) => [c.owner, c]));
+  const nativeIds = new Set(scans.map((scan) => scan.source));
+
+  const lines: string[] = [];
+  let total = 0;
+  let totalArchived = 0;
+  let pending = false;
+
+  // Native sources the user actually uses (transcripts on disk, a prior sync, or archived sessions).
+  for (const scan of scans) {
+    const c = byOwner.get(scan.source) ?? { owner: scan.source, present: 0, archived: 0 };
+    if (!scan.inUse && c.present + c.archived === 0) continue;
+    total += c.present + c.archived;
+    totalArchived += c.archived;
+    if (!scan.upToDate) pending = true;
+    const when = scan.lastSyncAtMs ? new Date(scan.lastSyncAtMs).toISOString() : "never";
+    const state = scan.upToDate ? "up to date" : "pending changes";
+    const archived = c.archived ? ` (+${c.archived} archived)` : "";
+    lines.push(`  ${scan.source}: ${c.present} sessions${archived} · last synced ${when} · ${state}`);
+  }
+  // Imported sources (e.g. AgentsView) — sessions read from another tool, not from transcripts on disk.
+  for (const c of counts) {
+    if (nativeIds.has(c.owner) || c.present + c.archived === 0) continue;
+    total += c.present + c.archived;
+    totalArchived += c.archived;
+    const label = c.owner === "agentsview" ? "AgentsView" : c.owner;
+    const archived = c.archived ? ` (+${c.archived} archived)` : "";
+    lines.push(`  ${label}: ${c.present} sessions imported${archived}`);
+  }
+
+  if (!lines.length) {
+    log("No sessions yet. Run `argus sync` once you've used Claude Code, Codex, or Gemini.");
+    return;
+  }
+  for (const line of lines) log(line);
+  if (lines.length > 1) log(`Total: ${total} sessions`);
+  if (totalArchived) {
+    log(`Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus forget --archived\``);
+  }
+  if (pending) log("Run `argus sync` to pick up new and changed sessions.");
 }
 
 /** Bring the store up to date for the requested sources (producers reconcile + materialize). */
