@@ -415,28 +415,63 @@ describe("SQLite store", () => {
     await cache.close();
   });
 
-  test("rebuilds an older-schema store from scratch (no migration path)", async () => {
+  test("migrates a v4 store in place, preserving the retained read model", async () => {
     const path = storePath();
     const initial = await openStore({ path });
-    await initial.replace(imported("external:old"));
+    // Materialize a session into the trusted read model, then degrade the store to look like v4
+    // (no `archived` column) so reopening exercises the 4 -> 5 migration.
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:migrate-me",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+        toolResults: [],
+      },
+    ]);
     await initial.close();
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_archived");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
+      await rawExec(db, "PRAGMA user_version = 4");
+    });
 
-    // No migrations: reopening an older owned schema rebuilds from scratch (the store is derived).
-    await withRawDatabase(path, (db) => rawExec(db, "PRAGMA user_version = 1"));
-
-    const rebuilt = await openStore({ path });
+    const migrated = await openStore({ path });
     try {
-      expect(await rebuilt.list()).toHaveLength(0); // prior data gone — rebuilt fresh
-      await rebuilt.replace(imported("external:new"));
-      expect((await rebuilt.list()).map((m) => m.id)).toEqual(["external:new"]);
+      // The retained session survived the migration (NOT rebuilt from scratch).
+      expect((await migrated.readResolved()).sessions.has("codex:migrate-me")).toBe(true);
+      // The new column is usable.
+      await migrated.setSessionsArchived(["codex:migrate-me"], true);
+      expect(await migrated.listArchived()).toEqual(["codex:migrate-me"]);
     } finally {
-      await rebuilt.close();
+      await migrated.close();
     }
 
     const version = await withRawDatabase(path, async (db) =>
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("rejects an older schema with no migration path instead of silently rebuilding", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.replace(imported("external:old"));
+    await initial.close();
+
+    // A version with no migration entry must NOT be destroyed (the store is a durable archive).
+    await withRawDatabase(path, (db) => rawExec(db, "PRAGMA user_version = 1"));
+
+    await expect(openStore({ path })).rejects.toMatchObject({
+      code: "incompatible_schema",
+      storePath: path,
+    });
+    // The data is left intact for an explicit `reindex --force`.
+    expect(readFileSync(path).subarray(0, 15).toString()).toBe("SQLite format 3");
   });
 
   test("reports newer schemas as incompatible without modifying them", async () => {
@@ -530,5 +565,77 @@ describe("SQLite store", () => {
     await expect(openStore({ path })).rejects.toMatchObject({
       code: "unsafe_path",
     });
+  });
+
+  test("materializeSessions guards against a partial re-parse overwriting a fuller record", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const session = (count: number) => ({
+        meta: {
+          source: "claude" as const,
+          sessionId: "claude:partial",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/t.jsonl",
+        },
+        messages: Array.from({ length: count }, (_, i) => ({
+          source: "claude" as const,
+          sessionId: "claude:partial",
+          project: "p",
+          cwd: "/tmp/p",
+          gitBranch: "",
+          ts: 1000 + i,
+          date: "2026-06-01",
+          model: "claude-x",
+          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+          attributionSkill: null,
+          toolUses: [],
+        })),
+        toolResults: [],
+      });
+
+      const first = await store.materializeSessions("claude", [session(3)]);
+      expect(first).toEqual([]); // fresh insert, no guard
+
+      // A same-owner re-parse with FEWER messages (a file aged off disk) must not shrink the record.
+      const guarded = await store.materializeSessions("claude", [session(1)]);
+      expect(guarded).toEqual(["claude:partial"]);
+      const resolved = await store.readResolved();
+      expect(resolved.messages.filter((m) => m.sessionId === "claude:partial")).toHaveLength(3);
+      expect(await store.listArchived()).toEqual(["claude:partial"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("clearIndex drops the structural index but preserves the resolved read model", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.replace(transcript("codex", "codex:idx"));
+      await store.setCoverage("codex", "digest", 1);
+      await store.materializeSessions("codex", [
+        {
+          meta: {
+            source: "codex",
+            sessionId: "codex:keep",
+            project: "p",
+            cwd: "/tmp/p",
+            filePath: "/tmp/p/r.jsonl",
+          },
+          messages: [],
+          toolResults: [],
+        },
+      ]);
+
+      await store.clearIndex();
+
+      expect(await store.list()).toHaveLength(0); // structural index gone
+      expect(await store.getCoverage("codex")).toBeUndefined(); // coverage gone
+      expect((await store.readResolved()).sessions.has("codex:keep")).toBe(true); // archive preserved
+    } finally {
+      await store.close();
+    }
   });
 });

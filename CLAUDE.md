@@ -27,6 +27,24 @@ CI (`.github/workflows/ci.yml`) runs `bun x tsc --noEmit` then `bun test` on eve
 Development runs `src/index.ts` directly with Bun. The published npm `bin` is
 `dist/index.js`, built as a Node-targeted bundle with `bun run build`.
 
+## User-facing messages
+
+Anything printed to the terminal (CLI `log()`/`console` output, help text, error messages) is
+written for a moderately technical user who understands the language of agents and computers generally, not for someone who has read the code:
+
+1. **Plain language.** Use words a user already knows — file, directory, session, transcript,
+   project. Avoid internal jargon.
+2. **Don't name code internals.** The user doesn't know what the code does, so don't refer to
+   implementation concepts (table names, "the structural index", "fragments", "materialize",
+   "reconcile", "fact rows", layer numbers, etc.). Describe the effect the user observes instead
+   (e.g. "Re-reading all transcripts from disk", not "Cleared the structural index").
+3. **Active voice** where possible ("Kept archived sessions", not "archived sessions were preserved").
+4. **Don't make Argus the subject.** Drop the actor and lead with the verb — "Kept archived
+   sessions.", not "Argus kept archived sessions."
+
+These rules are for output the user sees. Code comments and internal identifiers stay precise and
+may use the internal vocabulary freely.
+
 ## Architecture
 
 The pipeline is a one-way data flow; each stage is its own module:
