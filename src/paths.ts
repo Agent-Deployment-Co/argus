@@ -6,14 +6,16 @@ export const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".cla
 export const CODEX_DIR = process.env.CODEX_HOME || process.env.CODEX_CONFIG_DIR || join(homedir(), ".codex");
 export const GEMINI_DIR = join(process.env.GEMINI_CLI_HOME || homedir(), ".gemini");
 
-function defaultArgusCacheDir(): string {
-  if (process.env.ARGUS_CACHE_DIR) return process.env.ARGUS_CACHE_DIR;
-  if (process.env.XDG_CACHE_HOME) return join(process.env.XDG_CACHE_HOME, "argus");
-  if (platform === "darwin") return join(homedir(), "Library", "Caches", "argus");
+// The Argus data directory holds the durable, app-owned store (argus.db) and regenerable caches.
+// It is no longer a "cache" location: the store is the application's central datastore.
+function defaultArgusDataDir(): string {
+  if (process.env.ARGUS_DATA_DIR) return process.env.ARGUS_DATA_DIR;
+  if (process.env.XDG_DATA_HOME) return join(process.env.XDG_DATA_HOME, "argus");
+  if (platform === "darwin") return join(homedir(), "Library", "Application Support", "argus");
   if (platform === "win32" && process.env.LOCALAPPDATA) {
-    return join(process.env.LOCALAPPDATA, "Argus", "Cache");
+    return join(process.env.LOCALAPPDATA, "Argus", "Data");
   }
-  return join(homedir(), ".cache", "argus");
+  return join(homedir(), ".local", "share", "argus");
 }
 
 function defaultArgusConfigDir(): string {
@@ -30,10 +32,10 @@ export const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 export const HISTORY_FILE = join(CLAUDE_DIR, "history.jsonl");
 export const SETTINGS_FILE = join(CLAUDE_DIR, "settings.json");
 export const INSTALLED_PLUGINS_FILE = join(CLAUDE_DIR, "plugins", "installed_plugins.json");
-export const ARGUS_CACHE_DIR = defaultArgusCacheDir();
+export const ARGUS_DATA_DIR = defaultArgusDataDir();
 export const ARGUS_CONFIG_DIR = defaultArgusConfigDir();
-export const FRAGMENT_CACHE_FILE = join(ARGUS_CACHE_DIR, "fragments.sqlite3");
-export const SUMMARY_CACHE_FILE = join(ARGUS_CACHE_DIR, "summaries.json");
+export const STORE_FILE = join(ARGUS_DATA_DIR, "argus.db");
+export const SUMMARY_CACHE_FILE = join(ARGUS_DATA_DIR, "summaries.json");
 export const ACCESS_TOKEN_FILE = join(ARGUS_CONFIG_DIR, "token.json");
 export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");

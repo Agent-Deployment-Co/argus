@@ -14,27 +14,23 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { printBanner } from "./banner.ts";
-import { vendoredBrandFontsCss } from "./brand.ts";
-import { vendoredChartJs } from "./chartjs.ts";
-import { consoleOverview, isBareInvocation } from "./console-report.ts";
+import { isBareInvocation } from "./console-report.ts";
 import { loadPlugins } from "./inventory.ts";
-import { parseAll, type TranscriptSource } from "./parse.ts";
-import {
-  cacheStatsSummary,
-  parseAllIncrementalDetailed,
-} from "./parse-incremental.ts";
-import { renderHtml } from "./report.ts";
+import type { TranscriptSource } from "./parse.ts";
+import { syncStatsSummary, scanStore } from "./parse-incremental.ts";
+import { openSessionStore } from "./session-store.ts";
+import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
-import { ACCESS_TOKEN_FILE, FRAGMENT_CACHE_FILE } from "./paths.ts";
+import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
-import type { ParserDiagnostic } from "./cache-contract.ts";
-import { openFragmentCache, rebuildFragmentCache } from "./cache-store.ts";
+import type { ParserDiagnostic } from "./store-contract.ts";
+import { openStore, rebuildStore } from "./store.ts";
 
 interface Flags {
-  command: "report" | "push" | "login" | "cache-status" | "cache-rebuild";
+  command: "report" | "push" | "login" | "status" | "reindex" | "sync" | "forget";
   source: "all" | TranscriptSource;
   since?: string;
   until?: string;
@@ -44,10 +40,15 @@ interface Flags {
   summarizeModel?: string;
   open: boolean;
   json: boolean;
-  cache: boolean;
   agentsView: "auto" | "off";
   agentsViewDatabasePath?: string;
   help: boolean;
+  /** reindex: drop the whole store (loses archived/off-disk sessions) instead of re-deriving in place. */
+  force: boolean;
+  /** forget: target all archived (off-disk) sessions instead of explicit ids. */
+  archived: boolean;
+  /** Positional args (e.g. session ids for `forget`). */
+  positionals: string[];
   // push & login
   endpoint?: string;
   user?: string;
@@ -62,9 +63,11 @@ function parseArgs(argv: string[]): Flags {
     summarize: false,
     open: false,
     json: false,
-    cache: true,
     agentsView: "auto",
     help: false,
+    force: false,
+    archived: false,
+    positionals: [],
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
     org: process.env.ARGUS_ORG,
   };
@@ -75,8 +78,10 @@ function parseArgs(argv: string[]): Flags {
       case "report": f.command = "report"; break;
       case "push": f.command = "push"; break;
       case "login": f.command = "login"; break;
-      case "cache-status": f.command = "cache-status"; break;
-      case "cache-rebuild": f.command = "cache-rebuild"; break;
+      case "status": f.command = "status"; break;
+      case "reindex": f.command = "reindex"; break;
+      case "sync": f.command = "sync"; break;
+      case "forget": f.command = "forget"; break;
       case "--source": f.source = parseSource(next()); break;
       case "--since": f.since = next(); break;
       case "--until": f.until = next(); break;
@@ -86,16 +91,18 @@ function parseArgs(argv: string[]): Flags {
       case "--summarize-model": f.summarizeModel = next(); break;
       case "--open": f.open = true; break;
       case "--json": f.json = true; break;
-      case "--no-cache": f.cache = false; break;
       case "--agentsview": f.agentsView = "auto"; break;
       case "--no-agentsview": f.agentsView = "off"; break;
       case "--agentsview-db": f.agentsViewDatabasePath = next(); break;
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
       case "--org": f.org = next(); break;
+      case "--force": f.force = true; break;
+      case "--archived": f.archived = true; break;
       case "--help": case "-h": f.help = true; break;
       default:
         if (a.startsWith("-")) { console.error(`Unknown flag: ${a}`); process.exit(2); }
+        else f.positionals.push(a);
     }
   }
   return f;
@@ -114,49 +121,55 @@ function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
 const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 
 Usage:
-  argus                       show a terminal overview
-  argus report [options]      build the local HTML dashboard
+  argus                       terminal overview (no options; just run it)
+  argus report [options]      build the local HTML (or --json) dashboard
+  argus sync [options]        read new and changed sessions into the local store
+  argus reindex [options]     re-read all transcripts from disk (keeps archived); --force to wipe
+  argus status                show the local store path + per-source counts
+  argus forget <id>… | --archived   permanently remove sessions from the local store
   argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
-  argus cache-status          show local fragment cache status
-  argus cache-rebuild         delete and recreate the local fragment cache
 
-Report options:
-  --source <claude|codex|gemini|all>
-                            transcript source to parse (default: all)
-  --since <YYYY-MM-DD>     only include messages on/after this date
-  --until <YYYY-MM-DD>     only include messages on/before this date
-  --project <substr>       only include sessions whose project path matches substr
-  -o, --out <file>         output HTML path (default: argus-report.html)
-  --summarize              generate per-session LLM summaries via headless 'claude -p' (cached)
-  --summarize-model <id>   model for summaries (e.g. claude-haiku-4-5-20251001)
-  --open                   open the report in the default browser when done (macOS)
-  --json                   write raw aggregate JSON to --out instead of HTML
-  --no-cache               parse transcripts directly without the fragment cache
+Sessions stay in the local store even after their transcripts age off disk (Claude Code keeps
+~30 days): they're kept and marked "archived" rather than deleted. \`argus forget\` is the only
+thing that removes them.
+
+Source selection (report, push, sync, reindex, forget --archived):
+  --source <claude|codex|gemini|all>   transcript source(s) (default: all)
   --agentsview             auto-detect AgentsView imports (default)
   --no-agentsview          disable AgentsView discovery/import
   --agentsview-db <path>   read a specific AgentsView sessions.db
 
-Login options:
-  --endpoint <url>         SSO service URL     (default: https://argus.agentdeployment.co)
+Store maintenance (reindex, forget):
+  --force                  reindex: drop the whole store, including archived (off-disk) sessions
+  --archived               forget: target all archived sessions (optionally scoped by --source)
 
-Push options (also honors --since/--until/--project/--summarize):
-  --endpoint <url>         Worker base URL     (or env ARGUS_ENDPOINT, default: https://argus.agentdeployment.co)
-  --user <id>              override the user id (default: git email, else \$USER@host)
-  --org <id>               override authenticated org (or env ARGUS_ORG)
+Filters (report, push):
+  --since <YYYY-MM-DD>     only include messages on/after this date
+  --until <YYYY-MM-DD>     only include messages on/before this date
+  --project <substr>       only include sessions whose cwd contains substr
+
+Report output (report only):
+  -o, --out <file>         output path (default: argus-report.html)
+  --json                   write raw aggregate JSON to --out instead of HTML
+  --open                   open the report in the default browser when done (macOS)
+
+Summaries (report, push):
+  --summarize              generate per-session LLM summaries via headless 'claude -p' (cached)
+  --summarize-model <id>   model for summaries (e.g. claude-haiku-4-5-20251001)
+
+Login / push:
+  --endpoint <url>         service URL for login & push
+                           (env ARGUS_ENDPOINT, default: https://argus.agentdeployment.co)
+  --user <id>              push: override the user id (default: git email, else \$USER@host)
+  --org <id>               push: override the org (env ARGUS_ORG)
 
   -h, --help               show this help
 
-Reads transcripts from ~/.claude/projects (override dir via CLAUDE_CONFIG_DIR),
-~/.codex/sessions (override dir via CODEX_HOME or CODEX_CONFIG_DIR), and
-~/.gemini/tmp (override home via GEMINI_CLI_HOME).
+The local store path is shown by \`argus status\` (override its directory via
+ARGUS_DATA_DIR). Transcripts are read from ~/.claude/projects (CLAUDE_CONFIG_DIR),
+~/.codex/sessions (CODEX_HOME / CODEX_CONFIG_DIR), and ~/.gemini/tmp (GEMINI_CLI_HOME).
 `;
-
-function withinRange(date: string, since?: string, until?: string): boolean {
-  if (since && date < since) return false;
-  if (until && date > until) return false;
-  return true;
-}
 
 type Log = (s: string) => void;
 
@@ -176,66 +189,36 @@ function uniqueDiagnostics(entries: ParserDiagnostic[]): ParserDiagnostic[] {
   return out;
 }
 
-function logCacheDiagnostics(
-  diagnostics: ParserDiagnostic[],
-  flags: Flags,
-  log: Log,
-): void {
-  const surfacedInfo = new Set([
-    "agentsview_import_used",
-    "agentsview_native_precedence",
-    "cache_file_changed",
-    "cache_parser_version_changed",
-    "cache_contract_version_changed",
-    "cache_fragment_unavailable",
-  ]);
-  if (flags.agentsView === "off") surfacedInfo.add("agentsview_disabled");
-  if (flags.agentsViewDatabasePath) surfacedInfo.add("agentsview_unavailable");
-
-  const surfaced = uniqueDiagnostics(diagnostics).filter(
-    (entry) => entry.severity !== "info" || surfacedInfo.has(entry.code),
-  );
-  const important = surfaced.filter((entry) => entry.severity !== "info").slice(0, 5);
-  const info = surfaced.filter((entry) => entry.severity === "info").slice(0, 5);
-  for (const entry of important) log(`  ! ${entry.message}`);
-  for (const entry of info) log(`  i ${entry.message}`);
-  const omitted = surfaced.length - important.length - info.length;
-  if (omitted > 0) log(`  i ${omitted} additional cache diagnostics omitted.`);
+/** Diagnostics worth interrupting a report for: something that makes the result wrong or incomplete.
+ *  A missing source root just means the user doesn't use that tool — not a problem to report.
+ *  Routine notes (re-read files, AgentsView provenance) are left for `argus sync`. */
+function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
+  return uniqueDiagnostics(diagnostics)
+    .filter((entry) => entry.severity === "error" && entry.code !== "missing_root")
+    .slice(0, 5);
 }
 
 /** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
 async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
-  log("Parsing transcripts…");
-  const parsed = flags.cache
-    ? (await parseAllIncrementalDetailed({
-        sources: sourcesFor(flags.source),
-        agentsView: flags.agentsView,
-        agentsViewDatabasePath: flags.agentsViewDatabasePath,
-      }))
-    : { parsed: parseAll({ sources: sourcesFor(flags.source) }), stats: undefined };
-  if (flags.cache && parsed.stats && "diagnostics" in parsed) {
-    log(`  Cache: ${cacheStatsSummary(parsed.stats, parsed.diagnostics)}`);
-  } else if (flags.cache && parsed.stats) {
-    log(`  Cache: ${cacheStatsSummary(parsed.stats)}`);
+  log("Reading transcripts…");
+  const store = openSessionStore({
+    sources: sourcesFor(flags.source),
+    agentsView: flags.agentsView,
+    agentsViewDatabasePath: flags.agentsViewDatabasePath,
+  });
+  let parseResult;
+  try {
+    parseResult = await store.read({
+      since: flags.since,
+      until: flags.until,
+      projectSubstring: flags.project,
+    });
+  } finally {
+    await store.close();
   }
-  if (flags.cache && "diagnostics" in parsed) {
-    logCacheDiagnostics(parsed.diagnostics, flags, log);
-  }
-  if (!flags.cache) log("  Cache: disabled.");
-  const parseResult = parsed.parsed;
-
-  // Apply filters.
-  if (flags.since || flags.until || flags.project) {
-    parseResult.messages = parseResult.messages.filter(
-      (m) =>
-        withinRange(m.date, flags.since, flags.until) &&
-        (!flags.project || m.cwd.includes(flags.project)),
-    );
-    const keep = new Set(parseResult.messages.map((m) => m.sessionId));
-    for (const sid of [...parseResult.sessions.keys()]) {
-      if (!keep.has(sid)) parseResult.sessions.delete(sid);
-    }
-  }
+  // Keep reports quiet: only call out problems that affect the result (and explain a degraded read).
+  if (store.stats?.fallback) log(`  ${syncStatsSummary(store.stats, store.diagnostics)}`);
+  for (const entry of reportProblems(store.diagnostics)) log(`  ! ${entry.message}`);
 
   log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);
 
@@ -307,19 +290,17 @@ function formatBytes(value: number): string {
 
 async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<void> {
   const dash = await buildDashboard(flags, log);
-  if (consoleOnly) {
-    process.stdout.write(consoleOverview(dash));
+  const format: OutputFormat = consoleOnly ? "console" : flags.json ? "json" : "html";
+  const rendered = RENDERERS[format](dash);
+  if (rendered.toStdout) {
+    process.stdout.write(rendered.content);
     return;
   }
   const outPath = resolve(flags.out);
-  if (flags.json) {
-    writeFileSync(outPath, JSON.stringify(dash, null, 2));
-  } else {
-    writeFileSync(outPath, renderHtml(dash, { chartJs: vendoredChartJs(), fontCss: vendoredBrandFontsCss() }));
-  }
+  writeFileSync(outPath, rendered.content);
   log(`Wrote ${outPath}`);
   log(`Totals: ${summary(dash)}`);
-  if (flags.open && !flags.json) spawnSync("open", [outPath]);
+  if (flags.open && format === "html") spawnSync("open", [outPath]);
 }
 
 async function runLogin(flags: Flags, log: Log): Promise<void> {
@@ -400,54 +381,148 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
   }
 }
 
-async function runCacheStatus(log: Log): Promise<void> {
-  log(`Cache path: ${FRAGMENT_CACHE_FILE}`);
-  let cache;
+async function runStatus(log: Log): Promise<void> {
+  log(`Store path: ${STORE_FILE}`);
   try {
-    cache = await openFragmentCache();
+    log(`Store size: ${formatBytes(statSync(STORE_FILE).size)}`);
+  } catch {
+    log("Store size: unavailable");
+  }
+  let scans;
+  try {
+    scans = await scanStore({ sources: ["claude", "codex", "gemini"] });
   } catch (err) {
-    log(`Cache unavailable: ${err instanceof Error ? err.message : String(err)}`);
-    log("Run `argus cache-rebuild` to recreate the local fragment cache.");
+    log(`Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`);
+    log("Run `argus reindex --force` to rebuild it from your transcripts.");
     process.exit(1);
   }
+
+  // Count every session the store actually holds, grouped by where it came from, so the per-source
+  // lines and the total reconcile with what `argus sync` reports (which counts the whole store).
+  let counts: Array<{ owner: string; present: number; archived: number }> = [];
   try {
-    const rows = await cache.list();
-    const successful = rows.filter((row) => row.status === "success");
-    const bySource = new Map<string, number>();
-    const byKind = new Map<string, number>();
-    const byStatus = new Map<string, number>();
-    for (const row of successful) {
-      bySource.set(row.source ?? "external", (bySource.get(row.source ?? "external") ?? 0) + 1);
-      byKind.set(row.kind, (byKind.get(row.kind) ?? 0) + 1);
-    }
-    for (const row of rows) byStatus.set(row.status, (byStatus.get(row.status) ?? 0) + 1);
+    const store = await openStore();
     try {
-      log(`Cache size: ${formatBytes(statSync(FRAGMENT_CACHE_FILE).size)}`);
-    } catch {
-      log("Cache size: unavailable");
+      counts = await store.resolvedSessionCounts();
+    } finally {
+      await store.close();
     }
-    log(`Cache fragments: ${successful.length} successful / ${rows.length} total`);
-    for (const [status, count] of [...byStatus.entries()].sort()) {
-      log(`  status:${status}: ${count}`);
-    }
-    for (const [kind, count] of [...byKind.entries()].sort()) {
-      log(`  kind:${kind}: ${count}`);
-    }
-    for (const [source, count] of [...bySource.entries()].sort()) {
-      log(`  ${source}: ${count}`);
-    }
-    if (rows.some((row) => row.status !== "success")) {
-      log("Some cached fragments are not reusable; the next report can reparse or replace them.");
-    }
+  } catch {
+    // best-effort; the scan above already reported store availability
+  }
+  const byOwner = new Map(counts.map((c) => [c.owner, c]));
+  const nativeIds = new Set(scans.map((scan) => scan.source));
+
+  const lines: string[] = [];
+  let total = 0;
+  let totalArchived = 0;
+  let pending = false;
+
+  // Native sources the user actually uses (transcripts on disk, a prior sync, or archived sessions).
+  for (const scan of scans) {
+    const c = byOwner.get(scan.source) ?? { owner: scan.source, present: 0, archived: 0 };
+    if (!scan.inUse && c.present + c.archived === 0) continue;
+    total += c.present + c.archived;
+    totalArchived += c.archived;
+    if (!scan.upToDate) pending = true;
+    const when = scan.lastSyncAtMs ? new Date(scan.lastSyncAtMs).toISOString() : "never";
+    const state = scan.upToDate ? "up to date" : "pending changes";
+    const archived = c.archived ? ` (+${c.archived} archived)` : "";
+    lines.push(`  ${scan.source}: ${c.present} sessions${archived} · last synced ${when} · ${state}`);
+  }
+  // Imported sources (e.g. AgentsView) — sessions read from another tool, not from transcripts on disk.
+  for (const c of counts) {
+    if (nativeIds.has(c.owner) || c.present + c.archived === 0) continue;
+    total += c.present + c.archived;
+    totalArchived += c.archived;
+    const label = c.owner === "agentsview" ? "AgentsView" : c.owner;
+    const archived = c.archived ? ` (+${c.archived} archived)` : "";
+    lines.push(`  ${label}: ${c.present} sessions imported${archived}`);
+  }
+
+  if (!lines.length) {
+    log("No sessions yet. Run `argus sync` once you've used Claude Code, Codex, or Gemini.");
+    return;
+  }
+  for (const line of lines) log(line);
+  if (lines.length > 1) log(`Total: ${total} sessions`);
+  if (totalArchived) {
+    log(`Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus forget --archived\``);
+  }
+  if (pending) log("Run `argus sync` to pick up new and changed sessions.");
+}
+
+/** Bring the store up to date for the requested sources (producers reconcile + materialize). */
+async function runSync(flags: Flags, log: Log): Promise<void> {
+  const store = openSessionStore({
+    sources: sourcesFor(flags.source),
+    agentsView: flags.agentsView,
+    agentsViewDatabasePath: flags.agentsViewDatabasePath,
+  });
+  try {
+    const parsed = await store.read({});
+    if (store.stats) log(syncStatsSummary(store.stats, store.diagnostics));
+    log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
   } finally {
-    await cache.close();
+    await store.close();
   }
 }
 
-async function runCacheRebuild(log: Log): Promise<void> {
-  const cache = await rebuildFragmentCache();
-  await cache.close();
-  log("Rebuilt local Argus fragment cache.");
+async function runReindex(flags: Flags, log: Log): Promise<void> {
+  if (flags.force) {
+    // Destructive: drop the entire store, including archived (off-disk) sessions that cannot be
+    // re-derived from disk. Gated behind --force and announced before we delete anything. Counting
+    // archived sessions is best-effort — a damaged store can't be read, but --force still rebuilds it.
+    let archived: string[] = [];
+    try {
+      const store = await openStore();
+      try {
+        archived = await store.listArchived();
+      } finally {
+        await store.close();
+      }
+    } catch {
+      // store unreadable; the rebuild below replaces it regardless
+    }
+    if (archived.length) {
+      log(`! --force will permanently delete ${archived.length} archived session(s) no longer on disk.`);
+    }
+    const rebuilt = await rebuildStore();
+    await rebuilt.close();
+    log("Rebuilt the local store from scratch. Re-reading all transcripts from disk…");
+  } else {
+    // Non-destructive: re-derive the structural index from disk while preserving the trusted read
+    // model (resolved_*), so aged-out archived sessions survive a reindex.
+    const store = await openStore();
+    try {
+      await store.clearIndex();
+    } finally {
+      await store.close();
+    }
+    log("Re-reading all transcripts from disk. Archived sessions (no longer on disk) are kept…");
+  }
+  await runSync(flags, log);
+}
+
+async function runForget(flags: Flags, log: Log): Promise<void> {
+  const store = await openStore();
+  try {
+    const targets = flags.archived
+      ? await store.listArchived(flags.source === "all" ? undefined : flags.source)
+      : flags.positionals;
+    if (!targets.length) {
+      log(
+        flags.archived
+          ? "No archived sessions to forget."
+          : "Usage: argus forget <session-id>… (or --archived to remove every session no longer on disk).",
+      );
+      return;
+    }
+    await store.retractSessions(targets);
+    log(`Forgot ${targets.length} session(s) from the local store.`);
+  } finally {
+    await store.close();
+  }
 }
 
 async function main() {
@@ -458,8 +533,10 @@ async function main() {
   const log: Log = (s) => process.stderr.write(s + "\n");
   if (flags.command === "push") await runPush(flags, log);
   else if (flags.command === "login") await runLogin(flags, log);
-  else if (flags.command === "cache-status") await runCacheStatus(log);
-  else if (flags.command === "cache-rebuild") await runCacheRebuild(log);
+  else if (flags.command === "status") await runStatus(log);
+  else if (flags.command === "reindex") await runReindex(flags, log);
+  else if (flags.command === "sync") await runSync(flags, log);
+  else if (flags.command === "forget") await runForget(flags, log);
   else await runReport(flags, log, isBareInvocation(argv));
 }
 

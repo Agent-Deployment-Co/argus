@@ -13,20 +13,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import sqlite3, { type Database } from "sqlite3";
 import {
-  CACHE_APPLICATION_ID,
-  CACHE_SCHEMA_VERSION,
-  CacheStoreError,
-  openFragmentCache,
-  rebuildFragmentCache,
-} from "../src/cache-store.ts";
+  STORE_APPLICATION_ID,
+  STORE_SCHEMA_VERSION,
+  StoreError,
+  openStore,
+  rebuildStore,
+} from "../src/store.ts";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
-  type CacheFragment,
+  type StoredFragment,
   type CompleteDiscovery,
   type ImportedFragment,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
-} from "../src/cache-contract.ts";
+} from "../src/store-contract.ts";
 import type { AgentSource } from "../src/types.ts";
 
 const tempDirs: string[] = [];
@@ -35,7 +35,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function cachePath(): string {
+function storePath(): string {
   const dir = mkdtempSync(join(tmpdir(), "argus-cache-store-"));
   tempDirs.push(dir);
   return join(dir, "private", "fragments.sqlite3");
@@ -90,6 +90,57 @@ function transcript(
     ],
     diagnostics: [],
   };
+}
+
+function transcriptWithFacts(id: string): ParsedFileFragment {
+  const fragment = transcript("claude", id);
+  const position = (recordIndex: number) => ({ originKey: `file:${id}`, recordIndex, itemIndex: 0 });
+  fragment.facts = {
+    sessions: [
+      {
+        id: `sess:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        kind: "main",
+        transcriptPath: `/private/claude/${id}.jsonl`,
+        position: position(0),
+      },
+    ],
+    messages: [
+      {
+        id: `msg:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        providerMessageId: `pm-${id}`,
+        timestampMs: 1_717_600_000_000,
+        model: "claude-opus-4",
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        position: position(1),
+      },
+    ],
+    invocations: [
+      {
+        id: `inv:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        messageId: `msg:${id}`,
+        name: "Bash",
+        position: position(2),
+      },
+    ],
+    toolResults: [
+      {
+        id: `tr:${id}`,
+        source: "claude",
+        sourceSessionId: `s-${id}`,
+        approxTokens: 10,
+        position: position(3),
+      },
+    ],
+    relationships: [],
+  };
+  return fragment;
 }
 
 function auxiliary(id: string): ParsedAuxiliaryFragment {
@@ -155,6 +206,20 @@ function imported(id: string): ImportedFragment {
   };
 }
 
+// Only auxiliary fragments round-trip through load() — transcripts/imports are re-parsed from disk,
+// so load() returns undefined for them and their presence is verified via list().
+async function expectStored(
+  cache: Awaited<ReturnType<typeof openStore>>,
+  fragment: StoredFragment,
+): Promise<void> {
+  if (fragment.kind === "auxiliary") {
+    expect(await cache.load(fragment.id)).toEqual(fragment);
+  } else {
+    expect(await cache.load(fragment.id)).toBeUndefined();
+    expect((await cache.list()).some((m) => m.id === fragment.id && m.status === "success")).toBe(true);
+  }
+}
+
 function rawOpen(path: string): Promise<Database> {
   return new Promise((resolve, reject) => {
     const db = new sqlite3.Database(path, (error) => {
@@ -200,11 +265,11 @@ async function withRawDatabase<T>(path: string, operation: (db: Database) => Pro
   }
 }
 
-describe("SQLite fragment cache", () => {
+describe("SQLite store", () => {
   test("creates a private versioned database and round-trips every fragment kind", async () => {
-    const path = cachePath();
-    const cache = await openFragmentCache({ path, now: () => 100 });
-    const fragments: CacheFragment[] = [
+    const path = storePath();
+    const cache = await openStore({ path, now: () => 100 });
+    const fragments: StoredFragment[] = [
       transcript("claude", "claude:one"),
       transcript("codex", "codex:one"),
       transcript("gemini", "gemini:one"),
@@ -214,7 +279,7 @@ describe("SQLite fragment cache", () => {
 
     for (const fragment of fragments) {
       await cache.replace(fragment);
-      expect(await cache.load(fragment.id)).toEqual(fragment);
+      await expectStored(cache, fragment);
     }
 
     expect((await cache.list("codex")).map(({ id }) => id)).toEqual(["codex:one"]);
@@ -228,18 +293,18 @@ describe("SQLite fragment cache", () => {
       provenance: (
         await rawGet<{ import_provenance_json: string }>(
           db,
-          "SELECT import_provenance_json FROM cache_fragments WHERE id = 'external:one'",
+          "SELECT import_provenance_json FROM index_files WHERE id = 'external:one'",
         )
       )?.import_provenance_json,
       dependencies: (
         await rawGet<{ count: number }>(
           db,
-          "SELECT COUNT(*) AS count FROM auxiliary_dependencies WHERE fragment_id = 'claude:one'",
+          "SELECT COUNT(*) AS count FROM index_dependencies WHERE file_id = 'claude:one'",
         )
       )?.count,
     }));
-    expect(schema.applicationId).toBe(CACHE_APPLICATION_ID);
-    expect(schema.userVersion).toBe(CACHE_SCHEMA_VERSION);
+    expect(schema.applicationId).toBe(STORE_APPLICATION_ID);
+    expect(schema.userVersion).toBe(STORE_SCHEMA_VERSION);
     expect(JSON.parse(schema.provenance ?? "{}").schemaFingerprint).toBe("agentsview-schema-v3");
     expect(schema.dependencies).toBe(1);
 
@@ -256,16 +321,16 @@ describe("SQLite fragment cache", () => {
   });
 
   test("keeps the last successful fragment when a transactional replace fails", async () => {
-    const path = cachePath();
-    const cache = await openFragmentCache({ path });
+    const path = storePath();
+    const cache = await openStore({ path });
     const original = transcript("claude", "claude:atomic", "claude-root", "1");
     await cache.replace(original);
 
     const broken = transcript("claude", "claude:atomic", "claude-root", "2");
     broken.dependencies[0]!.inputId = null as unknown as string;
-    await expect(cache.replace(broken)).rejects.toBeInstanceOf(CacheStoreError);
+    await expect(cache.replace(broken)).rejects.toBeInstanceOf(StoreError);
 
-    expect(await cache.load(original.id)).toEqual(original);
+    await expectStored(cache, original);
     expect((await cache.list())[0]).toMatchObject({
       id: original.id,
       parserVersion: "1",
@@ -275,9 +340,9 @@ describe("SQLite fragment cache", () => {
   });
 
   test("invalidates without exposing stale JSON and can replace it successfully", async () => {
-    const path = cachePath();
+    const path = storePath();
     let now = 10;
-    const cache = await openFragmentCache({ path, now: () => now++ });
+    const cache = await openStore({ path, now: () => now++ });
     const first = transcript("gemini", "gemini:invalidate", "gemini-root", "1");
     await cache.replace(first);
     const successfulAt = (await cache.list())[0]!.updatedAtMs;
@@ -291,7 +356,7 @@ describe("SQLite fragment cache", () => {
 
     const second = transcript("gemini", first.id, "gemini-root", "2");
     await cache.replace(second);
-    expect(await cache.load(first.id)).toEqual(second);
+    await expectStored(cache, second);
     expect((await cache.list())[0]).toMatchObject({ status: "success", parserVersion: "2" });
 
     await cache.invalidate([first.id], "file_changed");
@@ -300,8 +365,8 @@ describe("SQLite fragment cache", () => {
   });
 
   test("removes missing files only for the authoritative source and root", async () => {
-    const path = cachePath();
-    const cache = await openFragmentCache({ path });
+    const path = storePath();
+    const cache = await openStore({ path });
     const keep = transcript("claude", "claude:keep", "shared-root");
     const missing = transcript("claude", "claude:missing", "shared-root");
     const otherRoot = transcript("claude", "claude:other-root", "other-root");
@@ -321,17 +386,18 @@ describe("SQLite fragment cache", () => {
     };
     await cache.removeMissing(discovery);
 
-    expect(await cache.load(keep.id)).toEqual(keep);
-    expect(await cache.load(missing.id)).toBeUndefined();
-    expect(await cache.load(otherRoot.id)).toEqual(otherRoot);
-    expect(await cache.load(otherSource.id)).toEqual(otherSource);
-    expect(await cache.load(external.id)).toEqual(external);
+    const ids = new Set((await cache.list()).map((m) => m.id));
+    expect(ids.has(keep.id)).toBe(true);
+    expect(ids.has(missing.id)).toBe(false);
+    expect(ids.has(otherRoot.id)).toBe(true);
+    expect(ids.has(otherSource.id)).toBe(true);
+    expect(ids.has(external.id)).toBe(true);
     await cache.close();
   });
 
   test("rejects non-authoritative cleanup even when forced through the type boundary", async () => {
-    const path = cachePath();
-    const cache = await openFragmentCache({ path });
+    const path = storePath();
+    const cache = await openStore({ path });
     const fragment = transcript("claude", "claude:not-authoritative");
     await cache.replace(fragment);
 
@@ -345,80 +411,117 @@ describe("SQLite fragment cache", () => {
         diagnostics: [],
       } as unknown as CompleteDiscovery),
     ).rejects.toThrow("complete authoritative");
-    expect(await cache.load(fragment.id)).toEqual(fragment);
+    await expectStored(cache, fragment);
     await cache.close();
   });
 
-  test("migrates a v1 Argus database to the current schema", async () => {
-    const path = cachePath();
-    const initial = await openFragmentCache({ path });
+  test("migrates a v4 store in place, preserving the retained read model", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    // Materialize a session into the trusted read model, then degrade the store to look like v4
+    // (no `archived` column) so reopening exercises the 4 -> 5 migration.
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:migrate-me",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+        toolResults: [],
+      },
+    ]);
     await initial.close();
-
     await withRawDatabase(path, async (db) => {
-      await rawExec(db, "ALTER TABLE cache_fragments DROP COLUMN import_provenance_json");
-      await rawExec(db, "DELETE FROM cache_schema_migrations WHERE version = 2");
-      await rawExec(db, "PRAGMA user_version = 1");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_archived");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
+      await rawExec(db, "PRAGMA user_version = 4");
     });
 
-    const migrated = await openFragmentCache({ path });
-    await migrated.replace(imported("external:migrated"));
-    expect(await migrated.load("external:migrated")).toEqual(imported("external:migrated"));
-    await migrated.close();
+    const migrated = await openStore({ path });
+    try {
+      // The retained session survived the migration (NOT rebuilt from scratch).
+      expect((await migrated.readResolved()).sessions.has("codex:migrate-me")).toBe(true);
+      // The new column is usable.
+      await migrated.setSessionsArchived(["codex:migrate-me"], true);
+      expect(await migrated.listArchived()).toEqual(["codex:migrate-me"]);
+    } finally {
+      await migrated.close();
+    }
 
     const version = await withRawDatabase(path, async (db) =>
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
-    expect(version?.user_version).toBe(CACHE_SCHEMA_VERSION);
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("rejects an older schema with no migration path instead of silently rebuilding", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.replace(imported("external:old"));
+    await initial.close();
+
+    // A version with no migration entry must NOT be destroyed (the store is a durable archive).
+    await withRawDatabase(path, (db) => rawExec(db, "PRAGMA user_version = 1"));
+
+    await expect(openStore({ path })).rejects.toMatchObject({
+      code: "incompatible_schema",
+      storePath: path,
+    });
+    // The data is left intact for an explicit `reindex --force`.
+    expect(readFileSync(path).subarray(0, 15).toString()).toBe("SQLite format 3");
   });
 
   test("reports newer schemas as incompatible without modifying them", async () => {
-    const path = cachePath();
-    const initial = await openFragmentCache({ path });
+    const path = storePath();
+    const initial = await openStore({ path });
     await initial.close();
     await withRawDatabase(path, (db) => rawExec(db, "PRAGMA user_version = 999"));
 
-    await expect(openFragmentCache({ path })).rejects.toMatchObject({
+    await expect(openStore({ path })).rejects.toMatchObject({
       code: "incompatible_schema",
-      cachePath: path,
+      storePath: path,
     });
     expect(readFileSync(path).subarray(0, 15).toString()).toBe("SQLite format 3");
   });
 
   test("reports a malformed current schema as incompatible", async () => {
-    const path = cachePath();
-    const initial = await openFragmentCache({ path });
+    const path = storePath();
+    const initial = await openStore({ path });
     await initial.close();
     await withRawDatabase(path, (db) =>
-      rawExec(db, "ALTER TABLE cache_fragments DROP COLUMN import_provenance_json"),
+      rawExec(db, "ALTER TABLE index_files DROP COLUMN import_provenance_json"),
     );
 
-    await expect(openFragmentCache({ path })).rejects.toMatchObject({
+    await expect(openStore({ path })).rejects.toMatchObject({
       code: "incompatible_schema",
-      cachePath: path,
+      storePath: path,
     });
   });
 
   test("provides an explicit rebuild path for corrupt databases", async () => {
-    const path = cachePath();
-    const initial = await openFragmentCache({ path });
+    const path = storePath();
+    const initial = await openStore({ path });
     await initial.close();
     writeFileSync(path, "not sqlite", { mode: 0o600 });
 
-    await expect(openFragmentCache({ path })).rejects.toMatchObject({
+    await expect(openStore({ path })).rejects.toMatchObject({
       code: "corrupt",
-      cachePath: path,
+      storePath: path,
     });
 
-    const rebuilt = await rebuildFragmentCache({ path });
+    const rebuilt = await rebuildStore({ path });
     const fragment = transcript("codex", "codex:rebuilt");
     await rebuilt.replace(fragment);
-    expect(await rebuilt.load(fragment.id)).toEqual(fragment);
+    await expectStored(rebuilt, fragment);
     await rebuilt.close();
   });
 
   test("uses a bounded busy timeout and succeeds after contention clears", async () => {
-    const path = cachePath();
-    const cache = await openFragmentCache({ path, busyTimeoutMs: 25 });
+    const path = storePath();
+    const cache = await openStore({ path, busyTimeoutMs: 25 });
     const locker = await rawOpen(path);
     await rawExec(locker, "BEGIN IMMEDIATE");
 
@@ -431,14 +534,14 @@ describe("SQLite fragment cache", () => {
     await rawExec(locker, "ROLLBACK");
     await rawClose(locker);
     await cache.replace(transcript("claude", "claude:after-busy"));
-    expect(await cache.load("claude:after-busy")).toBeDefined();
+    expect((await cache.list()).some((m) => m.id === "claude:after-busy")).toBe(true);
     await cache.close();
   });
 
   test("refuses a cache database symlink", async () => {
     if (process.platform === "win32") return;
-    const path = cachePath();
-    const initial = await openFragmentCache({ path });
+    const path = storePath();
+    const initial = await openStore({ path });
     await initial.close();
     rmSync(path);
     const target = join(dirname(path), "target.sqlite3");
@@ -446,21 +549,108 @@ describe("SQLite fragment cache", () => {
     chmodSync(target, 0o600);
     symlinkSync(target, path);
 
-    await expect(openFragmentCache({ path })).rejects.toMatchObject({
+    await expect(openStore({ path })).rejects.toMatchObject({
       code: "unsafe_path",
     });
   });
 
   test("refuses a dangling cache database symlink", async () => {
     if (process.platform === "win32") return;
-    const path = cachePath();
-    const initial = await openFragmentCache({ path });
+    const path = storePath();
+    const initial = await openStore({ path });
     await initial.close();
     rmSync(path);
     symlinkSync(join(dirname(path), "missing.sqlite3"), path);
 
-    await expect(openFragmentCache({ path })).rejects.toMatchObject({
+    await expect(openStore({ path })).rejects.toMatchObject({
       code: "unsafe_path",
     });
+  });
+
+  test("materializeSessions guards against a partial re-parse overwriting a fuller record", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const session = (count: number) => ({
+        meta: {
+          source: "claude" as const,
+          sessionId: "claude:partial",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/t.jsonl",
+        },
+        messages: Array.from({ length: count }, (_, i) => ({
+          source: "claude" as const,
+          sessionId: "claude:partial",
+          project: "p",
+          cwd: "/tmp/p",
+          gitBranch: "",
+          ts: 1000 + i,
+          date: "2026-06-01",
+          model: "claude-x",
+          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+          attributionSkill: null,
+          toolUses: [],
+        })),
+        toolResults: [],
+      });
+
+      const first = await store.materializeSessions("claude", [session(3)]);
+      expect(first).toEqual([]); // fresh insert, no guard
+
+      // A re-parse with FEWER messages must not shrink the record (a file may be missing this run).
+      const guarded = await store.materializeSessions("claude", [session(1)]);
+      expect(guarded).toEqual(["claude:partial"]);
+      const countMessages = async () =>
+        (await store.readResolved()).messages.filter((m) => m.sessionId === "claude:partial").length;
+      expect(await countMessages()).toBe(3);
+      // The guard does NOT flag archived — the file may still be on disk; archiving is decided by
+      // discovery, not by a message-count dip.
+      expect(await store.listArchived()).toEqual([]);
+
+      // The guard is owner-agnostic: a handoff to another producer with fewer messages can't regress.
+      const handoff = await store.materializeSessions("agentsview", [session(1)]);
+      expect(handoff).toEqual(["claude:partial"]);
+      expect(await countMessages()).toBe(3);
+      expect(await store.resolvedSessionCounts()).toEqual([
+        { owner: "claude", present: 1, archived: 0 },
+      ]); // still owned by claude, not handed off to a shorter copy
+
+      // An equal-or-larger re-parse replaces normally.
+      expect(await store.materializeSessions("claude", [session(5)])).toEqual([]);
+      expect(await countMessages()).toBe(5);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("clearIndex drops the structural index but preserves the resolved read model", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.replace(transcript("codex", "codex:idx"));
+      await store.setCoverage("codex", "digest", 1);
+      await store.materializeSessions("codex", [
+        {
+          meta: {
+            source: "codex",
+            sessionId: "codex:keep",
+            project: "p",
+            cwd: "/tmp/p",
+            filePath: "/tmp/p/r.jsonl",
+          },
+          messages: [],
+          toolResults: [],
+        },
+      ]);
+
+      await store.clearIndex();
+
+      expect(await store.list()).toHaveLength(0); // structural index gone
+      expect(await store.getCoverage("codex")).toBeUndefined(); // coverage gone
+      expect((await store.readResolved()).sessions.has("codex:keep")).toBe(true); // archive preserved
+    } finally {
+      await store.close();
+    }
   });
 });

@@ -12,7 +12,7 @@ import sqlite3 from "sqlite3";
 import {
   AgentsViewImporter,
   agentsViewDatabasePath,
-} from "../src/agentsview-import.ts";
+} from "../src/producers/agentsview/importer.ts";
 
 const tempDirs: string[] = [];
 

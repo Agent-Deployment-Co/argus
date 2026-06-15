@@ -9,7 +9,7 @@ import type {
   FileParseResult,
   ParsedAuxiliaryFragment,
   ParsedFileFragment,
-} from "../src/cache-contract.ts";
+} from "../src/store-contract.ts";
 import {
   GEMINI_AUXILIARY_PARSER,
   GEMINI_TRANSCRIPT_PARSER,
@@ -21,7 +21,7 @@ import {
   normalizeGeminiUsage,
   parseGeminiAuxiliaryFile,
   parseGeminiTranscriptFile,
-} from "../src/parse-gemini.ts";
+} from "../src/producers/gemini/parser.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "gemini");
 

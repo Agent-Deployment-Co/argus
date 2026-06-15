@@ -1,3 +1,22 @@
+// parse.ts — the original monolithic, from-scratch parser, kept DELIBERATELY as a second, independent
+// implementation that shares NO parsing code with the per-source adapter parsers in
+// `producers/<source>/parser.ts`. It exists for two roles:
+//
+//   1. Test oracle. The producer pipeline is validated against this — tests assert
+//      `parseAllIncrementalDetailed(...)` deep-equals `parseAll(...)`. Because the two implementations
+//      share no parsing code, the same bug is unlikely to hide on both sides; that independence is the
+//      whole point of an oracle, so the apparent duplication here is intentional, not accidental.
+//   2. Fallback. When the store can't be opened/synced, `parseAllIncrementalDetailed` catches the error
+//      and returns `parseAll(opts)`, so `argus report` still works with no store.
+//
+// So yes: this is largely a duplicate of the adapter parsers, on purpose. Unlike them it emits a flat
+// `ParseResult` (messages + sessions + tool-result stats) directly, not the fragment/fact model the
+// store is built from. It also owns the shared parse types/util the rest of the pipeline imports:
+// `ParseOptions`, `TranscriptSource`, `projectLabel`.
+//
+// Open question (a separate decision, not this file's concern): keep the dual implementation, or derive
+// the oracle from the producers. For now the independent cross-check + dependency-free fallback are
+// worth the duplication.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
