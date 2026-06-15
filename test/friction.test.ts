@@ -7,7 +7,7 @@ import {
   claudeHistoryFileIdentity,
   discoverClaudeTranscripts,
   parseClaudeTranscriptFile,
-} from "../src/parse-claude.ts";
+} from "../src/producers/claude/parser.ts";
 import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
 import { parseAll } from "../src/parse.ts";
 import { aggregate } from "../src/aggregate.ts";

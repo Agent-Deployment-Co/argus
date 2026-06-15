@@ -29,11 +29,11 @@ import {
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
-} from "./store-contract.ts";
-import { claudeFrictionEvents } from "./friction.ts";
-import { HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
-import { parseMcpTool } from "./tool-categories.ts";
-import { emptyUsage, type Usage } from "./types.ts";
+} from "../../store-contract.ts";
+import { claudeFrictionEvents } from "../../friction.ts";
+import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
+import { parseMcpTool } from "../../tool-categories.ts";
+import { emptyUsage, type Usage } from "../../types.ts";
 
 export const CLAUDE_PROJECTS_ROOT_ID = "claude-projects";
 export const CLAUDE_CONFIG_ROOT_ID = "claude-config";
