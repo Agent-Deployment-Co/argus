@@ -1187,6 +1187,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>> {
+    return this.schedule(async () => {
+      const rows = await all<{ owner: string; present: number; archived: number }>(
+        this.db,
+        `SELECT owner,
+                SUM(CASE WHEN archived = 0 THEN 1 ELSE 0 END) AS present,
+                SUM(archived) AS archived
+         FROM resolved_sessions GROUP BY owner ORDER BY owner`,
+      );
+      return rows.map((row) => ({ owner: row.owner, present: row.present, archived: row.archived }));
+    });
+  }
+
   clearIndex(): Promise<void> {
     return this.schedule(async () => {
       // Drop only the structural index + freshness attestation (both re-derivable from disk).

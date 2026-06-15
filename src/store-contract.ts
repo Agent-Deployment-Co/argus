@@ -437,6 +437,8 @@ export interface Store {
   listArchived(source?: AgentSource): Promise<string[]>;
   /** Count of archived (off-disk, retained) sessions currently owned by `owner`. */
   archivedCountForOwner(owner: string): Promise<number>;
+  /** Resolved session counts grouped by owning producer (present on disk vs archived). */
+  resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>>;
   /** Canonical session ids currently materialized for `owner` (present and archived). */
   resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
   /** Canonical session ids owned by some producer other than `owner`. */
