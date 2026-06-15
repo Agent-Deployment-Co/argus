@@ -598,12 +598,27 @@ describe("SQLite store", () => {
       const first = await store.materializeSessions("claude", [session(3)]);
       expect(first).toEqual([]); // fresh insert, no guard
 
-      // A same-owner re-parse with FEWER messages (a file aged off disk) must not shrink the record.
+      // A re-parse with FEWER messages must not shrink the record (a file may be missing this run).
       const guarded = await store.materializeSessions("claude", [session(1)]);
       expect(guarded).toEqual(["claude:partial"]);
-      const resolved = await store.readResolved();
-      expect(resolved.messages.filter((m) => m.sessionId === "claude:partial")).toHaveLength(3);
-      expect(await store.listArchived()).toEqual(["claude:partial"]);
+      const countMessages = async () =>
+        (await store.readResolved()).messages.filter((m) => m.sessionId === "claude:partial").length;
+      expect(await countMessages()).toBe(3);
+      // The guard does NOT flag archived — the file may still be on disk; archiving is decided by
+      // discovery, not by a message-count dip.
+      expect(await store.listArchived()).toEqual([]);
+
+      // The guard is owner-agnostic: a handoff to another producer with fewer messages can't regress.
+      const handoff = await store.materializeSessions("agentsview", [session(1)]);
+      expect(handoff).toEqual(["claude:partial"]);
+      expect(await countMessages()).toBe(3);
+      expect(await store.resolvedSessionCounts()).toEqual([
+        { owner: "claude", present: 1, archived: 0 },
+      ]); // still owned by claude, not handed off to a shorter copy
+
+      // An equal-or-larger re-parse replaces normally.
+      expect(await store.materializeSessions("claude", [session(5)])).toEqual([]);
+      expect(await countMessages()).toBe(5);
     } finally {
       await store.close();
     }
