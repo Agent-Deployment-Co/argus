@@ -11,20 +11,35 @@
   ],
   "scripts": {
     "start": "bun run src/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun x tsc --noEmit && bun x tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
-    "build": "bun build src/index.ts --target=node --external sqlite3 --outfile=dist/index.js && mkdir -p dist/vendor && cp src/vendor/* dist/vendor/ && tail -n +2 dist/index.js > dist/index.temp && echo '#!/usr/bin/env node' | cat - dist/index.temp > dist/index.js && rm dist/index.temp && chmod +x dist/index.js"
+    "build:web": "vite build --config web/vite.config.ts",
+    "build": "bun run build:web && bun build src/index.ts --target=node --external sqlite3 --outfile=dist/index.js && mkdir -p dist/vendor && cp src/vendor/* dist/vendor/ && tail -n +2 dist/index.js > dist/index.temp && echo '#!/usr/bin/env node' | cat - dist/index.temp > dist/index.js && rm dist/index.temp && chmod +x dist/index.js"
   },
   "engines": {
     "node": ">=20.17"
   },
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
+    "@hono/node-server": "^2.0.5",
+    "hono": "^4.12.25",
     "sqlite3": "6"
   },
   "devDependencies": {
+    "@tanstack/react-query": "^5.101.0",
+    "@tanstack/react-router": "^1.170.15",
+    "@tanstack/react-table": "^8.21.3",
     "@types/node": "^25.9.1",
-    "bun-types": "^1.3.14"
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "bun-types": "^1.3.14",
+    "chart.js": "^4.5.1",
+    "react": "^19.2.7",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.7",
+    "vite": "^8.0.16"
   }
 }
