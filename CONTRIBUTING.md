@@ -18,17 +18,36 @@ bun run src/index.ts
 bun run src/index.ts report --open
 ```
 
+Run the web app from source (build the UI once, then serve it):
+
+```bash
+bun run build:web                 # build web/ into dist/web
+bun run src/index.ts serve --open # serve it at http://localhost:4242
+```
+
+For live-reloading UI development, run the API and the Vite dev server in two terminals:
+
+```bash
+bun run src/index.ts serve --port 4242   # terminal 1: the JSON API
+bun run dev:web                          # terminal 2: Vite (proxies /api → 4242)
+```
+
+Then open the URL Vite prints. Edits under `web/src/**` hot-reload without a rebuild.
+
 ## Development commands
 
 ```bash
-bun run typecheck              # TypeScript checks
+bun run typecheck              # TypeScript checks (root src + web/)
 bun test                       # Full test suite
 bun test test/parse.test.ts    # One test file
 bun test -t "dedup"            # Tests matching a name
-bun run build                  # Build the distributable Node.js CLI
+bun run build:web              # Build the web app into dist/web
+bun run dev:web                # Vite dev server for the web app (live reload)
+bun run build                  # Build the distributable Node.js CLI (runs build:web first)
 ```
 
-CI installs with the frozen lockfile, runs the typecheck, and runs the full test suite.
+CI installs with the frozen lockfile, typechecks both the root and `web/`, runs the full test
+suite, and verifies the web build.
 
 ## Architecture
 
@@ -39,12 +58,16 @@ parse.ts -> aggregate.ts -> report.ts or push.ts
 ```
 
 - `src/index.ts` parses CLI options, applies filters, coordinates summaries, and dispatches
-  the terminal overview, HTML report, login, and push commands.
+  the terminal overview, HTML report, web server, login, and push commands.
+- `src/dashboard-builder.ts` builds the analyzed `Dashboard` from the session store. Shared by
+  the `report`/`push` commands and the web server.
 - `src/parse.ts` reads Claude, Codex, and Gemini transcripts into normalized message and
   session records.
 - `src/aggregate.ts` converts parsed records into the dashboard model and computes
   breakdowns and estimated cost.
 - `src/report.ts` renders the self-contained HTML report.
+- `src/serve.ts` runs the local web server (`argus serve`): a Hono app exposing the dashboard
+  as a JSON API and serving the React web app from `dist/web`.
 - `src/console-report.ts` renders the compact terminal overview.
 - `src/push.ts` detects user and organization metadata and sends a dashboard snapshot.
 - `src/auth.ts` manages dashboard login credentials used by the CLI.
@@ -83,6 +106,32 @@ The HTML report must remain self-contained and usable offline.
 - Keep third-party licenses in `src/vendor/`.
 - Run the production build when changing asset loading; source execution and the bundled
   Node.js CLI resolve assets differently.
+
+## Web app
+
+`argus serve` (`src/serve.ts`) serves an interactive React app from `web/`. See
+[docs/web-app.md](docs/web-app.md) for the full design and rationale. The essentials for working
+on it:
+
+- **Dependencies.** Runtime deps add only `hono` + `@hono/node-server`. The frontend stack
+  (`react`, `react-dom`, `vite`, `@vitejs/plugin-react`, `@tanstack/react-router`,
+  `@tanstack/react-query`, `@tanstack/react-table`, `chart.js`, `react-chartjs-2`) lives in
+  **`devDependencies`** — it's pre-bundled into `dist/web` at build time, so it's never installed
+  by end users.
+- **Layout.** `web/` is its own Vite project with its own `web/tsconfig.json` (DOM + JSX libs,
+  separate from the Bun/Node root config). Components live in `web/src/{routes,components,lib}`.
+- **Type sharing.** `web/src/types.ts` re-exports the CLI `Dashboard` types from `src/` as
+  **type-only** imports, so the `/api/snapshot` payload and the UI can't drift. Type-only imports
+  are erased at build time — no server code reaches the browser bundle.
+- **Build.** `bun run build:web` → `dist/web`. `bun run build` runs it before bundling the CLI.
+  `dist/web` ships via the package `files: ["dist"]`. Note `.gitignore` has a broad `*.html` rule;
+  a `!web/index.html` exception keeps the app's entry HTML tracked.
+- **API + tests.** `serve.ts` splits `createApp()` (pure route wiring) from `startServer()` (cache
+  + listening) so the routes are unit-testable. `test/serve.test.ts` builds a fixture snapshot,
+  injects it into `createApp()`, and asserts `GET /api/snapshot` returns a payload that satisfies
+  the wire contract — no real transcripts or network involved.
+- **Charts.** Chart.js controllers must be registered (`web/src/lib/charts.ts`); react-chartjs-2
+  does not auto-register them.
 
 ## Wire contract
 
