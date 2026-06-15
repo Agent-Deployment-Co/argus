@@ -27,10 +27,10 @@ import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
 import type { SessionMeta } from "./types.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
-import { rebuildStore } from "./store.ts";
+import { openStore, rebuildStore } from "./store.ts";
 
 interface Flags {
-  command: "report" | "push" | "login" | "status" | "reindex" | "sync";
+  command: "report" | "push" | "login" | "status" | "reindex" | "sync" | "forget";
   source: "all" | TranscriptSource;
   since?: string;
   until?: string;
@@ -43,6 +43,12 @@ interface Flags {
   agentsView: "auto" | "off";
   agentsViewDatabasePath?: string;
   help: boolean;
+  /** reindex: drop the whole store (loses archived/off-disk sessions) instead of re-deriving in place. */
+  force: boolean;
+  /** forget: target all archived (off-disk) sessions instead of explicit ids. */
+  archived: boolean;
+  /** Positional args (e.g. session ids for `forget`). */
+  positionals: string[];
   // push & login
   endpoint?: string;
   user?: string;
@@ -59,6 +65,9 @@ function parseArgs(argv: string[]): Flags {
     json: false,
     agentsView: "auto",
     help: false,
+    force: false,
+    archived: false,
+    positionals: [],
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
     org: process.env.ARGUS_ORG,
   };
@@ -72,6 +81,7 @@ function parseArgs(argv: string[]): Flags {
       case "status": f.command = "status"; break;
       case "reindex": f.command = "reindex"; break;
       case "sync": f.command = "sync"; break;
+      case "forget": f.command = "forget"; break;
       case "--source": f.source = parseSource(next()); break;
       case "--since": f.since = next(); break;
       case "--until": f.until = next(); break;
@@ -87,9 +97,12 @@ function parseArgs(argv: string[]): Flags {
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
       case "--org": f.org = next(); break;
+      case "--force": f.force = true; break;
+      case "--archived": f.archived = true; break;
       case "--help": case "-h": f.help = true; break;
       default:
         if (a.startsWith("-")) { console.error(`Unknown flag: ${a}`); process.exit(2); }
+        else f.positionals.push(a);
     }
   }
   return f;
@@ -108,42 +121,54 @@ function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
 const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 
 Usage:
-  argus                       show a terminal overview
-  argus report [options]      build the local HTML dashboard
+  argus                       terminal overview (no options; just run it)
+  argus report [options]      build the local HTML (or --json) dashboard
+  argus sync [options]        index new/changed sessions into the local store
+  argus reindex [options]     re-derive the index from disk (preserves archived); --force to wipe
+  argus status                show the local store path + per-source coverage
+  argus forget <id>… | --archived   permanently remove sessions from the local store
   argus login [options]       login via Cloudflare Access SSO in your browser
   argus push [options]        push your usage snapshot to a team Worker
-  argus status                show the local store path + per-source coverage
-  argus sync                  bring the local store up to date (index new/changed sessions)
-  argus reindex               rebuild the local store from scratch
 
-Report options:
-  --source <claude|codex|gemini|all>
-                            transcript source to parse (default: all)
-  --since <YYYY-MM-DD>     only include messages on/after this date
-  --until <YYYY-MM-DD>     only include messages on/before this date
-  --project <substr>       only include sessions whose project path matches substr
-  -o, --out <file>         output HTML path (default: argus-report.html)
-  --summarize              generate per-session LLM summaries via headless 'claude -p' (cached)
-  --summarize-model <id>   model for summaries (e.g. claude-haiku-4-5-20251001)
-  --open                   open the report in the default browser when done (macOS)
-  --json                   write raw aggregate JSON to --out instead of HTML
+The local store is a durable archive: once a session is indexed it is retained even after its
+transcript ages off disk (Claude Code keeps ~30 days), flagged "archived" rather than deleted.
+\`argus forget\` is the only thing that removes retained sessions.
+
+Source selection (report, push, sync, reindex, forget --archived):
+  --source <claude|codex|gemini|all>   transcript source(s) (default: all)
   --agentsview             auto-detect AgentsView imports (default)
   --no-agentsview          disable AgentsView discovery/import
   --agentsview-db <path>   read a specific AgentsView sessions.db
 
-Login options:
-  --endpoint <url>         SSO service URL     (default: https://argus.agentdeployment.co)
+Store maintenance (reindex, forget):
+  --force                  reindex: drop the whole store, including archived (off-disk) sessions
+  --archived               forget: target all archived sessions (optionally scoped by --source)
 
-Push options (also honors --since/--until/--project/--summarize):
-  --endpoint <url>         Worker base URL     (or env ARGUS_ENDPOINT, default: https://argus.agentdeployment.co)
-  --user <id>              override the user id (default: git email, else \$USER@host)
-  --org <id>               override authenticated org (or env ARGUS_ORG)
+Filters (report, push):
+  --since <YYYY-MM-DD>     only include messages on/after this date
+  --until <YYYY-MM-DD>     only include messages on/before this date
+  --project <substr>       only include sessions whose cwd contains substr
+
+Report output (report only):
+  -o, --out <file>         output path (default: argus-report.html)
+  --json                   write raw aggregate JSON to --out instead of HTML
+  --open                   open the report in the default browser when done (macOS)
+
+Summaries (report, push):
+  --summarize              generate per-session LLM summaries via headless 'claude -p' (cached)
+  --summarize-model <id>   model for summaries (e.g. claude-haiku-4-5-20251001)
+
+Login / push:
+  --endpoint <url>         service URL for login & push
+                           (env ARGUS_ENDPOINT, default: https://argus.agentdeployment.co)
+  --user <id>              push: override the user id (default: git email, else \$USER@host)
+  --org <id>               push: override the org (env ARGUS_ORG)
 
   -h, --help               show this help
 
-Reads transcripts from ~/.claude/projects (override dir via CLAUDE_CONFIG_DIR),
-~/.codex/sessions (override dir via CODEX_HOME or CODEX_CONFIG_DIR), and
-~/.gemini/tmp (override home via GEMINI_CLI_HOME).
+The local store path is shown by \`argus status\` (override its directory via
+ARGUS_DATA_DIR). Transcripts are read from ~/.claude/projects (CLAUDE_CONFIG_DIR),
+~/.codex/sessions (CODEX_HOME / CODEX_CONFIG_DIR), and ~/.gemini/tmp (GEMINI_CLI_HOME).
 `;
 
 type Log = (s: string) => void;
@@ -391,7 +416,23 @@ async function runStatus(log: Log): Promise<void> {
   for (const scan of scans) {
     const when = scan.lastSyncAtMs ? new Date(scan.lastSyncAtMs).toISOString() : "never";
     const state = scan.upToDate ? "up to date" : "pending changes";
-    log(`  ${scan.source}: ${scan.sessionCount} sessions · last synced ${when} · ${state}`);
+    const archived = scan.archivedCount ? ` (+${scan.archivedCount} archived)` : "";
+    log(`  ${scan.source}: ${scan.sessionCount} sessions${archived} · last synced ${when} · ${state}`);
+  }
+  // Total archived across all owners (includes import producers like AgentsView, which `scanStore`
+  // doesn't cover). These are retained, off-disk sessions that re-deriving from disk can't recover.
+  try {
+    const store = await openStore();
+    try {
+      const archivedAll = await store.listArchived();
+      if (archivedAll.length) {
+        log(`Archived (retained, off disk): ${archivedAll.length} sessions · prune with \`argus forget --archived\``);
+      }
+    } finally {
+      await store.close();
+    }
+  } catch {
+    // best-effort; the scan above already reported store availability
   }
   if (scans.some((scan) => !scan.upToDate)) log("Run `argus sync` to index pending changes.");
 }
@@ -413,10 +454,55 @@ async function runSync(flags: Flags, log: Log): Promise<void> {
 }
 
 async function runReindex(flags: Flags, log: Log): Promise<void> {
-  const store = await rebuildStore();
-  await store.close();
-  log("Rebuilt the local Argus store. Indexing…");
+  if (flags.force) {
+    // Destructive: drop the entire store, including archived (off-disk) sessions that cannot be
+    // re-derived from disk. Gated behind --force and announced before we delete anything.
+    const store = await openStore();
+    let archived: string[] = [];
+    try {
+      archived = await store.listArchived();
+    } finally {
+      await store.close();
+    }
+    if (archived.length) {
+      log(`! --force will permanently delete ${archived.length} archived session(s) no longer on disk.`);
+    }
+    const rebuilt = await rebuildStore();
+    await rebuilt.close();
+    log("Rebuilt the local Argus store from scratch. Indexing…");
+  } else {
+    // Non-destructive: re-derive the structural index from disk while preserving the trusted read
+    // model (resolved_*), so aged-out archived sessions survive a reindex.
+    const store = await openStore();
+    try {
+      await store.clearIndex();
+    } finally {
+      await store.close();
+    }
+    log("Re-reading all transcripts from disk. Archived sessions (no longer on disk) are kept…");
+  }
   await runSync(flags, log);
+}
+
+async function runForget(flags: Flags, log: Log): Promise<void> {
+  const store = await openStore();
+  try {
+    const targets = flags.archived
+      ? await store.listArchived(flags.source === "all" ? undefined : flags.source)
+      : flags.positionals;
+    if (!targets.length) {
+      log(
+        flags.archived
+          ? "No archived sessions to forget."
+          : "Usage: argus forget <session-id>… (or --archived to prune all off-disk sessions).",
+      );
+      return;
+    }
+    await store.retractSessions(targets);
+    log(`Forgot ${targets.length} session(s) from the local store.`);
+  } finally {
+    await store.close();
+  }
 }
 
 async function main() {
@@ -430,6 +516,7 @@ async function main() {
   else if (flags.command === "status") await runStatus(log);
   else if (flags.command === "reindex") await runReindex(flags, log);
   else if (flags.command === "sync") await runSync(flags, log);
+  else if (flags.command === "forget") await runForget(flags, log);
   else await runReport(flags, log, isBareInvocation(argv));
 }
 

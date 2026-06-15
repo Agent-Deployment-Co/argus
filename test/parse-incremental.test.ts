@@ -48,6 +48,7 @@ function stats(overrides: Partial<SyncStats> = {}): SyncStats {
     replaced: 0,
     imported: 0,
     deleted: 0,
+    archived: 0,
     unstable: 0,
     failed: 0,
     incompleteDiscoveries: 0,
@@ -241,7 +242,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(changed.parsed.messages.at(-1)?.usage).toMatchObject({ input: 3, output: 1 });
   });
 
-  test("a complete scan tombstones deleted files only for the selected source", async () => {
+  test("a deleted transcript is tombstoned in the index but its session is retained (archived)", async () => {
     const root = tempRoot();
     const projectsDir = copyFixture("projects", root);
     const codexSessionsDir = copyFixture("codex-sessions", root);
@@ -254,20 +255,55 @@ describe("parseAllIncrementalDetailed", () => {
       ...NO_AGENTSVIEW,
     };
 
-    await parseAllIncrementalDetailed(opts);
+    const before = await parseAllIncrementalDetailed(opts);
+    const codexBefore = before.parsed.messages.filter((m) => m.source === "codex");
+    const codexSessionIds = new Set(codexBefore.map((m) => m.sessionId));
+    expect(codexBefore.length).toBeGreaterThan(0);
     rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
 
     const codexOnly = await parseAllIncrementalDetailed({
       ...opts,
       sources: ["codex"],
     });
-    expect(codexOnly.parsed.messages).toEqual([]);
-    expect(codexOnly.stats.deleted).toBe(1);
+
+    // Durable archive: the session's content is RETAINED even though its transcript is gone from disk.
+    expect(codexOnly.parsed.messages).toEqual(codexBefore);
+    expect(codexOnly.stats.deleted).toBe(1); // index fragment tombstoned (the index mirrors disk)
+    expect(codexOnly.stats.archived).toBe(codexSessionIds.size); // session retained + flagged archived
 
     const cache = await openStore({ path: opts.storePath });
     try {
+      // The structural index reflects disk (codex fragment gone); claude index untouched.
       expect((await cache.list("claude")).filter((row) => row.status === "success").length).toBeGreaterThan(0);
       expect((await cache.list("codex")).filter((row) => row.status === "success")).toEqual([]);
+      // The resolved session survives, flagged archived.
+      expect(new Set(await cache.listArchived("codex"))).toEqual(codexSessionIds);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("forget permanently removes a retained (archived) session", async () => {
+    const root = tempRoot();
+    const codexSessionsDir = copyFixture("codex-sessions", root);
+    const opts = {
+      codexSessionsDir,
+      sources: ["codex"] as AgentSource[],
+      storePath: storePath(root),
+      ...NO_AGENTSVIEW,
+    };
+
+    await parseAllIncrementalDetailed(opts);
+    rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
+    await parseAllIncrementalDetailed(opts); // archives the now-off-disk session
+
+    const cache = await openStore({ path: opts.storePath });
+    try {
+      const archived = await cache.listArchived();
+      expect(archived.length).toBeGreaterThan(0);
+      await cache.retractSessions(archived);
+      expect(await cache.listArchived()).toEqual([]);
+      expect((await cache.readResolved()).messages).toEqual([]);
     } finally {
       await cache.close();
     }
@@ -438,20 +474,27 @@ describe("materialized read model", () => {
     expect(second.stats.parsed).toBe(0); // every fragment was a cache hit
   });
 
-  test("deleting a transcript re-materializes incrementally to match a full rebuild", async () => {
+  test("deleting a transcript retains its session — the store is a superset of a fresh rebuild", async () => {
     const root = tempRoot();
     const codexSessionsDir = copyFixture("codex-sessions", root);
     const base = { codexSessionsDir, sources: ["codex"] as AgentSource[], ...NO_AGENTSVIEW };
 
     const incrementalPath = storePath(root);
-    await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath });
+    const original = (await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath })).parsed;
     rmSync(join(codexSessionsDir, "2026/06/03/rollout-2026-06-03T08-00-00-codex-sess1.jsonl"));
     const incremental = (await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath })).parsed;
 
+    // A fresh store sees only what's on disk now (the deleted transcript is gone).
     const rebuilt = (
       await parseAllIncrementalDetailed({ ...base, storePath: join(root, "cache", "fresh.sqlite3") })
     ).parsed;
 
-    expect(comparable(incremental)).toEqual(comparable(rebuilt));
+    // Durable archive: the incremental store still holds the deleted session in full…
+    expect(comparable(incremental)).toEqual(comparable(original));
+    // …while the fresh rebuild, derived only from disk, has dropped it.
+    expect(rebuilt.messages.length).toBeLessThan(incremental.messages.length);
+    const rebuiltIds = new Set(rebuilt.messages.map((m) => m.sessionId));
+    const incrementalIds = new Set(incremental.messages.map((m) => m.sessionId));
+    for (const id of rebuiltIds) expect(incrementalIds.has(id)).toBe(true);
   });
 });

@@ -418,16 +418,32 @@ export interface Store {
   transcriptIndex(source: AgentSource): Promise<TranscriptIndex>;
 
   // --- Trusted read model (reconciled rows; the reader SELECTs these without reconciling) ---
-  /** Read the reconciled sessions/messages/tool-results, with optional SQL-pushdown filters. */
+  /** Read the reconciled sessions/messages/tool-results, with optional SQL-pushdown filters.
+   *  Includes archived (off-disk, retained) sessions — the store is a durable archive, not a
+   *  mirror of disk. */
   readResolved(query?: ResolvedQuery): Promise<ParseResult>;
-  /** Upsert the given reconciled sessions for `owner` (replacing any prior rows per session). */
-  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<void>;
-  /** Remove reconciled sessions (deleted or handed off to another owner). */
+  /**
+   * Upsert the given reconciled sessions for `owner` (replacing any prior rows per session) and
+   * mark them present (on-disk). Guards against a partial re-parse — a same-owner re-materialization
+   * with *fewer* messages than already stored, i.e. some of the session's files aged off disk —
+   * by keeping the fuller stored copy and flagging it archived. Returns the ids it guarded that way.
+   */
+  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
+  /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
-  /** Canonical session ids currently materialized for `owner`. */
+  /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */
+  setSessionsArchived(sessionIds: string[], archived: boolean): Promise<void>;
+  /** Canonical ids of archived (off-disk, retained) sessions, optionally restricted by source. */
+  listArchived(source?: AgentSource): Promise<string[]>;
+  /** Count of archived (off-disk, retained) sessions currently owned by `owner`. */
+  archivedCountForOwner(owner: string): Promise<number>;
+  /** Canonical session ids currently materialized for `owner` (present and archived). */
   resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
   /** Canonical session ids owned by some producer other than `owner`. */
   ownedSessionIdsExcept(owner: string): Promise<Set<string>>;
+  /** Drop the whole structural index + coverage (re-derivable from disk). Leaves the trusted
+   *  read model (resolved_*) and ownership intact — used by non-destructive `reindex`. */
+  clearIndex(): Promise<void>;
   getCoverage(source: string): Promise<SourceCoverageRow | undefined>;
   setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void>;
 

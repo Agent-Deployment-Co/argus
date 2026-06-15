@@ -33,7 +33,10 @@ export interface SyncStats {
   parsed: number;
   replaced: number;
   imported: number;
+  /** Index fragments tombstoned because their file is no longer on disk. */
   deleted: number;
+  /** Sessions retained but flagged archived because their source went off disk (durable archive). */
+  archived: number;
   unstable: number;
   failed: number;
   incompleteDiscoveries: number;
@@ -62,6 +65,7 @@ const EMPTY_STATS: SyncStats = {
   replaced: 0,
   imported: 0,
   deleted: 0,
+  archived: 0,
   unstable: 0,
   failed: 0,
   incompleteDiscoveries: 0,
@@ -301,6 +305,10 @@ function canonicalizer(
  * The coordinator: each native producer discovers + parses its sessions and re-materializes the
  * **touched** canonical sessions into the trusted read model; dependent import producers then fill
  * in only sessions no native owns. Reconciliation happens here (the producer), never at read.
+ *
+ * The store is a DURABLE ARCHIVE, not a mirror of disk: sources age out (Claude keeps ~30 days), so
+ * a previously-materialized session that is no longer discoverable is RETAINED and flagged archived,
+ * never deleted. The only way a resolved session leaves the store is the explicit `forget` command.
  */
 async function syncStore(
   opts: IncrementalParseOptions,
@@ -422,6 +430,7 @@ async function syncStore(
         ? currentCanonical
         : canonicalSessionIds(producer.capabilities, changedFragments);
 
+    let guardedArchived: string[] = [];
     if (touched.size) {
       // Re-parse every file of each touched session from disk (reuse already-parsed changed files).
       const fragments: ParsedFileFragment[] = [];
@@ -441,11 +450,18 @@ async function syncStore(
         auxiliaryFragments: aux,
         canonicalIds: touched,
       });
-      await store.materializeSessions(producer.id, toMaterializeSessions(output));
+      // materializeSessions marks these present (archived = 0), except sessions whose files partially
+      // aged out — it keeps the fuller stored copy and flags them archived (returned here).
+      guardedArchived = await store.materializeSessions(producer.id, toMaterializeSessions(output));
     }
 
+    // Durable archive: sessions we owned that are no longer discoverable on disk are RETAINED and
+    // flagged archived (never deleted). A reappearing file is always a parse miss (its index row was
+    // tombstoned), so it re-materializes as present — no separate un-archive pass is needed.
     const prevOwned = await store.resolvedSessionIdsForOwner(producer.id);
-    await store.retractSessions(prevOwned.filter((id) => !currentCanonical.has(id)));
+    const disappeared = prevOwned.filter((id) => !currentCanonical.has(id));
+    await store.setSessionsArchived(disappeared, true);
+    stats.archived += disappeared.length + guardedArchived.length;
     await store.setCoverage(producer.id, filesDigest(discovery.files), currentCanonical.size);
   }
 
@@ -467,6 +483,7 @@ async function syncStore(
       .map(convertImported)
       .filter((fragment): fragment is ParsedFileFragment => !!fragment);
     let unowned = new Set<string>();
+    let importGuard: string[] = [];
     if (converted.length) {
       const full = reconcileSessions({
         caps: producer.capabilities,
@@ -483,9 +500,14 @@ async function syncStore(
               auxiliaryFragments: allAuxiliary,
               canonicalIds: unowned,
             });
-      await store.materializeSessions(producer.id, toMaterializeSessions(output));
+      importGuard = await store.materializeSessions(producer.id, toMaterializeSessions(output));
     }
-    await store.retractSessions(prevOwned.filter((id) => !unowned.has(id)));
+    // Sessions we owned that vanished from the import source (e.g. AgentsView aged them out) but that
+    // no native producer has taken over: RETAIN as archived, never delete. A genuine handoff to a
+    // native owner already replaced the resolved row, so it no longer appears in prevOwned.
+    const vanished = prevOwned.filter((id) => !unowned.has(id));
+    await store.setSessionsArchived(vanished, true);
+    stats.archived += vanished.length + importGuard.length;
   }
 
   if (
@@ -610,7 +632,10 @@ export async function parseAllIncremental(
 /** Per-source freshness attestation: what the store has indexed vs. what's currently on disk. */
 export interface SourceScan {
   source: string;
+  /** Present (on-disk) sessions covered at the last sync. */
   sessionCount: number;
+  /** Retained sessions whose source has aged off disk (durable archive). */
+  archivedCount: number;
   lastSyncAtMs: number | null;
   /** True when the store's indexed file set matches the current discovery (nothing pending). */
   upToDate: boolean;
@@ -636,6 +661,7 @@ export async function scanStore(opts: IncrementalParseOptions = {}): Promise<Sou
       out.push({
         source: producer.id,
         sessionCount: coverage?.sessionCount ?? 0,
+        archivedCount: await store.archivedCountForOwner(producer.id),
         lastSyncAtMs: coverage?.lastSyncAtMs ?? null,
         upToDate: !!coverage && currentDigest != null && coverage.filesDigest === currentDigest,
       });
@@ -660,6 +686,7 @@ export function syncModeSummary(
     stats.parsed > 0 ||
     stats.replaced > 0 ||
     stats.deleted > 0 ||
+    stats.archived > 0 ||
     stats.unstable > 0 ||
     stats.failed > 0 ||
     stats.incompleteDiscoveries > 0;
@@ -674,5 +701,5 @@ export function syncStatsSummary(
   diagnostics: ParserDiagnostic[] = [],
 ): string {
   if (stats.fallback) return syncModeSummary(stats, diagnostics);
-  return `${syncModeSummary(stats, diagnostics)}: ${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.unstable} unstable, ${stats.failed} failed`;
+  return `${syncModeSummary(stats, diagnostics)}: ${stats.hits} hit, ${stats.parsed} parsed, ${stats.replaced} stored, ${stats.imported} imported, ${stats.deleted} deleted, ${stats.archived} archived, ${stats.unstable} unstable, ${stats.failed} failed`;
 }

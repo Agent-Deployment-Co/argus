@@ -30,7 +30,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 4;
+export const STORE_SCHEMA_VERSION = 5;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -47,8 +47,6 @@ export class StoreError extends Error {
     readonly storePath: string,
     message: string,
     options?: ErrorOptions,
-    /** Older owned schema with no migration path — safe to rebuild from disk. */
-    readonly rebuildable = false,
   ) {
     super(message, options);
     this.name = "StoreError";
@@ -59,8 +57,6 @@ export interface OpenStoreOptions {
   path?: string;
   busyTimeoutMs?: number;
   now?: () => number;
-  /** Internal: set when reopening after a rebuild so a second failure propagates. */
-  rebuilding?: boolean;
 }
 
 interface SqliteError extends Error {
@@ -111,10 +107,14 @@ interface FragmentStorage {
   envelopeJson: string | null;
 }
 
-// The store has a single, fresh schema (no migrations): it is fully derivable from disk, so on any
-// version/ownership mismatch the caller rebuilds it from source rather than migrating. Three layers:
-//   1. index_files + index_* — the per-file structural index producers write while indexing.
+// The store is a DURABLE ARCHIVE, not a mirror of disk. Source transcripts age out (Claude Code
+// keeps ~30 days), so once a session is materialized it is retained even after its files vanish —
+// flagged `archived` rather than deleted. Three layers:
+//   1. index_files + index_* — the per-file structural index producers write while indexing. This
+//      layer IS fully derivable from disk and is rebuilt freely (see clearIndex / reindex).
 //   2. resolved_* — the trusted, reconciled read model the reader SELECTs (no reconcile on read).
+//      This is NOT re-derivable once a source ages off disk, so it is preserved across schema
+//      changes via real migrations (MIGRATIONS below), never silently dropped.
 //   3. source_coverage + session_ownership — freshness attestation and per-session ownership.
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
@@ -196,6 +196,7 @@ const CREATE_SCHEMA_SQL = `
   );
 
   -- The trusted read model: reconciled session rows the reader SELECTs directly.
+  -- archived = 1 means retained but no longer backed by its source on disk (aged out / deleted).
   CREATE TABLE resolved_sessions (
     session_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
@@ -206,11 +207,13 @@ const CREATE_SCHEMA_SQL = `
     last_ts INTEGER,
     message_count INTEGER NOT NULL,
     first_prompt TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
     meta_json TEXT NOT NULL
   );
   CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
   CREATE INDEX resolved_sessions_last_ts ON resolved_sessions(last_ts);
   CREATE INDEX resolved_sessions_source ON resolved_sessions(source);
+  CREATE INDEX resolved_sessions_archived ON resolved_sessions(archived);
 
   CREATE TABLE resolved_messages (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -503,6 +506,44 @@ async function createSchema(db: Database): Promise<void> {
   });
 }
 
+/**
+ * Forward-only schema migrations, keyed by the version they upgrade FROM. Because resolved_* holds
+ * sessions that may no longer exist on disk (aged-out archives), the store can no longer be rebuilt
+ * from source on a version bump — it must be migrated in place. Each entry's SQL runs in its own
+ * transaction (with the user_version bump) so a partial upgrade never leaves a half-migrated store.
+ */
+const MIGRATIONS: Record<number, { to: number; sql: string }> = {
+  // 4 → 5: durable archive. Add the `archived` flag so off-disk sessions can be retained, not deleted.
+  4: {
+    to: 5,
+    sql: `
+      ALTER TABLE resolved_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS resolved_sessions_archived ON resolved_sessions(archived);
+    `,
+  },
+};
+
+/** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
+async function migrateSchema(db: Database, path: string, fromVersion: number): Promise<void> {
+  let version = fromVersion;
+  while (version !== STORE_SCHEMA_VERSION) {
+    const step = MIGRATIONS[version];
+    if (!step) {
+      throw new StoreError(
+        "incompatible_schema",
+        path,
+        `Argus store schema ${version} has no migration path to ${STORE_SCHEMA_VERSION}. ` +
+          `Run \`argus reindex --force\` to rebuild from disk (this drops aged-out archived sessions).`,
+      );
+    }
+    await transaction(db, async () => {
+      await exec(db, step.sql);
+      await exec(db, `PRAGMA user_version = ${step.to}`);
+    });
+    version = step.to;
+  }
+}
+
 async function initializeDatabase(db: Database, path: string): Promise<void> {
   await exec(db, "PRAGMA foreign_keys = ON");
   const currentVersion = await validateOwnership(db, path);
@@ -516,20 +557,14 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     );
   }
 
-  // No migrations: the store is derived from disk. Create it fresh when empty; any other version is
-  // a mismatch the caller resolves by rebuilding (openStore catches this and recreates).
+  // The store is a durable archive: an empty store is created fresh; an older owned schema is
+  // MIGRATED in place (resolved_* is preserved). validateOwnership already rejected newer schemas.
+  // A version with no migration path raises incompatible_schema (never silently rebuilt) — the user
+  // must opt into destruction via `reindex --force`.
   if (currentVersion === 0) {
     await createSchema(db);
   } else if (currentVersion !== STORE_SCHEMA_VERSION) {
-    // Older owned schema: no migration path, but the store is derived from disk, so it is safe to
-    // rebuild. (validateOwnership already rejected *newer* schemas, which must not be destroyed.)
-    throw new StoreError(
-      "incompatible_schema",
-      path,
-      `Argus store schema ${currentVersion} != ${STORE_SCHEMA_VERSION}. ${rebuildHint(path)}`,
-      undefined,
-      true,
-    );
+    await migrateSchema(db, path, currentVersion);
   }
 
   await exec(db, "PRAGMA journal_mode = WAL");
@@ -541,7 +576,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
   try {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
-    await get(db, "SELECT session_id FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
     if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
@@ -1026,13 +1061,32 @@ export class SqliteStore implements Store {
     return { messages, sessions, toolResults };
   }
 
-  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<void> {
+  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]> {
     return this.schedule(async () => {
-      if (!sessions.length) return;
+      if (!sessions.length) return [];
+      const archivedByGuard: string[] = [];
       await transaction(this.db, async () => {
         for (const session of sessions) {
           const sid = session.meta.sessionId;
-          // Replace this session wholesale (messages + tool results cascade via FK).
+          // Don't-regress guard: transcripts are append-only, so a same-owner re-parse that yields
+          // FEWER messages than already stored means some of the session's files aged off disk.
+          // Keep the fuller stored copy and flag it archived rather than overwriting with a partial.
+          const existing = await get<{ owner: string; message_count: number }>(
+            this.db,
+            "SELECT owner, message_count FROM resolved_sessions WHERE session_id = ?",
+            [sid],
+          );
+          if (
+            existing &&
+            existing.owner === owner &&
+            session.messages.length < existing.message_count
+          ) {
+            await run(this.db, "UPDATE resolved_sessions SET archived = 1 WHERE session_id = ?", [sid]);
+            archivedByGuard.push(sid);
+            continue;
+          }
+          // Replace this session wholesale (messages + tool results cascade via FK). A freshly
+          // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
@@ -1040,8 +1094,8 @@ export class SqliteStore implements Store {
           await run(
             this.db,
             `INSERT INTO resolved_sessions(
-               session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
             [
               sid,
               owner,
@@ -1079,6 +1133,7 @@ export class SqliteStore implements Store {
         }
       });
       secureSqliteFiles(this.path);
+      return archivedByGuard;
     });
   }
 
@@ -1090,6 +1145,55 @@ export class SqliteStore implements Store {
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [id]);
           await run(this.db, "DELETE FROM session_ownership WHERE session_id = ?", [id]);
         }
+      });
+    });
+  }
+
+  setSessionsArchived(sessionIds: string[], archived: boolean): Promise<void> {
+    return this.schedule(async () => {
+      if (!sessionIds.length) return;
+      await transaction(this.db, async () => {
+        for (const id of new Set(sessionIds)) {
+          await run(this.db, "UPDATE resolved_sessions SET archived = ? WHERE session_id = ?", [
+            archived ? 1 : 0,
+            id,
+          ]);
+        }
+      });
+    });
+  }
+
+  listArchived(source?: AgentSource): Promise<string[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT session_id FROM resolved_sessions WHERE archived = 1${
+          source ? " AND source = ?" : ""
+        }`,
+        source ? [source] : [],
+      );
+      return rows.map((row) => row.session_id);
+    });
+  }
+
+  archivedCountForOwner(owner: string): Promise<number> {
+    return this.schedule(async () => {
+      const row = await get<{ n: number }>(
+        this.db,
+        "SELECT COUNT(*) AS n FROM resolved_sessions WHERE owner = ? AND archived = 1",
+        [owner],
+      );
+      return row?.n ?? 0;
+    });
+  }
+
+  clearIndex(): Promise<void> {
+    return this.schedule(async () => {
+      // Drop only the structural index + freshness attestation (both re-derivable from disk).
+      // resolved_* and session_ownership are the durable archive and are intentionally preserved.
+      await transaction(this.db, async () => {
+        await run(this.db, "DELETE FROM index_files"); // cascades to index_sessions/relationships/auxiliary/dependencies
+        await run(this.db, "DELETE FROM source_coverage");
       });
     });
   }
@@ -1191,13 +1295,10 @@ export async function openStore(
     return new SqliteStore(db, path, busyTimeoutMs, now);
   } catch (error) {
     if (db) await closeDatabase(db).catch(() => undefined);
-    const storeError = asStoreError(error, path, busyTimeoutMs);
-    // No migrations: an older owned schema is rebuilt from disk (it is fully derivable). Newer or
-    // malformed schemas are NOT rebuilt — they propagate so a newer store is never destroyed.
-    if (!options.rebuilding && storeError.rebuildable) {
-      return rebuildStore({ ...options, rebuilding: true });
-    }
-    throw storeError;
+    // The store is a durable archive: open never silently rebuilds. Older owned schemas are migrated
+    // in place (initializeDatabase); anything unmigratable/newer/corrupt propagates so retained data
+    // is never destroyed without the user opting into `reindex --force`.
+    throw asStoreError(error, path, busyTimeoutMs);
   }
 }
 
