@@ -3,11 +3,14 @@
 Argus audits how you use Claude Code, Codex, and Gemini CLI. It reads local session
 transcripts and can:
 
-- Generate a self-contained HTML report for a point-in-time view of your usage.
+- **Serve an interactive dashboard** at a local web address (`serve`) — the preferred way to
+  explore your usage.
+- Generate a self-contained HTML report for a point-in-time snapshot you can share or open
+  offline (`report`).
 - Push usage snapshots to the [Argus dashboard](https://argus.agentdeployment.co), where
-  you can keep and analyze your data over time.
+  you can keep and analyze your data over time (`push`).
 
-Reports include:
+Both the web app and the report include:
 
 - Tokens and estimated cost over time
 - Claude, Codex, and Gemini source breakdowns
@@ -28,13 +31,42 @@ Print a compact overview in your terminal:
 npx @agentdeploymentco/argus
 ```
 
-Generate and open the full report:
+Open the interactive dashboard in your browser (recommended):
+
+```bash
+npx @agentdeploymentco/argus serve --open
+```
+
+This starts a local web server (default `http://localhost:4242`) and opens it. Press `Ctrl-C`
+to stop. Nothing leaves your machine — it reads your local transcripts and serves them locally.
+
+Or generate a self-contained report file to share or open offline:
 
 ```bash
 npx @agentdeploymentco/argus report --open
 ```
 
 The report is written to `argus-report.html` by default and works fully offline.
+
+## Web app
+
+`serve` is the preferred, interactive way to explore your usage: the same breakdowns as the
+report, in a live local web app that's the foundation for richer features over time. The report
+remains the right tool when you want a single file to email, attach to CI, or open without a server.
+
+```bash
+npx @agentdeploymentco/argus serve --open          # http://localhost:4242
+npx @agentdeploymentco/argus serve --port 8080      # choose a port (or set ARGUS_PORT)
+```
+
+| Flag | Description |
+|------|-------------|
+| `-p, --port <N>` | Local port to listen on (env `ARGUS_PORT`, default: `4242`) |
+| `--open` | Open the dashboard in your browser once it's ready (macOS) |
+| `--source`, `--since`, `--until`, `--project` | Same data filters as `report` |
+
+The web app reads from your local session store (the same data `report` uses) and refreshes it
+in the background; it does not re-parse every transcript on each page load.
 
 ## Report options
 

@@ -2,7 +2,6 @@
 import { spawnSync } from "node:child_process";
 import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { aggregate } from "./aggregate.ts";
 import {
   isLegacyAccessTokenCache,
   isManagedOAuthTokenCache,
@@ -15,22 +14,20 @@ import {
 } from "./auth.ts";
 import { printBanner } from "./banner.ts";
 import { isBareInvocation } from "./console-report.ts";
-import { loadPlugins } from "./inventory.ts";
 import type { TranscriptSource } from "./parse.ts";
 import { syncStatsSummary, scanStore } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
 import { RENDERERS, type OutputFormat } from "./renderers.ts";
-import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
-import type { SessionMeta } from "./types.ts";
-import type { ParserDiagnostic } from "./store-contract.ts";
+import { buildDashboard, sourcesFor, type Log } from "./dashboard-builder.ts";
+import { startServer } from "./serve.ts";
 import { openStore, rebuildStore } from "./store.ts";
 
 interface Flags {
-  command: "report" | "push" | "login" | "status" | "reindex" | "sync" | "forget";
+  command: "report" | "serve" | "push" | "login" | "status" | "reindex" | "sync" | "forget";
   source: "all" | TranscriptSource;
   since?: string;
   until?: string;
@@ -53,6 +50,8 @@ interface Flags {
   endpoint?: string;
   user?: string;
   org?: string;
+  // serve
+  port: number;
 }
 
 function parseArgs(argv: string[]): Flags {
@@ -70,12 +69,14 @@ function parseArgs(argv: string[]): Flags {
     positionals: [],
     endpoint: process.env.ARGUS_ENDPOINT || "https://argus.agentdeployment.co",
     org: process.env.ARGUS_ORG,
+    port: Number(process.env.ARGUS_PORT) || 4242,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const next = () => argv[++i];
     switch (a) {
       case "report": f.command = "report"; break;
+      case "serve": f.command = "serve"; break;
       case "push": f.command = "push"; break;
       case "login": f.command = "login"; break;
       case "status": f.command = "status"; break;
@@ -97,6 +98,7 @@ function parseArgs(argv: string[]): Flags {
       case "--endpoint": f.endpoint = next(); break;
       case "--user": f.user = next(); break;
       case "--org": f.org = next(); break;
+      case "--port": case "-p": f.port = Number(next()) || f.port; break;
       case "--force": f.force = true; break;
       case "--archived": f.archived = true; break;
       case "--help": case "-h": f.help = true; break;
@@ -114,15 +116,12 @@ function parseSource(value: string | undefined): "all" | TranscriptSource {
   process.exit(2);
 }
 
-function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
-  return source === "all" ? ["claude", "codex", "gemini"] : [source];
-}
-
 const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
 
 Usage:
   argus                       terminal overview (no options; just run it)
   argus report [options]      build the local HTML (or --json) dashboard
+  argus serve [options]       serve the interactive dashboard at a local web address
   argus sync [options]        read new and changed sessions into the local store
   argus reindex [options]     re-read all transcripts from disk (keeps archived); --force to wipe
   argus status                show the local store path + per-source counts
@@ -154,6 +153,10 @@ Report output (report only):
   --json                   write raw aggregate JSON to --out instead of HTML
   --open                   open the report in the default browser when done (macOS)
 
+Web app (serve only):
+  -p, --port <N>           local port to listen on (env ARGUS_PORT, default: 4242)
+  --open                   open the dashboard in the default browser once it's ready (macOS)
+
 Summaries (report, push):
   --summarize              generate per-session LLM summaries via headless 'claude -p' (cached)
   --summarize-model <id>   model for summaries (e.g. claude-haiku-4-5-20251001)
@@ -170,104 +173,6 @@ The local store path is shown by \`argus status\` (override its directory via
 ARGUS_DATA_DIR). Transcripts are read from ~/.claude/projects (CLAUDE_CONFIG_DIR),
 ~/.codex/sessions (CODEX_HOME / CODEX_CONFIG_DIR), and ~/.gemini/tmp (GEMINI_CLI_HOME).
 `;
-
-type Log = (s: string) => void;
-
-function diagnosticKey(entry: ParserDiagnostic): string {
-  return `${entry.severity}\0${entry.code}\0${entry.message}`;
-}
-
-function uniqueDiagnostics(entries: ParserDiagnostic[]): ParserDiagnostic[] {
-  const seen = new Set<string>();
-  const out: ParserDiagnostic[] = [];
-  for (const entry of entries) {
-    const key = diagnosticKey(entry);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(entry);
-  }
-  return out;
-}
-
-/** Diagnostics worth interrupting a report for: something that makes the result wrong or incomplete.
- *  A missing source root just means the user doesn't use that tool — not a problem to report.
- *  Routine notes (re-read files, AgentsView provenance) are left for `argus sync`. */
-function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
-  return uniqueDiagnostics(diagnostics)
-    .filter((entry) => entry.severity === "error" && entry.code !== "missing_root")
-    .slice(0, 5);
-}
-
-/** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
-async function buildDashboard(flags: Flags, log: Log): Promise<Dashboard> {
-  log("Reading transcripts…");
-  const store = openSessionStore({
-    sources: sourcesFor(flags.source),
-    agentsView: flags.agentsView,
-    agentsViewDatabasePath: flags.agentsViewDatabasePath,
-  });
-  let parseResult;
-  try {
-    parseResult = await store.read({
-      since: flags.since,
-      until: flags.until,
-      projectSubstring: flags.project,
-    });
-  } finally {
-    await store.close();
-  }
-  // Keep reports quiet: only call out problems that affect the result (and explain a degraded read).
-  if (store.stats?.fallback) log(`  ${syncStatsSummary(store.stats, store.diagnostics)}`);
-  for (const entry of reportProblems(store.diagnostics)) log(`  ! ${entry.message}`);
-
-  log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);
-
-  const plugins = loadPlugins();
-
-  // Build per-session last-timestamp + heuristic summaries first.
-  const lastTs = new Map<string, number>();
-  const factsBySession = new Map<string, { firstPrompt: string; topSkills: string[]; toolCounts: Record<string, number>; filesTouched: string[] }>();
-  for (const m of parseResult.messages) {
-    lastTs.set(m.sessionId, Math.max(lastTs.get(m.sessionId) || 0, m.ts));
-    const f = factsBySession.get(m.sessionId) || {
-      firstPrompt: parseResult.sessions.get(m.sessionId)?.firstPrompt || "",
-      topSkills: [],
-      toolCounts: {},
-      filesTouched: [],
-    };
-    if (m.attributionSkill && !f.topSkills.includes(m.attributionSkill)) f.topSkills.push(m.attributionSkill);
-    for (const tu of m.toolUses) {
-      f.toolCounts[tu.name] = (f.toolCounts[tu.name] || 0) + 1;
-      if (tu.filePath && !f.filesTouched.includes(tu.filePath)) f.filesTouched.push(tu.filePath);
-    }
-    factsBySession.set(m.sessionId, f);
-  }
-
-  const summaries = new Map<string, string>();
-
-  if (flags.summarize) {
-    if (!claudeAvailable()) {
-      log("  ! 'claude' CLI not found on PATH — falling back to heuristic summaries.");
-    } else {
-      log(`Summarizing ${parseResult.sessions.size} sessions via claude -p (cached; incremental)…`);
-      const targets: { meta: SessionMeta; lastTs: number }[] = [];
-      for (const meta of parseResult.sessions.values()) {
-        targets.push({ meta, lastTs: lastTs.get(meta.sessionId) || 0 });
-      }
-      const llm = llmSummaries(targets, flags.summarizeModel, log);
-      for (const [sid, s] of llm) summaries.set(sid, s);
-    }
-  }
-
-  // Fill any missing summaries with the heuristic.
-  for (const [sid, f] of factsBySession) {
-    if (!summaries.has(sid)) summaries.set(sid, heuristicSummary(f));
-  }
-
-  const dash = aggregate(parseResult, plugins, summaries);
-  dash.generatedAtMs = Date.now();
-  return dash;
-}
 
 function summary(dash: Dashboard): string {
   return (
@@ -301,6 +206,26 @@ async function runReport(flags: Flags, log: Log, consoleOnly = false): Promise<v
   log(`Wrote ${outPath}`);
   log(`Totals: ${summary(dash)}`);
   if (flags.open && format === "html") spawnSync("open", [outPath]);
+}
+
+async function runServe(flags: Flags, log: Log): Promise<void> {
+  await startServer(
+    {
+      port: flags.port,
+      open: flags.open,
+      build: {
+        source: flags.source,
+        agentsView: flags.agentsView,
+        agentsViewDatabasePath: flags.agentsViewDatabasePath,
+        since: flags.since,
+        until: flags.until,
+        project: flags.project,
+        summarize: flags.summarize,
+        summarizeModel: flags.summarizeModel,
+      },
+    },
+    log,
+  );
 }
 
 async function runLogin(flags: Flags, log: Log): Promise<void> {
@@ -532,6 +457,7 @@ async function main() {
   if (flags.help) { process.stdout.write(HELP); return; }
   const log: Log = (s) => process.stderr.write(s + "\n");
   if (flags.command === "push") await runPush(flags, log);
+  else if (flags.command === "serve") await runServe(flags, log);
   else if (flags.command === "login") await runLogin(flags, log);
   else if (flags.command === "status") await runStatus(log);
   else if (flags.command === "reindex") await runReindex(flags, log);
