@@ -655,6 +655,7 @@ function parseTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
+    tasks: [],
     relationships: [],
   };
   const diagnostics: ParserDiagnostic[] = [];

@@ -19,6 +19,7 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
+  type TaskFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -32,11 +33,13 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "1",
+  version: "2",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
 const ARGUMENT_LIMIT = 280;
+const FIRST_PROMPT_LIMIT = 500;
+const TASK_TEXT_LIMIT = 4_000;
 const DEFAULT_SNAPSHOT_ATTEMPTS = 3;
 
 interface ParsedRecord {
@@ -104,14 +107,14 @@ function normalizeCodexUsage(raw: unknown): Usage {
   return usage;
 }
 
-function textFromCodexContent(content: unknown): string {
-  if (typeof content === "string") return content.slice(0, 500);
+function textFromCodexContent(content: unknown, limit = FIRST_PROMPT_LIMIT): string {
+  if (typeof content === "string") return content.slice(0, limit);
   if (!Array.isArray(content)) return "";
   return content
     .map((part) => stringValue(objectValue(part).text) ?? "")
     .filter(Boolean)
     .join("\n")
-    .slice(0, 500);
+    .slice(0, limit);
 }
 
 function estimateTokens(content: unknown): number {
@@ -428,6 +431,39 @@ function scopedInvocationKey(sourceSessionId: string, invocationId: string): str
   return `${sourceSessionId}\0${invocationId}`;
 }
 
+function codexUserMessageText(record: ParsedRecord, limit = TASK_TEXT_LIMIT): string | undefined {
+  const payload = objectValue(record.value.payload);
+  if (
+    stringValue(record.value.type) !== "response_item" ||
+    stringValue(payload.type) !== "message" ||
+    payload.role !== "user"
+  ) {
+    return undefined;
+  }
+  return textFromCodexContent(payload.content, limit) || undefined;
+}
+
+function isAgentsInstructionsText(text: string): boolean {
+  return /^#?\s*AGENTS\.md instructions for\b/i.test(text.trimStart());
+}
+
+function isTurnAbortedText(text: string): boolean {
+  return text.trim() === "<turn_aborted>";
+}
+
+function directlyFollowedByTurnAborted(records: ParsedRecord[], index: number): boolean {
+  const nextText = records[index + 1] ? codexUserMessageText(records[index + 1]!) : undefined;
+  return nextText ? isTurnAbortedText(nextText) : false;
+}
+
+function shouldSkipTaskMessage(records: ParsedRecord[], index: number, text: string): boolean {
+  return (
+    isAgentsInstructionsText(text) ||
+    isTurnAbortedText(text) ||
+    directlyFollowedByTurnAborted(records, index)
+  );
+}
+
 export function parseCodexTranscript(
   raw: string,
   snapshot: StableFileSnapshot,
@@ -455,8 +491,10 @@ export function parseCodexTranscript(
   const pendingResults: PendingToolResult[] = [];
   const messages: MessageFact[] = [];
   const invocations: InvocationFact[] = [];
+  const tasks: TaskFact[] = [];
 
-  for (const record of records) {
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+    const record = records[recordIndex]!;
     const payload = objectValue(record.value.payload);
     const recordType = stringValue(record.value.type);
     const payloadType = stringValue(payload.type);
@@ -480,8 +518,22 @@ export function parseCodexTranscript(
     }
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
-      const prompt = textFromCodexContent(payload.content);
-      if (!firstPrompt && prompt) firstPrompt = prompt;
+      const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
+      if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
+        if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
+        const taskTimestamp = timestampMs(record.value.timestamp);
+        const task: TaskFact = {
+          id: createFactId("task", "codex", sourceSessionId, record.position, "user_message"),
+          source: "codex",
+          sourceSessionId,
+          description: taskText,
+          evidence: taskText,
+          evidenceKind: "user_message",
+          position: record.position,
+        };
+        if (taskTimestamp != null) task.timestampMs = taskTimestamp;
+        tasks.push(task);
+      }
       continue;
     }
 
@@ -655,6 +707,7 @@ export function parseCodexTranscript(
     messages,
     invocations,
     toolResults,
+    tasks,
     relationships: [],
   };
   if (records.length > 0) {

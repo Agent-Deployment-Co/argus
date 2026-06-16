@@ -1025,7 +1025,7 @@ function factsFromConversation(
     });
   }
 
-  return { sessions: [session], messages, invocations, toolResults, relationships };
+  return { sessions: [session], messages, invocations, toolResults, tasks: [], relationships };
 }
 
 function parseFailure(

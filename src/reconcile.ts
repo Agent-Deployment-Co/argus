@@ -18,6 +18,7 @@ import {
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type SessionFact,
+  type TaskFact,
 } from "./store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { projectLabel } from "./parse.ts";
@@ -56,6 +57,7 @@ export interface ReconcileInput {
 /** reconcileSessions output: a ParseResult plus tool-result stats attributed per session. */
 export interface ReconcileResult extends ParseResult {
   toolResultsBySession: Map<string, Map<string, ToolResultStat>>;
+  tasksBySession: Map<string, TaskFact[]>;
 }
 
 /**
@@ -160,6 +162,29 @@ function orderedMessages(fragments: ParsedFileFragment[]) {
         },
         {
           timestampMs: b.timestampMs,
+          source: b.source,
+          sourceSessionId: b.sourceSessionId,
+          position: b.position,
+          stableId: b.id,
+        },
+      ),
+    );
+}
+
+function orderedTasks(fragments: ParsedFileFragment[]): TaskFact[] {
+  return fragments
+    .flatMap((fragment) => fragment.facts.tasks)
+    .sort((a, b) =>
+      compareReconciliationOrder(
+        {
+          timestampMs: a.timestampMs ?? 0,
+          source: a.source,
+          sourceSessionId: a.sourceSessionId,
+          position: a.position,
+          stableId: a.id,
+        },
+        {
+          timestampMs: b.timestampMs ?? 0,
           source: b.source,
           sourceSessionId: b.sourceSessionId,
           position: b.position,
@@ -340,6 +365,15 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     });
   }
 
+  const tasksBySession = new Map<string, TaskFact[]>();
+  for (const fact of orderedTasks(fragments)) {
+    const sessionId = canonicalSessionId(fact.sourceSessionId);
+    if (!wanted(sessionId)) continue;
+    const tasks = tasksBySession.get(sessionId) ?? [];
+    tasks.push(fact);
+    tasksBySession.set(sessionId, tasks);
+  }
+
   const toolResults = new Map<string, ToolResultStat>();
   const toolResultsBySession = new Map<string, Map<string, ToolResultStat>>();
   for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
@@ -366,7 +400,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     perSession.set(name, sessionStat);
   }
 
-  return { messages, sessions, toolResults, toolResultsBySession };
+  return { messages, sessions, toolResults, toolResultsBySession, tasksBySession };
 }
 
 /** Convert an external import fragment into transcript shape so the engine treats it uniformly. */

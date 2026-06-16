@@ -47,6 +47,7 @@ function emptyFacts() {
     messages: [],
     invocations: [],
     toolResults: [],
+    tasks: [],
     relationships: [],
   };
 }
@@ -138,6 +139,7 @@ function transcriptWithFacts(id: string): ParsedFileFragment {
         position: position(3),
       },
     ],
+    tasks: [],
     relationships: [],
   };
   return fragment;
@@ -436,6 +438,9 @@ describe("SQLite store", () => {
     await initial.close();
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_archived");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_source");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_ts");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_tasks");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
       await rawExec(db, "PRAGMA user_version = 4");
     });
@@ -619,6 +624,42 @@ describe("SQLite store", () => {
       // An equal-or-larger re-parse replaces normally.
       expect(await store.materializeSessions("claude", [session(5)])).toEqual([]);
       expect(await countMessages()).toBe(5);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("stores and reads task facts for a materialized session", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const task = {
+        id: "task:codex:one",
+        source: "codex" as const,
+        sourceSessionId: "codex:task-session",
+        timestampMs: 1_780_000_000_000,
+        description: "add the facts command",
+        evidence: "add the facts command",
+        evidenceKind: "user_message" as const,
+        position: { originKey: "file:codex-task-session", recordIndex: 2, itemIndex: 0 },
+      };
+      await store.materializeSessions("codex", [
+        {
+          meta: {
+            source: "codex",
+            sessionId: "codex:task-session",
+            project: "p",
+            cwd: "/tmp/p",
+            filePath: "/tmp/p/rollout.jsonl",
+          },
+          messages: [],
+          toolResults: [],
+          tasks: [task],
+        },
+      ]);
+
+      expect(await store.readSessionTasks("codex:task-session")).toEqual([task]);
+      expect(await store.readSessionTasks("codex:missing")).toEqual([]);
     } finally {
       await store.close();
     }

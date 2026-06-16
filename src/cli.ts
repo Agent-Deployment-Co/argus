@@ -321,6 +321,33 @@ async function runStatus(log: Log): Promise<void> {
   if (pending) log("Run `argus index` to pick up new and changed sessions.");
 }
 
+function formatFactTimestamp(timestampMs: number | undefined): string {
+  return timestampMs == null ? "(no timestamp)" : new Date(timestampMs).toISOString();
+}
+
+function indentFactText(text: string): string {
+  const lines = text.trim().split(/\r?\n/);
+  return lines.map((line) => `   ${line}`).join("\n");
+}
+
+async function runFacts(sessionId: string, log: Log): Promise<void> {
+  const store = await openStore();
+  try {
+    const tasks = await store.readSessionTasks(sessionId);
+    if (!tasks.length) {
+      log(`No task facts found for ${sessionId}. Run \`argus index --source codex\` to read Codex sessions into the local store.`);
+      return;
+    }
+    const blocks = tasks.map(
+      (task, index) =>
+        `${index + 1}. ${formatFactTimestamp(task.timestampMs)}\n${indentFactText(task.description)}`,
+    );
+    process.stdout.write(`Task facts for ${sessionId}\n\n${blocks.join("\n\n")}\n`);
+  } finally {
+    await store.close();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CLI definition (citty). Each subcommand declares its own flags; --help scopes
 // to that subcommand automatically and flag types flow into the run handlers.
@@ -456,6 +483,19 @@ const status = defineCommand({
   run: handler(() => runStatus(log)),
 });
 
+const facts = defineCommand({
+  meta: { name: "facts", description: "show task facts for a session" },
+  args: {
+    id: { type: "positional", required: true, description: "session id" },
+  },
+  run: handler((args) => {
+    const sessionId = args._[0];
+    if (!sessionId) failArg("Usage: argus facts <session-id>");
+    if (args._.length > 1) failArg(`Unexpected argument: ${args._[1]}`);
+    return runFacts(sessionId, log);
+  }),
+});
+
 const login = defineCommand({
   meta: { name: "login", description: "login via Cloudflare Access SSO in your browser" },
   args: {
@@ -518,7 +558,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { report, serve, index, sync, run: runCmd, status, login },
+  subCommands: { report, serve, index, sync, run: runCmd, status, facts, login },
 });
 
 async function run() {
