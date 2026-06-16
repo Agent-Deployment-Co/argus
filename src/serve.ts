@@ -134,7 +134,10 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<void> {
   const app = createApp(snapshot, webRoot);
 
   await new Promise<void>((resolveClose) => {
-    const server = serve({ fetch: app.fetch, port: opts.port }, (info) => {
+    // Bind to loopback only. /api/snapshot exposes transcript-derived data and `serve` is documented
+    // as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
+    // would expose that data to anyone on the network.
+    const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
       const url = `http://localhost:${info.port}`;
       log(`Listening on ${url} — press Ctrl-C to stop`);
       if (!webRoot) {
