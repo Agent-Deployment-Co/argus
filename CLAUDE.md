@@ -169,8 +169,3 @@ Stable types come from the external package `@agentdeploymentco/argus-schema` (p
 `test/contract.test.ts` builds a dashboard from fixtures and validates it against the schema's
 `PushPayloadSchema`, so any drift between the CLI's output and the wire contract **fails CI**. When
 changing the `Dashboard` shape, update the schema package and bump its pinned version here in lockstep.
-
-## Version control
-
-Per global user preference: use `jj` (Jujutsu), never `git`, for all version control. See the `jj` skill.
-Note `push.ts` does shell out to `git config user.email` to detect the user — that's a read, not a VCS op.
