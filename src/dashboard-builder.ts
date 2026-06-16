@@ -24,6 +24,9 @@ export interface BuildDashboardOptions {
   project?: string;
   summarize: boolean;
   summarizeModel?: string;
+  /** Read the store without reconciling first (no writes). Set by the serve/upload legs of
+   *  `argus run`, where the index leg is the sole writer; left false for one-shot commands. */
+  readOnly?: boolean;
 }
 
 export function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
@@ -70,6 +73,7 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
     sources: sourcesFor(opts.source),
     agentsView: opts.agentsView,
     agentsViewDatabasePath: opts.agentsViewDatabasePath,
+    readOnly: opts.readOnly,
   });
   let parseResult;
   try {

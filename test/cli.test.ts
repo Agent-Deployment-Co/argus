@@ -170,3 +170,20 @@ describe("run command", () => {
     expect(stderr).toContain("Shutting down");
   }, 25_000);
 });
+
+describe("serve command", () => {
+  test("exits nonzero when the requested port is already in use", async () => {
+    // Occupy a port, then ask `serve` to bind the same one. A failed start must not look like success.
+    const occupied = createServer();
+    await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", () => resolve()));
+    const addr = occupied.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    try {
+      const { status, stderr } = runCli(["serve", "--port", String(port)]);
+      expect(status).not.toBe(0);
+      expect(stderr).toContain("web server");
+    } finally {
+      await new Promise<void>((resolve) => occupied.close(() => resolve()));
+    }
+  });
+});
