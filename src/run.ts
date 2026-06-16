@@ -25,7 +25,7 @@ export function assertHomeResolved(log: Log): void {
   const hasHome = process.platform === "win32" ? !!process.env.USERPROFILE : !!process.env.HOME;
   const hasExplicit = !!(process.env.ARGUS_DATA_DIR || process.env.ARGUS_CONFIG_DIR || process.env.XDG_DATA_HOME);
   if (!hasHome && !hasExplicit) {
-    log("Can't locate your home directory. Set HOME (or ARGUS_DATA_DIR and ARGUS_CONFIG_DIR) so the local store can be found, then start again.");
+    log("Can't find your home directory. Set HOME (or ARGUS_DATA_DIR and ARGUS_CONFIG_DIR) to locate the local store, then start again.");
     process.exit(1);
   }
 }

@@ -54,7 +54,7 @@ export async function runIndexRebuild(opts: SyncOptions & { force: boolean }, lo
   if (!opts.force) {
     if (!process.stdin.isTTY) {
       // Non-interactive (a script or pipe): refuse rather than silently destroy. Re-run with --force.
-      log("Rebuilding reads everything from your transcripts and permanently removes any sessions no longer on disk. Re-run with --force to confirm.");
+      log("Rebuilding re-reads every transcript and permanently removes any sessions no longer on disk. Re-run with --force to confirm.");
       process.exit(2);
     }
     const note = archived.length
@@ -62,7 +62,7 @@ export async function runIndexRebuild(opts: SyncOptions & { force: boolean }, lo
       : "";
     const confirmed = await promptYesNo(`Rebuild the local store from your transcripts? ${note}[y/N] `);
     if (!confirmed) {
-      log("Cancelled. Nothing was changed.");
+      log("Cancelled. Left the store as it is.");
       return;
     }
   } else if (archived.length) {
@@ -84,7 +84,7 @@ export async function runIndexRefresh(opts: SyncOptions, log: Log): Promise<void
   } finally {
     await store.close();
   }
-  log("Re-reading all transcripts from disk. Sessions no longer on disk are kept…");
+  log("Re-reading all transcripts from disk…");
   await runIndex(opts, log);
 }
 
