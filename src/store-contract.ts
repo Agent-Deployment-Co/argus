@@ -66,7 +66,13 @@ export interface SourcePosition {
   byteOffset?: number;
 }
 
-export type FactKind = "session" | "message" | "invocation" | "tool_result" | "relationship";
+export type FactKind =
+  | "session"
+  | "message"
+  | "invocation"
+  | "tool_result"
+  | "relationship"
+  | "task";
 
 export interface ParserDiagnostic {
   code: string;
@@ -171,6 +177,22 @@ export interface ToolResultFact {
   position: SourcePosition;
 }
 
+export interface TaskFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  /** Present when the source user-message record carried a valid timestamp. */
+  timestampMs?: number;
+  /**
+   * What the user was trying to accomplish. The first Codex implementation uses the user message
+   * itself; later implementations can replace this with a derived task while keeping evidence.
+   */
+  description: string;
+  evidence: string;
+  evidenceKind: "user_message";
+  position: SourcePosition;
+}
+
 export interface SessionRelationshipFact {
   id: string;
   source: AgentSource;
@@ -185,6 +207,7 @@ export interface NormalizedFacts {
   messages: MessageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
+  tasks: TaskFact[];
   relationships: SessionRelationshipFact[];
 }
 
@@ -377,6 +400,7 @@ export interface MaterializeSession {
   meta: SessionMeta;
   messages: MessageRecord[];
   toolResults: Array<{ name: string; count: number; approxTokens: number }>;
+  tasks?: TaskFact[];
 }
 
 /** Per-source freshness attestation. */
@@ -431,6 +455,8 @@ export interface Store {
    * discovery, not a count dip). Returns the ids it kept (skipped) that way.
    */
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
+  /** Task facts for a resolved session, in source order. */
+  readSessionTasks(sessionId: string): Promise<TaskFact[]>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

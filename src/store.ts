@@ -16,6 +16,7 @@ import type {
   FragmentMetadata,
   CompleteDiscovery,
   Store,
+  TaskFact,
   FileFingerprint,
   FileIdentity,
   FileRole,
@@ -30,7 +31,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 6;
+export const STORE_SCHEMA_VERSION = 7;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -229,6 +230,17 @@ const CREATE_SCHEMA_SQL = `
   CREATE INDEX resolved_messages_date ON resolved_messages(date);
   CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
   CREATE INDEX resolved_messages_source ON resolved_messages(source);
+
+  CREATE TABLE resolved_tasks (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    ts INTEGER,
+    task_json TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  );
+  CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
+  CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
 
   -- Tool-result stats per session (global dashboard total = SUM across all sessions).
   CREATE TABLE resolved_tool_results (
@@ -587,6 +599,23 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       CREATE INDEX index_files_identity ON index_files(file_identity);
     `,
   },
+  // 6 -> 7: Task facts. Preserve retained sessions and add a side table populated on the next
+  // materialization of each session.
+  6: {
+    to: 7,
+    sql: `
+      CREATE TABLE resolved_tasks (
+        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        ts INTEGER,
+        task_json TEXT NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+      CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
+      CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -643,6 +672,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
     if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
@@ -1102,6 +1132,17 @@ export class SqliteStore implements Store {
     return this.schedule(() => this.readResolvedCore(query));
   }
 
+  readSessionTasks(sessionId: string): Promise<TaskFact[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ task_json: string }>(
+        this.db,
+        "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      return rows.map((row) => JSON.parse(row.task_json) as TaskFact);
+    });
+  }
+
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(
@@ -1168,7 +1209,7 @@ export class SqliteStore implements Store {
             keptFuller.push(sid);
             continue;
           }
-          // Replace this session wholesale (messages + tool results cascade via FK). A freshly
+          // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
@@ -1205,6 +1246,19 @@ export class SqliteStore implements Store {
               message.cwd ?? "",
               message.project,
               JSON.stringify(message),
+            ]),
+          );
+          const tasks = session.tasks ?? [];
+          await insertRows(
+            this.db,
+            "resolved_tasks",
+            ["session_id", "seq", "source", "ts", "task_json"],
+            tasks.map((task, seq) => [
+              sid,
+              seq,
+              task.source,
+              task.timestampMs ?? null,
+              JSON.stringify(task),
             ]),
           );
           await insertRows(

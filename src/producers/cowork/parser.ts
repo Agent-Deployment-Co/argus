@@ -390,6 +390,7 @@ function parseCoworkTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
+    tasks: [],
     relationships: [],
   };
   const diagnostics: ParserDiagnostic[] = [];

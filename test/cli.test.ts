@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { cpSync, mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,21 +11,25 @@ import { join } from "node:path";
 // as a subprocess and asserts the exit code and message.
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
+const FIXTURES = join(import.meta.dir, "fixtures");
 
 /** Run the CLI with isolated, empty config/data dirs so it never reads the developer's real store. */
-function runCli(args: string[]): { status: number; stderr: string; stdout: string } {
-  const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
+function cliEnv(dir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ARGUS_DATA_DIR: join(dir, "data"),
+    ARGUS_CONFIG_DIR: join(dir, "config"),
+    CLAUDE_CONFIG_DIR: join(dir, "claude"),
+    CODEX_HOME: join(dir, "codex"),
+    GEMINI_CLI_HOME: dir,
+    NO_COLOR: "1",
+  };
+}
+
+function runCli(args: string[], dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"))): { status: number; stderr: string; stdout: string } {
   const result = spawnSync("bun", ["run", CLI, ...args], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      ARGUS_DATA_DIR: join(dir, "data"),
-      ARGUS_CONFIG_DIR: join(dir, "config"),
-      CLAUDE_CONFIG_DIR: join(dir, "claude"),
-      CODEX_HOME: join(dir, "codex"),
-      GEMINI_CLI_HOME: dir,
-      NO_COLOR: "1",
-    },
+    env: cliEnv(dir),
   });
   return { status: result.status ?? -1, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
 }
@@ -97,6 +101,21 @@ describe("cli argument validation", () => {
     expect(stderr).not.toContain("Unknown option");
     expect(stderr).not.toContain("Missing value");
     expect(stderr).not.toContain("Unexpected argument");
+  });
+
+  test("facts prints Codex task facts for a synced session", () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
+    cpSync(join(FIXTURES, "codex-sessions"), join(dir, "codex", "sessions"), {
+      recursive: true,
+    });
+
+    const synced = runCli(["index", "--source", "codex", "--no-agentsview"], dir);
+    expect(synced.status).toBe(0);
+
+    const facts = runCli(["facts", "codex:codex-sess1"], dir);
+    expect(facts.status).toBe(0);
+    expect(facts.stdout).toContain("Task facts for codex:codex-sess1");
+    expect(facts.stdout).toContain("codex hello");
   });
 });
 

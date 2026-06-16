@@ -93,6 +93,7 @@ const fragment: ParsedFileFragment = {
         position: position(3),
       },
     ],
+    tasks: [],
     relationships: [
       {
         id: "relationship:subagent",
@@ -177,6 +178,18 @@ const codexFragment: ParsedFileFragment = {
       },
     ],
     toolResults: [],
+    tasks: [
+      {
+        id: "task:codex-1",
+        source: "codex",
+        sourceSessionId: "codex:1",
+        timestampMs: 1_717_605_099_000,
+        description: "Fix the tests.",
+        evidence: "Fix the tests.",
+        evidenceKind: "user_message",
+        position: { originKey: "codex:sessions:rollout.jsonl", recordIndex: 3, itemIndex: 0 },
+      },
+    ],
     relationships: [],
   },
   dependencies: [],
@@ -256,6 +269,7 @@ const geminiFragment: ParsedFileFragment = {
         position: { originKey: "gemini:chats:session.jsonl", recordIndex: 2, itemIndex: 2 },
       },
     ],
+    tasks: [],
     relationships: [],
   },
   dependencies: [
@@ -323,7 +337,7 @@ const imported: ImportedFragment = {
     coverage: [{ source: "claude", completeness: "partial", sourceSessionIds: ["session-1"] }],
     importedAtMs: 1_717_607_000_000,
   },
-  facts: { sessions: [], messages: [], invocations: [], toolResults: [], relationships: [] },
+  facts: { sessions: [], messages: [], invocations: [], toolResults: [], tasks: [], relationships: [] },
   diagnostics: [],
 };
 
