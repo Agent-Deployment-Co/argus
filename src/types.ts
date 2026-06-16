@@ -17,9 +17,9 @@ export type {
 } from "@agentdeploymentco/argus-schema";
 export type { ToolCategory } from "./tool-categories.ts";
 
-export type AgentSource = "claude" | "codex" | "gemini";
+export type AgentSource = "claude" | "codex" | "gemini" | "cowork";
 
-export type SessionRow = SchemaSessionRow & {
+export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;

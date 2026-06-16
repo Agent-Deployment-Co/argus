@@ -18,6 +18,7 @@ export interface ProducerContext {
   historyFile?: string;
   codexSessionsDir?: string;
   geminiDir?: string;
+  coworkSessionsDir?: string;
   agentsViewDatabasePath?: string;
   agentsView?: "auto" | "off";
 }

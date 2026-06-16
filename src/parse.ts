@@ -19,9 +19,9 @@
 // worth the duplication.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "./friction.ts";
-import { CODEX_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
+import { CODEX_SESSIONS_DIR, COWORK_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
   emptyUsage,
@@ -55,6 +55,7 @@ export interface ParseOptions {
   historyFile?: string;
   codexSessionsDir?: string;
   geminiDir?: string;
+  coworkSessionsDir?: string;
   sources?: TranscriptSource[];
 }
 
@@ -856,6 +857,179 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             toolUses,
           });
         }
+      }
+    }
+  }
+
+  if (sources.includes("cowork")) {
+    const coworkDir = opts.coworkSessionsDir ?? COWORK_SESSIONS_DIR;
+    if (!coworkDir || !existsSync(coworkDir)) {
+      if (coworkDir) missingRoots.push(coworkDir);
+    } else {
+      rootsFound++;
+      // Walk recursively for audit.jsonl files only (avoids other .jsonl files in the session dir).
+      const auditFiles: string[] = [];
+      const walkAudit = (dir: string): void => {
+        let entries: string[];
+        try {
+          entries = readdirSync(dir);
+        } catch {
+          return;
+        }
+        for (const name of entries) {
+          const p = join(dir, name);
+          let st;
+          try {
+            st = statSync(p);
+          } catch {
+            continue;
+          }
+          if (st.isDirectory()) {
+            walkAudit(p);
+          } else if (st.isFile() && name === "audit.jsonl") {
+            auditFiles.push(p);
+          }
+        }
+      };
+      walkAudit(coworkDir);
+
+      for (const filePath of auditFiles) {
+        let raw: string;
+        try {
+          raw = readFileSync(filePath, "utf8");
+        } catch {
+          continue;
+        }
+
+        // Read sibling local_<id>.json for project info (one dir up from the local_* dir).
+        const localDirName = basename(dirname(filePath));
+        const teamDir = dirname(dirname(filePath));
+        let coworkCwd = "";
+        let coworkFallbackProject = "";
+        try {
+          const meta = JSON.parse(readFileSync(join(teamDir, `${localDirName}.json`), "utf8"));
+          const folders: unknown[] = Array.isArray(meta.userSelectedFolders)
+            ? meta.userSelectedFolders
+            : [];
+          const first = folders.find((f) => typeof f === "string");
+          coworkCwd = typeof first === "string" ? first : "";
+          if (!coworkCwd) {
+            coworkFallbackProject =
+              (typeof meta.title === "string" && meta.title) ||
+              (typeof meta.processName === "string" && meta.processName) ||
+              "";
+          }
+        } catch {
+          // metadata unavailable — proceed with empty cwd
+        }
+
+        let sid = "";
+        let seenInit = false;
+        let currentModel = "(unknown)";
+        let open: { msgId: string; record: MessageRecord } | undefined;
+
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          let o: any;
+          try {
+            o = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          // thinking_tokens streaming events carry no useful data
+          if (o.type === "system" && o.subtype === "thinking_tokens") continue;
+
+          // system/init: first establishes session; subsequent reconnects are per-turn
+          if (o.type === "system" && o.subtype === "init") {
+            if (!seenInit) {
+              seenInit = true;
+              const innerSid =
+                typeof o.session_id === "string" && o.session_id ? o.session_id : undefined;
+              if (!innerSid) continue;
+              sid = `cowork:${innerSid}`;
+              if (typeof o.model === "string" && o.model) currentModel = o.model;
+              const meta = ensureSession(sid, "cowork", coworkCwd, filePath);
+              if (!coworkCwd && coworkFallbackProject) meta.project = coworkFallbackProject;
+            }
+            continue;
+          }
+
+          if (!sid) continue;
+
+          // Bare queued user event (no isReplay, no timestamp) — skip
+          if (o.type === "user" && o.isReplay !== true) continue;
+
+          if (o.type !== "assistant") continue;
+
+          const msgId =
+            typeof o.message?.id === "string" && o.message.id ? o.message.id : undefined;
+
+          // Multi-line streaming: same message ID = continuation of open record
+          if (msgId && open !== undefined && open.msgId === msgId) {
+            if (o.message?.usage) {
+              const extra = normalizeUsage(o.message.usage);
+              // Usage is repeated on each streaming line — last line is authoritative,
+              // so replace rather than add to avoid double-counting.
+              Object.assign(open.record.usage, extra);
+            }
+            if (typeof o.message?.stop_reason === "string" && !open.record.stopReason) {
+              open.record.stopReason = o.message.stop_reason;
+            }
+            continue;
+          }
+
+          if (!o.message?.usage) continue;
+          if (o.message?.model === "<synthetic>") continue;
+
+          const ts = (() => {
+            if (typeof o.timestamp === "string") return Date.parse(o.timestamp);
+            if (
+              typeof o._audit_timestamp === "string" &&
+              o._audit_timestamp
+            )
+              return Date.parse(o._audit_timestamp);
+            return NaN;
+          })();
+          if (Number.isNaN(ts)) continue;
+
+          if (msgId && seenMessageIds.has(msgId)) continue;
+          if (msgId) seenMessageIds.add(msgId);
+
+          const model =
+            typeof o.message?.model === "string" && o.message.model
+              ? o.message.model
+              : currentModel;
+          const usage = normalizeUsage(o.message.usage);
+          const rec: MessageRecord = {
+            source: "cowork",
+            sessionId: sid,
+            project: coworkCwd ? projectLabel(coworkCwd) : coworkFallbackProject || "(unknown)",
+            cwd: coworkCwd,
+            gitBranch: "",
+            ts,
+            date: localDate(ts),
+            model,
+            usage,
+            attributionSkill: typeof o.attributionSkill === "string" ? o.attributionSkill : null,
+            toolUses: Array.isArray(o.message?.content) ? toolUsesFrom(o.message.content) : [],
+          };
+          if (typeof o.message?.stop_reason === "string") {
+            rec.stopReason = o.message.stop_reason;
+            countStopReason(sid, o.message.stop_reason);
+          }
+          messages.push(rec);
+          open = msgId ? { msgId, record: rec } : undefined;
+        }
+      }
+
+      // Fold friction for cowork sessions (partial — result-record signals only; no per-record
+      // interruption detection like Claude Code has, but stop_reason + turn counts are observable).
+      for (const [sid, meta] of sessions) {
+        if (meta.source !== "cowork") continue;
+        meta.friction = foldFrictionEvents(frictionEventsBySession.get(sid) ?? []);
+        const stopReasons = stopReasonsBySession.get(sid);
+        if (stopReasons) meta.friction.stopReasons = stopReasons;
       }
     }
   }

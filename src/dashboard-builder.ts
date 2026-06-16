@@ -27,7 +27,7 @@ export interface BuildDashboardOptions {
 }
 
 export function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
-  return source === "all" ? ["claude", "codex", "gemini"] : [source];
+  return source === "all" ? ["claude", "codex", "gemini", "cowork"] : [source];
 }
 
 function diagnosticKey(entry: ParserDiagnostic): string {
