@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineCommand, runMain, showUsage } from "citty";
+import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
 import {
   isLegacyAccessTokenCache,
   isManagedOAuthTokenCache,
@@ -84,6 +85,85 @@ async function guard(body: () => Promise<void>): Promise<void> {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
+}
+
+// citty parses non-strictly (Node's util.parseArgs with strict:false): unknown flags are silently
+// accepted, and a value-less string flag swallows the following token as its value. The hand-rolled
+// parser this replaced rejected both, so we re-check the raw argv against each command's declared
+// flags to keep typos and missing values failing loudly (#59).
+
+const BUILTIN_FLAGS = new Set(["help", "h", "version", "v"]);
+
+const kebab = (name: string): string => name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+const camel = (name: string): string => name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+/** A flag name plus the camelCase/kebab-case spellings citty also accepts for it. */
+const nameVariants = (name: string): string[] => [name, kebab(name), camel(name)];
+
+function failArg(message: string): never {
+  console.error(message);
+  process.exit(2);
+}
+
+/** Reject unknown flags, value-less string flags (which would otherwise eat the next token), and
+ *  stray positionals on commands that take none. */
+function validateArgs(ctx: CommandContext<any>): void {
+  const def = (ctx.cmd.args ?? {}) as ArgsDef;
+  const allowed = new Set<string>();
+  const stringFlags = new Set<string>();
+  let acceptsPositional = false;
+  for (const [name, rawSpec] of Object.entries(def)) {
+    const spec = rawSpec as { type?: string; alias?: string | string[] };
+    if (spec.type === "positional") {
+      acceptsPositional = true;
+      continue;
+    }
+    const aliases = Array.isArray(spec.alias) ? spec.alias : spec.alias ? [spec.alias] : [];
+    for (const variant of [name, ...aliases].flatMap(nameVariants)) {
+      allowed.add(variant);
+      if (spec.type === "boolean") allowed.add(`no-${variant}`);
+      if (spec.type === "string" || spec.type === "enum") stringFlags.add(variant);
+    }
+  }
+
+  const raw = ctx.rawArgs;
+  for (let i = 0; i < raw.length; i++) {
+    const tok = raw[i]!;
+    if (tok === "--") break; // end-of-options marker; the rest are operands
+    if (tok === "-" || !tok.startsWith("-")) continue; // a value or positional, not a flag
+    const body = tok.slice(tok.startsWith("--") ? 2 : 1);
+    const eq = body.indexOf("=");
+    const name = eq === -1 ? body : body.slice(0, eq);
+    if (BUILTIN_FLAGS.has(name)) continue;
+    if (!allowed.has(name)) failArg(`Unknown option: ${tok}`);
+    // A string flag written as `--flag value` consumes the next token; skip it so a value isn't
+    // re-read as a flag. An *omitted* value (the next token is itself a flag) is caught just below.
+    if (eq === -1 && stringFlags.has(name) && i + 1 < raw.length && raw[i + 1] !== "--") i++;
+  }
+
+  // A string flag whose parsed value is itself a flag means its value was omitted and the following
+  // flag got swallowed (e.g. `report --since --out x` parses as since="--out"). Treat as missing.
+  const parsed = ctx.args as Record<string, unknown>;
+  for (const [name, spec] of Object.entries(def)) {
+    if (spec.type !== "string" && spec.type !== "enum") continue;
+    const value = parsed[name];
+    if (typeof value === "string" && value.length > 1 && value.startsWith("-")) {
+      failArg(`Missing value for --${name} (got "${value}")`);
+    }
+  }
+
+  if (!acceptsPositional && ctx.args._.length > 0) {
+    failArg(`Unexpected argument: ${ctx.args._[0]}`);
+  }
+}
+
+/** Wrap a subcommand handler: validate the raw argv first, then run the body through `guard`. */
+function handler<T extends ArgsDef>(
+  body: (args: ParsedArgs<T>) => Promise<void>,
+): (ctx: CommandContext<T>) => Promise<void> {
+  return (ctx) => {
+    validateArgs(ctx);
+    return guard(() => body(ctx.args));
+  };
 }
 
 function summary(dash: Dashboard): string {
@@ -450,7 +530,7 @@ function buildOptions(args: BuildArgs): BuildDashboardOptions {
 const report = defineCommand({
   meta: { name: "report", description: "build the local HTML (or --json) dashboard" },
   args: reportArgs,
-  run: ({ args }) => guard(() => runReport({ ...buildOptions(args), out: args.out, json: args.json, open: args.open }, log, args.console)),
+  run: handler((args) => runReport({ ...buildOptions(args), out: args.out, json: args.json, open: args.open }, log, args.console)),
 });
 
 const serve = defineCommand({
@@ -460,13 +540,13 @@ const serve = defineCommand({
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     open: { type: "boolean", default: false, description: "Open the dashboard in your browser once it's ready (macOS)" },
   },
-  run: ({ args }) => guard(() => runServe({ ...buildOptions(args), port: Number(args.port) || DEFAULT_PORT, open: args.open }, log)),
+  run: handler((args) => runServe({ ...buildOptions(args), port: Number(args.port) || DEFAULT_PORT, open: args.open }, log)),
 });
 
 const sync = defineCommand({
   meta: { name: "sync", description: "read new and changed sessions into the local store" },
   args: { ...sourceArg, ...agentsViewArgs },
-  run: ({ args }) => guard(() => runSync(syncOptions(args), log)),
+  run: handler((args) => runSync(syncOptions(args), log)),
 });
 
 const reindex = defineCommand({
@@ -476,12 +556,12 @@ const reindex = defineCommand({
     ...agentsViewArgs,
     force: { type: "boolean", default: false, description: "Drop the whole store, including archived (off-disk) sessions" },
   },
-  run: ({ args }) => guard(() => runReindex({ ...syncOptions(args), force: args.force }, log)),
+  run: handler((args) => runReindex({ ...syncOptions(args), force: args.force }, log)),
 });
 
 const status = defineCommand({
   meta: { name: "status", description: "show the local store path + per-source counts" },
-  run: () => guard(() => runStatus(log)),
+  run: handler(() => runStatus(log)),
 });
 
 const forget = defineCommand({
@@ -491,7 +571,7 @@ const forget = defineCommand({
     ...sourceArg,
     archived: { type: "boolean", default: false, description: "Target all archived (off-disk) sessions, optionally scoped by --source" },
   },
-  run: ({ args }) => guard(() => runForget({ source: toSource(args.source), archived: args.archived, ids: args._ }, log)),
+  run: handler((args) => runForget({ source: toSource(args.source), archived: args.archived, ids: args._ }, log)),
 });
 
 const login = defineCommand({
@@ -499,7 +579,7 @@ const login = defineCommand({
   args: {
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for login (env ARGUS_ENDPOINT)", valueHint: "url" },
   },
-  run: ({ args }) => guard(() => runLogin({ endpoint: args.endpoint }, log)),
+  run: handler((args) => runLogin({ endpoint: args.endpoint }, log)),
 });
 
 const push = defineCommand({
@@ -510,7 +590,7 @@ const push = defineCommand({
     user: { type: "string", description: "Override the user id (default: git email, else $USER@host)", valueHint: "id" },
     org: { type: "string", default: process.env.ARGUS_ORG, description: "Override the org (env ARGUS_ORG)", valueHint: "id" },
   },
-  run: ({ args }) => guard(() => runPush({ ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org }, log)),
+  run: handler((args) => runPush({ ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org }, log)),
 });
 
 
