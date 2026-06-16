@@ -6,10 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
 local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, …) and
-presents them three ways: a self-contained HTML dashboard (`report`, the default), an interactive
-local web app (`serve` — the preferred UI; see `docs/web-app.md`), or a per-(org, user) snapshot
-pushed to a private Cloudflare Worker backend (`push`). Nothing is uploaded during `report`/`serve`;
-all parsing is local.
+presents them three ways: a self-contained HTML dashboard (`report`), an interactive local web app
+(`serve` — the preferred UI; see `docs/web-app.md`), or a per-(org, user) snapshot uploaded to a
+private Cloudflare Worker backend (`sync`, formerly `push`). `argus run` ties the long-running pieces
+together: it keeps the local store current (`index --watch`), serves the web app, and uploads on a
+schedule (`sync --watch`) in one supervised foreground process. Nothing is uploaded during
+`report`/`serve`/`index`; all parsing is local.
 
 The Worker + D1 dashboard backend lives in a **separate private repo**, `agentdeploymentco/argus-dash`.
 This repo is the public CLI only.
@@ -62,7 +64,7 @@ The pipeline is a one-way data flow; each stage is its own module:
 `parse.ts` → `aggregate.ts` → (`report.ts` HTML | `serve.ts` web app | `push.ts` snapshot)
 
 `dashboard-builder.ts` wraps `parse → aggregate` as `buildDashboard()`, the single entry point the
-`report`/`push` commands and the web server all call.
+`report`/`sync` commands and the web server all call.
 
 - **`parse.ts`** — Reads raw `.jsonl` transcripts into `MessageRecord[]` + session metadata.
   This is the most subtle file; accuracy lives here:
@@ -123,17 +125,40 @@ The pipeline is a one-way data flow; each stage is its own module:
   reads the warm store incrementally like `report` (not a cold re-parse) — the `log("Reading
   transcripts…")` line is inherited from `report` and is a candidate to reword for the warm-store case.
 
-- **`push.ts`** — Detects user (git email → `$USER@host`) and org (email domain), POSTs the snapshot to
-  `<endpoint>/ingest` with a bearer token. The server is authoritative on org/token validation.
+- **`push.ts`** — The upload mechanics behind `argus sync` (the command was renamed from `push`; the
+  module keeps its name). Detects user (git email → `$USER@host`) and org (email domain), POSTs the
+  snapshot to `<endpoint>/ingest` with a bearer token. The server is authoritative on org/token
+  validation.
 
 - **`paths.ts`** — All filesystem locations, honoring `CLAUDE_CONFIG_DIR`, `CODEX_HOME`/`CODEX_CONFIG_DIR`.
 
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`report`, `serve`,
-  `sync`, `reindex`, `status`, `forget`, `login`, `push`) with [citty](https://github.com/unjs/citty):
-  each declares its own flags, `--help` scopes per subcommand, and flag types flow into the handlers.
-  There is no default command: a bare `argus` (no subcommand) prints the usage/help. The terminal
-  overview is `argus report --console`. Holds the `run*` handlers that wire flags into
-  `dashboard-builder.ts` and the pipeline.
+  `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly
+  `push`; + `--watch`], `run`, `status`, `login`) with [citty](https://github.com/unjs/citty): each
+  declares its own flags, `--help` scopes per subcommand, and flag types flow into the handlers. There
+  is no default command: a bare `argus` (no subcommand) prints the usage/help. The terminal overview
+  is `argus report --console`. Holds the `run*` handlers that wire flags into `dashboard-builder.ts`
+  and the pipeline. Note: citty runs a parent command's `run` *even after* dispatching to a
+  subcommand, so `index`'s parent `run` bails via `dispatchedSubcommand(ctx)` when a subcommand
+  handled the call. The store-maintenance bodies live in `index-ops.ts`; the long-running `--watch`
+  loops and the orchestrator are in `watch.ts` / `run.ts` (see below).
+
+- **`index-ops.ts`** — The `argus index` command bodies (`runIndex`, `runIndexRebuild` with its
+  confirmation prompt, `runIndexRefresh`, `runIndexDelete`), extracted so both `cli.ts` and the watch
+  loop share them. The only writers to the store.
+
+- **`backoff.ts`** — Shared loop primitives for the long-running commands: cancellable `sleep`, a
+  jittered/capped `Backoff`, a `RepeatCollapser` (collapses repeated identical failure logs), and
+  `superviseLoop` (restarts a crashing leg with backoff, exits on `AbortSignal`).
+
+- **`watch.ts`** — `watchIndex` and `watchSync` (the `--watch` loops, factored so `run` calls them
+  in-process). `watchSync` takes `onUnauthenticated: "fail" | "dormant"` — standalone fails fast,
+  the `run`-embedded leg stays dormant and recovers after `argus login`. Both accept optional test
+  seams. `resolveCredentials`/`pushSnapshotForOpts` (the push mechanics) live here too.
+
+- **`run.ts`** — `argus run`: one foreground process, one `AbortController` + single SIGINT/SIGTERM
+  handler, `Promise.all` of `watchIndex` + a supervised `serve` + `watchSync` against one shared
+  store. `assertHomeResolved` is the fatal-startup guard for the service-manager minimal-env case.
 
 ## The wire contract (important)
 

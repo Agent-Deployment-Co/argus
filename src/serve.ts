@@ -18,6 +18,17 @@ export interface ServeOptions {
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
+  /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
+   *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
+  installSignalHandlers?: boolean;
+  /** When the caller owns signals, aborting this stops the server. */
+  signal?: AbortSignal;
+}
+
+/** Control surface for a running server. `closed` resolves once it has fully shut down. */
+export interface ServeHandle {
+  closed: Promise<void>;
+  close(): Promise<void>;
 }
 
 export interface Snapshot {
@@ -100,7 +111,7 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null): 
   return app;
 }
 
-export async function startServer(opts: ServeOptions, log: Log): Promise<void> {
+export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
   const webRoot = findWebRoot();
 
   // Snapshot cache: a built dashboard is reused for CACHE_TTL_MS so reloading the page (or several
@@ -133,26 +144,55 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<void> {
 
   const app = createApp(snapshot, webRoot);
 
-  await new Promise<void>((resolveClose) => {
-    // Bind to loopback only. /api/snapshot exposes transcript-derived data and `serve` is documented
-    // as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
-    // would expose that data to anyone on the network.
-    const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
-      const url = `http://localhost:${info.port}`;
-      log(`Listening on ${url} — press Ctrl-C to stop`);
-      if (!webRoot) {
-        log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
-      }
-      // Warm the cache so the first page load is fast; failures surface on the first request anyway.
-      void snapshot(false).catch(() => {});
-      if (opts.open) spawnSync("open", [url]);
-    });
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
 
+  // Bind to loopback only. /api/snapshot exposes transcript-derived data and `serve` is documented
+  // as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
+  // would expose that data to anyone on the network.
+  const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
+    const url = `http://localhost:${info.port}`;
+    log(`Listening on ${url} — press Ctrl-C to stop`);
+    if (!webRoot) {
+      log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
+    }
+    // Warm the cache so the first page load is fast; failures surface on the first request anyway.
+    void snapshot(false).catch(() => {});
+    if (opts.open) spawnSync("open", [url]);
+  });
+
+  // Surface a bind failure (e.g. the port is already in use) by unblocking instead of hanging. The
+  // standalone command then returns; under `argus run` the supervisor restarts the leg with backoff.
+  server.on("error", (err: unknown) => {
+    log(`! Web server error: ${err instanceof Error ? err.message : String(err)}`);
+    resolveClosed();
+  });
+
+  let closing = false;
+  const close = (): Promise<void> => {
+    if (!closing) {
+      closing = true;
+      server.close(() => resolveClosed());
+    }
+    return closed;
+  };
+
+  if (opts.installSignalHandlers ?? true) {
+    // Standalone `argus serve`: own the signals and block until one fires.
     const shutdown = () => {
       log("Stopped.");
-      server.close(() => resolveClose());
+      void close();
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
-  });
+    await closed;
+  } else if (opts.signal) {
+    // Composed under `argus run`: the orchestrator owns signals; abort triggers shutdown.
+    if (opts.signal.aborted) void close();
+    else opts.signal.addEventListener("abort", () => void close(), { once: true });
+  }
+
+  return { closed, close };
 }
