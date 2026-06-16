@@ -32,6 +32,9 @@ export interface SessionStoreOptions {
   agentsView?: "auto" | "off";
   /** Read a specific AgentsView sessions.db. */
   agentsViewDatabasePath?: string;
+  /** Read the already-materialized store without reconciling first (no writes). For callers that must
+   *  not write — e.g. the serve/upload legs of `argus run`, where the index leg is the only writer. */
+  readOnly?: boolean;
 }
 
 export interface SessionStore {
@@ -57,6 +60,7 @@ class StoreBackedSessionStore implements SessionStore {
       storePath: this.opts.storePath,
       agentsView: this.opts.agentsView,
       agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
+      skipSync: this.opts.readOnly,
       query,
     });
     this.stats = details.stats;

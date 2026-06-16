@@ -1,0 +1,51 @@
+// Shared option shapes and the citty-args → options converters, factored out of cli.ts so the
+// command bodies (index-ops.ts), the long-running loops (watch.ts), and the orchestrator (run.ts)
+// can reuse them without importing cli.ts (which would create a cycle).
+import type { TranscriptSource } from "./parse.ts";
+import type { BuildDashboardOptions } from "./dashboard-builder.ts";
+
+export type Source = "all" | TranscriptSource;
+
+/** The store-selection slice shared by `index`, its subcommands, and `index delete --archived`. */
+export interface SyncOptions {
+  source: Source;
+  agentsView: "auto" | "off";
+  agentsViewDatabasePath?: string;
+}
+
+export interface DeleteOptions {
+  source: Source;
+  archived: boolean;
+  ids: string[];
+}
+
+/** Narrow a raw `--source` value to the accepted set, exiting with a clear message otherwise. */
+export function toSource(value: string): Source {
+  if (value === "all" || value === "claude" || value === "codex" || value === "gemini" || value === "cowork") return value;
+  console.error(`Invalid --source: ${value} (expected claude, codex, gemini, cowork, or all)`);
+  process.exit(2);
+}
+
+/** The source-selection citty args shared by every store-reading command. */
+export type SyncArgs = { source: string; agentsview: boolean; "agentsview-db"?: string };
+/** The full dashboard-building citty args (source + date/project filters + summarize). */
+export type BuildArgs = SyncArgs & { since?: string; until?: string; project?: string; summarize: boolean; "summarize-model"?: string };
+
+export function syncOptions(args: SyncArgs): SyncOptions {
+  return {
+    source: toSource(args.source),
+    agentsView: args.agentsview ? "auto" : "off",
+    agentsViewDatabasePath: args["agentsview-db"],
+  };
+}
+
+export function buildOptions(args: BuildArgs): BuildDashboardOptions {
+  return {
+    ...syncOptions(args),
+    since: args.since,
+    until: args.until,
+    project: args.project,
+    summarize: args.summarize,
+    summarizeModel: args["summarize-model"],
+  };
+}

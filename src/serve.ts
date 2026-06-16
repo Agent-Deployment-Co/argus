@@ -18,6 +18,17 @@ export interface ServeOptions {
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
+  /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
+   *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
+  installSignalHandlers?: boolean;
+  /** When the caller owns signals, aborting this stops the server. */
+  signal?: AbortSignal;
+}
+
+/** Control surface for a running server. `closed` resolves once it has fully shut down. */
+export interface ServeHandle {
+  closed: Promise<void>;
+  close(): Promise<void>;
 }
 
 export interface Snapshot {
@@ -100,7 +111,7 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null): 
   return app;
 }
 
-export async function startServer(opts: ServeOptions, log: Log): Promise<void> {
+export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
   const webRoot = findWebRoot();
 
   // Snapshot cache: a built dashboard is reused for CACHE_TTL_MS so reloading the page (or several
@@ -133,26 +144,76 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<void> {
 
   const app = createApp(snapshot, webRoot);
 
-  await new Promise<void>((resolveClose) => {
-    // Bind to loopback only. /api/snapshot exposes transcript-derived data and `serve` is documented
-    // as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
-    // would expose that data to anyone on the network.
-    const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
-      const url = `http://localhost:${info.port}`;
-      log(`Listening on ${url} — press Ctrl-C to stop`);
-      if (!webRoot) {
-        log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
-      }
-      // Warm the cache so the first page load is fast; failures surface on the first request anyway.
-      void snapshot(false).catch(() => {});
-      if (opts.open) spawnSync("open", [url]);
-    });
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
 
+  // Resolves once the server is actually listening, rejects if it fails before binding (e.g. the port
+  // is in use). Awaiting it means a bind failure throws: standalone `argus serve` exits nonzero, and
+  // under `argus run` the supervisor restarts the leg with backoff — neither treats it as success.
+  let resolveListening!: () => void;
+  let rejectListening!: (err: Error) => void;
+  const listening = new Promise<void>((resolve, reject) => {
+    resolveListening = resolve;
+    rejectListening = reject;
+  });
+  let isListening = false;
+
+  // Bind to loopback only. /api/snapshot exposes transcript-derived data and `serve` is documented
+  // as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
+  // would expose that data to anyone on the network.
+  const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
+    isListening = true;
+    const url = `http://localhost:${info.port}`;
+    log(`Listening on ${url} — press Ctrl-C to stop`);
+    if (!webRoot) {
+      log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
+    }
+    // Warm the cache so the first page load is fast; failures surface on the first request anyway.
+    void snapshot(false).catch(() => {});
+    if (opts.open) spawnSync("open", [url]);
+    resolveListening();
+  });
+
+  server.on("error", (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isListening) {
+      // Never bound — fail startup loudly rather than exit cleanly.
+      rejectListening(new Error(`Couldn't start the web server: ${message}`));
+    } else {
+      // A runtime error after a successful bind — unblock so the caller shuts down (standalone) or
+      // the supervisor restarts the leg (run).
+      log(`! Web server error: ${message}`);
+      resolveClosed();
+    }
+  });
+
+  await listening;
+
+  let closing = false;
+  const close = (): Promise<void> => {
+    if (!closing) {
+      closing = true;
+      server.close(() => resolveClosed());
+    }
+    return closed;
+  };
+
+  if (opts.installSignalHandlers ?? true) {
+    // Standalone `argus serve`: own the signals and block until one fires.
     const shutdown = () => {
       log("Stopped.");
-      server.close(() => resolveClose());
+      void close();
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
-  });
+    await closed;
+  } else if (opts.signal) {
+    // Composed under `argus run`: the orchestrator owns signals; abort triggers shutdown.
+    if (opts.signal.aborted) void close();
+    else opts.signal.addEventListener("abort", () => void close(), { once: true });
+  }
+
+  return { closed, close };
 }
