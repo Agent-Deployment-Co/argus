@@ -1,11 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { SESSION_ANALYSIS_CACHE_FILE } from "./paths.ts";
+import { readFileSync } from "node:fs";
+import { openStore } from "./store.ts";
 import { toolDisplayName } from "./tool-categories.ts";
 import type { MessageRecord, SessionMeta, SessionRow, ToolUse } from "./types.ts";
 
-const CACHE_VERSION = 2;
+const ANALYSIS_VERSION = 2;
 
 export type SessionOutcome = "success" | "partial" | "failed" | "unknown";
 
@@ -54,16 +53,6 @@ export interface SessionAnalysis {
   filesTouched: string[];
 }
 
-interface CacheEntry {
-  version: number;
-  lastTs: number;
-  analysis: SessionAnalysis;
-}
-
-interface SessionAnalysisCache {
-  version: number;
-  entries: Record<string, CacheEntry>;
-}
 
 export interface AnalyzeSessionOptions {
   row: SessionRow;
@@ -72,7 +61,7 @@ export interface AnalyzeSessionOptions {
   model?: string;
   refresh?: boolean;
   useLlm?: boolean;
-  cacheFile?: string;
+  storePath?: string;
   log?: (message: string) => void;
 }
 
@@ -84,7 +73,7 @@ export interface AnalyzeSessionResult {
 export interface CachedSessionAnalysisOptions {
   row: SessionRow;
   messages: MessageRecord[];
-  cacheFile?: string;
+  storePath?: string;
 }
 
 interface CondensedTranscript {
@@ -286,41 +275,16 @@ export function condenseSessionTranscript(filePath: string | undefined, limitCha
   return state;
 }
 
-function readCache(cacheFile: string): SessionAnalysisCache {
-  try {
-    const parsed = existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, "utf8")) : undefined;
-    if (parsed?.version === CACHE_VERSION && parsed.entries && typeof parsed.entries === "object") {
-      return parsed as SessionAnalysisCache;
-    }
-  } catch {
-    // Corrupt caches are ignored and replaced on write.
-  }
-  return { version: CACHE_VERSION, entries: {} };
-}
-
-function writeCache(cacheFile: string, cache: SessionAnalysisCache): void {
-  try {
-    mkdirSync(dirname(cacheFile), { recursive: true });
-    writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
-  } catch {
-    // Best-effort cache.
-  }
-}
-
-function cacheKey(row: SessionRow): string {
-  return `${row.source}:${row.sessionId}`;
-}
-
 function latestTimestamp(row: SessionRow, messages: MessageRecord[]): number {
   return messages.reduce((latest, message) => Math.max(latest, message.ts), row.end);
 }
 
 function reusableCacheEntry(
-  cached: CacheEntry | undefined,
+  cached: { version: number; lastTs: number; analysis: SessionAnalysis } | undefined,
   row: SessionRow,
   lastTs: number,
-): cached is CacheEntry {
-  return cached?.version === CACHE_VERSION &&
+): cached is { version: number; lastTs: number; analysis: SessionAnalysis } {
+  return cached?.version === ANALYSIS_VERSION &&
     cached.lastTs === lastTs &&
     cached.analysis.firstPrompt === row.firstPrompt;
 }
@@ -444,7 +408,7 @@ function baseAnalysis(
 ): SessionAnalysis {
   const outcome = inferOutcome(row, transcript);
   return {
-    version: CACHE_VERSION,
+    version: ANALYSIS_VERSION,
     sessionId: row.sessionId,
     source: row.source,
     project: row.project,
@@ -557,20 +521,43 @@ function claudeAvailable(): boolean {
   return res.status === 0;
 }
 
-export function cachedSessionAnalysis(opts: CachedSessionAnalysisOptions): SessionAnalysis | undefined {
-  const cache = readCache(opts.cacheFile ?? SESSION_ANALYSIS_CACHE_FILE);
-  const cached = cache.entries[cacheKey(opts.row)];
-  if (!reusableCacheEntry(cached, opts.row, latestTimestamp(opts.row, opts.messages))) return undefined;
-  return cached.analysis;
+export async function cachedSessionAnalysis(opts: CachedSessionAnalysisOptions): Promise<SessionAnalysis | undefined> {
+  const lastTs = latestTimestamp(opts.row, opts.messages);
+  const store = await openStore({ path: opts.storePath });
+  try {
+    const row = await store.getSessionAnalysis(opts.row.source, opts.row.sessionId);
+    if (!row) return undefined;
+    let parsed: { version: number; lastTs: number; analysis: SessionAnalysis } | undefined;
+    try {
+      parsed = JSON.parse(row.analysisJson);
+    } catch {
+      return undefined;
+    }
+    if (!reusableCacheEntry(parsed, opts.row, lastTs)) return undefined;
+    return parsed.analysis;
+  } finally {
+    await store.close();
+  }
 }
 
-export function analyzeSession(opts: AnalyzeSessionOptions): AnalyzeSessionResult {
-  const cacheFile = opts.cacheFile ?? SESSION_ANALYSIS_CACHE_FILE;
+export async function analyzeSession(opts: AnalyzeSessionOptions): Promise<AnalyzeSessionResult> {
   const lastTs = latestTimestamp(opts.row, opts.messages);
-  const key = cacheKey(opts.row);
   const useLlm = opts.useLlm ?? true;
-  const cache = readCache(cacheFile);
-  const cached = cache.entries[key];
+  const store = await openStore({ path: opts.storePath });
+
+  let cached: { version: number; lastTs: number; analysis: SessionAnalysis } | undefined;
+  try {
+    const row = await store.getSessionAnalysis(opts.row.source, opts.row.sessionId);
+    if (row) {
+      try {
+        cached = JSON.parse(row.analysisJson);
+      } catch {
+        cached = undefined;
+      }
+    }
+  } catch {
+    // If we can't read the cache, continue without it.
+  }
 
   let canUseClaude = false;
   if (useLlm && (!cached || cached.analysis.generatedBy !== "claude" || opts.refresh)) {
@@ -583,6 +570,7 @@ export function analyzeSession(opts: AnalyzeSessionOptions): AnalyzeSessionResul
     ((!useLlm && cached.analysis.generatedBy === "heuristic") ||
       (useLlm && (cached.analysis.generatedBy === "claude" || !canUseClaude)))
   ) {
+    await store.close();
     return { analysis: cached.analysis, fromCache: true };
   }
 
@@ -592,8 +580,14 @@ export function analyzeSession(opts: AnalyzeSessionOptions): AnalyzeSessionResul
     ? llmAnalysis(base, transcript, opts.model, opts.log) ?? base
     : base;
 
-  cache.entries[key] = { version: CACHE_VERSION, lastTs, analysis };
-  writeCache(cacheFile, cache);
+  try {
+    const entry = { version: ANALYSIS_VERSION, lastTs, analysis };
+    await store.setSessionAnalysis(opts.row.source, opts.row.sessionId, lastTs, opts.row.firstPrompt, JSON.stringify(entry));
+  } catch {
+    // Best-effort cache write.
+  } finally {
+    await store.close();
+  }
   return { analysis, fromCache: false };
 }
 

@@ -30,7 +30,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 6;
+export const STORE_SCHEMA_VERSION = 7;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -251,6 +251,18 @@ const CREATE_SCHEMA_SQL = `
   CREATE TABLE session_ownership (
     session_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL
+  );
+
+  -- LLM and heuristic session analyses, keyed by (source, session_id).
+  -- last_ts and first_prompt are the cache invalidation keys: a changed value means the entry is stale.
+  CREATE TABLE session_analyses (
+    source TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_ts INTEGER NOT NULL,
+    first_prompt TEXT NOT NULL,
+    analysis_json TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (source, session_id)
   );
 `;
 
@@ -546,6 +558,21 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
     sql: `
       ALTER TABLE resolved_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS resolved_sessions_archived ON resolved_sessions(archived);
+    `,
+  },
+  // 6 → 7: session analyses. Add the session_analyses table for per-session LLM/heuristic analysis cache.
+  6: {
+    to: 7,
+    sql: `
+      CREATE TABLE IF NOT EXISTS session_analyses (
+        source TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_ts INTEGER NOT NULL,
+        first_prompt TEXT NOT NULL,
+        analysis_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (source, session_id)
+      );
     `,
   },
   // 5 → 6: cowork source. Recreate index_files with an updated CHECK constraint that includes 'cowork'.
@@ -1292,6 +1319,29 @@ export class SqliteStore implements Store {
          FROM resolved_sessions GROUP BY owner ORDER BY owner`,
       );
       return rows.map((row) => ({ owner: row.owner, present: row.present, archived: row.archived }));
+    });
+  }
+
+  getSessionAnalysis(source: string, sessionId: string): Promise<{ lastTs: number; firstPrompt: string; analysisJson: string } | undefined> {
+    return this.schedule(async () => {
+      const row = await get<{ last_ts: number; first_prompt: string; analysis_json: string }>(
+        this.db,
+        "SELECT last_ts, first_prompt, analysis_json FROM session_analyses WHERE source = ? AND session_id = ?",
+        [source, sessionId],
+      );
+      if (!row) return undefined;
+      return { lastTs: row.last_ts, firstPrompt: row.first_prompt, analysisJson: row.analysis_json };
+    });
+  }
+
+  setSessionAnalysis(source: string, sessionId: string, lastTs: number, firstPrompt: string, analysisJson: string): Promise<void> {
+    return this.schedule(async () => {
+      await run(
+        this.db,
+        `INSERT OR REPLACE INTO session_analyses (source, session_id, last_ts, first_prompt, analysis_json, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [source, sessionId, lastTs, firstPrompt, analysisJson, this.now()],
+      );
     });
   }
 

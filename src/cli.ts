@@ -618,10 +618,10 @@ function messagesForSession(parseResult: ParseResult, sessionId: string): Messag
   return parseResult.messages.filter((message) => message.sessionId === sessionId);
 }
 
-function cachedAnalysisTitles(rows: SessionRow[], parseResult: ParseResult): Map<string, string> {
+async function cachedAnalysisTitles(rows: SessionRow[], parseResult: ParseResult): Promise<Map<string, string>> {
   const titles = new Map<string, string>();
   for (const row of rows) {
-    const analysis = cachedSessionAnalysis({
+    const analysis = await cachedSessionAnalysis({
       row,
       messages: messagesForSession(parseResult, row.sessionId),
     });
@@ -680,7 +680,7 @@ async function promptForSession(
 
 async function runAnalyze(opts: AnalyzeOptions, log: Log): Promise<void> {
   const { dash, parseResult } = await buildDashboardDetailed(opts, log);
-  const titles = cachedAnalysisTitles(dash.sessions, parseResult);
+  const titles = await cachedAnalysisTitles(dash.sessions, parseResult);
   const logPaths = sessionLogPaths(dash.sessions, parseResult);
   const sessions = opts.unanalyzed
     ? dash.sessions.filter((row) => !titles.has(row.sessionId))
@@ -721,7 +721,7 @@ async function runAnalyze(opts: AnalyzeOptions, log: Log): Promise<void> {
     process.exit(2);
   }
 
-  const result = analyzeSession({
+  const result = await analyzeSession({
     row,
     meta: parseResult.sessions.get(row.sessionId),
     messages: messagesForSession(parseResult, row.sessionId),

@@ -96,10 +96,10 @@ function transcriptFile(dir: string): string {
 }
 
 describe("session analysis", () => {
-  test("creates a cached heuristic analysis with tool, skill, and MCP breakdowns", () => {
+  test("creates a cached heuristic analysis with tool, skill, and MCP breakdowns", async () => {
     const dir = tempDir();
     const filePath = transcriptFile(dir);
-    const cacheFile = join(dir, "analysis-cache.json");
+    const storePath = join(dir, "argus.db");
     const meta: SessionMeta = {
       source: "claude",
       sessionId: "sess-analysis",
@@ -109,12 +109,12 @@ describe("session analysis", () => {
       firstPrompt: "add a cached session analyzer",
     };
 
-    const first = analyzeSession({
+    const first = await analyzeSession({
       row: row(),
       meta,
       messages: [message()],
       useLlm: false,
-      cacheFile,
+      storePath,
     });
     expect(first.fromCache).toBe(false);
     expect(first.analysis.generatedBy).toBe("heuristic");
@@ -130,28 +130,28 @@ describe("session analysis", () => {
       { server: "github", calls: 1, topTools: [{ tool: "get_issue", count: 1 }] },
     ]);
 
-    const second = analyzeSession({
+    const second = await analyzeSession({
       row: row(),
       meta,
       messages: [message()],
       useLlm: false,
-      cacheFile,
+      storePath,
     });
     expect(second.fromCache).toBe(true);
     expect(second.analysis).toEqual(first.analysis);
-    expect(cachedSessionAnalysis({ row: row(), messages: [message()], cacheFile })?.title).toBe(first.analysis.title);
+    expect((await cachedSessionAnalysis({ row: row(), messages: [message()], storePath }))?.title).toBe(first.analysis.title);
     expect(
-      cachedSessionAnalysis({
+      await cachedSessionAnalysis({
         row: row({ end: 1780333320000 }),
         messages: [message({ ts: 1780333320000 })],
-        cacheFile,
+        storePath,
       }),
     ).toBeUndefined();
     expect(
-      cachedSessionAnalysis({
+      await cachedSessionAnalysis({
         row: row({ firstPrompt: "fix the session title bug" }),
         messages: [message()],
-        cacheFile,
+        storePath,
       }),
     ).toBeUndefined();
   });
