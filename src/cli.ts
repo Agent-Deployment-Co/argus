@@ -422,6 +422,7 @@ const reportArgs = {
   ...buildArgs,
   out: { type: "string", alias: "o", default: "argus-report.html", description: "Output path", valueHint: "file" },
   json: { type: "boolean", default: false, description: "Write raw aggregate JSON to --out instead of HTML" },
+  console: { type: "boolean", default: false, description: "Print a compact overview to the terminal instead of writing a file" },
   open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
 
@@ -450,7 +451,7 @@ function buildOptions(args: BuildArgs): BuildDashboardOptions {
 const report = defineCommand({
   meta: { name: "report", description: "build the local HTML (or --json) dashboard" },
   args: reportArgs,
-  run: ({ args }) => guard(() => runReport({ ...buildOptions(args), out: args.out, json: args.json, open: args.open }, log)),
+  run: ({ args }) => guard(() => runReport({ ...buildOptions(args), out: args.out, json: args.json, open: args.open }, log, args.console)),
 });
 
 const serve = defineCommand({

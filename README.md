@@ -81,6 +81,7 @@ in the background; it does not re-parse every transcript on each page load.
 | `--summarize-model <id>` | Model used for summaries |
 | `--open` | Open the generated report (macOS) |
 | `--json` | Write the aggregate data as JSON instead of HTML |
+| `--console` | Print a compact overview in your terminal instead of writing a file |
 | `--no-cache` | Parse transcripts directly without the incremental fragment cache |
 | `--agentsview` | Import compatible AgentsView data when available (default) |
 | `--no-agentsview` | Disable AgentsView import |
