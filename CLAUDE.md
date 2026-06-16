@@ -17,8 +17,8 @@ This repo is the public CLI only.
 ## Commands
 
 ```bash
-bun run src/index.ts [report] [--open]   # build the dashboard (entry point)
-bun run src/index.ts serve --open        # run the interactive web app (needs build:web once)
+bun run src/cli.ts [report] [--open]     # build the dashboard (entry point)
+bun run src/cli.ts serve --open          # run the interactive web app (needs build:web once)
 bun run dev:web                           # Vite dev server for web/ (live reload; proxies /api → 4242)
 bun test                                  # run all tests (uses bun:test, zero extra deps)
 bun test test/parse.test.ts               # run a single test file
@@ -29,8 +29,8 @@ bun run build                             # build the Node CLI (runs build:web f
 ```
 
 CI (`.github/workflows/ci.yml`) typechecks the root and `web/`, runs `bun test`, and verifies
-`build:web` on every push/PR. Development runs `src/index.ts` directly with Bun. The published npm
-`bin` is `dist/index.js`, a Node-targeted bundle built with `bun run build`; the web app is built to
+`build:web` on every push/PR. Development runs `src/cli.ts` directly with Bun. The published npm
+`bin` is `dist/cli.js`, a Node-targeted bundle built with `bun run build`; the web app is built to
 `dist/web` and ships in the same package.
 
 ## User-facing messages
@@ -127,6 +127,13 @@ The pipeline is a one-way data flow; each stage is its own module:
   `<endpoint>/ingest` with a bearer token. The server is authoritative on org/token validation.
 
 - **`paths.ts`** — All filesystem locations, honoring `CLAUDE_CONFIG_DIR`, `CODEX_HOME`/`CODEX_CONFIG_DIR`.
+
+- **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`report`, `serve`,
+  `sync`, `reindex`, `status`, `forget`, `login`, `push`) with [citty](https://github.com/unjs/citty):
+  each declares its own flags, `--help` scopes per subcommand, and flag types flow into the handlers.
+  There is no default command: a bare `argus` (no subcommand) prints the usage/help. The terminal
+  overview is `argus report --console`. Holds the `run*` handlers that wire flags into
+  `dashboard-builder.ts` and the pipeline.
 
 ## The wire contract (important)
 

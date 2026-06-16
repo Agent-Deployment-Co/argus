@@ -14,21 +14,21 @@ bun install
 Run the CLI directly from source:
 
 ```bash
-bun run src/index.ts
-bun run src/index.ts report --open
+bun run src/cli.ts
+bun run src/cli.ts report --open
 ```
 
 Run the web app from source (build the UI once, then serve it):
 
 ```bash
 bun run build:web                 # build web/ into dist/web
-bun run src/index.ts serve --open # serve it at http://localhost:4242
+bun run src/cli.ts serve --open # serve it at http://localhost:4242
 ```
 
 For live-reloading UI development, run the API and the Vite dev server in two terminals:
 
 ```bash
-bun run src/index.ts serve --port 4242   # terminal 1: the JSON API
+bun run src/cli.ts serve --port 4242   # terminal 1: the JSON API
 bun run dev:web                          # terminal 2: Vite (proxies /api → 4242)
 ```
 
@@ -57,8 +57,10 @@ The core data flow is:
 parse.ts -> aggregate.ts -> report.ts or push.ts
 ```
 
-- `src/index.ts` parses CLI options, applies filters, coordinates summaries, and dispatches
-  the terminal overview, HTML report, web server, login, and push commands.
+- `src/cli.ts` is the executable entry point. It defines the subcommands with
+  [citty](https://github.com/unjs/citty) (each declares its own flags and per-subcommand `--help`),
+  applies filters, coordinates summaries, and dispatches the terminal overview, HTML report, web
+  server, login, and push commands.
 - `src/dashboard-builder.ts` builds the analyzed `Dashboard` from the session store. Shared by
   the `report`/`push` commands and the web server.
 - `src/parse.ts` reads Claude, Codex, and Gemini transcripts into normalized message and
