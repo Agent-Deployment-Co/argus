@@ -1,0 +1,10 @@
+{
+  "sessionId": "local_session-111",
+  "processName": "vibrant-friendly-goldberg",
+  "cwd": "/sessions/vibrant-friendly-goldberg",
+  "userSelectedFolders": ["/Users/test/Projects/myapp"],
+  "createdAt": 1748000000000,
+  "title": "Setup test project",
+  "model": "claude-sonnet-4-6",
+  "cliSessionId": "inner-session-id-111"
+}

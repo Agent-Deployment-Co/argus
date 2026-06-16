@@ -260,6 +260,7 @@ function producerContext(opts: IncrementalParseOptions): ProducerContext {
     historyFile: opts.historyFile,
     codexSessionsDir: opts.codexSessionsDir,
     geminiDir: opts.geminiDir,
+    coworkSessionsDir: opts.coworkSessionsDir,
     agentsViewDatabasePath: opts.agentsViewDatabasePath,
     agentsView: opts.agentsView,
   };

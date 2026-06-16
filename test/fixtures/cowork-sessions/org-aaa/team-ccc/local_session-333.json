@@ -1,0 +1,10 @@
+{
+  "sessionId": "local_session-333",
+  "processName": "cool-session-name",
+  "cwd": "/sessions/cool-session-name",
+  "userSelectedFolders": ["/Users/test/Projects/anotherapp"],
+  "createdAt": 1748000200000,
+  "title": "Another project",
+  "model": "claude-sonnet-4-6",
+  "cliSessionId": "inner-session-id-333"
+}
