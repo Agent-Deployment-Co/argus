@@ -4,19 +4,19 @@
   "description": "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
   "type": "module",
   "bin": {
-    "argus": "./dist/index.js"
+    "argus": "./dist/cli.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "start": "bun run src/index.ts",
+    "start": "bun run src/cli.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "build": "bun run build:web && bun build src/index.ts --target=node --external sqlite3 --outfile=dist/index.js && mkdir -p dist/vendor && cp src/vendor/* dist/vendor/ && tail -n +2 dist/index.js > dist/index.temp && echo '#!/usr/bin/env node' | cat - dist/index.temp > dist/index.js && rm dist/index.temp && chmod +x dist/index.js"
+    "build": "bun run build:web && bun build src/cli.ts --target=node --external sqlite3 --outfile=dist/cli.js && mkdir -p dist/vendor && cp src/vendor/* dist/vendor/ && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js"
   },
   "engines": {
     "node": ">=20.17"
@@ -24,6 +24,7 @@
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
     "@hono/node-server": "^2.0.5",
+    "citty": "^0.2.2",
     "hono": "^4.12.25",
     "sqlite3": "6"
   },
