@@ -502,6 +502,7 @@ const SOURCE_ORDER: Record<AgentSource, number> = {
   claude: 0,
   codex: 1,
   gemini: 2,
+  cowork: 3,
 };
 
 function compareText(a: string, b: string): number {

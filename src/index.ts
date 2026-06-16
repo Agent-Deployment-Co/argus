@@ -111,12 +111,12 @@ function parseArgs(argv: string[]): Flags {
 }
 
 function parseSource(value: string | undefined): "all" | TranscriptSource {
-  if (value === "all" || value === "claude" || value === "codex" || value === "gemini") return value;
-  console.error(`Invalid --source: ${value ?? ""} (expected claude, codex, gemini, or all)`);
+  if (value === "all" || value === "claude" || value === "codex" || value === "gemini" || value === "cowork") return value;
+  console.error(`Invalid --source: ${value ?? ""} (expected claude, codex, gemini, cowork, or all)`);
   process.exit(2);
 }
 
-const HELP = `argus — audit your Claude Code, Codex, and Gemini CLI usage
+const HELP = `argus — audit your Claude Code, Claude Cowork, Codex, and Gemini CLI usage
 
 Usage:
   argus                       terminal overview (no options; just run it)
@@ -134,7 +134,7 @@ Sessions stay in the local store even after their transcripts age off disk (Clau
 thing that removes them.
 
 Source selection (report, push, sync, reindex, forget --archived):
-  --source <claude|codex|gemini|all>   transcript source(s) (default: all)
+  --source <claude|codex|gemini|cowork|all>   transcript source(s) (default: all)
   --agentsview             auto-detect AgentsView imports (default)
   --no-agentsview          disable AgentsView discovery/import
   --agentsview-db <path>   read a specific AgentsView sessions.db
@@ -291,7 +291,9 @@ async function runPush(flags: Flags, log: Log): Promise<void> {
     org,
     user,
     generatedAtMs: dash.generatedAtMs,
-    dashboard: dash,
+    // Cast: the schema's AgentSource union lags the local one by one source ("cowork" pending
+    // argus-schema update). The server will reject cowork sessions at runtime until then.
+    dashboard: dash as any,
   });
 
   if (res.ok) {
@@ -315,7 +317,7 @@ async function runStatus(log: Log): Promise<void> {
   }
   let scans;
   try {
-    scans = await scanStore({ sources: ["claude", "codex", "gemini"] });
+    scans = await scanStore({ sources: ["claude", "codex", "gemini", "cowork"] });
   } catch (err) {
     log(`Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`);
     log("Run `argus reindex --force` to rebuild it from your transcripts.");
@@ -366,7 +368,7 @@ async function runStatus(log: Log): Promise<void> {
   }
 
   if (!lines.length) {
-    log("No sessions yet. Run `argus sync` once you've used Claude Code, Codex, or Gemini.");
+    log("No sessions yet. Run `argus sync` once you've used Claude Code, Claude Cowork, Codex, or Gemini.");
     return;
   }
   for (const line of lines) log(line);

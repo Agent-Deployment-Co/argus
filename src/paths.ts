@@ -39,3 +39,7 @@ export const SUMMARY_CACHE_FILE = join(ARGUS_DATA_DIR, "summaries.json");
 export const ACCESS_TOKEN_FILE = join(ARGUS_CONFIG_DIR, "token.json");
 export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
+export const COWORK_SESSIONS_DIR: string | undefined =
+  platform === "darwin"
+    ? join(homedir(), "Library", "Application Support", "Claude", "local-agent-mode-sessions")
+    : undefined;

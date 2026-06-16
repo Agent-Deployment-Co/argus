@@ -30,7 +30,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 5;
+export const STORE_SCHEMA_VERSION = 6;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -120,7 +120,7 @@ const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('transcript', 'auxiliary', 'external')),
-    source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini')),
+    source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini', 'cowork')),
     file_identity TEXT,
     root_id TEXT,
     role TEXT,
@@ -546,6 +546,45 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
     sql: `
       ALTER TABLE resolved_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX IF NOT EXISTS resolved_sessions_archived ON resolved_sessions(archived);
+    `,
+  },
+  // 5 → 6: cowork source. Recreate index_files with an updated CHECK constraint that includes 'cowork'.
+  // SQLite doesn't support ALTER COLUMN; DROP TABLE is safe here because it does NOT trigger ON DELETE
+  // CASCADE in child tables (FK enforcement only fires on DML, not DDL). Child table data is intact
+  // after the rename because FK constraints reference the table by name, which is restored.
+  5: {
+    to: 6,
+    sql: `
+      CREATE TABLE index_files_v6 (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('transcript', 'auxiliary', 'external')),
+        source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini', 'cowork')),
+        file_identity TEXT,
+        root_id TEXT,
+        role TEXT,
+        relative_path TEXT,
+        observed_path TEXT,
+        size_bytes TEXT,
+        mtime_ns TEXT,
+        ctime_ns TEXT,
+        physical_id_scheme TEXT,
+        physical_id_value TEXT,
+        contract_version INTEGER NOT NULL,
+        parser_name TEXT,
+        parser_version TEXT,
+        status TEXT NOT NULL CHECK (status IN ('success', 'failed', 'unstable')),
+        invalidation_reason TEXT,
+        diagnostics_json TEXT NOT NULL,
+        import_provenance_json TEXT,
+        envelope_json TEXT,
+        last_success_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO index_files_v6 SELECT * FROM index_files;
+      DROP TABLE index_files;
+      ALTER TABLE index_files_v6 RENAME TO index_files;
+      CREATE INDEX index_files_source_root ON index_files(source, root_id);
+      CREATE INDEX index_files_identity ON index_files(file_identity);
     `,
   },
 };
