@@ -700,7 +700,8 @@ export function syncStatsSummary(
   const parts = [`${stats.parsed} new or changed`];
   if (stats.hits) parts.push(`${stats.hits} unchanged`);
   if (stats.imported) parts.push(`${stats.imported} from AgentsView`);
-  if (stats.archived) parts.push(`${stats.archived} kept after leaving disk`);
+  // Sessions retained after their transcripts aged off disk are working as intended; mentioning the
+  // count on every pass just invites concern. `argus status` is where that total belongs.
   const unreadable = stats.unstable + stats.failed;
   if (unreadable) parts.push(`${unreadable} couldn't be read`);
   return `${mode} — ${parts.join(", ")}`;
