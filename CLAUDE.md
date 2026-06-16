@@ -51,6 +51,10 @@ written for a moderately technical user who understands the language of agents a
 These rules are for output the user sees. Code comments and internal identifiers stay precise and
 may use the internal vocabulary freely.
 
+**Product name styling.** Anthropic styles it **Claude Cowork** — "Cowork" with a lowercase "w"
+(not "CoWork" or "Co-Work"). Use this exact casing in all user-facing strings. The internal
+source identifier / slug stays `cowork` (all lowercase).
+
 ## Architecture
 
 The pipeline is a one-way data flow; each stage is its own module:

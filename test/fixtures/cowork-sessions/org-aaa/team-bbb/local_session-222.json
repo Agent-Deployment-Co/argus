@@ -1,0 +1,10 @@
+{
+  "sessionId": "local_session-222",
+  "processName": "zen-happy-turing",
+  "cwd": "/sessions/zen-happy-turing",
+  "userSelectedFolders": [],
+  "createdAt": 1748000100000,
+  "title": "Sandbox exploration",
+  "model": "claude-opus-4-8",
+  "cliSessionId": "inner-session-id-222"
+}
