@@ -16,7 +16,7 @@ one-directional:
                       the store  (argus.db)
                                 ▼
                        consumers (read only)
-                report · push · status · the bare overview
+                  report · serve · push · status
 ```
 
 Three ideas carry the whole design:
@@ -136,7 +136,7 @@ are pushed down to SQL. Archived sessions are included, so reporting survives tr
 - `serve` — the same read → `aggregate.ts` path, exposed as a JSON API and an interactive web app
   (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
-- the bare `argus` overview — same read path, rendered to the terminal.
+- `argus report --console` — same read path, rendered as a compact overview in the terminal.
 
 Because the read model is self-sufficient, a report can be produced even after the original transcripts
 are gone.

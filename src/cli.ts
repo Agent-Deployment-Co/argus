@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { defineCommand, runMain } from "citty";
+import { defineCommand, runMain, showUsage } from "citty";
 import {
   isLegacyAccessTokenCache,
   isManagedOAuthTokenCache,
@@ -14,7 +14,6 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { printBanner } from "./banner.ts";
-import { isBareInvocation } from "./console-report.ts";
 import type { TranscriptSource } from "./parse.ts";
 import { syncStatsSummary, scanStore } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
@@ -514,36 +513,27 @@ const push = defineCommand({
   run: ({ args }) => guard(() => runPush({ ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org }, log)),
 });
 
+
 const main = defineCommand({
   meta: {
     name: "argus",
     version: pkg.version,
     description: "audit your Claude Code, Claude Cowork, Codex, and Gemini CLI usage",
   },
-  // The root flags mirror `report` so a bare `argus --open`/`argus --since …` routes to the
-  // default report command with its values parsed correctly (citty needs to know which root
-  // flags take a value to find the subcommand boundary). Sessions stay in the local store even
-  // after their transcripts age off disk; only `argus forget` removes them.
-  args: reportArgs,
+  // No root flags and no default command: every flag belongs to a specific subcommand, so running
+  // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
+  // even after their transcripts age off disk; only `argus forget` removes them.
   subCommands: { report, serve, sync, reindex, status, forget, login, push },
-  // No subcommand named on the command line → behave like `report`.
-  default: "report",
 });
 
 async function run() {
   printBanner();
   const argv = process.argv.slice(2);
-  // A truly bare `argus` (no arguments) prints the terminal overview rather than writing a file.
-  // Everything else — including `argus report` and bare flags like `argus --open` — flows through
-  // citty to the report command, which writes the HTML/JSON dashboard.
-  if (isBareInvocation(argv)) {
-    await guard(() =>
-      runReport(
-        { ...buildOptions({ source: "all", agentsview: true, summarize: false }), out: "argus-report.html", json: false, open: false },
-        log,
-        true,
-      ),
-    );
+  // A bare `argus` (no subcommand) shows the usage/help with a success exit code; citty's own
+  // "no command specified" path would treat the same input as an error. `argus <command>` and
+  // `argus --help` flow through citty normally.
+  if (argv.length === 0) {
+    await showUsage(main);
     return;
   }
   await runMain(main);
