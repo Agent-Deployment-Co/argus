@@ -55,8 +55,10 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
     agentsViewDatabasePath: opts.agentsViewDatabasePath,
   };
   // The web + upload legs read the store unfiltered; `run` exposes only source selection, not the
-  // report-style date/project/summarize filters.
-  const build: BuildDashboardOptions = { ...src, summarize: false };
+  // report-style date/project/summarize filters. They read the store **read-only** — the index leg
+  // is the sole writer, so serve/upload must not also materialize (concurrent writers would contend
+  // and could fall back to a direct disk parse that omits archived sessions).
+  const build: BuildDashboardOptions = { ...src, summarize: false, readOnly: true };
 
   const ac = new AbortController();
   const onSignal = () => {
