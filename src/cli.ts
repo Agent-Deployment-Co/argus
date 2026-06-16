@@ -4,44 +4,27 @@ import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
-import {
-  isLegacyAccessTokenCache,
-  isManagedOAuthTokenCache,
-  loadAccessTokenCache,
-  loginWithManagedOAuth,
-  oauthCacheMatchesEndpoint,
-  oauthTokenIsFresh,
-  refreshManagedOAuthToken,
-  saveAccessTokenCache,
-} from "./auth.ts";
+import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
-import type { TranscriptSource } from "./parse.ts";
-import { syncStatsSummary, scanStore } from "./parse-incremental.ts";
-import { openSessionStore } from "./session-store.ts";
+import { scanStore } from "./parse-incremental.ts";
 import { RENDERERS, type OutputFormat } from "./renderers.ts";
-import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
-import type { PushCredentials } from "./push.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
-import type { Dashboard } from "./aggregate.ts";
-import { buildDashboard, sourcesFor, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
+import { buildDashboard, summaryLine, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
 import { startServer } from "./serve.ts";
-import { openStore, rebuildStore } from "./store.ts";
+import { openStore } from "./store.ts";
+import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
+import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
+import { runRun } from "./run.ts";
+import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
 const DEFAULT_PORT = Number(process.env.ARGUS_PORT) || 4242;
 
-type Source = "all" | TranscriptSource;
-
-/** The store-selection slice shared by sync, reindex, and `forget --archived`. */
-interface SyncOptions {
-  source: Source;
-  agentsView: "auto" | "off";
-  agentsViewDatabasePath?: string;
-}
-
 // `buildDashboard` takes `BuildDashboardOptions` (from dashboard-builder); the command-specific
-// option shapes below layer each subcommand's own flags on top of it.
+// option shapes below layer each subcommand's own flags on top of it. The shared store-selection
+// (`SyncOptions`) and build (`buildOptions`) shapes live in cli-options.ts so the extracted command
+// bodies and the long-running loops can reuse them.
 interface ReportOptions extends BuildDashboardOptions {
   out: string;
   json: boolean;
@@ -53,26 +36,16 @@ interface ServeOptions extends BuildDashboardOptions {
   open: boolean;
 }
 
-interface PushOptions extends BuildDashboardOptions {
-  endpoint: string;
-  user?: string;
-  org?: string;
-}
-
-interface ForgetOptions {
-  source: Source;
-  archived: boolean;
-  ids: string[];
-}
-
-/** Narrow a raw `--source` value to the accepted set, exiting with a clear message otherwise. */
-function toSource(value: string): Source {
-  if (value === "all" || value === "claude" || value === "codex" || value === "gemini" || value === "cowork") return value;
-  console.error(`Invalid --source: ${value} (expected claude, codex, gemini, cowork, or all)`);
-  process.exit(2);
-}
-
 const log: Log = (s) => process.stderr.write(s + "\n");
+
+/** Build an AbortController wired to one-shot SIGINT/SIGTERM handlers, for the `--watch` commands. */
+function abortOnSignals(): AbortController {
+  const ac = new AbortController();
+  const onSignal = () => ac.abort();
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  return ac;
+}
 
 /** Run a command body, reporting any failure as a single clean line (no stack) and exiting 1.
  *  citty's own runner prints unexpected errors with a full stack; routing expected operational
@@ -166,11 +139,33 @@ function handler<T extends ArgsDef>(
   };
 }
 
-function summary(dash: Dashboard): string {
-  return (
-    `${dash.totals.sessions} sessions · ${dash.totals.messages} msgs · ` +
-    `${(dash.totals.total / 1e6).toFixed(2)}M tokens · $${dash.totals.cost.toFixed(2)} est.`
-  );
+/** The first bare (non-flag) token in rawArgs — the position citty uses to pick a subcommand. Mirrors
+ *  citty's own findSubCommandIndex, skipping the value of a `--flag value` string flag. Returns
+ *  undefined when there's no positional token. citty runs a parent command's `run` *even after*
+ *  dispatching to a subcommand, so a parent with both must check this and bail when one matched
+ *  (citty throws "Unknown command" before the parent run if the token isn't a real subcommand, so a
+ *  present token here always means a subcommand handled the invocation). */
+function dispatchedSubcommand(ctx: CommandContext<any>): string | undefined {
+  const def = (ctx.cmd.args ?? {}) as ArgsDef;
+  const valueFlags = new Set<string>();
+  for (const [name, rawSpec] of Object.entries(def)) {
+    const spec = rawSpec as { type?: string; alias?: string | string[] };
+    if (spec.type !== "string" && spec.type !== "enum") continue;
+    const aliases = Array.isArray(spec.alias) ? spec.alias : spec.alias ? [spec.alias] : [];
+    for (const variant of [name, ...aliases].flatMap(nameVariants)) valueFlags.add(variant);
+  }
+  const raw = ctx.rawArgs;
+  for (let i = 0; i < raw.length; i++) {
+    const tok = raw[i]!;
+    if (tok === "--") return undefined;
+    if (tok.startsWith("-") && tok !== "-") {
+      const body = tok.slice(tok.startsWith("--") ? 2 : 1);
+      if (!body.includes("=") && valueFlags.has(body)) i++; // skip the flag's value
+      continue;
+    }
+    return tok;
+  }
+  return undefined;
 }
 
 function formatBytes(value: number): string {
@@ -196,7 +191,7 @@ async function runReport(opts: ReportOptions, log: Log, consoleOnly = false): Pr
   const outPath = resolve(opts.out);
   writeFileSync(outPath, rendered.content);
   log(`Wrote ${outPath}`);
-  log(`Totals: ${summary(dash)}`);
+  log(`Totals: ${summaryLine(dash)}`);
   if (opts.open && format === "html") spawnSync("open", [outPath]);
 }
 
@@ -234,60 +229,15 @@ async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
   }
 }
 
-async function runPush(opts: PushOptions, log: Log): Promise<void> {
-  const endpoint = opts.endpoint || DEFAULT_ENDPOINT;
-  const user = detectUser(opts.user);
-  const org = detectOrg(opts.org);
-
-  // Authenticate:
-  // 1. CI/Automation: CF_ACCESS_CLIENT_ID + CF_ACCESS_CLIENT_SECRET
-  // 2. Human/Interactive: Cached Managed OAuth access + refresh tokens
-  const clientId = process.env.CF_ACCESS_CLIENT_ID;
-  const clientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
-  const credentials: PushCredentials = {};
-
-  if (clientId && clientSecret) {
-    credentials.clientId = clientId;
-    credentials.clientSecret = clientSecret;
-  } else {
-    let cached = loadAccessTokenCache(ACCESS_TOKEN_FILE);
-    if (isManagedOAuthTokenCache(cached) && oauthCacheMatchesEndpoint(cached, endpoint)) {
-      if (!oauthTokenIsFresh(cached)) {
-        log("Refreshing Cloudflare Access login…");
-        try {
-          cached = await refreshManagedOAuthToken(cached);
-          saveAccessTokenCache(ACCESS_TOKEN_FILE, cached);
-        } catch (err) {
-          log(`! Login refresh failed: ${err instanceof Error ? err.message : String(err)}`);
-          cached = undefined;
-        }
-      }
-      if (isManagedOAuthTokenCache(cached)) credentials.bearerToken = cached.accessToken;
-    } else if (isLegacyAccessTokenCache(cached)) {
-      // Preserve existing cloudflared caches during migration.
-      credentials.jwt = cached.token;
-    }
-
-    if (!credentials.bearerToken && !credentials.jwt) {
-      log("! Unauthenticated. Please run 'argus login' first to authenticate via Cloudflare Access.");
-      process.exit(1);
-    }
+/** One-shot upload of the current snapshot to the team dashboard (the bare `argus sync`). */
+async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
+  const credentials = await resolveCredentials(opts.endpoint, log);
+  if (!credentials) {
+    log("! Unauthenticated. Please run 'argus login' first to authenticate via Cloudflare Access.");
+    process.exit(1);
   }
 
-  const dash = await buildDashboard(opts, log);
-  log(`Pushing snapshot for "${user}" (org: ${org ?? "from token"}) → ${endpoint}`);
-  log(`  ${summary(dash)}`);
-
-  const res = await pushSnapshot(endpoint, credentials, {
-    schemaVersion: SCHEMA_VERSION,
-    org,
-    user,
-    generatedAtMs: dash.generatedAtMs,
-    // Cast: the schema's AgentSource union lags the local one by one source ("cowork" pending
-    // argus-schema update). The server will reject cowork sessions at runtime until then.
-    dashboard: dash as any,
-  });
-
+  const res = await pushSnapshotForOpts(opts, credentials, log);
   if (res.ok) {
     log(`✓ Pushed (${res.status}). ${res.body.slice(0, 200)}`);
   } else if (res.isAccessChallenge) {
@@ -312,12 +262,12 @@ async function runStatus(log: Log): Promise<void> {
     scans = await scanStore({ sources: ["claude", "codex", "gemini", "cowork"] });
   } catch (err) {
     log(`Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`);
-    log("Run `argus reindex --force` to rebuild it from your transcripts.");
+    log("Run `argus index rebuild --force` to rebuild it from your transcripts.");
     process.exit(1);
   }
 
   // Count every session the store actually holds, grouped by where it came from, so the per-source
-  // lines and the total reconcile with what `argus sync` reports (which counts the whole store).
+  // lines and the total reconcile with what `argus index` reports (which counts the whole store).
   let counts: Array<{ owner: string; present: number; archived: number }> = [];
   try {
     const store = await openStore();
@@ -360,88 +310,15 @@ async function runStatus(log: Log): Promise<void> {
   }
 
   if (!lines.length) {
-    log("No sessions yet. Run `argus sync` once you've used Claude Code, Claude Cowork, Codex, or Gemini.");
+    log("No sessions yet. Run `argus index` once you've used Claude Code, Claude Cowork, Codex, or Gemini.");
     return;
   }
   for (const line of lines) log(line);
   if (lines.length > 1) log(`Total: ${total} sessions`);
   if (totalArchived) {
-    log(`Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus forget --archived\``);
+    log(`Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus index delete --archived\``);
   }
-  if (pending) log("Run `argus sync` to pick up new and changed sessions.");
-}
-
-/** Bring the store up to date for the requested sources (producers reconcile + materialize). */
-async function runSync(opts: SyncOptions, log: Log): Promise<void> {
-  const store = openSessionStore({
-    sources: sourcesFor(opts.source),
-    agentsView: opts.agentsView,
-    agentsViewDatabasePath: opts.agentsViewDatabasePath,
-  });
-  try {
-    const parsed = await store.read({});
-    if (store.stats) log(syncStatsSummary(store.stats, store.diagnostics));
-    log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
-  } finally {
-    await store.close();
-  }
-}
-
-async function runReindex(opts: SyncOptions & { force: boolean }, log: Log): Promise<void> {
-  if (opts.force) {
-    // Destructive: drop the entire store, including archived (off-disk) sessions that cannot be
-    // re-derived from disk. Gated behind --force and announced before we delete anything. Counting
-    // archived sessions is best-effort — a damaged store can't be read, but --force still rebuilds it.
-    let archived: string[] = [];
-    try {
-      const store = await openStore();
-      try {
-        archived = await store.listArchived();
-      } finally {
-        await store.close();
-      }
-    } catch {
-      // store unreadable; the rebuild below replaces it regardless
-    }
-    if (archived.length) {
-      log(`! --force will permanently delete ${archived.length} archived session(s) no longer on disk.`);
-    }
-    const rebuilt = await rebuildStore();
-    await rebuilt.close();
-    log("Rebuilt the local store from scratch. Re-reading all transcripts from disk…");
-  } else {
-    // Non-destructive: re-derive the structural index from disk while preserving the trusted read
-    // model (resolved_*), so aged-out archived sessions survive a reindex.
-    const store = await openStore();
-    try {
-      await store.clearIndex();
-    } finally {
-      await store.close();
-    }
-    log("Re-reading all transcripts from disk. Archived sessions (no longer on disk) are kept…");
-  }
-  await runSync(opts, log);
-}
-
-async function runForget(opts: ForgetOptions, log: Log): Promise<void> {
-  const store = await openStore();
-  try {
-    const targets = opts.archived
-      ? await store.listArchived(opts.source === "all" ? undefined : opts.source)
-      : opts.ids;
-    if (!targets.length) {
-      log(
-        opts.archived
-          ? "No archived sessions to forget."
-          : "Usage: argus forget <session-id>… (or --archived to remove every session no longer on disk).",
-      );
-      return;
-    }
-    await store.retractSessions(targets);
-    log(`Forgot ${targets.length} session(s) from the local store.`);
-  } finally {
-    await store.close();
-  }
+  if (pending) log("Run `argus index` to pick up new and changed sessions.");
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +326,7 @@ async function runForget(opts: ForgetOptions, log: Log): Promise<void> {
 // to that subcommand automatically and flag types flow into the run handlers.
 // ---------------------------------------------------------------------------
 
-/** Source selection — shared by report, serve, push, sync, reindex, and `forget --archived`.
+/** Source selection — shared by report, serve, sync, run, and the `index` commands.
  *  Declared as a string (not enum) so citty's flag inference stays intact; the value set is
  *  validated by `toSource`. */
 const sourceArg = {
@@ -476,20 +353,20 @@ const agentsViewArgs = {
   },
 } as const;
 
-/** Date/project filters — shared by report, serve, and push. */
+/** Date/project filters — shared by report, serve, and sync. */
 const filterArgs = {
   since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
   until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
   project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
 } as const;
 
-/** Summary generation — shared by report, serve, and push. */
+/** Summary generation — shared by report, serve, and sync. */
 const summarizeArgs = {
   summarize: { type: "boolean", default: false, description: "Generate per-session summaries via headless 'claude -p' (cached)" },
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
 } as const;
 
-/** Inputs shared by report, serve, and push (everything `buildDashboard` reads). */
+/** Inputs shared by report, serve, and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
   ...agentsViewArgs,
@@ -504,28 +381,6 @@ const reportArgs = {
   console: { type: "boolean", default: false, description: "Print a compact overview to the terminal instead of writing a file" },
   open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
-
-type SyncArgs = { source: string; agentsview: boolean; "agentsview-db"?: string };
-type BuildArgs = SyncArgs & { since?: string; until?: string; project?: string; summarize: boolean; "summarize-model"?: string };
-
-function syncOptions(args: SyncArgs): SyncOptions {
-  return {
-    source: toSource(args.source),
-    agentsView: args.agentsview ? "auto" : "off",
-    agentsViewDatabasePath: args["agentsview-db"],
-  };
-}
-
-function buildOptions(args: BuildArgs): BuildDashboardOptions {
-  return {
-    ...syncOptions(args),
-    since: args.since,
-    until: args.until,
-    project: args.project,
-    summarize: args.summarize,
-    summarizeModel: args["summarize-model"],
-  };
-}
 
 const report = defineCommand({
   meta: { name: "report", description: "build the local HTML (or --json) dashboard" },
@@ -543,35 +398,62 @@ const serve = defineCommand({
   run: handler((args) => runServe({ ...buildOptions(args), port: Number(args.port) || DEFAULT_PORT, open: args.open }, log)),
 });
 
-const sync = defineCommand({
-  meta: { name: "sync", description: "read new and changed sessions into the local store" },
-  args: { ...sourceArg, ...agentsViewArgs },
-  run: handler((args) => runSync(syncOptions(args), log)),
-});
-
-const reindex = defineCommand({
-  meta: { name: "reindex", description: "re-read all transcripts from disk (keeps archived); --force to wipe" },
+// `argus index` — the local store maintenance group. The bare command does an incremental read;
+// `--watch` keeps it running on an interval; the subcommands cover the destructive/scoped operations.
+const indexRebuild = defineCommand({
+  meta: { name: "rebuild", description: "rebuild the store from your transcripts (drops sessions no longer on disk)" },
   args: {
     ...sourceArg,
     ...agentsViewArgs,
-    force: { type: "boolean", default: false, description: "Drop the whole store, including archived (off-disk) sessions" },
+    force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
-  run: handler((args) => runReindex({ ...syncOptions(args), force: args.force }, log)),
+  run: handler((args) => runIndexRebuild({ ...syncOptions(args), force: args.force }, log)),
+});
+
+const indexRefresh = defineCommand({
+  meta: { name: "refresh", description: "re-read all transcripts from disk (keeps sessions no longer on disk)" },
+  args: { ...sourceArg, ...agentsViewArgs },
+  run: handler((args) => runIndexRefresh(syncOptions(args), log)),
+});
+
+const indexDelete = defineCommand({
+  meta: { name: "delete", description: "permanently remove sessions from the local store" },
+  args: {
+    id: { type: "positional", required: false, description: "session id(s) to remove" },
+    ...sourceArg,
+    archived: { type: "boolean", default: false, description: "Remove all sessions no longer on disk, optionally scoped by --source" },
+  },
+  run: handler((args) => runIndexDelete({ source: toSource(args.source), archived: args.archived, ids: args._ }, log)),
+});
+
+const index = defineCommand({
+  meta: { name: "index", description: "read new and changed sessions into the local store" },
+  args: {
+    ...sourceArg,
+    ...agentsViewArgs,
+    watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
+    interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
+  },
+  subCommands: { rebuild: indexRebuild, refresh: indexRefresh, delete: indexDelete },
+  run: (ctx) => {
+    // citty also runs this parent `run` after a subcommand handled the call — bail in that case.
+    if (dispatchedSubcommand(ctx) !== undefined) return Promise.resolve();
+    validateArgs(ctx);
+    return guard(async () => {
+      const args = ctx.args;
+      if (args.watch) {
+        const ac = abortOnSignals();
+        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5 }, log, ac.signal);
+      } else {
+        await runIndex(syncOptions(args), log);
+      }
+    });
+  },
 });
 
 const status = defineCommand({
   meta: { name: "status", description: "show the local store path + per-source counts" },
   run: handler(() => runStatus(log)),
-});
-
-const forget = defineCommand({
-  meta: { name: "forget", description: "permanently remove sessions from the local store" },
-  args: {
-    id: { type: "positional", required: false, description: "session id(s) to forget" },
-    ...sourceArg,
-    archived: { type: "boolean", default: false, description: "Target all archived (off-disk) sessions, optionally scoped by --source" },
-  },
-  run: handler((args) => runForget({ source: toSource(args.source), archived: args.archived, ids: args._ }, log)),
 });
 
 const login = defineCommand({
@@ -582,17 +464,50 @@ const login = defineCommand({
   run: handler((args) => runLogin({ endpoint: args.endpoint }, log)),
 });
 
-const push = defineCommand({
-  meta: { name: "push", description: "push your usage snapshot to a team Worker" },
+const sync = defineCommand({
+  meta: { name: "sync", description: "upload your usage snapshot to a team dashboard" },
   args: {
     ...buildArgs,
-    endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for push (env ARGUS_ENDPOINT)", valueHint: "url" },
+    endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
     user: { type: "string", description: "Override the user id (default: git email, else $USER@host)", valueHint: "id" },
     org: { type: "string", default: process.env.ARGUS_ORG, description: "Override the org (env ARGUS_ORG)", valueHint: "id" },
+    watch: { type: "boolean", default: false, description: "Keep uploading on an interval" },
+    interval: { type: "string", default: "5", description: "Minutes between uploads (with --watch)", valueHint: "N" },
   },
-  run: handler((args) => runPush({ ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org }, log)),
+  run: handler(async (args) => {
+    const base: PushLoopOptions = { ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org };
+    if (args.watch) {
+      const ac = abortOnSignals();
+      await watchSync({ ...base, intervalMin: Number(args.interval) || 5, onUnauthenticated: "fail" }, log, ac.signal);
+    } else {
+      await runPushOnce(base, log);
+    }
+  }),
 });
 
+const runCmd = defineCommand({
+  meta: { name: "run", description: "keep the dashboard live: index, serve, and upload in one process" },
+  args: {
+    ...sourceArg,
+    ...agentsViewArgs,
+    port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
+    "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
+    "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
+    endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
+  },
+  run: handler((args) =>
+    runRun(
+      {
+        ...syncOptions(args),
+        port: Number(args.port) || DEFAULT_PORT,
+        indexIntervalMin: Number(args["index-interval"]) || 5,
+        syncIntervalMin: Number(args["sync-interval"]) || 5,
+        endpoint: args.endpoint,
+      },
+      log,
+    ),
+  ),
+});
 
 const main = defineCommand({
   meta: {
@@ -602,8 +517,8 @@ const main = defineCommand({
   },
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
-  // even after their transcripts age off disk; only `argus forget` removes them.
-  subCommands: { report, serve, sync, reindex, status, forget, login, push },
+  // even after their transcripts age off disk; only `argus index delete` removes them.
+  subCommands: { report, serve, index, sync, run: runCmd, status, login },
 });
 
 async function run() {

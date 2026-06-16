@@ -10,13 +10,13 @@ one-directional:
                 │                                            │
                 └───────────────┬────────────────────────────┘
                                 ▼
-                      the coordinator (sync)
+                      the coordinator (indexing)
                  reconcile → materialize per session
                                 ▼
                       the store  (argus.db)
                                 ▼
                        consumers (read only)
-                  report · serve · push · status
+                  report · serve · sync · status
 ```
 
 Three ideas carry the whole design:
@@ -63,7 +63,7 @@ One SQLite file, `argus.db` (`src/store.ts`). Three layers:
 1. **Structural index** — `index_files` + `index_sessions` / `index_relationships` /
    `index_auxiliary` / `index_dependencies`. A thin map of *which files exist, their fingerprints
    (for change detection), and which sessions each file maps to*. No message content. **Fully
-   re-derivable from disk** — `reindex` rebuilds it freely.
+   re-derivable from disk** — `index refresh` rebuilds it freely.
 
 2. **Trusted read model** — `resolved_sessions` / `resolved_messages` / `resolved_tool_results`.
    The finished, reconciled rows consumers read directly. **Not re-derivable** once a transcript ages
@@ -74,7 +74,7 @@ One SQLite file, `argus.db` (`src/store.ts`). Three layers:
 
 **Durable archive.** When a session's transcript disappears from disk, its `resolved_*` rows are
 **kept and flagged `archived`**, not deleted. The only thing that removes a retained session is the
-explicit `argus forget` command. `resolved_sessions.archived` distinguishes live (on disk) from
+explicit `argus index delete` command. `resolved_sessions.archived` distinguishes live (on disk) from
 archived (kept after leaving disk).
 
 ---
@@ -132,7 +132,7 @@ and then returns the reconciled `ParseResult` straight from `resolved_*` — **n
 re-parsing, no in-memory filtering.** Query filters (`--since` / `--until` / `--project` / `--source`)
 are pushed down to SQL. Archived sessions are included, so reporting survives transcript retention.
 
-- `report` / `push` — read → `aggregate.ts` builds the dashboard → render HTML / JSON / push snapshot.
+- `report` / `sync` — read → `aggregate.ts` builds the dashboard → render HTML / JSON / upload snapshot.
 - `serve` — the same read → `aggregate.ts` path, exposed as a JSON API and an interactive web app
   (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
@@ -147,13 +147,15 @@ are gone.
 
 | Command  | Touches the store | What it does |
 |----------|-------------------|--------------|
-| `sync`   | writes            | Read new/changed transcripts; update the store. |
-| `report` | reads (+ syncs)   | Build the dashboard from the store as a self-contained HTML file. |
-| `serve`  | reads (+ syncs)   | Serve the dashboard as an interactive local web app (JSON API + SPA). |
-| `push`   | reads (+ syncs)   | Build a snapshot and push it to a team Worker. |
+| `index`  | writes            | Read new/changed transcripts; update the store. `--watch` keeps reading on an interval. |
+| `index refresh` | rebuilds index | Re-read all transcripts; keeps sessions no longer on disk. |
+| `index rebuild` | rebuilds store | Rebuild from scratch; **drops sessions no longer on disk** (confirm, or `--force`). |
+| `index delete` | deletes      | Permanently remove sessions (`<id>…` or `--archived`). |
+| `report` | reads (+ indexes) | Build the dashboard from the store as a self-contained HTML file. |
+| `serve`  | reads (+ indexes) | Serve the dashboard as an interactive local web app (JSON API + SPA). |
+| `sync`   | reads (+ indexes) | Build a snapshot and upload it to the team Worker. `--watch` uploads on an interval. |
 | `status` | reads             | Show per-source counts, freshness, and archived totals. |
-| `reindex`| rebuilds index    | Re-read all transcripts; keeps archived sessions. `--force` wipes everything. |
-| `forget` | deletes           | Permanently remove sessions (`<id>…` or `--archived`). |
+| `run`    | writes + reads    | One long-running process: `index --watch` + `serve` + `sync --watch` against one store, under one shutdown handler, each leg supervised. |
 
 ---
 
@@ -161,9 +163,12 @@ are gone.
 
 - **Reconcile at write, read raw.** Consumers never reconcile.
 - **Per-session ownership.** Native sources win over importers; AgentsView only fills gaps.
-- **The index is disposable; the read model is not.** `reindex` rebuilds the index from disk; the
-  trusted rows (including archived sessions) are preserved.
-- **Nothing is uploaded except by `push`.** `report` is entirely local.
+- **The index is disposable; the read model is not.** `index refresh` rebuilds the index from disk;
+  the trusted rows (including archived sessions) are preserved. `index rebuild` wipes everything.
+- **Nothing is uploaded except by `sync`** (one-shot, `sync --watch`, or the upload leg of `run`).
+  `report` and `serve` are entirely local.
+- **Indexing is the only writer.** Under `run`, the index leg writes; `serve` and the upload leg only
+  read. SQLite WAL makes one writer + concurrent readers safe.
 
 ## Adding a source
 

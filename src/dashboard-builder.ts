@@ -30,6 +30,14 @@ export function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[]
   return source === "all" ? ["claude", "codex", "gemini", "cowork"] : [source];
 }
 
+/** One-line totals for a built dashboard, shared by the report and upload commands. */
+export function summaryLine(dash: Dashboard): string {
+  return (
+    `${dash.totals.sessions} sessions · ${dash.totals.messages} msgs · ` +
+    `${(dash.totals.total / 1e6).toFixed(2)}M tokens · $${dash.totals.cost.toFixed(2)} est.`
+  );
+}
+
 function diagnosticKey(entry: ParserDiagnostic): string {
   return `${entry.severity}\0${entry.code}\0${entry.message}`;
 }
