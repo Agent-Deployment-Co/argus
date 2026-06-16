@@ -187,7 +187,9 @@ describe("parseAllIncrementalDetailed", () => {
         },
       ]),
     ).toStartWith("Read transcripts and filled gaps from AgentsView —");
-    expect(syncStatsSummary(stats({ archived: 3 }))).toContain("3 kept after leaving disk");
+    // Archived sessions are working as intended, so the per-pass summary stays quiet about them
+    // (the count lives in `argus status`).
+    expect(syncStatsSummary(stats({ parsed: 2, archived: 3 }))).not.toContain("kept after leaving disk");
     expect(syncStatsSummary(stats({ fallback: true }))).toBe(
       "Read transcripts directly (couldn't open the local store)",
     );
