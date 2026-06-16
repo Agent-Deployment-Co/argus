@@ -105,7 +105,7 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);
   const dash = await buildDashboard(opts, log);
-  log(`Pushing snapshot for "${user}" (org: ${org ?? "from token"}) → ${opts.endpoint}`);
+  log(`Uploading snapshot for "${user}" (org: ${org ?? "from token"}) → ${opts.endpoint}`);
   log(`  ${summaryLine(dash)}`);
   return pushSnapshot(opts.endpoint, credentials, {
     schemaVersion: SCHEMA_VERSION,

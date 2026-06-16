@@ -233,19 +233,19 @@ async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
 async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
   const credentials = await resolveCredentials(opts.endpoint, log);
   if (!credentials) {
-    log("! Unauthenticated. Please run 'argus login' first to authenticate via Cloudflare Access.");
+    log("Not logged in. Run `argus login` first to upload to the team dashboard.");
     process.exit(1);
   }
 
   const res = await pushSnapshotForOpts(opts, credentials, log);
   if (res.ok) {
-    log(`✓ Pushed (${res.status}). ${res.body.slice(0, 200)}`);
+    log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
   } else if (res.isAccessChallenge) {
-    log(`✗ Push failed (${res.status}): Cloudflare Access login required or token has expired.`);
-    log(`  Please run 'argus login' to authenticate.`);
+    log(`✗ Upload failed (${res.status}): you're signed out or your session expired.`);
+    log("  Run `argus login`, then try again.");
     process.exit(1);
   } else {
-    log(`✗ Push failed (${res.status}): ${res.body.slice(0, 400)}`);
+    log(`✗ Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
     process.exit(1);
   }
 }
