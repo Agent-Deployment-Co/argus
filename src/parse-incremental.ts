@@ -57,6 +57,9 @@ export interface IncrementalParseOptions extends ParseOptions {
   agentsViewDatabasePath?: string;
   /** SQL-pushdown filters applied when reading the materialized model. */
   query?: ResolvedQuery;
+  /** Read the already-materialized store without reconciling/materializing first (no writes). Used by
+   *  the read-only legs of `argus run`, where the index leg is the sole writer. */
+  skipSync?: boolean;
 }
 
 const EMPTY_STATS: SyncStats = {
@@ -579,8 +582,9 @@ export async function parseAllIncrementalDetailed(
       ownsStore = true;
     }
     // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with
-    // optional SQL pushdown). `parseAll` (direct disk parse) is the test oracle.
-    await syncStore(opts, store, stats, diagnostics);
+    // optional SQL pushdown). `parseAll` (direct disk parse) is the test oracle. `skipSync` reads the
+    // store as-is without materializing — for the read-only legs of `argus run` (the index leg writes).
+    if (!opts.skipSync) await syncStore(opts, store, stats, diagnostics);
     return {
       parsed: await store.readResolved({
         sources: normalizeSources(opts.sources) as AgentSource[],
@@ -700,7 +704,8 @@ export function syncStatsSummary(
   const parts = [`${stats.parsed} new or changed`];
   if (stats.hits) parts.push(`${stats.hits} unchanged`);
   if (stats.imported) parts.push(`${stats.imported} from AgentsView`);
-  if (stats.archived) parts.push(`${stats.archived} kept after leaving disk`);
+  // Sessions retained after their transcripts aged off disk are working as intended; mentioning the
+  // count on every pass just invites concern. `argus status` is where that total belongs.
   const unreadable = stats.unstable + stats.failed;
   if (unreadable) parts.push(`${unreadable} couldn't be read`);
   return `${mode} — ${parts.join(", ")}`;
