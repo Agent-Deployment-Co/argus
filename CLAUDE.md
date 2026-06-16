@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Argus is a Bun + TypeScript CLI that audits local Claude Code and Codex usage. It reads
-local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`)
-and either emits a self-contained HTML dashboard (`report`, the default) or pushes a
-per-(org, user) snapshot to a private Cloudflare Worker backend (`push`). Nothing is uploaded
-during `report`; all parsing is local.
+Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
+local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, …) and
+presents them three ways: a self-contained HTML dashboard (`report`, the default), an interactive
+local web app (`serve` — the preferred UI; see `docs/web-app.md`), or a per-(org, user) snapshot
+pushed to a private Cloudflare Worker backend (`push`). Nothing is uploaded during `report`/`serve`;
+all parsing is local.
 
 The Worker + D1 dashboard backend lives in a **separate private repo**, `agentdeploymentco/argus-dash`.
 This repo is the public CLI only.
@@ -17,15 +18,20 @@ This repo is the public CLI only.
 
 ```bash
 bun run src/index.ts [report] [--open]   # build the dashboard (entry point)
+bun run src/index.ts serve --open        # run the interactive web app (needs build:web once)
+bun run dev:web                           # Vite dev server for web/ (live reload; proxies /api → 4242)
 bun test                                  # run all tests (uses bun:test, zero extra deps)
 bun test test/parse.test.ts               # run a single test file
 bun test -t "dedup"                       # run tests matching a name
-bun run typecheck                         # tsc --noEmit (also run in CI)
+bun run typecheck                         # tsc --noEmit for root src + web/ (also run in CI)
+bun run build:web                         # build web/ → dist/web
+bun run build                             # build the Node CLI (runs build:web first)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `bun x tsc --noEmit` then `bun test` on every push/PR.
-Development runs `src/index.ts` directly with Bun. The published npm `bin` is
-`dist/index.js`, built as a Node-targeted bundle with `bun run build`.
+CI (`.github/workflows/ci.yml`) typechecks the root and `web/`, runs `bun test`, and verifies
+`build:web` on every push/PR. Development runs `src/index.ts` directly with Bun. The published npm
+`bin` is `dist/index.js`, a Node-targeted bundle built with `bun run build`; the web app is built to
+`dist/web` and ships in the same package.
 
 ## User-facing messages
 
@@ -49,7 +55,10 @@ may use the internal vocabulary freely.
 
 The pipeline is a one-way data flow; each stage is its own module:
 
-`parse.ts` → `aggregate.ts` → (`report.ts` HTML | `push.ts` snapshot)
+`parse.ts` → `aggregate.ts` → (`report.ts` HTML | `serve.ts` web app | `push.ts` snapshot)
+
+`dashboard-builder.ts` wraps `parse → aggregate` as `buildDashboard()`, the single entry point the
+`report`/`push` commands and the web server all call.
 
 - **`parse.ts`** — Reads raw `.jsonl` transcripts into `MessageRecord[]` + session metadata.
   This is the most subtle file; accuracy lives here:
@@ -97,7 +106,18 @@ The pipeline is a one-way data flow; each stage is its own module:
 
 - **`report.ts`** / **`chartjs.ts`** — Render the `Dashboard` to one self-contained HTML file with Chart.js
   inlined from `src/vendor/` (works fully offline). `report.ts` also supports a team/Worker mode (user
-  selector) — that path is exercised by `argus-dash`, not the CLI.
+  selector) — that path is exercised by `argus-dash`, not the CLI. Untouched by the web app.
+
+- **`serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer` to
+  listen via `@hono/node-server`) exposing `GET /api/snapshot` (`{ dashboard, recommendations,
+  generatedAtMs }`, cached 30s in-memory, `?refresh` forces a re-read) and serving the React+Vite SPA
+  in `web/` from `dist/web` (SPA fallback to `index.html`). The frontend stack (React, Vite, TanStack
+  Router/Query/Table, Chart.js via react-chartjs-2) is **devDependencies only** — bundled into
+  `dist/web` at build, never installed by end users; only `hono`+`@hono/node-server` are runtime deps.
+  `web/src/types.ts` imports the CLI `Dashboard` types **type-only** from `src/`, so the API payload and
+  UI can't drift. The preferred UI; full design + rationale in **`docs/web-app.md`**. Note: `serve`
+  reads the warm store incrementally like `report` (not a cold re-parse) — the `log("Reading
+  transcripts…")` line is inherited from `report` and is a candidate to reword for the warm-store case.
 
 - **`push.ts`** — Detects user (git email → `$USER@host`) and org (email domain), POSTs the snapshot to
   `<endpoint>/ingest` with a bearer token. The server is authoritative on org/token validation.

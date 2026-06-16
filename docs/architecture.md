@@ -133,6 +133,8 @@ re-parsing, no in-memory filtering.** Query filters (`--since` / `--until` / `--
 are pushed down to SQL. Archived sessions are included, so reporting survives transcript retention.
 
 - `report` / `push` — read → `aggregate.ts` builds the dashboard → render HTML / JSON / push snapshot.
+- `serve` — the same read → `aggregate.ts` path, exposed as a JSON API and an interactive web app
+  (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
 - the bare `argus` overview — same read path, rendered to the terminal.
 
@@ -146,7 +148,8 @@ are gone.
 | Command  | Touches the store | What it does |
 |----------|-------------------|--------------|
 | `sync`   | writes            | Read new/changed transcripts; update the store. |
-| `report` | reads (+ syncs)   | Build the dashboard from the store. |
+| `report` | reads (+ syncs)   | Build the dashboard from the store as a self-contained HTML file. |
+| `serve`  | reads (+ syncs)   | Serve the dashboard as an interactive local web app (JSON API + SPA). |
 | `push`   | reads (+ syncs)   | Build a snapshot and push it to a team Worker. |
 | `status` | reads             | Show per-source counts, freshness, and archived totals. |
 | `reindex`| rebuilds index    | Re-read all transcripts; keeps archived sessions. `--force` wipes everything. |

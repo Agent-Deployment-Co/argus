@@ -16,5 +16,6 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - run: bun x tsc --noEmit
+      - run: bun run typecheck
       - run: bun test
+      - run: bun run build:web

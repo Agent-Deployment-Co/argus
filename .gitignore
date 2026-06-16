@@ -1,6 +1,8 @@
 node_modules/
 dist/
+data/
 *.html
+!web/index.html
 *.report.json
 argus-report.*
 .DS_Store
