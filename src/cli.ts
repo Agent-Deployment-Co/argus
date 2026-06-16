@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
 import {
@@ -23,9 +24,11 @@ import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION } from "./push.ts";
 import type { PushCredentials } from "./push.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import type { Dashboard } from "./aggregate.ts";
-import { buildDashboard, sourcesFor, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
+import { buildDashboard, buildDashboardDetailed, sourcesFor, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
+import { analyzeSession, cachedSessionAnalysis, formatSessionAnalysis } from "./session-analysis.ts";
 import { startServer } from "./serve.ts";
 import { openStore, rebuildStore } from "./store.ts";
+import type { MessageRecord, ParseResult, SessionRow } from "./types.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -444,6 +447,298 @@ async function runForget(opts: ForgetOptions, log: Log): Promise<void> {
   }
 }
 
+interface AnalyzeOptions extends BuildDashboardOptions {
+  session?: string;
+  listSessions: boolean;
+  allColumns: boolean;
+  unanalyzed: boolean;
+  analysisModel?: string;
+  refreshAnalysis: boolean;
+  analysisLlm: boolean;
+  json: boolean;
+}
+
+function compact(value: string, width: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (width <= 0) return "";
+  if (normalized.length <= width) return normalized;
+  if (width <= 3) return ".".repeat(width);
+  return `${normalized.slice(0, width - 3)}...`;
+}
+
+function sessionDate(row: SessionRow): string {
+  if (!row.start) return "(unknown)";
+  return new Date(row.start).toISOString().slice(0, 16).replace("T", " ");
+}
+
+function displaySessionId(sessionId: string): string {
+  const firstDash = sessionId.indexOf("-");
+  if (firstDash < 0) return sessionId;
+  const secondDash = sessionId.indexOf("-", firstDash + 1);
+  if (secondDash < 0) return sessionId;
+  return `${sessionId.slice(0, secondDash + 1)}...`;
+}
+
+interface SessionListColumn {
+  label: string;
+  minWidth: number;
+  weight?: number;
+  align?: "left" | "right";
+}
+
+const FALLBACK_TERMINAL_COLUMNS = 120;
+const SESSION_LIST_TERMINAL_RATIO = 0.75;
+
+function terminalColumns(): number {
+  const columns = process.stdout.columns;
+  return Number.isFinite(columns) && columns >= 40 ? Math.floor(columns) : FALLBACK_TERMINAL_COLUMNS;
+}
+
+function sessionListTableColumns(): number {
+  return Math.max(40, Math.floor(terminalColumns() * SESSION_LIST_TERMINAL_RATIO));
+}
+
+function sessionListColumns(allColumns: boolean): SessionListColumn[] {
+  const columns: SessionListColumn[] = [
+    { label: "Title", minWidth: 12, weight: 3 },
+    { label: "Messages", minWidth: 8, align: "right" },
+    { label: "Session", minWidth: 10, weight: 2 },
+    { label: "Started", minWidth: 16 },
+  ];
+  if (allColumns) {
+    columns.push(
+      { label: "Project", minWidth: 8, weight: 1 },
+      { label: "Log", minWidth: 8, weight: 4 },
+    );
+  }
+  return columns;
+}
+
+function sessionListWidths(columns: SessionListColumn[], terminalWidth: number): number[] {
+  const separatorWidth = Math.max(0, columns.length - 1) * 2;
+  const targetWidth = Math.max(0, terminalWidth - separatorWidth);
+  const widths = columns.map((column) => Math.max(column.minWidth, column.label.length));
+  let extra = targetWidth - widths.reduce((sum, width) => sum + width, 0);
+  const flexible = columns
+    .map((column, index) => ({ index, weight: column.weight ?? 0 }))
+    .filter((column) => column.weight > 0);
+
+  if (extra < 0) {
+    let deficit = -extra;
+    const shrinkable = [...flexible].sort((a, b) => b.weight - a.weight);
+    while (deficit > 0) {
+      const column = shrinkable.find((candidate) => widths[candidate.index]! > columns[candidate.index]!.label.length);
+      if (!column) break;
+      widths[column.index]!--;
+      deficit--;
+    }
+    return widths;
+  }
+
+  if (extra === 0) return widths;
+  if (!flexible.length) return widths;
+
+  const totalWeight = flexible.reduce((sum, column) => sum + column.weight, 0);
+  let used = 0;
+  for (const column of flexible) {
+    const added = Math.floor((extra * column.weight) / totalWeight);
+    widths[column.index]! += added;
+    used += added;
+  }
+  extra -= used;
+  for (let i = 0; extra > 0; i++, extra--) {
+    widths[flexible[i % flexible.length]!.index]!++;
+  }
+  return widths;
+}
+
+function renderSessionListCell(value: string, width: number, align: "left" | "right" = "left"): string {
+  const text = compact(value, width);
+  return align === "right" ? text.padStart(width) : text.padEnd(width);
+}
+
+function formatSessionList(
+  rows: SessionRow[],
+  limit = 40,
+  titles = new Map<string, string>(),
+  logPaths = new Map<string, string>(),
+  allColumns = false,
+): string {
+  if (!rows.length) return "No sessions matched the selected filters.\n";
+  const shown = rows.slice(0, limit);
+  const columns = sessionListColumns(allColumns);
+  const widths = sessionListWidths(columns, sessionListTableColumns());
+  const renderRow = (values: string[], header = false): string =>
+    values
+      .map((value, index) => renderSessionListCell(value, widths[index]!, header ? "left" : columns[index]?.align))
+      .join("  ");
+  const lines = [
+    "Available sessions for analysis",
+    "",
+    renderRow(columns.map((column) => column.label), true),
+  ];
+  for (let i = 0; i < shown.length; i++) {
+    const row = shown[i]!;
+    const prefix = titles.has(row.sessionId) ? "✓ " : "· ";
+    const title = prefix + (titles.get(row.sessionId) || row.firstPrompt);
+    const values = [
+      title,
+      String(row.messages),
+      displaySessionId(row.sessionId),
+      sessionDate(row),
+    ];
+    if (allColumns) {
+      values.push(row.project, logPaths.get(row.sessionId) ?? "");
+    }
+    lines.push(renderRow(values));
+  }
+  if (rows.length > shown.length) lines.push(``, `Showing ${shown.length} of ${rows.length} sessions. Narrow with --source, --since, --until, or --project.`);
+  return `${lines.join("\n")}\n`;
+}
+
+function sessionSearchText(row: SessionRow): string {
+  return [row.sessionId, row.project, row.firstPrompt, row.summary].join("\n").toLowerCase();
+}
+
+function resolveSession(rows: SessionRow[], selector: string): { row?: SessionRow; error?: string; matches?: SessionRow[] } {
+  const value = selector.trim();
+  const exact = rows.find((row) => row.sessionId === value);
+  if (exact) return { row: exact };
+  const needle = value.toLowerCase();
+  const matches = rows.filter((row) => sessionSearchText(row).includes(needle));
+  if (matches.length === 1) return { row: matches[0] };
+  if (!matches.length) return { error: `No session matched "${selector}".` };
+  return {
+    error: `Session selector "${selector}" matched ${matches.length} sessions. Use a more specific id or substring.`,
+    matches,
+  };
+}
+
+function messagesForSession(parseResult: ParseResult, sessionId: string): MessageRecord[] {
+  return parseResult.messages.filter((message) => message.sessionId === sessionId);
+}
+
+function cachedAnalysisTitles(rows: SessionRow[], parseResult: ParseResult): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const row of rows) {
+    const analysis = cachedSessionAnalysis({
+      row,
+      messages: messagesForSession(parseResult, row.sessionId),
+    });
+    if (analysis?.title) titles.set(row.sessionId, analysis.title);
+  }
+  return titles;
+}
+
+function sessionLogPaths(rows: SessionRow[], parseResult: ParseResult): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const row of rows) {
+    const filePath = parseResult.sessions.get(row.sessionId)?.filePath;
+    if (filePath) paths.set(row.sessionId, filePath);
+  }
+  return paths;
+}
+
+function sessionsForJsonList(
+  rows: SessionRow[],
+  titles: Map<string, string>,
+  logPaths: Map<string, string>,
+): Array<SessionRow & { analysisTitle?: string; sessionLogPath: string }> {
+  return rows.map((row) => {
+    const title = titles.get(row.sessionId);
+    return {
+      ...row,
+      analysisTitle: title || row.firstPrompt,
+      sessionLogPath: logPaths.get(row.sessionId) ?? "",
+    };
+  });
+}
+
+async function promptForSession(
+  rows: SessionRow[],
+  titles: Map<string, string>,
+  logPaths: Map<string, string>,
+  allColumns: boolean,
+  log: Log,
+): Promise<SessionRow | undefined> {
+  process.stdout.write(formatSessionList(rows, 20, titles, logPaths, allColumns));
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await rl.question("Select a session id or unique substring: ");
+    if (!answer.trim()) return undefined;
+    const selected = resolveSession(rows, answer);
+    if (selected.error) {
+      log(selected.error);
+      if (selected.matches?.length) process.stdout.write(formatSessionList(selected.matches, 10, titles, logPaths, allColumns));
+      return undefined;
+    }
+    return selected.row;
+  } finally {
+    rl.close();
+  }
+}
+
+async function runAnalyze(opts: AnalyzeOptions, log: Log): Promise<void> {
+  const { dash, parseResult } = await buildDashboardDetailed(opts, log);
+  const titles = cachedAnalysisTitles(dash.sessions, parseResult);
+  const logPaths = sessionLogPaths(dash.sessions, parseResult);
+  const sessions = opts.unanalyzed
+    ? dash.sessions.filter((row) => !titles.has(row.sessionId))
+    : dash.sessions;
+  if (opts.listSessions) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(sessionsForJsonList(sessions, titles, logPaths), null, 2) + "\n");
+    } else {
+      process.stdout.write(formatSessionList(sessions, 40, titles, logPaths, opts.allColumns));
+    }
+    return;
+  }
+
+  if (!sessions.length) {
+    log(opts.unanalyzed ? "All sessions have been analyzed." : "No sessions matched the selected filters.");
+    process.exit(opts.unanalyzed ? 0 : 1);
+  }
+
+  let row: SessionRow | undefined;
+  if (opts.session) {
+    const selected = resolveSession(sessions, opts.session);
+    if (selected.error) {
+      log(selected.error);
+      if (selected.matches?.length) process.stdout.write(formatSessionList(selected.matches, 10, titles, logPaths, opts.allColumns));
+      process.exit(2);
+    }
+    row = selected.row;
+  } else if (process.stdin.isTTY) {
+    row = await promptForSession(sessions, titles, logPaths, opts.allColumns, log);
+  } else {
+    process.stdout.write(formatSessionList(sessions, 40, titles, logPaths, opts.allColumns));
+    log("Pass --session <id|substring> to analyze a session in noninteractive mode.");
+    process.exit(2);
+  }
+
+  if (!row) {
+    log("No session selected.");
+    process.exit(2);
+  }
+
+  const result = analyzeSession({
+    row,
+    meta: parseResult.sessions.get(row.sessionId),
+    messages: messagesForSession(parseResult, row.sessionId),
+    model: opts.analysisModel ?? opts.summarizeModel,
+    refresh: opts.refreshAnalysis,
+    useLlm: opts.analysisLlm,
+    log,
+  });
+  if (result.fromCache) log("Using cached session analysis.");
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ fromCache: result.fromCache, analysis: result.analysis }, null, 2) + "\n");
+  } else {
+    process.stdout.write(formatSessionAnalysis(result.analysis, result.fromCache));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CLI definition (citty). Each subcommand declares its own flags; --help scopes
 // to that subcommand automatically and flag types flow into the run handlers.
@@ -593,6 +888,31 @@ const push = defineCommand({
   run: handler((args) => runPush({ ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org }, log)),
 });
 
+const analyze = defineCommand({
+  meta: { name: "analyze", description: "list, select, and deep-analyze one session" },
+  args: {
+    session: { type: "positional", required: false, description: "session id or unique substring to analyze" },
+    ...buildArgs,
+    list: { type: "boolean", alias: "l", default: false, description: "List available sessions" },
+    "all-columns": { type: "boolean", default: false, description: "Show project and log path in session lists" },
+    unanalyzed: { type: "boolean", default: false, description: "Only show or select sessions without a cached analysis" },
+    "analysis-model": { type: "string", description: "Model for LLM session analysis (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
+    "refresh-analysis": { type: "boolean", default: false, description: "Ignore cached analysis and regenerate it" },
+    llm: { type: "boolean", default: true, description: "Use LLM analysis via headless 'claude -p' (cached)", negativeDescription: "Use local heuristic analysis only" },
+    json: { type: "boolean", default: false, description: "Write the selected analysis as JSON" },
+  },
+  run: handler((args) => runAnalyze({
+    ...buildOptions(args),
+    session: args._[0],
+    listSessions: args.list,
+    allColumns: args["all-columns"],
+    unanalyzed: args.unanalyzed,
+    analysisModel: args["analysis-model"],
+    refreshAnalysis: args["refresh-analysis"],
+    analysisLlm: args.llm,
+    json: args.json,
+  }, log)),
+});
 
 const main = defineCommand({
   meta: {
@@ -603,7 +923,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus forget` removes them.
-  subCommands: { report, serve, sync, reindex, status, forget, login, push },
+  subCommands: { report, serve, sync, reindex, status, forget, login, push, analyze },
 });
 
 async function run() {

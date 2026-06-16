@@ -9,7 +9,7 @@ import { syncStatsSummary } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
 import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
-import type { SessionMeta } from "./types.ts";
+import type { ParseResult, SessionMeta } from "./types.ts";
 
 export type Log = (s: string) => void;
 
@@ -55,8 +55,13 @@ function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
     .slice(0, 5);
 }
 
-/** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
-export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
+/** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. Also returns
+ *  the raw ParseResult so callers that need per-session messages (e.g. `argus analyze`) don't
+ *  have to re-open the store. */
+export async function buildDashboardDetailed(
+  opts: BuildDashboardOptions,
+  log: Log,
+): Promise<{ dash: Dashboard; parseResult: ParseResult }> {
   log("Reading transcripts…");
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
@@ -123,5 +128,10 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
 
   const dash = aggregate(parseResult, plugins, summaries);
   dash.generatedAtMs = Date.now();
-  return dash;
+  return { dash, parseResult };
+}
+
+/** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
+export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
+  return (await buildDashboardDetailed(opts, log)).dash;
 }
