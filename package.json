@@ -13,7 +13,7 @@
     "start": "bun run src/index.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "test": "bun test",
-    "typecheck": "bun x tsc --noEmit && bun x tsc -p web --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "build": "bun run build:web && bun build src/index.ts --target=node --external sqlite3 --outfile=dist/index.js && mkdir -p dist/vendor && cp src/vendor/* dist/vendor/ && tail -n +2 dist/index.js > dist/index.temp && echo '#!/usr/bin/env node' | cat - dist/index.temp > dist/index.js && rm dist/index.temp && chmod +x dist/index.js"
@@ -40,6 +40,7 @@
     "react": "^19.2.7",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.7",
+    "typescript": "^5.9.3",
     "vite": "^8.0.16"
   }
 }
