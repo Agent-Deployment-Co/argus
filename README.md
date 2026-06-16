@@ -82,7 +82,6 @@ in the background; it does not re-parse every transcript on each page load.
 | `--open` | Open the generated report (macOS) |
 | `--json` | Write the aggregate data as JSON instead of HTML |
 | `--console` | Print a compact overview in your terminal instead of writing a file |
-| `--no-cache` | Parse transcripts directly without the incremental fragment cache |
 | `--agentsview` | Import compatible AgentsView data when available (default) |
 | `--no-agentsview` | Disable AgentsView import |
 | `--agentsview-db <path>` | Read AgentsView data from a specific SQLite database path |
@@ -106,9 +105,6 @@ npx @agentdeploymentco/argus report --summarize --open
 
 # Raw aggregate data
 npx @agentdeploymentco/argus report --json -o argus.json
-
-# Bypass the local fragment cache for one run
-npx @agentdeploymentco/argus report --no-cache
 
 # Control optional AgentsView import
 npx @agentdeploymentco/argus report --no-agentsview
