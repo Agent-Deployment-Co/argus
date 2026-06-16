@@ -131,9 +131,9 @@ The pipeline is a one-way data flow; each stage is its own module:
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`report`, `serve`,
   `sync`, `reindex`, `status`, `forget`, `login`, `push`) with [citty](https://github.com/unjs/citty):
   each declares its own flags, `--help` scopes per subcommand, and flag types flow into the handlers.
-  A bare `argus` (no args) prints the terminal overview; everything else — including bare flags like
-  `argus --open` — routes to the default `report` command. Holds the `run*` handlers that wire flags
-  into `dashboard-builder.ts` and the pipeline.
+  There is no default command: a bare `argus` (no subcommand) prints the usage/help. The terminal
+  overview is `argus report --console`. Holds the `run*` handlers that wire flags into
+  `dashboard-builder.ts` and the pipeline.
 
 ## The wire contract (important)
 

@@ -28,7 +28,7 @@ development and tests, but the installed npm executable runs under Node.
 Print a compact overview in your terminal:
 
 ```bash
-npx @agentdeploymentco/argus
+npx @agentdeploymentco/argus report --console
 ```
 
 Open the interactive dashboard in your browser (recommended):
