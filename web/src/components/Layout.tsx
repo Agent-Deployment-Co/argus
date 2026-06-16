@@ -1,5 +1,4 @@
 import { Link, Outlet } from "@tanstack/react-router";
-import { dt } from "../lib/format";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
 import { useTheme, type Theme } from "../lib/theme";
 
@@ -44,10 +43,6 @@ export function Layout() {
   const snap = query.data;
   const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
 
-  const subtitle = snap
-    ? `Claude Code, Codex, and Gemini CLI usage · ${snap.dashboard.range.start} → ${snap.dashboard.range.end} · generated ${dt(snap.generatedAtMs)}`
-    : "Claude Code, Codex, and Gemini CLI usage";
-
   return (
     <>
       <header>
@@ -56,33 +51,30 @@ export function Layout() {
             <BrandMark />
             <h1>Argus</h1>
           </div>
-          <span className="sub">{subtitle}</span>
+          <nav className="tabs" role="tablist" aria-label="Dashboard sections">
+            {TABS.map((t) => {
+              const disabled = t.healthOnly && !hasHealth;
+              return (
+                <Link
+                  key={t.to}
+                  to={t.to}
+                  className="tab"
+                  role="tab"
+                  activeOptions={{ exact: t.to === "/" }}
+                  activeProps={{ "aria-selected": "true" }}
+                  aria-disabled={disabled || undefined}
+                  title={disabled ? "No Claude sessions — friction signals require native Claude transcripts" : undefined}
+                >
+                  {t.label}
+                </Link>
+              );
+            })}
+          </nav>
           <div className="header-controls">
             <ThemeSwitcher />
           </div>
         </div>
       </header>
-      <nav className="tabs" role="tablist" aria-label="Dashboard sections">
-        <div className="tabs-inner">
-          {TABS.map((t) => {
-            const disabled = t.healthOnly && !hasHealth;
-            return (
-              <Link
-                key={t.to}
-                to={t.to}
-                className="tab"
-                role="tab"
-                activeOptions={{ exact: t.to === "/" }}
-                activeProps={{ "aria-selected": "true" }}
-                aria-disabled={disabled || undefined}
-                title={disabled ? "No Claude sessions — friction signals require native Claude transcripts" : undefined}
-              >
-                {t.label}
-              </Link>
-            );
-          })}
-        </div>
-      </nav>
       <main>
         {query.isPending ? (
           <div className="center-state">Reading transcripts…</div>
