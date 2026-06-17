@@ -4,6 +4,7 @@
 // process) on a free local port and exposes a tray menu whose items map onto the CLI's command
 // surface. "Open dashboard" opens the user's default browser at the served URL — the dashboard is
 // the existing web app, not an embedded webview.
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::{
@@ -12,18 +13,28 @@ use tauri::{
     AppHandle, Manager, Wry,
 };
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 /// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
-/// and the tray menu items we update as that state changes.
+/// the tray menu items we update as that state changes, and a flag marking a stop as intentional
+/// (so a crash can be told apart from a user-requested Stop / Quit).
 struct AppState {
     port: u16,
     child: Mutex<Option<CommandChild>>,
+    stopping: AtomicBool,
     status_item: MenuItem<Wry>,
     start_item: MenuItem<Wry>,
     stop_item: MenuItem<Wry>,
+}
+
+/// Show a native notification. Best-effort: a failure to notify is itself only logged.
+fn notify(app: &AppHandle, title: &str, body: &str) {
+    if let Err(err) = app.notification().builder().title(title).body(body).show() {
+        log::warn!("could not show notification: {err}");
+    }
 }
 
 /// Ask the OS for an unused localhost port by binding to :0 and reading back the assignment.
@@ -84,8 +95,19 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
                 }
                 CommandEvent::Terminated(payload) => {
                     log::warn!("[argus] sidecar exited: {:?}", payload.code);
-                    *handle.state::<AppState>().child.lock().unwrap() = None;
+                    let state = handle.state::<AppState>();
+                    *state.child.lock().unwrap() = None;
+                    // Tell a crash apart from a user-requested Stop/Quit.
+                    let intentional = state.stopping.swap(false, Ordering::SeqCst);
                     refresh_status(&handle);
+                    if !intentional {
+                        let _ = state.status_item.set_text("Argus stopped unexpectedly");
+                        notify(
+                            &handle,
+                            "Argus stopped",
+                            "The background service exited unexpectedly. Use Start to run it again.",
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -105,7 +127,17 @@ fn start(app: &AppHandle) {
         }
         match spawn_sidecar(app) {
             Ok(child) => *slot = Some(child),
-            Err(err) => log::error!("{err}"),
+            Err(err) => {
+                log::error!("{err}");
+                drop(slot);
+                let _ = state.status_item.set_text("Argus couldn't start");
+                notify(
+                    app,
+                    "Argus couldn't start",
+                    "The background service failed to launch. Check Console for details.",
+                );
+                return;
+            }
         }
     }
     refresh_status(app);
@@ -114,7 +146,11 @@ fn start(app: &AppHandle) {
 /// Stop the sidecar if running. `argus run` installs its own shutdown handler; killing the process
 /// ends all three legs.
 fn stop(app: &AppHandle) {
-    if let Some(child) = app.state::<AppState>().child.lock().unwrap().take() {
+    let state = app.state::<AppState>();
+    let child = state.child.lock().unwrap().take();
+    if let Some(child) = child {
+        // Mark the impending exit as intentional so the Terminated handler doesn't flag a crash.
+        state.stopping.store(true, Ordering::SeqCst);
         if let Err(err) = child.kill() {
             log::warn!("stopping the argus sidecar: {err}");
         }
@@ -167,6 +203,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -215,6 +252,7 @@ pub fn run() {
             app.manage(AppState {
                 port: pick_free_port(),
                 child: Mutex::new(None),
+                stopping: AtomicBool::new(false),
                 status_item: status,
                 start_item,
                 stop_item,
