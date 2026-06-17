@@ -14,8 +14,11 @@ if [ "${1:-}" = "--build" ]; then
   bun run build:compile
 fi
 
-if [ ! -x dist/argus ]; then
-  echo "dist/argus not found — run 'bun run build:compile' first (or pass --build)." >&2
+# `bun build --compile` writes dist/argus on Unix and dist/argus.exe on Windows.
+binsrc="dist/argus"
+[ -f "dist/argus.exe" ] && binsrc="dist/argus.exe"
+if [ ! -f "$binsrc" ]; then
+  echo "$binsrc not found — run 'bun run build:compile' first (or pass --build)." >&2
   exit 1
 fi
 
@@ -29,7 +32,7 @@ ext=""
 case "$triple" in *windows*) ext=".exe" ;; esac
 
 mkdir -p desktop/src-tauri/binaries
-cp dist/argus "desktop/src-tauri/binaries/argus-${triple}${ext}"
+cp "$binsrc" "desktop/src-tauri/binaries/argus-${triple}${ext}"
 
 rm -rf desktop/src-tauri/web
 cp -R dist/web desktop/src-tauri/web
