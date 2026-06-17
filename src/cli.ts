@@ -437,7 +437,10 @@ type TaskArgs = {
   "task-command"?: string;
 };
 
-function taskExtractionOptions(args: TaskArgs): TaskExtractionOptions {
+function taskExtractionOptions(
+  args: TaskArgs,
+  debugLog?: (message: string) => void,
+): TaskExtractionOptions {
   const options: TaskExtractionOptions = {
     provider: toTaskProvider(args["task-provider"]),
   };
@@ -445,6 +448,7 @@ function taskExtractionOptions(args: TaskArgs): TaskExtractionOptions {
   if (args["task-prompt"]) options.prompt = args["task-prompt"];
   if (args["task-prompt-file"]) options.promptFile = args["task-prompt-file"];
   if (args["task-command"]) options.command = args["task-command"];
+  if (debugLog) options.debugLog = debugLog;
   return options;
 }
 
@@ -572,20 +576,24 @@ const runCmd = defineCommand({
     "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
     "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
+    debug: { type: "boolean", default: false, description: "Print task extraction debug logs to stdout" },
   },
-  run: handler((args) =>
-    runRun(
+  run: handler((args) => {
+    const debugLog = args.debug
+      ? (message: string) => process.stdout.write(message + "\n")
+      : undefined;
+    return runRun(
       {
         ...syncOptions(args),
         port: Number(args.port) || DEFAULT_PORT,
         indexIntervalMin: Number(args["index-interval"]) || 5,
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
-        taskExtraction: taskExtractionOptions(args),
+        taskExtraction: taskExtractionOptions(args, debugLog),
       },
       log,
-    ),
-  ),
+    );
+  }),
 });
 
 const main = defineCommand({

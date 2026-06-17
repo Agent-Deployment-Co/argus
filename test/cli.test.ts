@@ -155,6 +155,7 @@ describe("run command", () => {
     expect(status).toBe(0);
     expect(out).toContain("index-interval");
     expect(out).toContain("sync-interval");
+    expect(out).toContain("debug");
   });
 
   test("starts all legs and shuts down cleanly on SIGTERM", async () => {
