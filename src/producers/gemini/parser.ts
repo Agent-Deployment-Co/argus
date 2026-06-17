@@ -51,7 +51,8 @@ export const GEMINI_AUXILIARY_ROOT_ID = "gemini-config";
 export const GEMINI_ROOT_ID = GEMINI_TRANSCRIPT_ROOT_ID;
 export const GEMINI_PROJECTS_ROOT_ID = GEMINI_AUXILIARY_ROOT_ID;
 // v2: emits filtered user task candidates for explicit per-session task extraction.
-export const GEMINI_TRANSCRIPT_PARSER_VERSION = "2";
+// v3: excludes Argus task-extraction prompts from task candidates.
+export const GEMINI_TRANSCRIPT_PARSER_VERSION = "3";
 export const GEMINI_AUXILIARY_PARSER_VERSION = "1";
 
 export const GEMINI_TRANSCRIPT_PARSER: ParserDescriptor = {

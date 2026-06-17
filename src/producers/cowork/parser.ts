@@ -41,7 +41,8 @@ import {
 export const COWORK_SESSIONS_ROOT_ID = "cowork-sessions";
 // v1: initial implementation.
 // v2: emits filtered user task candidates for explicit per-session task extraction.
-export const COWORK_TRANSCRIPT_PARSER_VERSION = "2";
+// v3: excludes Argus task-extraction prompts from task candidates.
+export const COWORK_TRANSCRIPT_PARSER_VERSION = "3";
 export const COWORK_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "cowork-jsonl",
   source: "cowork",

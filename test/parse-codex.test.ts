@@ -58,7 +58,7 @@ describe("Codex fragment discovery", () => {
     expect(createCodexTranscriptParserAdapter().parser).toEqual({
       name: "codex-jsonl",
       source: "codex",
-      version: "4",
+      version: "5",
     });
   });
 });

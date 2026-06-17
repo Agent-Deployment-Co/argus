@@ -49,7 +49,8 @@ export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
 // v5: emits filtered user task candidates for explicit per-session task extraction.
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "5";
+// v6: excludes Argus task-extraction prompts from task candidates.
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "6";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",

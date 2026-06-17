@@ -31,10 +31,29 @@ export function isTurnAbortedText(text: string): boolean {
   );
 }
 
+export function isTaskExtractionPromptText(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (
+    trimmed.startsWith(
+      "You identify the actual tasks a user was trying to accomplish in a coding-agent session.",
+    ) &&
+    trimmed.includes("Filtered user messages:")
+  ) {
+    return true;
+  }
+
+  const marker = "Filtered user messages:";
+  const markerIndex = trimmed.indexOf(marker);
+  if (markerIndex < 0) return false;
+  const payload = trimmed.slice(markerIndex + marker.length);
+  return /"sessionId"\s*:\s*"/.test(payload) && /"messages"\s*:\s*\[/.test(payload);
+}
+
 export function shouldSkipTaskCandidateText(text: string, nextText?: string): boolean {
   return (
     isAgentsInstructionsText(text) ||
     isTurnAbortedText(text) ||
+    isTaskExtractionPromptText(text) ||
     (nextText ? isTurnAbortedText(nextText) : false)
   );
 }
