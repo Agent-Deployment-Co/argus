@@ -10,7 +10,6 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "allowJs": true,
     "noEmit": true
   },
   "include": ["src", "test", "scripts"]

@@ -12,3 +12,4 @@ desktop/src-tauri/target/
 desktop/src-tauri/binaries/
 desktop/src-tauri/gen/
 desktop/src-tauri/web/
+*.bun-build
