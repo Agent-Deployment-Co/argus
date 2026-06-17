@@ -1,5 +1,5 @@
 import { Link, Outlet } from "@tanstack/react-router";
-import { Activity, Folder, HeartPulse, Moon, PanelLeftClose, PanelLeftOpen, Sun, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Sun, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
 import { useTheme } from "../lib/theme";
@@ -57,6 +57,7 @@ function ThemeToggle({ collapsed }: { collapsed: boolean }) {
 
 const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }[] = [
   { to: "/", label: "Activity", icon: Activity },
+  { to: "/sessions", label: "Sessions", icon: MessagesSquare },
   { to: "/projects", label: "Projects", icon: Folder },
   { to: "/tools", label: "Tools", icon: Wrench },
   { to: "/health", label: "Health", icon: HeartPulse, healthOnly: true },
