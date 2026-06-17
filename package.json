@@ -17,7 +17,10 @@
     "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "build": "bun run build:web && bun build src/cli.ts --target=node --external sqlite3 --outfile=dist/cli.js && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js"
+    "build": "bun run build:web && bun build src/cli.ts --target=node --external sqlite3 --outfile=dist/cli.js && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js",
+    "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
+    "desktop:dev": "bun run desktop:stage && cd desktop && bunx tauri dev",
+    "desktop:build": "bun run desktop:stage && cd desktop && bunx tauri build"
   },
   "engines": {
     "node": ">=20.17"
@@ -32,6 +35,7 @@
     "@tanstack/react-query": "^5.101.0",
     "@tanstack/react-router": "^1.170.15",
     "@tanstack/react-table": "^8.21.3",
+    "@tauri-apps/cli": "^2",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
