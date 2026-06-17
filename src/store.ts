@@ -1199,8 +1199,25 @@ export class SqliteStore implements Store {
       for (const row of sessionRows) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
     }
 
-    // Tool-result totals are unfiltered by date/project but scoped to the requested sources.
     const sourceJoin = buildResolvedFilters(query, "s.source");
+    const taskRows = await all<{ session_id: string; task_json: string }>(
+      this.db,
+      `SELECT t.session_id, t.task_json
+       FROM resolved_tasks t
+       JOIN resolved_sessions s ON s.session_id = t.session_id
+       ${sourceJoin.sourceWhere}
+       ORDER BY t.session_id, t.ts IS NULL, t.ts, t.seq`,
+      sourceJoin.sourceParams,
+    );
+    const tasksBySession = new Map<string, TaskFact[]>();
+    for (const row of taskRows) {
+      if (!sessions.has(row.session_id)) continue;
+      const tasks = tasksBySession.get(row.session_id) ?? [];
+      tasks.push(JSON.parse(row.task_json) as TaskFact);
+      tasksBySession.set(row.session_id, tasks);
+    }
+
+    // Tool-result totals are unfiltered by date/project but scoped to the requested sources.
     const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
       this.db,
       `SELECT tr.name AS name, SUM(tr.count) AS count, SUM(tr.approx_tokens) AS approx_tokens
@@ -1213,7 +1230,7 @@ export class SqliteStore implements Store {
     const toolResults = new Map<string, ToolResultStat>();
     for (const row of toolRows) toolResults.set(row.name, { count: row.count, approxTokens: row.approx_tokens });
 
-    return { messages, sessions, toolResults };
+    return { messages, sessions, toolResults, tasksBySession };
   }
 
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]> {

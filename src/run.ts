@@ -8,12 +8,14 @@ import type { BuildDashboardOptions, Log } from "./dashboard-builder.ts";
 import { startServer } from "./serve.ts";
 import { watchIndex, watchSync } from "./watch.ts";
 import type { SyncOptions } from "./cli-options.ts";
+import type { TaskExtractionOptions } from "./task-extraction.ts";
 
 export interface RunOptions extends SyncOptions {
   port: number;
   indexIntervalMin: number;
   syncIntervalMin: number;
   endpoint: string;
+  taskExtraction: TaskExtractionOptions;
 }
 
 /**
@@ -31,12 +33,23 @@ export function assertHomeResolved(log: Log): void {
 }
 
 /** The web-server leg: run the server until shutdown, restarting with backoff if it errors. */
-async function serveLeg(opts: { port: number; build: BuildDashboardOptions }, log: Log, signal: AbortSignal): Promise<void> {
+async function serveLeg(
+  opts: { port: number; build: BuildDashboardOptions; taskExtraction: TaskExtractionOptions },
+  log: Log,
+  signal: AbortSignal,
+): Promise<void> {
   await superviseLoop(
     "serving",
     async (sig) => {
       const handle = await startServer(
-        { port: opts.port, open: false, build: opts.build, installSignalHandlers: false, signal: sig },
+        {
+          port: opts.port,
+          open: false,
+          build: opts.build,
+          taskExtraction: opts.taskExtraction,
+          installSignalHandlers: false,
+          signal: sig,
+        },
         log,
       );
       await handle.closed;
@@ -78,7 +91,7 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
     // never stops serving. The sync leg stays dormant (rather than failing) when not logged in.
     await Promise.all([
       watchIndex({ ...src, intervalMin: opts.indexIntervalMin }, log, ac.signal),
-      serveLeg({ port: opts.port, build }, log, ac.signal),
+      serveLeg({ port: opts.port, build, taskExtraction: opts.taskExtraction }, log, ac.signal),
       watchSync(
         { ...build, endpoint: opts.endpoint, intervalMin: opts.syncIntervalMin, onUnauthenticated: "dormant" },
         log,

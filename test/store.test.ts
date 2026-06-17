@@ -687,6 +687,9 @@ describe("SQLite store", () => {
       expect(await store.replaceSessionTasks("codex:task-session", [replacement])).toBe(true);
       expect(await store.replaceSessionTasks("codex:missing", [replacement])).toBe(false);
       expect(await store.readSessionTasks("codex:task-session")).toEqual([replacement]);
+      expect((await store.readResolved()).tasksBySession?.get("codex:task-session")).toEqual([
+        replacement,
+      ]);
     } finally {
       await store.close();
     }

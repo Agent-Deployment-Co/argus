@@ -410,6 +410,7 @@ export function aggregate(
       firstPrompt: meta?.firstPrompt || "",
       summary: summaries.get(sid) || "",
       health: sessionHealth(msgs, meta?.friction),
+      tasks: parsed.tasksBySession?.get(sid) ?? [],
     });
   }
   sessionRows.sort((a, b) => b.start - a.start);

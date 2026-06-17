@@ -8,6 +8,7 @@ import type {
   SessionRow as SchemaSessionRow,
   Usage,
 } from "@agentdeploymentco/argus-schema";
+import type { TaskFact } from "./store-contract.ts";
 import type { ToolCategory } from "./tool-categories.ts";
 export type {
   DayBucket,
@@ -23,6 +24,8 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
+  /** CLI-only: task facts generated for this session via `argus facts --extract`. */
+  tasks?: TaskFact[];
 };
 
 /**
@@ -204,6 +207,8 @@ export interface ParseResult {
   sessions: Map<string, SessionMeta>;
   /** full tool name -> result-token stats */
   toolResults: Map<string, ToolResultStat>;
+  /** sessionId -> generated tasks */
+  tasksBySession?: Map<string, TaskFact[]>;
 }
 
 export interface PluginInfo {
