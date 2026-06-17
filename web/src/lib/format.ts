@@ -17,6 +17,27 @@ export const dur = (ms: number): string => {
 
 export const dt = (ms: number): string => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 
+/** Full local date + am/pm time, e.g. "2026-06-16 1:34 PM". */
+export const dtAmPm = (ms: number): string => {
+  const d = new Date(ms);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+  return `${d.getFullYear()}-${m}-${day} ${time}`;
+};
+
+/** Compact stamp for lists: the time (h:mm AM/PM) if it happened today, else the YYYY-MM-DD date. */
+export const dayStamp = (ms: number): string => {
+  const d = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+};
+
 export function compactProject(project: string): string {
   const value = String(project || "");
   const match = value.match(/^(gemini\/)([0-9a-f]{32,})$/i);
