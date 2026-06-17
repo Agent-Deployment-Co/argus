@@ -163,6 +163,51 @@ function estimateTokens(content: unknown): number {
   return Math.round(chars / 4);
 }
 
+function textFromClaudeUserContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const text = (part as any).text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function hasClaudeToolResultContent(content: unknown): boolean {
+  return Array.isArray(content) && content.some((part) => part?.type === "tool_result");
+}
+
+function isArgusGeneratedClaudePrompt(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (
+    (trimmed.startsWith("You identify the actual tasks a user was trying to accomplish in a coding-agent session.") &&
+      trimmed.includes("Filtered user messages:")) ||
+    trimmed.startsWith("Analyze this coding-agent session.")
+  );
+}
+
+function isClaudeGeneratedContextText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<bash-stdout>") ||
+    trimmed.startsWith("<bash-stderr>") ||
+    trimmed.startsWith("Base directory for this skill:") ||
+    isArgusGeneratedClaudePrompt(trimmed)
+  );
+}
+
+function isCountableClaudeUserMessage(record: any): boolean {
+  if (record.type !== "user" || record.isCompactSummary === true) return false;
+  const content = record.message?.content;
+  if (hasClaudeToolResultContent(content)) return false;
+  const text = textFromClaudeUserContent(content);
+  return Boolean(text.trim() && !isClaudeGeneratedContextText(text));
+}
+
 function toolUsesFrom(content: any[]): ToolUse[] {
   const out: ToolUse[] = [];
   for (const part of content) {
@@ -499,6 +544,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
   const frictionEventsBySession = new Map<string, FrictionEvent[]>();
   const seenFrictionEventIds = new Set<string>();
   const stopReasonsBySession = new Map<string, Record<string, number>>();
+  const claudeAgentMessageIdsBySession = new Map<string, Set<string>>();
   const countStopReason = (sid: string, stopReason: string): void => {
     const counts = stopReasonsBySession.get(sid) ?? {};
     if (!stopReasonsBySession.has(sid)) stopReasonsBySession.set(sid, counts);
@@ -583,6 +629,22 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
 
           const content = o.message?.content;
+          if (o.type === "user" && isCountableClaudeUserMessage(o)) {
+            existing.userMessages = (existing.userMessages ?? 0) + 1;
+          }
+          if (o.type === "assistant" && o.message?.model !== "<synthetic>") {
+            const providerMessageId = typeof o.message?.id === "string" && o.message.id ? o.message.id : undefined;
+            if (providerMessageId) {
+              const ids = claudeAgentMessageIdsBySession.get(sid) ?? new Set<string>();
+              if (!claudeAgentMessageIdsBySession.has(sid)) claudeAgentMessageIdsBySession.set(sid, ids);
+              if (!ids.has(providerMessageId)) {
+                ids.add(providerMessageId);
+                existing.agentMessages = (existing.agentMessages ?? 0) + 1;
+              }
+            } else {
+              existing.agentMessages = (existing.agentMessages ?? 0) + 1;
+            }
+          }
 
           // First pass: register tool_use ids -> names (for result attribution).
           if (o.type === "assistant" && Array.isArray(content)) {
