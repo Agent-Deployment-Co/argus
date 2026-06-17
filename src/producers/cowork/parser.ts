@@ -18,12 +18,18 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
 } from "../../store-contract.ts";
 import { type FrictionEvent } from "../../friction.ts";
 import { COWORK_SESSIONS_DIR } from "../../paths.ts";
+import {
+  TASK_TEXT_LIMIT,
+  shouldSkipTaskCandidateText,
+  textFromUserContent,
+} from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage } from "../../types.ts";
 import {
@@ -34,7 +40,8 @@ import {
 
 export const COWORK_SESSIONS_ROOT_ID = "cowork-sessions";
 // v1: initial implementation.
-export const COWORK_TRANSCRIPT_PARSER_VERSION = "1";
+// v2: emits filtered user task candidates for explicit per-session task extraction.
+export const COWORK_TRANSCRIPT_PARSER_VERSION = "2";
 export const COWORK_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "cowork-jsonl",
   source: "cowork",
@@ -86,6 +93,11 @@ function invocationMapKey(sourceSessionId: string, invocationId: string): string
 
 function contentParts(record: Record<string, any>): any[] {
   return Array.isArray(record.message?.content) ? record.message.content : [];
+}
+
+function coworkUserMessageText(record: PositionedRecord, limit = TASK_TEXT_LIMIT): string | undefined {
+  if (record.value.type !== "user") return undefined;
+  return textFromUserContent(record.value.message?.content, limit) || undefined;
 }
 
 function timestampMs(value: unknown): number {
@@ -407,7 +419,14 @@ function parseCoworkTranscript(
     ? undefined
     : (metadata?.title ?? metadata?.processName ?? undefined);
 
-  for (const record of records) {
+  const nextUserText = (recordIndex: number, nativeSessionId: string): string | undefined => {
+    const next = records[recordIndex + 1];
+    if (!next || next.value.session_id !== nativeSessionId) return undefined;
+    return coworkUserMessageText(next);
+  };
+
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+    const record = records[recordIndex]!;
     // system/thinking_tokens: streaming progress events, no useful data
     if (record.value.type === "system" && record.value.subtype === "thinking_tokens") continue;
 
@@ -452,6 +471,30 @@ function parseCoworkTranscript(
       const content = Array.isArray(record.value.message?.content)
         ? record.value.message.content
         : [];
+      const taskText = coworkUserMessageText(record);
+      const nativeSessionId =
+        typeof record.value.session_id === "string" ? record.value.session_id : "";
+      if (
+        taskText &&
+        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
+      ) {
+        const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
+        const task: TaskCandidateFact = {
+          id: createFactId(
+            "task_candidate",
+            "cowork",
+            sourceSessionId,
+            record.position,
+            "user_message",
+          ),
+          source: "cowork",
+          sourceSessionId,
+          text: taskText,
+          position: record.position,
+        };
+        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
+        facts.taskCandidates.push(task);
+      }
       for (const [itemIndex, part] of content.entries()) {
         if (!part || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
         const position = { ...record.position, itemIndex };
@@ -732,6 +775,35 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
       ),
     ],
   };
+}
+
+export function parseCoworkTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = COWORK_SESSIONS_DIR ? resolve(COWORK_SESSIONS_DIR) : dirname(absolutePath);
+  const file = fileIdentity(absolutePath, rootPath);
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintClaudeFile(absolutePath);
+  } catch (error) {
+    const missing = errorCode(error) === "ENOENT";
+    return {
+      status: missing ? "missing" : "unreadable",
+      file,
+      observations: [],
+      diagnostics: [
+        diagnostic(
+          missing ? "missing_file" : "unreadable_file",
+          "snapshot",
+          missing
+            ? `CoWork transcript disappeared before parsing: ${absolutePath}`
+            : `Unable to fingerprint CoWork transcript: ${absolutePath}`,
+          undefined,
+          missing ? "warning" : "error",
+        ),
+      ],
+    };
+  }
+  return parseCoworkTranscriptFile({ file, fingerprint });
 }
 
 export function createCoworkTranscriptDiscoveryAdapter(

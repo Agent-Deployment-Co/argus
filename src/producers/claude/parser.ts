@@ -26,12 +26,18 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
 } from "../../store-contract.ts";
 import { claudeFrictionEvents } from "../../friction.ts";
 import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
+import {
+  TASK_TEXT_LIMIT,
+  shouldSkipTaskCandidateText,
+  textFromUserContent,
+} from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage, type Usage } from "../../types.ts";
 
@@ -42,7 +48,8 @@ export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "4";
+// v5: emits filtered user task candidates for explicit per-session task extraction.
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "5";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",
@@ -528,6 +535,11 @@ function contentParts(record: Record<string, any>): any[] {
   return Array.isArray(record.message?.content) ? record.message.content : [];
 }
 
+function claudeUserMessageText(record: PositionedRecord, limit = TASK_TEXT_LIMIT): string | undefined {
+  if (record.value.type !== "user") return undefined;
+  return textFromUserContent(record.value.message?.content, limit) || undefined;
+}
+
 function invocationMapKey(sourceSessionId: string, invocationId: string): string {
   return `${sourceSessionId}\u0000${invocationId}`;
 }
@@ -729,7 +741,14 @@ function parseTranscript(
     return state;
   };
 
-  for (const record of records) {
+  const nextUserText = (recordIndex: number, parentSourceSessionId: string): string | undefined => {
+    const next = records[recordIndex + 1];
+    if (!next || next.value.sessionId !== parentSourceSessionId) return undefined;
+    return claudeUserMessageText(next);
+  };
+
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+    const record = records[recordIndex]!;
     const parentSourceSessionId =
       typeof record.value.sessionId === "string" && record.value.sessionId
         ? record.value.sessionId
@@ -762,6 +781,29 @@ function parseTranscript(
     if (record.value.type !== "assistant") open = undefined;
 
     if (record.value.type === "user") {
+      const taskText = claudeUserMessageText(record);
+      if (
+        taskText &&
+        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
+      ) {
+        const taskTimestamp = timestampMs(record.value.timestamp);
+        const task: TaskCandidateFact = {
+          id: createFactId(
+            "task_candidate",
+            "claude",
+            sourceSessionId,
+            record.position,
+            "user_message",
+          ),
+          source: "claude",
+          sourceSessionId,
+          text: taskText,
+          position: record.position,
+        };
+        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
+        facts.taskCandidates.push(task);
+      }
+
       for (const [itemIndex, part] of content.entries()) {
         if (
           !part ||
@@ -922,6 +964,40 @@ export function parseClaudeTranscriptFile(
       ],
     };
   }
+}
+
+export function parseClaudeTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = resolve(PROJECTS_DIR);
+  const file = fileIdentity(
+    absolutePath,
+    rootPath,
+    CLAUDE_TRANSCRIPT_ROOT_ID,
+    "transcript",
+  );
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintClaudeFile(absolutePath);
+  } catch (error) {
+    const missing = errorCode(error) === "ENOENT";
+    return {
+      status: missing ? "missing" : "unreadable",
+      file,
+      observations: [],
+      diagnostics: [
+        diagnostic(
+          missing ? "missing_file" : "unreadable_file",
+          "snapshot",
+          missing
+            ? `Claude transcript disappeared before parsing: ${absolutePath}`
+            : `Unable to fingerprint Claude transcript: ${absolutePath}`,
+          undefined,
+          missing ? "warning" : "error",
+        ),
+      ],
+    };
+  }
+  return parseClaudeTranscriptFile({ file, fingerprint });
 }
 
 export function parseClaudeHistoryFile(
