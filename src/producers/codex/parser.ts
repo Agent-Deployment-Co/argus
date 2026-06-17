@@ -27,9 +27,9 @@ import {
 import { CODEX_SESSIONS_DIR } from "../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
+  argusGeneratedPromptTitle,
   isTurnAbortedText,
   shouldSkipTaskCandidateText,
-  taskExtractionPromptTitle,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
@@ -39,7 +39,7 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "6",
+  version: "7",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
@@ -513,8 +513,8 @@ export function parseCodexTranscript(
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
-      const extractionTitle = taskText ? taskExtractionPromptTitle(taskText) : undefined;
-      if (!firstPrompt && extractionTitle) firstPrompt = extractionTitle;
+      const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
       if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
         if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
         const taskTimestamp = timestampMs(record.value.timestamp);

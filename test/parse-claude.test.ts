@@ -285,6 +285,40 @@ Filtered user messages:
     expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe("Task extraction for codex:one");
     expect(parsed.fragment.facts.taskCandidates).toEqual([]);
   });
+
+  test("excludes Argus session analysis prompts from task candidates", () => {
+    const root = temporaryDirectory();
+    const transcript = join(root, "session-analysis.jsonl");
+    const prompt = `Analyze this coding-agent session. Return JSON only with these string fields: title, attempted, outcome, outcomeReason.
+
+FACTS:
+{
+  "sessionId": "codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+  "source": "codex",
+  "project": "adc/argus"
+}
+
+TRANSCRIPT:
+USER: add a new session analysis mode`;
+    writeFileSync(
+      transcript,
+      `${JSON.stringify({
+        type: "user",
+        sessionId: "session-analysis-session",
+        timestamp: "2026-06-16T21:09:17.281Z",
+        message: { role: "user", content: prompt },
+        cwd: "/Users/fixture/proj",
+      })}\n`,
+    );
+
+    const parsed = parseClaudeTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe(
+      "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+    );
+    expect(parsed.fragment.facts.taskCandidates).toEqual([]);
+  });
 });
 
 describe("Claude history auxiliary fragments", () => {
