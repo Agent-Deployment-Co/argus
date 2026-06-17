@@ -71,6 +71,7 @@ export type FactKind =
   | "message"
   | "invocation"
   | "tool_result"
+  | "task_candidate"
   | "relationship"
   | "task";
 
@@ -181,15 +182,23 @@ export interface TaskFact {
   id: string;
   source: AgentSource;
   sourceSessionId: string;
-  /** Present when the source user-message record carried a valid timestamp. */
+  /** Present when referenced source messages carried a valid timestamp. */
   timestampMs?: number;
-  /**
-   * What the user was trying to accomplish. The first Codex implementation uses the user message
-   * itself; later implementations can replace this with a derived task while keeping evidence.
-   */
+  /** What the user was trying to accomplish, derived from one or more filtered user messages. */
   description: string;
   evidence: string;
-  evidenceKind: "user_message";
+  evidenceKind: "llm_inference" | "user_message";
+  position: SourcePosition;
+}
+
+export interface TaskCandidateFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  /** Present when the source user-message record carried a valid timestamp. */
+  timestampMs?: number;
+  /** Filtered user-authored text made available to the task extractor. Not materialized as a task. */
+  text: string;
   position: SourcePosition;
 }
 
@@ -207,6 +216,7 @@ export interface NormalizedFacts {
   messages: MessageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
+  taskCandidates: TaskCandidateFact[];
   tasks: TaskFact[];
   relationships: SessionRelationshipFact[];
 }
@@ -455,8 +465,10 @@ export interface Store {
    * discovery, not a count dip). Returns the ids it kept (skipped) that way.
    */
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
-  /** Task facts for a resolved session, in source order. */
+  /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
+  /** Replace only the task facts for one resolved session. Returns false if the session is unknown. */
+  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

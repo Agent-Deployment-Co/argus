@@ -460,6 +460,7 @@ function buildFragments(
         messages: [],
         invocations: [],
         toolResults: [],
+        taskCandidates: [],
         tasks: [],
         relationships: [],
       };

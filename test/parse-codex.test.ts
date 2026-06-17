@@ -58,7 +58,7 @@ describe("Codex fragment discovery", () => {
     expect(createCodexTranscriptParserAdapter().parser).toEqual({
       name: "codex-jsonl",
       source: "codex",
-      version: "2",
+      version: "4",
     });
   });
 });
@@ -103,17 +103,16 @@ describe("Codex transcript fragments", () => {
       cwd: "/Users/fixture/codex-proj",
       firstPrompt: "codex hello",
     });
-    expect(fragment.facts.tasks).toEqual([
+    expect(fragment.facts.taskCandidates).toEqual([
       expect.objectContaining({
         source: "codex",
         sourceSessionId: "codex:codex-sess1",
         timestampMs: Date.parse("2026-06-03T13:00:02.000Z"),
-        description: "codex hello",
-        evidence: "codex hello",
-        evidenceKind: "user_message",
+        text: "codex hello",
         position: expect.objectContaining({ recordIndex: 2 }),
       }),
     ]);
+    expect(fragment.facts.tasks).toEqual([]);
   });
 
   test("preserves context, positive token events, total-only usage, and pending-call flushes", () => {
@@ -245,7 +244,7 @@ describe("Codex transcript fragments", () => {
     ]);
   });
 
-  test("excludes AGENTS.md and immediately aborted user messages from task facts", () => {
+  test("excludes AGENTS.md and immediately aborted user messages from task candidates", () => {
     const file = createFileIdentity({
       source: "codex",
       rootId: "test",
@@ -301,6 +300,15 @@ describe("Codex transcript fragments", () => {
         payload: {
           type: "message",
           role: "user",
+          content: [{ type: "input_text", text: '<turn_aborted reason="user_cancelled"></turn_aborted>' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
           content: [{ type: "input_text", text: "after abort task" }],
         },
       }),
@@ -317,10 +325,11 @@ describe("Codex transcript fragments", () => {
     });
 
     expect(fragment.facts.sessions[0]?.firstPrompt).toBe("real task");
-    expect(fragment.facts.tasks.map((task) => task.description)).toEqual([
+    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
       "real task",
       "after abort task",
     ]);
+    expect(fragment.facts.tasks).toEqual([]);
   });
 
   test("emits IDs, timestamps, arguments, paths, MCP details, and custom calls", () => {

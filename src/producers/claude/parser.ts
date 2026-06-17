@@ -655,6 +655,7 @@ function parseTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
+    taskCandidates: [],
     tasks: [],
     relationships: [],
   };

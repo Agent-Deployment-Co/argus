@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync } from "node:fs";
+import { chmodSync, cpSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -108,14 +108,40 @@ describe("cli argument validation", () => {
     cpSync(join(FIXTURES, "codex-sessions"), join(dir, "codex", "sessions"), {
       recursive: true,
     });
+    const extractor = join(dir, "task-extractor.js");
+    writeFileSync(
+      extractor,
+      `let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => input += chunk);
+process.stdin.on("end", () => {
+  console.log(JSON.stringify({ tasks: [{ description: "extracted fixture task", messageIndexes: [0] }] }));
+});`,
+    );
+    chmodSync(extractor, 0o755);
+    const command = `"${process.execPath}" "${extractor}"`;
 
     const synced = runCli(["index", "--source", "codex", "--no-agentsview"], dir);
     expect(synced.status).toBe(0);
 
-    const facts = runCli(["facts", "codex:codex-sess1"], dir);
+    const before = runCli(["facts", "codex:codex-sess1"], dir);
+    expect(before.status).toBe(0);
+    expect(before.stderr).toContain("No tasks found for codex:codex-sess1");
+
+    const facts = runCli([
+      "facts",
+      "codex:codex-sess1",
+      "--extract",
+      "--task-provider",
+      "command",
+      "--task-command",
+      command,
+    ], dir);
     expect(facts.status).toBe(0);
-    expect(facts.stdout).toContain("Task facts for codex:codex-sess1");
-    expect(facts.stdout).toContain("codex hello");
+    expect(facts.stderr).toContain("Saved 1 task for codex:codex-sess1");
+    expect(facts.stdout).toContain("Tasks for codex:codex-sess1");
+    expect(facts.stdout).toContain("extracted fixture task");
+    expect(facts.stdout).not.toContain("codex hello");
   });
 });
 

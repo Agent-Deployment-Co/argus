@@ -10,12 +10,19 @@ import { scanStore } from "./parse-incremental.ts";
 import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { buildDashboard, summaryLine, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
+import { parseCodexTranscriptPath } from "./producers/codex/parser.ts";
 import { startServer } from "./serve.ts";
 import { openStore } from "./store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
+import {
+  DEFAULT_TASK_EXTRACTION_PROVIDER,
+  extractTasksForSession,
+  type TaskExtractionOptions,
+  type TaskExtractionProvider,
+} from "./task-extraction.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -34,6 +41,18 @@ interface ReportOptions extends BuildDashboardOptions {
 interface ServeOptions extends BuildDashboardOptions {
   port: number;
   open: boolean;
+}
+
+interface FactsOptions {
+  sessionId: string;
+  extract: boolean;
+  taskExtraction?: TaskExtractionOptions;
+}
+
+function toTaskProvider(value: string): TaskExtractionProvider {
+  if (value === "off" || value === "claude" || value === "command") return value;
+  console.error(`Invalid --task-provider: ${value} (expected claude, command, or off)`);
+  process.exit(2);
 }
 
 const log: Log = (s) => process.stderr.write(s + "\n");
@@ -330,19 +349,61 @@ function indentFactText(text: string): string {
   return lines.map((line) => `   ${line}`).join("\n");
 }
 
-async function runFacts(sessionId: string, log: Log): Promise<void> {
+async function extractFactsForSession(
+  store: Awaited<ReturnType<typeof openStore>>,
+  opts: FactsOptions,
+  log: Log,
+): Promise<boolean> {
+  const parsed = await store.readResolved();
+  const meta = parsed.sessions.get(opts.sessionId);
+  if (!meta) {
+    log(`No session found for ${opts.sessionId}. Run \`argus index\` to read sessions into the local store.`);
+    return false;
+  }
+  if (meta.source !== "codex") {
+    log(`Task extraction currently supports Codex sessions only. ${opts.sessionId} is a ${meta.source} session.`);
+    return false;
+  }
+
+  const parsedTranscript = parseCodexTranscriptPath(meta.filePath);
+  if (parsedTranscript.status !== "current") {
+    const detail = parsedTranscript.diagnostics[0]?.message ?? `Couldn't read ${meta.filePath}`;
+    log(`Couldn't extract tasks for ${opts.sessionId}: ${detail}`);
+    return false;
+  }
+
+  const candidates = parsedTranscript.fragment.facts.taskCandidates.filter(
+    (candidate) => candidate.sourceSessionId === opts.sessionId,
+  );
+  const extracted = extractTasksForSession(opts.sessionId, candidates, opts.taskExtraction);
+  if (extracted.diagnostics.length) {
+    for (const entry of extracted.diagnostics.slice(0, 5)) log(`  ! ${entry.message}`);
+    return false;
+  }
+
+  const replaced = await store.replaceSessionTasks(opts.sessionId, extracted.tasks);
+  if (!replaced) {
+    log(`No session found for ${opts.sessionId}. Run \`argus index\` to read sessions into the local store.`);
+    return false;
+  }
+  log(`Saved ${extracted.tasks.length} task${extracted.tasks.length === 1 ? "" : "s"} for ${opts.sessionId}.`);
+  return true;
+}
+
+async function runFacts(opts: FactsOptions, log: Log): Promise<void> {
   const store = await openStore();
   try {
-    const tasks = await store.readSessionTasks(sessionId);
+    if (opts.extract && !(await extractFactsForSession(store, opts, log))) return;
+    const tasks = await store.readSessionTasks(opts.sessionId);
     if (!tasks.length) {
-      log(`No task facts found for ${sessionId}. Run \`argus index --source codex\` to read Codex sessions into the local store.`);
+      log(`No tasks found for ${opts.sessionId}. Run \`argus facts ${opts.sessionId} --extract\` to extract tasks from its transcript.`);
       return;
     }
     const blocks = tasks.map(
       (task, index) =>
         `${index + 1}. ${formatFactTimestamp(task.timestampMs)}\n${indentFactText(task.description)}`,
     );
-    process.stdout.write(`Task facts for ${sessionId}\n\n${blocks.join("\n\n")}\n`);
+    process.stdout.write(`Tasks for ${opts.sessionId}\n\n${blocks.join("\n\n")}\n`);
   } finally {
     await store.close();
   }
@@ -393,6 +454,40 @@ const summarizeArgs = {
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
 } as const;
 
+/** Task extraction options for `facts --extract`. */
+const taskArgs = {
+  "task-provider": {
+    type: "string",
+    default: process.env.ARGUS_TASK_PROVIDER || DEFAULT_TASK_EXTRACTION_PROVIDER,
+    description: "Task extractor: claude, command, or off",
+    valueHint: "claude|command|off",
+  },
+  "task-model": {
+    type: "string",
+    default: process.env.ARGUS_TASK_MODEL,
+    description: "Model for task extraction when the provider supports it",
+    valueHint: "id",
+  },
+  "task-prompt": {
+    type: "string",
+    default: process.env.ARGUS_TASK_PROMPT,
+    description: "Custom task extraction prompt",
+    valueHint: "text",
+  },
+  "task-prompt-file": {
+    type: "string",
+    default: process.env.ARGUS_TASK_PROMPT_FILE,
+    description: "Read the task extraction prompt from a file",
+    valueHint: "path",
+  },
+  "task-command": {
+    type: "string",
+    default: process.env.ARGUS_TASK_COMMAND,
+    description: "Command provider; reads prompt on stdin and writes task JSON to stdout",
+    valueHint: "cmd",
+  },
+} as const;
+
 /** Inputs shared by report, serve, and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
@@ -408,6 +503,25 @@ const reportArgs = {
   console: { type: "boolean", default: false, description: "Print a compact overview to the terminal instead of writing a file" },
   open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
+
+type TaskArgs = {
+  "task-provider": string;
+  "task-model"?: string;
+  "task-prompt"?: string;
+  "task-prompt-file"?: string;
+  "task-command"?: string;
+};
+
+function taskExtractionOptions(args: TaskArgs): TaskExtractionOptions {
+  const options: TaskExtractionOptions = {
+    provider: toTaskProvider(args["task-provider"]),
+  };
+  if (args["task-model"]) options.model = args["task-model"];
+  if (args["task-prompt"]) options.prompt = args["task-prompt"];
+  if (args["task-prompt-file"]) options.promptFile = args["task-prompt-file"];
+  if (args["task-command"]) options.command = args["task-command"];
+  return options;
+}
 
 const report = defineCommand({
   meta: { name: "report", description: "build the local HTML (or --json) dashboard" },
@@ -484,15 +598,24 @@ const status = defineCommand({
 });
 
 const facts = defineCommand({
-  meta: { name: "facts", description: "show task facts for a session" },
+  meta: { name: "facts", description: "show tasks for a session" },
   args: {
     id: { type: "positional", required: true, description: "session id" },
+    extract: { type: "boolean", default: false, description: "Extract tasks from this session's transcript before printing" },
+    ...taskArgs,
   },
   run: handler((args) => {
     const sessionId = args._[0];
     if (!sessionId) failArg("Usage: argus facts <session-id>");
     if (args._.length > 1) failArg(`Unexpected argument: ${args._[1]}`);
-    return runFacts(sessionId, log);
+    return runFacts(
+      {
+        sessionId,
+        extract: args.extract,
+        taskExtraction: args.extract ? taskExtractionOptions(args) : undefined,
+      },
+      log,
+    );
   }),
 });
 
