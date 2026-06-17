@@ -34,7 +34,7 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "4",
+  version: "5",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 

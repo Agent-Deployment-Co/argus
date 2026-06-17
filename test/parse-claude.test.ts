@@ -10,6 +10,7 @@ import {
   discoverClaudeHistory,
   discoverClaudeTranscripts,
   parseClaudeHistoryFile,
+  parseClaudeTranscriptPath,
   parseClaudeTranscriptFile,
 } from "../src/producers/claude/parser.ts";
 
@@ -248,6 +249,40 @@ describe("Claude transcript fragments", () => {
         position: expect.objectContaining({ recordIndex: 3 }),
       }),
     ]);
+  });
+
+  test("excludes Argus task extraction prompts from task candidates", () => {
+    const root = temporaryDirectory();
+    const transcript = join(root, "task-extraction.jsonl");
+    const prompt = `You identify the actual tasks a user was trying to accomplish in a coding-agent session.
+
+Return JSON only.
+
+Filtered user messages:
+{
+  "sessionId": "codex:one",
+  "messages": [
+    {
+      "index": 0,
+      "text": "add a facts command"
+    }
+  ]
+}`;
+    writeFileSync(
+      transcript,
+      `${JSON.stringify({
+        type: "user",
+        sessionId: "task-extraction-session",
+        timestamp: "2026-06-17T17:43:52.723Z",
+        message: { role: "user", content: prompt },
+        cwd: "/Users/fixture/proj",
+      })}\n`,
+    );
+
+    const parsed = parseClaudeTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.taskCandidates).toEqual([]);
   });
 });
 
