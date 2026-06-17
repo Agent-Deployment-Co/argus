@@ -462,6 +462,7 @@ makeTable(document.getElementById('healthSessionTable'),[
   {label:'Turns', num:true, sort:r=>r.health&&r.health.turns!=null?r.health.turns:-1, cell:r=>r.health&&r.health.turns!=null?r.health.turns:'<span class="muted">—</span>'},
   {label:'Median turn', num:true, sort:r=>r.health&&r.health.medianTurnMs!=null?r.health.medianTurnMs:-1, cell:r=>r.health&&r.health.medianTurnMs!=null?dur(r.health.medianTurnMs):'<span class="muted">—</span>'},
   {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},
+  {label:'User msgs', num:true, sort:r=>r.userMessages!=null?r.userMessages:-1, cell:r=>r.userMessages!=null?r.userMessages:'<span class="muted">—</span>'},
   {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
   {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
 ], DATA.sessions);
@@ -675,6 +676,8 @@ const sessionCols = [
   {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
   {label:'Dur', num:true, sort:r=>r.durationMs, cell:r=>dur(r.durationMs)},
   {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
+  {label:'User msgs', num:true, sort:r=>r.userMessages!=null?r.userMessages:-1, cell:r=>r.userMessages!=null?r.userMessages:'<span class="muted">—</span>'},
+  {label:'Turns', num:true, sort:r=>r.rawTurns!=null?r.rawTurns:(r.health&&r.health.turns!=null?r.health.turns:-1), cell:r=>r.rawTurns!=null?r.rawTurns:(r.health&&r.health.turns!=null?r.health.turns:'<span class="muted">—</span>')},
   {label:'Outcome', sort:r=>(r.health&&r.health.outcome)||'', cell:r=>outcomeCell(r.health&&r.health.outcome)},
   {label:'Interrupts', num:true, sort:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:-1, cell:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:'<span class="muted">—</span>'},
   {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},

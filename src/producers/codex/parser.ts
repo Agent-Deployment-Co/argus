@@ -39,7 +39,7 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "7",
+  version: "8",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
@@ -486,12 +486,26 @@ export function parseCodexTranscript(
   const messages: MessageFact[] = [];
   const invocations: InvocationFact[] = [];
   const taskCandidates: TaskCandidateFact[] = [];
+  const rawTurnIds = new Set<string>();
+  let rawTurnsWithoutId = 0;
+  let userMessageEvents = 0;
+  let responseUserMessages = 0;
 
   for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
     const record = records[recordIndex]!;
     const payload = objectValue(record.value.payload);
     const recordType = stringValue(record.value.type);
     const payloadType = stringValue(payload.type);
+
+    if (recordType === "event_msg") {
+      const turnId = stringValue(payload.turn_id);
+      if (turnId) rawTurnIds.add(turnId);
+      else if (payloadType === "task_started") rawTurnsWithoutId++;
+    }
+
+    if (recordType === "event_msg" && payloadType === "user_message") {
+      userMessageEvents++;
+    }
 
     if (recordType === "session_meta") {
       const cwd = stringValue(payload.cwd);
@@ -512,6 +526,7 @@ export function parseCodexTranscript(
     }
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
+      responseUserMessages++;
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
@@ -716,6 +731,10 @@ export function parseCodexTranscript(
     };
     if (sessionCwd) Object.assign(session, { cwd: sessionCwd });
     if (firstPrompt) Object.assign(session, { firstPrompt });
+    const userMessages = userMessageEvents || responseUserMessages;
+    const rawTurns = rawTurnIds.size + rawTurnsWithoutId || userMessages || undefined;
+    if (userMessages) Object.assign(session, { userMessages });
+    if (rawTurns) Object.assign(session, { rawTurns });
     facts.sessions.push(session);
   }
 

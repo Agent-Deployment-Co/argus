@@ -54,6 +54,7 @@ export function SessionDetail() {
     { label: "Tokens", value: fmt(s.total) },
     { label: "Est. cost", value: usd(s.cost) },
     { label: "Messages", value: String(s.messages) },
+    { label: "User messages", value: s.userMessages != null ? String(s.userMessages) : "—" },
     { label: "Duration", value: dur(s.durationMs) },
     { label: "Turns", value: h.turns != null ? String(h.turns) : "—" },
   ];

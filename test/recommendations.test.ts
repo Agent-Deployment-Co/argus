@@ -19,6 +19,7 @@ function session(health: Partial<SessionHealth>): SessionRow {
   return {
     source: "claude", sessionId: "s1", project: "p/1",
     start: 0, end: 0, durationMs: 0, messages: 1, models: [], topSkills: [],
+    userMessages: null, rawTurns: null,
     toolCounts: {}, filesTouched: [], total: 0, cost: 0, firstPrompt: "", summary: "",
     health: { ...defaultHealth, ...health },
   };
