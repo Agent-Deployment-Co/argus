@@ -15,7 +15,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": "all",
     "externalBin": ["binaries/argus"],
     "resources": ["web/**/*"],
     "icon": [

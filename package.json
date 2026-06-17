@@ -20,7 +20,7 @@
     "build": "bun run build:web && bun build src/cli.ts --target=node --external sqlite3 --outfile=dist/cli.js && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js",
     "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
     "desktop:dev": "bun run desktop:stage && cd desktop && bunx tauri dev",
-    "desktop:build": "bun run desktop:stage && cd desktop && bunx tauri build"
+    "desktop:build": "bun run desktop:stage && cd desktop && bunx tauri build --bundles app"
   },
   "engines": {
     "node": ">=20.17"
