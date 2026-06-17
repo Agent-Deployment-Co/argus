@@ -27,8 +27,8 @@ import { type FrictionEvent } from "../../friction.ts";
 import { COWORK_SESSIONS_DIR } from "../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
+  argusGeneratedPromptTitle,
   shouldSkipTaskCandidateText,
-  taskExtractionPromptTitle,
   textFromUserContent,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
@@ -44,7 +44,8 @@ export const COWORK_SESSIONS_ROOT_ID = "cowork-sessions";
 // v2: emits filtered user task candidates for explicit per-session task extraction.
 // v3: excludes Argus task-extraction prompts from task candidates.
 // v4: labels Argus task-extraction sessions with their target session.
-export const COWORK_TRANSCRIPT_PARSER_VERSION = "4";
+// v5: excludes and labels Argus session-analysis prompts.
+export const COWORK_TRANSCRIPT_PARSER_VERSION = "5";
 export const COWORK_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "cowork-jsonl",
   source: "cowork",
@@ -477,9 +478,9 @@ function parseCoworkTranscript(
       const taskText = coworkUserMessageText(record);
       const nativeSessionId =
         typeof record.value.session_id === "string" ? record.value.session_id : "";
-      const extractionTitle = taskText ? taskExtractionPromptTitle(taskText) : undefined;
-      if (extractionTitle && !sessionFact.firstPrompt) {
-        sessionFact.firstPrompt = extractionTitle;
+      const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (generatedTitle && !sessionFact.firstPrompt) {
+        sessionFact.firstPrompt = generatedTitle;
       }
       if (
         taskText &&

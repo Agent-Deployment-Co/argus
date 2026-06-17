@@ -31,25 +31,61 @@ export function isTurnAbortedText(text: string): boolean {
   );
 }
 
+function jsonObjectAfterMarker(text: string, marker: string): Record<string, unknown> | undefined {
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  const payload = text.slice(markerIndex + marker.length);
+  const start = payload.indexOf("{");
+  if (start < 0) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < payload.length; index++) {
+    const char = payload[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = inString;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth++;
+    if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(payload.slice(start, index + 1)) as unknown;
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 export function taskExtractionPromptTargetSessionId(text: string): string | undefined {
   const trimmed = text.trimStart();
   const marker = "Filtered user messages:";
   const markerIndex = trimmed.indexOf(marker);
   if (markerIndex < 0) return undefined;
-  const payload = trimmed.slice(markerIndex + marker.length);
-  const objectStart = payload.indexOf("{");
-  if (objectStart < 0) return undefined;
-  try {
-    const parsed = JSON.parse(payload.slice(objectStart)) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const values = parsed as Record<string, unknown>;
-    return typeof values.sessionId === "string" && Array.isArray(values.messages)
-      ? values.sessionId
-      : undefined;
-  } catch {
-    const sessionId = payload.match(/"sessionId"\s*:\s*"([^"]+)"/)?.[1];
-    return sessionId && /"messages"\s*:\s*\[/.test(payload) ? sessionId : undefined;
+  const values = jsonObjectAfterMarker(trimmed, marker);
+  if (typeof values?.sessionId === "string" && Array.isArray(values.messages)) {
+    return values.sessionId;
   }
+  const payload = trimmed.slice(markerIndex + marker.length);
+  const sessionId = payload.match(/"sessionId"\s*:\s*"([^"]+)"/)?.[1];
+  return sessionId && /"messages"\s*:\s*\[/.test(payload) ? sessionId : undefined;
 }
 
 export function taskExtractionPromptTitle(text: string): string | undefined {
@@ -71,11 +107,28 @@ export function isTaskExtractionPromptText(text: string): boolean {
   return taskExtractionPromptTitle(text) != null;
 }
 
+export function sessionAnalysisPromptTargetSessionId(text: string): string | undefined {
+  const trimmed = text.trimStart();
+  const values = jsonObjectAfterMarker(trimmed, "FACTS:");
+  return typeof values?.sessionId === "string" ? values.sessionId : undefined;
+}
+
+export function sessionAnalysisPromptTitle(text: string): string | undefined {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("Analyze this coding-agent session.")) return undefined;
+  const targetSessionId = sessionAnalysisPromptTargetSessionId(text);
+  return targetSessionId ? `Session analysis for ${targetSessionId}` : "Session analysis run";
+}
+
+export function argusGeneratedPromptTitle(text: string): string | undefined {
+  return taskExtractionPromptTitle(text) ?? sessionAnalysisPromptTitle(text);
+}
+
 export function shouldSkipTaskCandidateText(text: string, nextText?: string): boolean {
   return (
     isAgentsInstructionsText(text) ||
     isTurnAbortedText(text) ||
-    isTaskExtractionPromptText(text) ||
+    argusGeneratedPromptTitle(text) != null ||
     (nextText ? isTurnAbortedText(nextText) : false)
   );
 }

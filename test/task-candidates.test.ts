@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { shouldSkipTaskCandidateText, taskExtractionPromptTitle } from "../src/task-candidates.ts";
+import {
+  argusGeneratedPromptTitle,
+  sessionAnalysisPromptTitle,
+  shouldSkipTaskCandidateText,
+  taskExtractionPromptTitle,
+} from "../src/task-candidates.ts";
 
 describe("task candidate filtering", () => {
   test("skips Argus task extraction prompts so embedded source sessions are not re-extracted", () => {
@@ -42,5 +47,27 @@ Filtered user messages:
   test("keeps ordinary task text", () => {
     expect(shouldSkipTaskCandidateText("add task extraction to the session screen")).toBe(false);
     expect(taskExtractionPromptTitle("add task extraction to the session screen")).toBeUndefined();
+  });
+
+  test("skips Argus session analysis prompts and labels their target session", () => {
+    const text = `Analyze this coding-agent session. Return JSON only with these string fields: title, attempted, outcome, outcomeReason.
+
+FACTS:
+{
+  "sessionId": "codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+  "source": "codex",
+  "project": "adc/argus"
+}
+
+TRANSCRIPT:
+USER: add a new session analysis mode`;
+
+    expect(shouldSkipTaskCandidateText(text)).toBe(true);
+    expect(sessionAnalysisPromptTitle(text)).toBe(
+      "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+    );
+    expect(argusGeneratedPromptTitle(text)).toBe(
+      "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+    );
   });
 });
