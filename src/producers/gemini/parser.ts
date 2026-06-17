@@ -41,6 +41,7 @@ import { GEMINI_DIR } from "../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   shouldSkipTaskCandidateText,
+  taskExtractionPromptTitle,
   textFromUserContent,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
@@ -52,7 +53,8 @@ export const GEMINI_ROOT_ID = GEMINI_TRANSCRIPT_ROOT_ID;
 export const GEMINI_PROJECTS_ROOT_ID = GEMINI_AUXILIARY_ROOT_ID;
 // v2: emits filtered user task candidates for explicit per-session task extraction.
 // v3: excludes Argus task-extraction prompts from task candidates.
-export const GEMINI_TRANSCRIPT_PARSER_VERSION = "3";
+// v4: labels Argus task-extraction sessions with their target session.
+export const GEMINI_TRANSCRIPT_PARSER_VERSION = "4";
 export const GEMINI_AUXILIARY_PARSER_VERSION = "1";
 
 export const GEMINI_TRANSCRIPT_PARSER: ParserDescriptor = {
@@ -952,6 +954,7 @@ function factsFromConversation(
   const firstPrompt = conversation.messages
     .filter((message) => message.value.type === "user")
     .map((message) => textFromGeminiContent(message.value.content))
+    .map((text) => taskExtractionPromptTitle(text) ?? text)
     .find(Boolean);
   const taskCandidates: TaskCandidateFact[] = [];
   for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex++) {

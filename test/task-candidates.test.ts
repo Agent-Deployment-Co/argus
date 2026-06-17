@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { shouldSkipTaskCandidateText } from "../src/task-candidates.ts";
+import { shouldSkipTaskCandidateText, taskExtractionPromptTitle } from "../src/task-candidates.ts";
 
 describe("task candidate filtering", () => {
   test("skips Argus task extraction prompts so embedded source sessions are not re-extracted", () => {
@@ -19,6 +19,9 @@ Filtered user messages:
 }`;
 
     expect(shouldSkipTaskCandidateText(text)).toBe(true);
+    expect(taskExtractionPromptTitle(text)).toBe(
+      "Task extraction for codex:019ed69b-6e39-7631-ba51-3131851b31ea",
+    );
   });
 
   test("skips custom task extraction prompts with the generated filtered-message payload", () => {
@@ -33,9 +36,11 @@ Filtered user messages:
 }`;
 
     expect(shouldSkipTaskCandidateText(text)).toBe(true);
+    expect(taskExtractionPromptTitle(text)).toBe("Task extraction for claude:one");
   });
 
   test("keeps ordinary task text", () => {
     expect(shouldSkipTaskCandidateText("add task extraction to the session screen")).toBe(false);
+    expect(taskExtractionPromptTitle("add task extraction to the session screen")).toBeUndefined();
   });
 });

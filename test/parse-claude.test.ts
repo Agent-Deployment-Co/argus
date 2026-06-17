@@ -282,6 +282,7 @@ Filtered user messages:
     const parsed = parseClaudeTranscriptPath(transcript);
     expect(parsed.status).toBe("current");
     if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe("Task extraction for codex:one");
     expect(parsed.fragment.facts.taskCandidates).toEqual([]);
   });
 });
