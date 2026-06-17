@@ -6,25 +6,19 @@ import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
 import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
-import type { TranscriptSource } from "./parse.ts";
 import { scanStore } from "./parse-incremental.ts";
 import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { buildDashboard, summaryLine, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
-import { parseClaudeTranscriptPath } from "./producers/claude/parser.ts";
-import { parseCodexTranscriptPath } from "./producers/codex/parser.ts";
-import { parseCoworkTranscriptPath } from "./producers/cowork/parser.ts";
-import { parseGeminiTranscriptPath } from "./producers/gemini/parser.ts";
 import { startServer } from "./serve.ts";
 import { openStore } from "./store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import type { FileParseResult } from "./store-contract.ts";
+import { extractSessionTasks } from "./session-tasks.ts";
 import {
   DEFAULT_TASK_EXTRACTION_PROVIDER,
-  extractTasksForSession,
   type TaskExtractionOptions,
   type TaskExtractionProvider,
 } from "./task-extraction.ts";
@@ -46,6 +40,7 @@ interface ReportOptions extends BuildDashboardOptions {
 interface ServeOptions extends BuildDashboardOptions {
   port: number;
   open: boolean;
+  taskExtraction: TaskExtractionOptions;
 }
 
 interface FactsOptions {
@@ -234,6 +229,7 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
         summarize: opts.summarize,
         summarizeModel: opts.summarizeModel,
       },
+      taskExtraction: opts.taskExtraction,
     },
     log,
   );
@@ -354,52 +350,25 @@ function indentFactText(text: string): string {
   return lines.map((line) => `   ${line}`).join("\n");
 }
 
-function parseTranscriptForTaskExtraction(source: TranscriptSource, path: string): FileParseResult {
-  switch (source) {
-    case "claude":
-      return parseClaudeTranscriptPath(path);
-    case "codex":
-      return parseCodexTranscriptPath(path);
-    case "cowork":
-      return parseCoworkTranscriptPath(path);
-    case "gemini":
-      return parseGeminiTranscriptPath(path);
-  }
-}
-
 async function extractFactsForSession(
   store: Awaited<ReturnType<typeof openStore>>,
   opts: FactsOptions,
   log: Log,
 ): Promise<boolean> {
-  const parsed = await store.readResolved();
-  const meta = parsed.sessions.get(opts.sessionId);
-  if (!meta) {
-    log(`No session found for ${opts.sessionId}. Run \`argus index\` to read sessions into the local store.`);
+  const extracted = await extractSessionTasks(store, {
+    sessionId: opts.sessionId,
+    taskExtraction: opts.taskExtraction,
+  });
+  if (!extracted.ok) {
+    log(extracted.message);
+    for (const entry of (extracted.diagnostics ?? [])
+      .filter((diagnostic) => diagnostic.message !== extracted.message)
+      .slice(0, 4)) {
+      log(`  ! ${entry.message}`);
+    }
     return false;
   }
 
-  const parsedTranscript = parseTranscriptForTaskExtraction(meta.source, meta.filePath);
-  if (parsedTranscript.status !== "current") {
-    const detail = parsedTranscript.diagnostics[0]?.message ?? `Couldn't read ${meta.filePath}`;
-    log(`Couldn't extract tasks for ${opts.sessionId}: ${detail}`);
-    return false;
-  }
-
-  const candidates = parsedTranscript.fragment.facts.taskCandidates.filter(
-    (candidate) => candidate.sourceSessionId === opts.sessionId,
-  );
-  const extracted = extractTasksForSession(opts.sessionId, candidates, opts.taskExtraction);
-  if (extracted.diagnostics.length) {
-    for (const entry of extracted.diagnostics.slice(0, 5)) log(`  ! ${entry.message}`);
-    return false;
-  }
-
-  const replaced = await store.replaceSessionTasks(opts.sessionId, extracted.tasks);
-  if (!replaced) {
-    log(`No session found for ${opts.sessionId}. Run \`argus index\` to read sessions into the local store.`);
-    return false;
-  }
   log(`Saved ${extracted.tasks.length} task${extracted.tasks.length === 1 ? "" : "s"} for ${opts.sessionId}.`);
   return true;
 }
@@ -547,10 +516,21 @@ const serve = defineCommand({
   meta: { name: "serve", description: "serve the interactive dashboard at a local web address" },
   args: {
     ...buildArgs,
+    ...taskArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     open: { type: "boolean", default: false, description: "Open the dashboard in your browser once it's ready (macOS)" },
   },
-  run: handler((args) => runServe({ ...buildOptions(args), port: Number(args.port) || DEFAULT_PORT, open: args.open }, log)),
+  run: handler((args) =>
+    runServe(
+      {
+        ...buildOptions(args),
+        port: Number(args.port) || DEFAULT_PORT,
+        open: args.open,
+        taskExtraction: taskExtractionOptions(args),
+      },
+      log,
+    ),
+  ),
 });
 
 // `argus index` — the local store maintenance group. The bare command does an incremental read;
@@ -667,6 +647,7 @@ const runCmd = defineCommand({
   args: {
     ...sourceArg,
     ...agentsViewArgs,
+    ...taskArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
     "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
@@ -680,6 +661,7 @@ const runCmd = defineCommand({
         indexIntervalMin: Number(args["index-interval"]) || 5,
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
+        taskExtraction: taskExtractionOptions(args),
       },
       log,
     ),

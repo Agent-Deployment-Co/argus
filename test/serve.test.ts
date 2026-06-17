@@ -5,6 +5,7 @@ import { aggregate } from "../src/aggregate.ts";
 import { parseAll } from "../src/parse.ts";
 import { computeRecommendations } from "../src/recommendations.ts";
 import { createApp, type Snapshot } from "../src/serve.ts";
+import type { TaskFact } from "../src/store-contract.ts";
 import type { PluginInfo } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -48,6 +49,47 @@ describe("serve API", () => {
     await app.request("/api/snapshot");
     await app.request("/api/snapshot?refresh=1");
     expect(calls).toBe(1);
+  });
+
+  test("POST /api/tasks/extract returns tasks and reports that tasks changed", async () => {
+    const task: TaskFact = {
+      id: "task:fixture",
+      source: "codex",
+      sourceSessionId: "codex:codex-sess1",
+      timestampMs: 1,
+      description: "Extract tasks from the session screen",
+      evidence: "message indexes: 0",
+      evidenceKind: "llm_inference",
+      position: { originKey: "fixture", recordIndex: 0, itemIndex: 0 },
+    };
+    let changed = 0;
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      extractTasks: async (sessionId) => ({ ok: true, tasks: [{ ...task, sourceSessionId: sessionId }] }),
+      onTasksChanged: () => { changed++; },
+    });
+
+    const res = await app.request("/api/tasks/extract", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "codex:codex-sess1" }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+    expect(changed).toBe(1);
+    expect(await res.json()).toEqual({ tasks: [{ ...task, sourceSessionId: "codex:codex-sess1" }] });
+  });
+
+  test("POST /api/tasks/extract returns a plain error when extraction fails", async () => {
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      extractTasks: async () => ({ ok: false, status: 404, message: "No session found for missing." }),
+    });
+
+    const res = await app.request("/api/tasks/extract", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "missing" }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "No session found for missing.", diagnostics: [] });
   });
 
   test("unknown paths fall back to the SPA (placeholder when unbuilt)", async () => {
