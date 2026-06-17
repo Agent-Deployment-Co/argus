@@ -95,10 +95,10 @@ main { padding: 30px 32px 64px; }
    only so the list sits flush against the rail instead of floating inside the page gutters. */
 main:has(.sessions-split) { padding: 0; }
 .sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: 100vh; }
-.session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg); }
+.session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .session-search-row { display: flex; align-items: center; gap: 8px; }
-.session-search { flex: 1 1 auto; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.session-search { flex: 1 1 auto; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
 .session-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--pill-cool-line); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool) 14%, transparent); color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
 .filter-pill:hover { border-color: var(--accent); }
