@@ -25,6 +25,7 @@ Rules:
 - messageIndexes must refer to the filtered user message indexes provided below.`;
 
 export type TaskExtractionProvider = "off" | "claude" | "command";
+export type TaskExtractionDebugLog = (message: string) => void;
 
 export interface TaskExtractionOptions {
   provider?: TaskExtractionProvider;
@@ -36,6 +37,8 @@ export interface TaskExtractionOptions {
   promptFile?: string;
   /** Custom command provider. The command reads the full prompt on stdin and writes JSON to stdout. */
   command?: string;
+  /** Optional debug sink for task extraction. Callers decide whether this goes to stdout/stderr. */
+  debugLog?: TaskExtractionDebugLog;
 }
 
 export interface ExtractedTaskSpec {
@@ -47,6 +50,29 @@ interface ProviderResult {
   ok: boolean;
   stdout: string;
   error?: string;
+  stderr?: string;
+  status?: number | null;
+}
+
+export function logTaskExtractionDebug(
+  options: TaskExtractionOptions | undefined,
+  message: string,
+): void {
+  options?.debugLog?.(`[task extraction] ${message}`);
+}
+
+function logTaskExtractionBlock(
+  options: TaskExtractionOptions | undefined,
+  label: string,
+  body: string,
+): void {
+  if (!options?.debugLog) return;
+  logTaskExtractionDebug(options, `${label} begin`);
+  const content = body.length ? body : "(empty)";
+  for (const line of content.split(/\r?\n/)) {
+    options.debugLog(`[task extraction] ${line}`);
+  }
+  logTaskExtractionDebug(options, `${label} end`);
 }
 
 function diagnostic(
@@ -205,12 +231,19 @@ function runClaude(prompt: string, options: TaskExtractionOptions | undefined): 
     encoding: "utf8",
     maxBuffer: MAX_LLM_BUFFER_BYTES,
   });
+  const stderr = result.stderr ?? "";
   const error = result.error
     ? result.error.message
     : result.status !== 0
-      ? result.stderr?.trim() || `exited with status ${result.status}`
+      ? stderr.trim() || `exited with status ${result.status}`
       : undefined;
-  return { ok: !error && !!result.stdout?.trim(), stdout: result.stdout ?? "", error };
+  return {
+    ok: !error && !!result.stdout?.trim(),
+    stdout: result.stdout ?? "",
+    error,
+    stderr,
+    status: result.status,
+  };
 }
 
 function runCommand(prompt: string, command: string | undefined): ProviderResult {
@@ -231,12 +264,19 @@ function runCommand(prompt: string, command: string | undefined): ProviderResult
     encoding: "utf8",
     maxBuffer: MAX_LLM_BUFFER_BYTES,
   });
+  const stderr = result.stderr ?? "";
   const error = result.error
     ? result.error.message
     : result.status !== 0
-      ? result.stderr?.trim() || `exited with status ${result.status}`
+      ? stderr.trim() || `exited with status ${result.status}`
       : undefined;
-  return { ok: !error && !!result.stdout?.trim(), stdout: result.stdout ?? "", error };
+  return {
+    ok: !error && !!result.stdout?.trim(),
+    stdout: result.stdout ?? "",
+    error,
+    stderr,
+    status: result.status,
+  };
 }
 
 function runProvider(
@@ -296,17 +336,53 @@ export function extractTasksForSession(
 ): { tasks: TaskFact[]; diagnostics: ParserDiagnostic[] } {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
-  if (provider === "off" || candidates.length === 0) {
+  logTaskExtractionDebug(
+    options,
+    `starting extraction for ${sessionId}: provider=${provider}, filtered user messages=${candidates.length}`,
+  );
+  if (provider === "off") {
+    logTaskExtractionDebug(options, `skipping ${sessionId}: task extraction is off`);
+    return { tasks: [], diagnostics };
+  }
+  if (candidates.length === 0) {
+    logTaskExtractionDebug(options, `skipping ${sessionId}: no filtered user messages`);
     return { tasks: [], diagnostics };
   }
 
   const instructions = resolveInstructions(options, diagnostics);
   if (!instructions) {
+    logTaskExtractionDebug(options, `skipping ${sessionId}: no task extraction prompt available`);
     return { tasks: [], diagnostics };
   }
 
+  const promptSource = options?.promptFile
+    ? `prompt file ${options.promptFile}`
+    : options?.prompt
+      ? "custom prompt"
+      : "default prompt";
+  logTaskExtractionDebug(options, `using ${promptSource}`);
   const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions);
+  logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
+  logTaskExtractionBlock(options, "prompt", prompt);
+  if (provider === "claude") {
+    logTaskExtractionDebug(
+      options,
+      `running claude provider${options?.model ? ` with model ${options.model}` : ""}`,
+    );
+  } else if (provider === "command") {
+    logTaskExtractionDebug(options, `running command provider: ${options?.command ?? "(none)"}`);
+  }
   const result = runProvider(provider, prompt, options);
+  logTaskExtractionDebug(
+    options,
+    `provider finished: ok=${result.ok}${result.status == null ? "" : ` status=${result.status}`}${
+      result.error ? ` error=${result.error}` : ""
+    }`,
+  );
+  logTaskExtractionBlock(options, "provider stdout", result.stdout);
+  if (result.stderr?.trim()) {
+    logTaskExtractionBlock(options, "provider stderr", result.stderr);
+  }
   if (!result.ok) {
     diagnostics.push(
       diagnostic(
@@ -321,8 +397,15 @@ export function extractTasksForSession(
 
   try {
     const specs = parseTaskExtractionOutput(result.stdout);
-    return { tasks: taskFactsFromSpecs(sessionId, candidates, specs), diagnostics };
+    logTaskExtractionDebug(options, `parsed tasks=${specs.length}`);
+    const tasks = taskFactsFromSpecs(sessionId, candidates, specs);
+    logTaskExtractionDebug(options, `created tasks=${tasks.length}`);
+    return { tasks, diagnostics };
   } catch (error) {
+    logTaskExtractionDebug(
+      options,
+      `couldn't read provider output: ${error instanceof Error ? error.message : String(error)}`,
+    );
     diagnostics.push(
       diagnostic(
         "task_extraction_bad_response",

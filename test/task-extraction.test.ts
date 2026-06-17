@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildTaskExtractionPrompt,
+  extractTasksForSession,
   parseTaskExtractionOutput,
   splitCommand,
   taskFactsFromSpecs,
@@ -60,6 +61,18 @@ describe("task extraction", () => {
         position: expect.objectContaining({ recordIndex: 2 }),
       }),
     ]);
+  });
+
+  test("emits debug logs through the configured sink", () => {
+    const logs: string[] = [];
+    const result = extractTasksForSession("codex:one", candidates, {
+      provider: "off",
+      debugLog: (message) => logs.push(message),
+    });
+    expect(result).toEqual({ tasks: [], diagnostics: [] });
+    expect(logs.join("\n")).toContain("[task extraction] starting extraction for codex:one");
+    expect(logs.join("\n")).toContain("provider=off");
+    expect(logs.join("\n")).toContain("task extraction is off");
   });
 
   test("splits custom provider commands without invoking a shell", () => {
