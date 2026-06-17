@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import type { ChartOptions } from "chart.js";
 import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { DataTable, type Column } from "../components/DataTable";
@@ -10,7 +11,14 @@ import type { SessionRow } from "../types";
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
 const healthColumns: Column<SessionRow>[] = [
-  { id: "start", label: "Started", className: "nowrap", sortValue: (r) => r.start, cell: (r) => dt(r.start) },
+  {
+    id: "start", label: "Started", className: "nowrap", sortValue: (r) => r.start,
+    cell: (r) => (
+      <Link to="/sessions/$sessionId" params={{ sessionId: r.sessionId }} className="table-link" title="View session">
+        {dt(r.start)}
+      </Link>
+    ),
+  },
   {
     id: "project", label: "Project", className: "session-project", sortValue: (r) => r.project,
     cell: (r) => <span className="truncate" title={r.project}>{compactProject(r.project)}</span>,

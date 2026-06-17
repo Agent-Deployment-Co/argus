@@ -53,26 +53,95 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Aleo", Georgia, serif; -webkit-font-smoothing: antialiased; }
-header { border-bottom: 1px solid var(--line); }
-.header-inner { max-width: 1200px; margin: 0 auto; padding: 24px 32px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.brand { display: flex; align-items: center; gap: 11px; }
-.brand-mark { display: block; width: 34px; height: auto; flex: 0 0 auto; }
-header h1 { margin: 0; color: var(--heading); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 21px; font-weight: 700; letter-spacing: .01em; }
-header .sub { color: var(--muted); font-size: 13px; }
-.header-controls { display: flex; align-items: center; gap: 12px; margin-left: auto; }
-.theme-switcher { display: inline-flex; align-items: center; padding: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
-.theme-choice { border: 0; border-radius: 6px; padding: 4px 9px; background: transparent; color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; text-transform: uppercase; letter-spacing: .05em; cursor: pointer; }
-.theme-choice:hover { color: var(--heading); }
-.theme-choice[aria-pressed="true"] { background: var(--accent); color: var(--coffee-bean); }
+/* App shell: persistent left nav rail + content region. The rail collapses to an icon-only
+   strip (width driven by --rail-w) so wide views like the sessions split-pane get more canvas. */
+.app-shell { --rail-w: 184px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
+.app-shell.rail-collapsed { --rail-w: 60px; }
+.content { min-width: 0; }
+
+.rail { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
+.rail-brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 14px; }
+.brand-mark { display: block; width: auto; height: 20px; flex: 0 0 auto; }
+.rail-wordmark { color: var(--heading); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 22px; line-height: 1; font-weight: 700; letter-spacing: -0.05em; }
+
+.rail-nav { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; }
+.rail-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px "Poppins", "Avenir Next", Arial, sans-serif; letter-spacing: .01em; white-space: nowrap; }
+.rail-link:hover { background: var(--hover); color: var(--heading); }
+.rail-link[aria-current="page"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.rail-link[aria-disabled="true"] { opacity: .4; cursor: not-allowed; pointer-events: none; }
+.rail-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rail-icon { flex: 0 0 auto; }
+
+.rail-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--line); }
+.rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.rail-icon-btn:hover { color: var(--heading); border-color: var(--muted); }
+.rail-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.theme-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; }
+.theme-choice { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; padding: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+.theme-choice:hover { background: var(--hover); color: var(--heading); }
+.theme-choice[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .theme-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-nav.tabs { border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; background: var(--bg); }
-.tabs-inner { max-width: 1200px; margin: 0 auto; padding: 0 32px; display: flex; gap: 2px; }
-.tab { border: 0; background: transparent; color: var(--muted); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; text-transform: uppercase; letter-spacing: .1em; padding: 14px 16px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; text-decoration: none; display: inline-block; }
-.tab:hover { color: var(--heading); }
-.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
-.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.tab[aria-disabled="true"] { opacity: .38; cursor: not-allowed; pointer-events: none; }
-main { padding: 30px 32px 64px; max-width: 1200px; margin: 0 auto; }
+
+/* Collapsed rail: hide text, center icons. */
+.rail-collapsed .rail-wordmark, .rail-collapsed .rail-label { display: none; }
+.rail-collapsed .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+.rail-collapsed .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
+.rail-collapsed .rail-footer { flex-direction: column-reverse; }
+
+main { padding: 30px 32px 64px; }
+
+/* Sessions: a full-height two-pane (selector list + detail). Drop main's padding for this route
+   only so the list sits flush against the rail instead of floating inside the page gutters. */
+main:has(.sessions-split) { padding: 0; }
+.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: 100vh; }
+.session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.session-search-row { display: flex; align-items: center; gap: 8px; }
+.session-search { flex: 1 1 auto; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.session-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--pill-cool-line); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool) 14%, transparent); color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.filter-pill:hover { border-color: var(--accent); }
+.filter-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: var(--hover); font-size: 13px; line-height: 1; }
+.filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
+.session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-count { flex: 0 0 auto; color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; white-space: nowrap; }
+.session-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
+.session-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
+.session-item:hover { background: var(--hover); color: var(--text); }
+.session-item.active { background: color-mix(in srgb, var(--accent) 13%, transparent); border-left-color: var(--accent); }
+.session-item-title { color: var(--heading); font-weight: 700; font-size: 13.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.session-item-meta { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; font-size: 11.5px; }
+.session-item-meta .truncate { max-width: 60%; }
+.session-item-stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; color: var(--muted); font: 600 10.5px "Poppins", "Avenir Next", Arial, sans-serif; }
+.session-empty-row { padding: 18px 14px; color: var(--muted); font-size: 13px; }
+
+.session-detail { overflow-y: auto; min-height: 0; }
+.session-detail-inner { padding: 28px 32px 64px; }
+.session-empty { display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
+.session-detail-head { margin-bottom: 20px; }
+.session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
+.session-detail-eyebrow .truncate { max-width: 280px; }
+.eyebrow-link { color: var(--link); }
+.eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
+.table-link { color: var(--link); }
+.table-link:hover { color: var(--link-hover); text-decoration: underline; }
+.session-detail-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
+.session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.session-id { display: inline-block; font-size: 11px; }
+.session-detail-inner section { margin: 22px 0 0; }
+.session-detail-inner h3 { margin: 0 0 10px; color: var(--heading); font-size: 14px; font-weight: 700; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 22px; }
+.kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.kv-k { color: var(--muted); font-size: 13px; }
+.kv-v { color: var(--heading); font-size: 13px; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--text); }
+.chip-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.file-list li { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.first-prompt { margin: 0; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 8px 8px 0; color: var(--text); font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+
 section { margin: 0 0 42px; }
 section h2 { font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: .14em; color: var(--accent); margin: 0 0 14px; font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
@@ -119,8 +188,11 @@ a:hover { color: var(--link-hover); }
 code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 ::selection { background: var(--sel-bg); color: var(--sel-text); }
 .center-state { max-width: 1200px; margin: 0 auto; padding: 80px 32px; color: var(--muted); text-align: center; }
-@media (max-width: 600px) {
-  .header-inner, main { padding-left: 18px; padding-right: 18px; }
-  .header-inner { align-items: flex-start; }
-  .header-controls { width: 100%; margin-left: 45px; justify-content: space-between; }
+@media (max-width: 640px) {
+  /* Force the rail to its icon-only width on narrow screens. */
+  .app-shell { --rail-w: 60px; }
+  .rail-wordmark, .rail-label { display: none; }
+  .rail-brand, .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
+  .rail-footer { flex-direction: column-reverse; }
+  main { padding-left: 18px; padding-right: 18px; }
 }
