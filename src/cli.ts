@@ -16,7 +16,6 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import { extractSessionTasks } from "./session-tasks.ts";
 import {
   DEFAULT_TASK_EXTRACTION_PROVIDER,
   type TaskExtractionOptions,
@@ -41,12 +40,6 @@ interface ServeOptions extends BuildDashboardOptions {
   port: number;
   open: boolean;
   taskExtraction: TaskExtractionOptions;
-}
-
-interface FactsOptions {
-  sessionId: string;
-  extract: boolean;
-  taskExtraction?: TaskExtractionOptions;
 }
 
 function toTaskProvider(value: string): TaskExtractionProvider {
@@ -341,57 +334,6 @@ async function runStatus(log: Log): Promise<void> {
   if (pending) log("Run `argus index` to pick up new and changed sessions.");
 }
 
-function formatFactTimestamp(timestampMs: number | undefined): string {
-  return timestampMs == null ? "(no timestamp)" : new Date(timestampMs).toISOString();
-}
-
-function indentFactText(text: string): string {
-  const lines = text.trim().split(/\r?\n/);
-  return lines.map((line) => `   ${line}`).join("\n");
-}
-
-async function extractFactsForSession(
-  store: Awaited<ReturnType<typeof openStore>>,
-  opts: FactsOptions,
-  log: Log,
-): Promise<boolean> {
-  const extracted = await extractSessionTasks(store, {
-    sessionId: opts.sessionId,
-    taskExtraction: opts.taskExtraction,
-  });
-  if (!extracted.ok) {
-    log(extracted.message);
-    for (const entry of (extracted.diagnostics ?? [])
-      .filter((diagnostic) => diagnostic.message !== extracted.message)
-      .slice(0, 4)) {
-      log(`  ! ${entry.message}`);
-    }
-    return false;
-  }
-
-  log(`Saved ${extracted.tasks.length} task${extracted.tasks.length === 1 ? "" : "s"} for ${opts.sessionId}.`);
-  return true;
-}
-
-async function runFacts(opts: FactsOptions, log: Log): Promise<void> {
-  const store = await openStore();
-  try {
-    if (opts.extract && !(await extractFactsForSession(store, opts, log))) return;
-    const tasks = await store.readSessionTasks(opts.sessionId);
-    if (!tasks.length) {
-      log(`No tasks found for ${opts.sessionId}. Run \`argus facts ${opts.sessionId} --extract\` to extract tasks from its transcript.`);
-      return;
-    }
-    const blocks = tasks.map(
-      (task, index) =>
-        `${index + 1}. ${formatFactTimestamp(task.timestampMs)}\n${indentFactText(task.description)}`,
-    );
-    process.stdout.write(`Tasks for ${opts.sessionId}\n\n${blocks.join("\n\n")}\n`);
-  } finally {
-    await store.close();
-  }
-}
-
 // ---------------------------------------------------------------------------
 // CLI definition (citty). Each subcommand declares its own flags; --help scopes
 // to that subcommand automatically and flag types flow into the run handlers.
@@ -437,7 +379,7 @@ const summarizeArgs = {
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
 } as const;
 
-/** Task extraction options for `facts --extract`. */
+/** Task extraction options for web/session-screen extraction. */
 const taskArgs = {
   "task-provider": {
     type: "string",
@@ -591,28 +533,6 @@ const status = defineCommand({
   run: handler(() => runStatus(log)),
 });
 
-const facts = defineCommand({
-  meta: { name: "facts", description: "show tasks for a session" },
-  args: {
-    id: { type: "positional", required: true, description: "session id" },
-    extract: { type: "boolean", default: false, description: "Extract tasks from this session's transcript before printing" },
-    ...taskArgs,
-  },
-  run: handler((args) => {
-    const sessionId = args._[0];
-    if (!sessionId) failArg("Usage: argus facts <session-id>");
-    if (args._.length > 1) failArg(`Unexpected argument: ${args._[1]}`);
-    return runFacts(
-      {
-        sessionId,
-        extract: args.extract,
-        taskExtraction: args.extract ? taskExtractionOptions(args) : undefined,
-      },
-      log,
-    );
-  }),
-});
-
 const login = defineCommand({
   meta: { name: "login", description: "login via Cloudflare Access SSO in your browser" },
   args: {
@@ -677,7 +597,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { report, serve, index, sync, run: runCmd, status, facts, login },
+  subCommands: { report, serve, index, sync, run: runCmd, status, login },
 });
 
 async function run() {
