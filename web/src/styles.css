@@ -124,6 +124,8 @@ main:has(.sessions-split) { padding: 0; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
 .eyebrow-link { color: var(--link); }
 .eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
+.table-link { color: var(--link); }
+.table-link:hover { color: var(--link-hover); text-decoration: underline; }
 .session-detail-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
 .session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .session-id { display: inline-block; font-size: 11px; }
