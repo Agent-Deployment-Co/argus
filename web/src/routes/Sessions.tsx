@@ -1,4 +1,4 @@
-import { Link, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt } from "../lib/format";
 import { useSnapshot } from "../lib/snapshot";
@@ -21,6 +21,19 @@ function extractFilterToken(raw: string, requireTerminator: boolean): { key: Fil
   if (!m) return null;
   const rest = (raw.slice(0, m.index) + raw.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim();
   return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
+}
+
+/** Sessions sorted newest-first and narrowed by the URL filters (project/source). */
+function sessionsForSearch(sessions: SessionRow[], { project, source }: SessionsSearch): SessionRow[] {
+  const proj = project?.toLowerCase();
+  const src = source?.toLowerCase();
+  return [...sessions]
+    .sort((a, b) => b.start - a.start)
+    .filter((s) => {
+      if (proj && !s.project.toLowerCase().includes(proj)) return false;
+      if (src && (s.source ?? "").toLowerCase() !== src) return false;
+      return true;
+    });
 }
 
 /** A human-facing title for a session: its opening prompt, else the summary, else a placeholder. */
@@ -65,22 +78,18 @@ function SessionList() {
     }
   };
 
-  const sorted = useMemo(() => [...d.sessions].sort((a, b) => b.start - a.start), [d.sessions]);
+  const byUrl = useMemo(() => sessionsForSearch(d.sessions, { project, source }), [d.sessions, project, source]);
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
-    const proj = project?.toLowerCase();
-    const src = source?.toLowerCase();
-    return sorted.filter((s) => {
-      if (proj && !s.project.toLowerCase().includes(proj)) return false;
-      if (src && (s.source ?? "").toLowerCase() !== src) return false;
-      if (!term) return true;
-      return (
+    if (!term) return byUrl;
+    return byUrl.filter(
+      (s) =>
         sessionTitle(s).toLowerCase().includes(term) ||
         s.project.toLowerCase().includes(term) ||
-        (s.source ?? "").toLowerCase().includes(term)
-      );
-    });
-  }, [sorted, query, project, source]);
+        (s.source ?? "").toLowerCase().includes(term),
+    );
+  }, [byUrl, query]);
+  const total = d.sessions.length;
 
   const activeFilters = ([["project", project], ["source", source]] as const).filter(([, v]) => Boolean(v));
 
@@ -101,7 +110,7 @@ function SessionList() {
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={onQueryKeyDown}
           />
-          <span className="session-count">{filtered.length === sorted.length ? sorted.length : `${filtered.length} / ${sorted.length}`}</span>
+          <span className="session-count">{filtered.length === total ? total : `${filtered.length} / ${total}`}</span>
         </div>
         {activeFilters.length > 0 && (
           <div className="session-filters">
@@ -156,5 +165,12 @@ export function Sessions() {
 }
 
 export function SessionsEmpty() {
-  return <div className="session-empty">Select a session on the left to see its details.</div>;
+  const { dashboard: d } = useSnapshot();
+  const search = useSearch({ from: "/sessions" });
+  const first = sessionsForSearch(d.sessions, search)[0];
+  if (first) {
+    return <Navigate to="/sessions/$sessionId" params={{ sessionId: first.sessionId }} search={search} replace />;
+  }
+  const filtered = Boolean(search.project || search.source);
+  return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
 }
