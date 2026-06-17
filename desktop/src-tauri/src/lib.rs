@@ -7,18 +7,23 @@
 use std::sync::Mutex;
 
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    AppHandle, Manager, Wry,
 };
+use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-/// Shared state: the local port the sidecar serves on, and the handle to the running child (if any).
+/// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
+/// and the tray menu items we update as that state changes.
 struct AppState {
     port: u16,
     child: Mutex<Option<CommandChild>>,
+    status_item: MenuItem<Wry>,
+    start_item: MenuItem<Wry>,
+    stop_item: MenuItem<Wry>,
 }
 
 /// Ask the OS for an unused localhost port by binding to :0 and reading back the assignment.
@@ -33,14 +38,27 @@ fn pick_free_port() -> u16 {
 
 /// The bundled web assets live under `<resources>/web`. Returns it as a string for the sidecar's
 /// `ARGUS_WEB_ROOT`, which `serve.ts` honors above every other candidate.
-fn web_root(app: &tauri::AppHandle) -> Option<String> {
+fn web_root(app: &AppHandle) -> Option<String> {
     let dir = app.path().resource_dir().ok()?.join("web");
     dir.to_str().map(|s| s.to_string())
 }
 
+/// Reflect the running/stopped state in the tray menu: status label text and which of Start/Stop
+/// is selectable.
+fn refresh_status(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let running = state.child.lock().unwrap().is_some();
+    let _ = state
+        .status_item
+        .set_text(if running { "Argus is running" } else { "Argus is stopped" });
+    let _ = state.start_item.set_enabled(!running);
+    let _ = state.stop_item.set_enabled(running);
+}
+
 /// Spawn `argus run --port <port>` as a sidecar, forwarding the web-asset location, and drain its
-/// output to the log. Returns the child handle so the tray can stop it.
-fn spawn_sidecar(app: &tauri::AppHandle) -> Result<CommandChild, String> {
+/// output to the log. When it exits (crash or stop), clear the handle and refresh the menu so the
+/// tray never claims to be running a process that has gone away.
+fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     let port = app.state::<AppState>().port;
     let mut command = app
         .shell()
@@ -54,6 +72,7 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<CommandChild, String> {
         .spawn()
         .map_err(|e| format!("starting the argus sidecar: {e}"))?;
 
+    let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -64,7 +83,9 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<CommandChild, String> {
                     log::warn!("[argus] {}", String::from_utf8_lossy(&line).trim_end())
                 }
                 CommandEvent::Terminated(payload) => {
-                    log::warn!("[argus] sidecar exited: {:?}", payload.code)
+                    log::warn!("[argus] sidecar exited: {:?}", payload.code);
+                    *handle.state::<AppState>().child.lock().unwrap() = None;
+                    refresh_status(&handle);
                 }
                 _ => {}
             }
@@ -75,30 +96,34 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<CommandChild, String> {
 }
 
 /// Start the sidecar if it isn't already running.
-fn start(app: &tauri::AppHandle) {
-    let state = app.state::<AppState>();
-    let mut slot = state.child.lock().unwrap();
-    if slot.is_some() {
-        return;
+fn start(app: &AppHandle) {
+    {
+        let state = app.state::<AppState>();
+        let mut slot = state.child.lock().unwrap();
+        if slot.is_some() {
+            return;
+        }
+        match spawn_sidecar(app) {
+            Ok(child) => *slot = Some(child),
+            Err(err) => log::error!("{err}"),
+        }
     }
-    match spawn_sidecar(app) {
-        Ok(child) => *slot = Some(child),
-        Err(err) => log::error!("{err}"),
-    }
+    refresh_status(app);
 }
 
 /// Stop the sidecar if running. `argus run` installs its own shutdown handler; killing the process
-/// group ends all three legs.
-fn stop(app: &tauri::AppHandle) {
+/// ends all three legs.
+fn stop(app: &AppHandle) {
     if let Some(child) = app.state::<AppState>().child.lock().unwrap().take() {
         if let Err(err) = child.kill() {
             log::warn!("stopping the argus sidecar: {err}");
         }
     }
+    refresh_status(app);
 }
 
 /// Open the served dashboard in the user's default browser.
-fn open_dashboard(app: &tauri::AppHandle) {
+fn open_dashboard(app: &AppHandle) {
     let port = app.state::<AppState>().port;
     let url = format!("http://localhost:{port}");
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
@@ -108,7 +133,7 @@ fn open_dashboard(app: &tauri::AppHandle) {
 
 /// Kick off the browser sign-in flow (`argus login`, Cloudflare Access). Fire-and-forget: it opens
 /// a browser and exits; the running sidecar's sync leg recovers from dormant once a token lands.
-fn sign_in(app: &tauri::AppHandle) {
+fn sign_in(app: &AppHandle) {
     match app.shell().sidecar("argus").and_then(|c| c.args(["login"]).spawn()) {
         Ok((mut rx, _child)) => {
             tauri::async_runtime::spawn(async move {
@@ -123,11 +148,26 @@ fn sign_in(app: &tauri::AppHandle) {
     }
 }
 
+/// Toggle launch-at-login and return the new state so the menu checkmark can follow.
+fn toggle_autostart(app: &AppHandle) -> bool {
+    let manager = app.autolaunch();
+    let enabled = manager.is_enabled().unwrap_or(false);
+    let result = if enabled { manager.disable() } else { manager.enable() };
+    match result {
+        Ok(()) => !enabled,
+        Err(err) => {
+            log::error!("toggling open-at-login: {err}");
+            enabled
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -141,16 +181,20 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            app.manage(AppState {
-                port: pick_free_port(),
-                child: Mutex::new(None),
-            });
-
-            let status = MenuItem::with_id(app, "status", "Argus is running", false, None::<&str>)?;
+            let status = MenuItem::with_id(app, "status", "Argus is starting…", false, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
             let signin = MenuItem::with_id(app, "signin", "Sign in…", true, None::<&str>)?;
+            let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+            let autostart = CheckMenuItem::with_id(
+                app,
+                "autostart",
+                "Open at login",
+                true,
+                autostart_on,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
@@ -162,10 +206,19 @@ pub fn run() {
                     &stop_item,
                     &PredefinedMenuItem::separator(app)?,
                     &signin,
+                    &autostart,
                     &PredefinedMenuItem::separator(app)?,
                     &quit,
                 ],
             )?;
+
+            app.manage(AppState {
+                port: pick_free_port(),
+                child: Mutex::new(None),
+                status_item: status,
+                start_item,
+                stop_item,
+            });
 
             let mut tray = TrayIconBuilder::with_id("main")
                 .tooltip("Argus")
@@ -176,6 +229,9 @@ pub fn run() {
                     "start" => start(app),
                     "stop" => stop(app),
                     "signin" => sign_in(app),
+                    "autostart" => {
+                        let _ = toggle_autostart(app);
+                    }
                     "quit" => {
                         stop(app);
                         app.exit(0);
