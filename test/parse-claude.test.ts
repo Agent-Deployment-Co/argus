@@ -98,6 +98,8 @@ describe("Claude transcript fragments", () => {
       sourceSessionId: "sess1",
       cwd: "/Users/fixture/proj",
       gitBranch: "main",
+      userMessages: 1,
+      agentMessages: 2,
     });
     expect(fragment.facts.taskCandidates).toEqual([
       expect.objectContaining({
@@ -166,6 +168,7 @@ describe("Claude transcript fragments", () => {
     const session = fragment.facts.sessions[0]!;
     expect(session.kind).toBe("subagent");
     expect(session.sourceSessionId).toBe("sess1:subagent:agent-a1");
+    expect(session.agentMessages).toBe(1);
     expect(fragment.facts.messages[0]?.sourceSessionId).toBe(session.sourceSessionId);
     expect(fragment.facts.relationships).toEqual([
       expect.objectContaining({
@@ -249,6 +252,100 @@ describe("Claude transcript fragments", () => {
         position: expect.objectContaining({ recordIndex: 3 }),
       }),
     ]);
+  });
+
+  test("counts real Claude user messages and unique agent messages", () => {
+    const root = temporaryDirectory();
+    const transcript = join(root, "session.jsonl");
+    const records = [
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:00.000Z",
+        message: { content: "<local-command-caveat>ignore command output</local-command-caveat>" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:01.000Z",
+        message: { content: "<bash-input>jj status</bash-input>" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:02.000Z",
+        message: { content: "<bash-stdout>clean</bash-stdout><bash-stderr></bash-stderr>" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:03.000Z",
+        message: { content: "update the parser" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:04.000Z",
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-1", content: "ok" }] },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:05.000Z",
+        message: { content: [{ type: "text", text: "Base directory for this skill: /tmp/skill\n\n# Skill" }] },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:06.000Z",
+        message: {
+          content:
+            "You identify the actual tasks a user was trying to accomplish in a coding-agent session.\n\nFiltered user messages:\n{}",
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:07.000Z",
+        message: {
+          id: "message-1",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+          content: [{ type: "text", text: "working" }],
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:08.000Z",
+        message: {
+          id: "message-1",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+          content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:09.000Z",
+        message: {
+          id: "message-2",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+          content: [{ type: "text", text: "done" }],
+        },
+      },
+    ];
+    writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n"));
+
+    const parsed = parseClaudeTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.sessions[0]).toMatchObject({
+      userMessages: 2,
+      agentMessages: 2,
+    });
   });
 
   test("excludes Argus task extraction prompts from task candidates", () => {

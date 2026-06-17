@@ -53,7 +53,8 @@ export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v6: excludes Argus task-extraction prompts from task candidates.
 // v7: labels Argus task-extraction sessions with their target session.
 // v8: excludes and labels Argus session-analysis prompts.
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "8";
+// v9: emits source-owned user-message and agent-message counts.
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "9";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",
@@ -86,6 +87,7 @@ interface OpenAssistantMessage {
 interface SessionState {
   fact: SessionFact;
   parentSourceSessionId?: string;
+  agentMessageIds: Set<string>;
 }
 
 interface SnapshotRead {
@@ -544,6 +546,29 @@ function claudeUserMessageText(record: PositionedRecord, limit = TASK_TEXT_LIMIT
   return textFromUserContent(record.value.message?.content, limit) || undefined;
 }
 
+function hasToolResultContent(content: unknown): boolean {
+  return Array.isArray(content) && content.some((part) => part?.type === "tool_result");
+}
+
+function isClaudeGeneratedContextText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<bash-stdout>") ||
+    trimmed.startsWith("<bash-stderr>") ||
+    trimmed.startsWith("Base directory for this skill:") ||
+    argusGeneratedPromptTitle(trimmed) != null
+  );
+}
+
+function isCountableClaudeUserMessage(record: PositionedRecord): boolean {
+  if (record.value.type !== "user" || record.value.isCompactSummary === true) return false;
+  const content = record.value.message?.content;
+  if (hasToolResultContent(content)) return false;
+  const text = textFromUserContent(content, TASK_TEXT_LIMIT);
+  return Boolean(text.trim() && !isClaudeGeneratedContextText(text));
+}
+
 function invocationMapKey(sourceSessionId: string, invocationId: string): string {
   return `${sourceSessionId}\u0000${invocationId}`;
 }
@@ -710,7 +735,11 @@ function parseTranscript(
           : {}),
         position: record.position,
       };
-      state = { fact, parentSourceSessionId: identity.parentSourceSessionId };
+      state = {
+        fact,
+        parentSourceSessionId: identity.parentSourceSessionId,
+        agentMessageIds: new Set(),
+      };
       sessions.set(identity.sourceSessionId, state);
       facts.sessions.push(fact);
       if (identity.parentSourceSessionId) {
@@ -771,6 +800,20 @@ function parseTranscript(
     }
 
     if (record.value.type === "assistant") {
+      if (record.value.message?.model !== "<synthetic>") {
+        const providerMessageId =
+          typeof record.value.message?.id === "string" && record.value.message.id
+            ? record.value.message.id
+            : undefined;
+        if (providerMessageId) {
+          if (!session.agentMessageIds.has(providerMessageId)) {
+            session.agentMessageIds.add(providerMessageId);
+            session.fact.agentMessages = (session.fact.agentMessages ?? 0) + 1;
+          }
+        } else {
+          session.fact.agentMessages = (session.fact.agentMessages ?? 0) + 1;
+        }
+      }
       for (const part of content) {
         if (
           part?.type === "tool_use" &&
@@ -785,6 +828,9 @@ function parseTranscript(
     if (record.value.type !== "assistant") open = undefined;
 
     if (record.value.type === "user") {
+      if (isCountableClaudeUserMessage(record)) {
+        session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
+      }
       const taskText = claudeUserMessageText(record);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       if (generatedTitle && !session.fact.firstPrompt) {
