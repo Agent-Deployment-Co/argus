@@ -13,3 +13,11 @@ desktop/src-tauri/binaries/
 desktop/src-tauri/gen/
 desktop/src-tauri/web/
 *.bun-build
+
+# Tauri build artifacts and staged sidecar/web (regenerated from dist/ by the build)
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/
+desktop/src-tauri/web/
+desktop/src-tauri/gen/
+# Keep the tray app's placeholder UI (its frontendDist); the *.html rule above would hide it.
+!desktop/ui/index.html
