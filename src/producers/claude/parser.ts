@@ -36,6 +36,7 @@ import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   shouldSkipTaskCandidateText,
+  taskExtractionPromptTitle,
   textFromUserContent,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
@@ -50,7 +51,8 @@ export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
 // v5: emits filtered user task candidates for explicit per-session task extraction.
 // v6: excludes Argus task-extraction prompts from task candidates.
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "6";
+// v7: labels Argus task-extraction sessions with their target session.
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "7";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",
@@ -783,6 +785,10 @@ function parseTranscript(
 
     if (record.value.type === "user") {
       const taskText = claudeUserMessageText(record);
+      const extractionTitle = taskText ? taskExtractionPromptTitle(taskText) : undefined;
+      if (extractionTitle && !session.fact.firstPrompt) {
+        session.fact.firstPrompt = extractionTitle;
+      }
       if (
         taskText &&
         !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
