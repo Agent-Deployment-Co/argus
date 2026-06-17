@@ -142,6 +142,7 @@ function SessionList() {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
+                {s.userMessages != null && <span>{fmt(s.userMessages)} user</span>}
                 {s.agentMessages != null && <span>{fmt(s.agentMessages)} agent</span>}
                 <span>{fmt(s.total)} tok</span>
               </div>
