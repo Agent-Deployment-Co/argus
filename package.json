@@ -22,9 +22,6 @@
     "desktop:dev": "bun run desktop:stage && cd desktop && bunx tauri dev",
     "desktop:build": "bun run desktop:stage && cd desktop && bunx tauri build --bundles app"
   },
-  "engines": {
-    "node": ">=20.17"
-  },
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
     "@hono/node-server": "^2.0.5",
