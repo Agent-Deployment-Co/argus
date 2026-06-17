@@ -18,7 +18,7 @@ export function Activity() {
 
   const cards: Stat[] = [
     { label: "Sessions", value: String(d.totals.sessions) },
-    { label: "Messages", value: fmt(d.totals.messages) },
+    { label: "Model responses", value: fmt(d.totals.messages) },
     { label: "Total tokens", value: fmt(d.totals.total) },
     { label: "Est. cost", value: usd(d.totals.cost) },
     {

@@ -60,7 +60,7 @@ export function consoleOverview(dashboard: Dashboard): string {
       [{ label: "Metric" }, { label: "Value", align: "right" }],
       [
         ["Sessions", compactNumber(dashboard.totals.sessions)],
-        ["Messages", compactNumber(dashboard.totals.messages)],
+        ["Model responses", compactNumber(dashboard.totals.messages)],
         ["Total tokens", compactNumber(dashboard.totals.total)],
         ["Estimated cost", usd(dashboard.totals.cost)],
         ["Date range", dashboard.range.start && dashboard.range.end
@@ -86,7 +86,7 @@ export function consoleOverview(dashboard: Dashboard): string {
       "Top skills",
       [
         { label: "Skill" },
-        { label: "Messages", align: "right" },
+        { label: "Responses", align: "right" },
         { label: "Tokens", align: "right" },
       ],
       dashboard.bySkill

@@ -31,7 +31,7 @@ const healthColumns: Column<SessionRow>[] = [
   { id: "median", label: "Median turn", num: true, sortValue: (r) => r.health.medianTurnMs ?? -1, cell: (r) => (r.health.medianTurnMs != null ? dur(r.health.medianTurnMs) : <Dash />) },
   { id: "growth", label: "Tok×", num: true, sortValue: (r) => r.health.tokenGrowth ?? 0, cell: (r) => <TokGrowthCell growth={r.health.tokenGrowth} /> },
   { id: "userMessages", label: "User msgs", num: true, sortValue: (r) => r.userMessages ?? -1, cell: (r) => numOrDash(r.userMessages) },
-  { id: "msgs", label: "Msgs", num: true, sortValue: (r) => r.messages, cell: (r) => r.messages },
+  { id: "agentMessages", label: "Agent msgs", num: true, sortValue: (r) => r.agentMessages ?? -1, cell: (r) => numOrDash(r.agentMessages) },
   { id: "cost", label: "Cost", num: true, sortValue: (r) => r.cost, cell: (r) => usd(r.cost) },
 ];
 

@@ -402,6 +402,7 @@ export function aggregate(
       durationMs: end - start,
       messages: msgs.length,
       userMessages: meta?.userMessages ?? null,
+      agentMessages: meta?.agentMessages ?? null,
       rawTurns: meta?.rawTurns ?? null,
       models: [...models],
       topSkills,

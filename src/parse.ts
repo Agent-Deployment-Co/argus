@@ -691,7 +691,9 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
         const rawTurnIds = new Set<string>();
         let rawTurnsWithoutId = 0;
         let userMessageEvents = 0;
+        let agentMessageEvents = 0;
         let responseUserMessages = 0;
+        let responseAssistantMessages = 0;
 
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
@@ -708,6 +710,9 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
           if (o.type === "event_msg" && payload.type === "user_message") {
             userMessageEvents++;
+          }
+          if (o.type === "event_msg" && payload.type === "agent_message") {
+            agentMessageEvents++;
           }
           if (o.type === "session_meta") {
             sid = `codex:${codexSessionId(filePath, payload)}`;
@@ -729,6 +734,11 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             responseUserMessages++;
             const prompt = textFromCodexContent(payload.content);
             if (prompt) ensureSession(sid, "codex", currentCwd, filePath, prompt);
+            continue;
+          }
+
+          if (o.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
+            responseAssistantMessages++;
             continue;
           }
 
@@ -790,8 +800,10 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
         if (sid) {
           const meta = ensureSession(sid, "codex", currentCwd, filePath);
           const userMessages = userMessageEvents || responseUserMessages;
+          const agentMessages = agentMessageEvents || responseAssistantMessages;
           const rawTurns = rawTurnIds.size + rawTurnsWithoutId || userMessages || undefined;
           if (userMessages) meta.userMessages = userMessages;
+          if (agentMessages) meta.agentMessages = agentMessages;
           if (rawTurns) meta.rawTurns = rawTurns;
         }
       }

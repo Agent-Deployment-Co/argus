@@ -126,7 +126,7 @@ describe("aggregate", () => {
     expect(result.sessions[0]?.tasks).toEqual([task]);
   });
 
-  test("attaches source-owned user message and raw turn counts to session rows", () => {
+  test("attaches source-owned user message, agent message, and raw turn counts to session rows", () => {
     const message: MessageRecord = {
       source: "codex",
       sessionId: "codex:turns",
@@ -153,6 +153,7 @@ describe("aggregate", () => {
               cwd: "/Users/fixture/codex",
               filePath: "/tmp/codex.jsonl",
               userMessages: 8,
+              agentMessages: 287,
               rawTurns: 8,
             },
           ],
@@ -165,6 +166,7 @@ describe("aggregate", () => {
     expect(result.sessions[0]).toMatchObject({
       messages: 1,
       userMessages: 8,
+      agentMessages: 287,
       rawTurns: 8,
       health: expect.objectContaining({ turns: 8 }),
     });

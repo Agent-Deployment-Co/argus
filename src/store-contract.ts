@@ -126,6 +126,8 @@ export interface SessionFact {
   firstPrompt?: string;
   /** Raw user-message events observed in this session, when the source exposes them. */
   userMessages?: number;
+  /** Raw agent-message events observed in this session, when the source exposes them. */
+  agentMessages?: number;
   /** Raw conversational turns observed in this session, when the source exposes them. */
   rawTurns?: number;
   /**
