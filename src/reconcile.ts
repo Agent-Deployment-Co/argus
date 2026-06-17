@@ -273,6 +273,8 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     const cwd = cwdForSession(fact);
     const firstPrompt =
       firstPrompts.get(sid)?.text ?? firstPrompts.get(fact.sourceSessionId)?.text ?? fact.firstPrompt;
+    const userMessages = fact.userMessages;
+    const rawTurns = fact.rawTurns;
     const existing = sessions.get(sid);
     if (!existing) {
       sessions.set(sid, {
@@ -282,6 +284,8 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
         cwd,
         filePath: fact.transcriptPath,
         ...(firstPrompt ? { firstPrompt } : {}),
+        ...(userMessages != null ? { userMessages } : {}),
+        ...(rawTurns != null ? { rawTurns } : {}),
       });
       continue;
     }
@@ -290,6 +294,8 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       existing.project = projectLabel(cwd);
     }
     if (!existing.firstPrompt && firstPrompt) existing.firstPrompt = firstPrompt;
+    if (userMessages != null) existing.userMessages = Math.max(existing.userMessages ?? 0, userMessages);
+    if (rawTurns != null) existing.rawTurns = Math.max(existing.rawTurns ?? 0, rawTurns);
   }
 
   // Friction (#37): folded only for producers that observe it; absence then means zero, not unknown.

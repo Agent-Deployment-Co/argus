@@ -688,6 +688,10 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
         let currentModel = "(unknown)";
         let pendingToolUses: ToolUse[] = [];
         const callIdToName = new Map<string, string>();
+        const rawTurnIds = new Set<string>();
+        let rawTurnsWithoutId = 0;
+        let userMessageEvents = 0;
+        let responseUserMessages = 0;
 
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
@@ -698,6 +702,13 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             continue;
           }
           const payload = o.payload ?? {};
+          if (o.type === "event_msg") {
+            if (typeof payload.turn_id === "string" && payload.turn_id) rawTurnIds.add(payload.turn_id);
+            else if (payload.type === "task_started") rawTurnsWithoutId++;
+          }
+          if (o.type === "event_msg" && payload.type === "user_message") {
+            userMessageEvents++;
+          }
           if (o.type === "session_meta") {
             sid = `codex:${codexSessionId(filePath, payload)}`;
             if (typeof payload.cwd === "string") currentCwd = payload.cwd;
@@ -715,6 +726,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
 
           if (o.type === "response_item" && payload.type === "message" && payload.role === "user") {
+            responseUserMessages++;
             const prompt = textFromCodexContent(payload.content);
             if (prompt) ensureSession(sid, "codex", currentCwd, filePath, prompt);
             continue;
@@ -774,6 +786,13 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             }
             pendingToolUses = [];
           }
+        }
+        if (sid) {
+          const meta = ensureSession(sid, "codex", currentCwd, filePath);
+          const userMessages = userMessageEvents || responseUserMessages;
+          const rawTurns = rawTurnIds.size + rawTurnsWithoutId || userMessages || undefined;
+          if (userMessages) meta.userMessages = userMessages;
+          if (rawTurns) meta.rawTurns = rawTurns;
         }
       }
     }

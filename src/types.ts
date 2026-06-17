@@ -22,6 +22,10 @@ export type AgentSource = "claude" | "codex" | "gemini" | "cowork";
 
 export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;
+  /** CLI-only: raw user-message count when the source exposes it. */
+  userMessages: number | null;
+  /** CLI-only: raw turn count when the source exposes it. */
+  rawTurns: number | null;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
   /** CLI-only: tasks generated for this session via session task extraction. */
@@ -29,14 +33,15 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
 };
 
 /**
- * Per-session health metrics (#38), derived in aggregate.ts from messages + SessionFriction.
- * Friction-derived fields are null when the session's source doesn't expose friction
- * (codex/gemini/AgentsView imports) — distinct from an observed zero.
+ * Per-session health metrics (#38), derived in aggregate.ts from messages, source-owned counters,
+ * and SessionFriction. Friction-derived fields are null when the session's source doesn't expose
+ * friction — distinct from an observed zero.
  */
 export interface SessionHealth {
   interruptions: number | null;
   rejections: number | null;
   compactions: number | null;
+  /** Raw turns when source-owned counters exist, otherwise friction-observed turns if available. */
   turns: number | null;
   medianTurnMs: number | null;
   maxTurnMs: number | null;
@@ -197,6 +202,10 @@ export interface SessionMeta {
   cwd: string;
   filePath: string; // transcript path, for on-demand LLM summarization
   firstPrompt?: string;
+  /** Raw user-message events observed in this session, when the source exposes them. */
+  userMessages?: number;
+  /** Raw conversational turns observed in this session, when the source exposes them. */
+  rawTurns?: number;
   /** Present only for sessions parsed from native Claude transcripts. */
   friction?: SessionFriction;
 }

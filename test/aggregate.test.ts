@@ -125,4 +125,48 @@ describe("aggregate", () => {
     const result = aggregate(parsedWithTask, new Map(), new Map());
     expect(result.sessions[0]?.tasks).toEqual([task]);
   });
+
+  test("attaches source-owned user message and raw turn counts to session rows", () => {
+    const message: MessageRecord = {
+      source: "codex",
+      sessionId: "codex:turns",
+      project: "fixture/codex",
+      cwd: "/Users/fixture/codex",
+      gitBranch: "",
+      ts: 1,
+      date: "2026-06-01",
+      model: "gpt-5",
+      usage: { ...emptyUsage(), input: 10 },
+      attributionSkill: null,
+      toolUses: [],
+    };
+    const result = aggregate(
+      {
+        messages: [message],
+        sessions: new Map([
+          [
+            "codex:turns",
+            {
+              source: "codex",
+              sessionId: "codex:turns",
+              project: "fixture/codex",
+              cwd: "/Users/fixture/codex",
+              filePath: "/tmp/codex.jsonl",
+              userMessages: 8,
+              rawTurns: 8,
+            },
+          ],
+        ]),
+        toolResults: new Map(),
+      },
+      new Map(),
+      new Map(),
+    );
+    expect(result.sessions[0]).toMatchObject({
+      messages: 1,
+      userMessages: 8,
+      rawTurns: 8,
+      health: expect.objectContaining({ turns: 8 }),
+    });
+  });
 });

@@ -124,6 +124,10 @@ export interface SessionFact {
   rawProjectId?: string;
   /** Native prompt when the transcript itself owns it (for example Codex or Gemini). */
   firstPrompt?: string;
+  /** Raw user-message events observed in this session, when the source exposes them. */
+  userMessages?: number;
+  /** Raw conversational turns observed in this session, when the source exposes them. */
+  rawTurns?: number;
   /**
    * Session friction events (#37) observed in this file, identified stably so the
    * reconciler can dedupe replays across resumed-session files. Claude only.
