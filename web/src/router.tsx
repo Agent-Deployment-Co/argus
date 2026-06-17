@@ -13,9 +13,10 @@ const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
   component: Sessions,
-  validateSearch: (search: Record<string, unknown>): { project?: string; source?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { project?: string; source?: string; showGenerated?: boolean } => ({
     project: typeof search.project === "string" && search.project ? search.project : undefined,
     source: typeof search.source === "string" && search.source ? search.source : undefined,
+    showGenerated: search.showGenerated === true || search.showGenerated === "true" ? true : undefined,
   }),
 });
 
