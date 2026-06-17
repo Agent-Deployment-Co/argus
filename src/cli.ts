@@ -6,17 +6,22 @@ import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
 import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
+import type { TranscriptSource } from "./parse.ts";
 import { scanStore } from "./parse-incremental.ts";
 import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { buildDashboard, summaryLine, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
+import { parseClaudeTranscriptPath } from "./producers/claude/parser.ts";
 import { parseCodexTranscriptPath } from "./producers/codex/parser.ts";
+import { parseCoworkTranscriptPath } from "./producers/cowork/parser.ts";
+import { parseGeminiTranscriptPath } from "./producers/gemini/parser.ts";
 import { startServer } from "./serve.ts";
 import { openStore } from "./store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
+import type { FileParseResult } from "./store-contract.ts";
 import {
   DEFAULT_TASK_EXTRACTION_PROVIDER,
   extractTasksForSession,
@@ -349,6 +354,19 @@ function indentFactText(text: string): string {
   return lines.map((line) => `   ${line}`).join("\n");
 }
 
+function parseTranscriptForTaskExtraction(source: TranscriptSource, path: string): FileParseResult {
+  switch (source) {
+    case "claude":
+      return parseClaudeTranscriptPath(path);
+    case "codex":
+      return parseCodexTranscriptPath(path);
+    case "cowork":
+      return parseCoworkTranscriptPath(path);
+    case "gemini":
+      return parseGeminiTranscriptPath(path);
+  }
+}
+
 async function extractFactsForSession(
   store: Awaited<ReturnType<typeof openStore>>,
   opts: FactsOptions,
@@ -360,12 +378,8 @@ async function extractFactsForSession(
     log(`No session found for ${opts.sessionId}. Run \`argus index\` to read sessions into the local store.`);
     return false;
   }
-  if (meta.source !== "codex") {
-    log(`Task extraction currently supports Codex sessions only. ${opts.sessionId} is a ${meta.source} session.`);
-    return false;
-  }
 
-  const parsedTranscript = parseCodexTranscriptPath(meta.filePath);
+  const parsedTranscript = parseTranscriptForTaskExtraction(meta.source, meta.filePath);
   if (parsedTranscript.status !== "current") {
     const detail = parsedTranscript.diagnostics[0]?.message ?? `Couldn't read ${meta.filePath}`;
     log(`Couldn't extract tasks for ${opts.sessionId}: ${detail}`);

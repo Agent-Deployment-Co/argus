@@ -25,6 +25,7 @@ import {
   type TranscriptParserAdapter,
 } from "../../store-contract.ts";
 import { CODEX_SESSIONS_DIR } from "../../paths.ts";
+import { TASK_TEXT_LIMIT, isTurnAbortedText, shouldSkipTaskCandidateText } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
@@ -39,7 +40,6 @@ export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
 const ARGUMENT_LIMIT = 280;
 const FIRST_PROMPT_LIMIT = 500;
-const TASK_TEXT_LIMIT = 4_000;
 const DEFAULT_SNAPSHOT_ATTEMPTS = 3;
 
 interface ParsedRecord {
@@ -443,29 +443,14 @@ function codexUserMessageText(record: ParsedRecord, limit = TASK_TEXT_LIMIT): st
   return textFromCodexContent(payload.content, limit) || undefined;
 }
 
-function isAgentsInstructionsText(text: string): boolean {
-  return /^#?\s*AGENTS\.md instructions for\b/i.test(text.trimStart());
-}
-
-function isTurnAbortedText(text: string): boolean {
-  const trimmed = text.trim();
-  return (
-    /^<turn_aborted\b[^>]*\/?>$/i.test(trimmed) ||
-    /^<turn_aborted\b[^>]*>\s*<\/turn_aborted>$/i.test(trimmed)
-  );
-}
-
 function directlyFollowedByTurnAborted(records: ParsedRecord[], index: number): boolean {
   const nextText = records[index + 1] ? codexUserMessageText(records[index + 1]!) : undefined;
   return nextText ? isTurnAbortedText(nextText) : false;
 }
 
 function shouldSkipTaskMessage(records: ParsedRecord[], index: number, text: string): boolean {
-  return (
-    isAgentsInstructionsText(text) ||
-    isTurnAbortedText(text) ||
-    directlyFollowedByTurnAborted(records, index)
-  );
+  const nextText = directlyFollowedByTurnAborted(records, index) ? "<turn_aborted>" : undefined;
+  return shouldSkipTaskCandidateText(text, nextText);
 }
 
 export function parseCodexTranscript(

@@ -98,6 +98,16 @@ describe("Claude transcript fragments", () => {
       cwd: "/Users/fixture/proj",
       gitBranch: "main",
     });
+    expect(fragment.facts.taskCandidates).toEqual([
+      expect.objectContaining({
+        source: "claude",
+        sourceSessionId: "sess1",
+        text: "hello there",
+        timestampMs: Date.parse("2026-06-01T17:00:00.000Z"),
+        position: expect.objectContaining({ recordIndex: 0 }),
+      }),
+    ]);
+    expect(fragment.facts.tasks).toEqual([]);
 
     const invocations = fragment.facts.invocations.filter(
       (invocation) => invocation.messageId === first.id,

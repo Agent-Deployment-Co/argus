@@ -31,12 +31,18 @@ import {
   type SessionFact,
   type SessionRelationshipFact,
   type SourcePosition,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
   type AuxiliaryParserAdapter,
 } from "../../store-contract.ts";
 import { GEMINI_DIR } from "../../paths.ts";
+import {
+  TASK_TEXT_LIMIT,
+  shouldSkipTaskCandidateText,
+  textFromUserContent,
+} from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
@@ -44,7 +50,8 @@ export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
 export const GEMINI_AUXILIARY_ROOT_ID = "gemini-config";
 export const GEMINI_ROOT_ID = GEMINI_TRANSCRIPT_ROOT_ID;
 export const GEMINI_PROJECTS_ROOT_ID = GEMINI_AUXILIARY_ROOT_ID;
-export const GEMINI_TRANSCRIPT_PARSER_VERSION = "1";
+// v2: emits filtered user task candidates for explicit per-session task extraction.
+export const GEMINI_TRANSCRIPT_PARSER_VERSION = "2";
 export const GEMINI_AUXILIARY_PARSER_VERSION = "1";
 
 export const GEMINI_TRANSCRIPT_PARSER: ParserDescriptor = {
@@ -539,17 +546,8 @@ export function normalizeGeminiUsage(raw: any): Usage {
   return usage;
 }
 
-export function textFromGeminiContent(content: unknown): string {
-  if (typeof content === "string") return content.slice(0, 500);
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => {
-      if (!part || typeof part !== "object") return "";
-      return typeof (part as any).text === "string" ? (part as any).text : "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, 500);
+export function textFromGeminiContent(content: unknown, limit = 500): string {
+  return textFromUserContent(content, limit);
 }
 
 export function estimateGeminiResultTokens(content: unknown): number {
@@ -954,6 +952,36 @@ function factsFromConversation(
     .filter((message) => message.value.type === "user")
     .map((message) => textFromGeminiContent(message.value.content))
     .find(Boolean);
+  const taskCandidates: TaskCandidateFact[] = [];
+  for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex++) {
+    const positioned = conversation.messages[messageIndex]!;
+    const message = positioned.value;
+    if (message.type !== "user") continue;
+    const taskText = textFromGeminiContent(message.content, TASK_TEXT_LIMIT);
+    if (!taskText) continue;
+    const next = conversation.messages[messageIndex + 1];
+    const nextText =
+      next?.value.type === "user"
+        ? textFromGeminiContent(next.value.content, TASK_TEXT_LIMIT)
+        : undefined;
+    if (shouldSkipTaskCandidateText(taskText, nextText)) continue;
+    const taskTimestamp = parseTimestamp(message.timestamp);
+    const task: TaskCandidateFact = {
+      id: createFactId(
+        "task_candidate",
+        "gemini",
+        sourceSessionId,
+        positioned.position,
+        "user_message",
+      ),
+      source: "gemini",
+      sourceSessionId,
+      text: taskText,
+      position: positioned.position,
+    };
+    if (!Number.isNaN(taskTimestamp)) task.timestampMs = taskTimestamp;
+    taskCandidates.push(task);
+  }
   const session: SessionFact = {
     id: createFactId(
       "session",
@@ -1025,7 +1053,15 @@ function factsFromConversation(
     });
   }
 
-  return { sessions: [session], messages, invocations, toolResults, taskCandidates: [], tasks: [], relationships };
+  return {
+    sessions: [session],
+    messages,
+    invocations,
+    toolResults,
+    taskCandidates,
+    tasks: [],
+    relationships,
+  };
 }
 
 function parseFailure(
@@ -1102,6 +1138,40 @@ export function parseGeminiTranscriptFile(
     diagnostics: replayed.diagnostics,
   };
   return { status: "current", fragment };
+}
+
+export function parseGeminiTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = join(resolve(GEMINI_DIR), "tmp");
+  const file = createFileIdentity({
+    source: "gemini",
+    rootId: GEMINI_TRANSCRIPT_ROOT_ID,
+    role: "transcript",
+    relativePath: normalizedRelativePath(relative(rootPath, absolutePath)),
+    path: absolutePath,
+  });
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintGeminiFile(absolutePath);
+  } catch (error) {
+    const missing = errno(error) === "ENOENT";
+    return {
+      status: missing ? "missing" : "unreadable",
+      file,
+      observations: [],
+      diagnostics: [
+        diagnostic(
+          missing ? "missing_file" : "unreadable_file",
+          "snapshot",
+          missing
+            ? `Gemini transcript disappeared before parsing: ${absolutePath}`
+            : `Unable to fingerprint Gemini transcript: ${absolutePath}`,
+          missing ? "warning" : "error",
+        ),
+      ],
+    };
+  }
+  return parseGeminiTranscriptFile({ file, fingerprint });
 }
 
 function projectRootFact(
