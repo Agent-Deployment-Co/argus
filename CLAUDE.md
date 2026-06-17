@@ -47,8 +47,8 @@ bun run build:npm                         # build the publishable npm package se
 bun run desktop:build                     # build the Tauri tray app → desktop/src-tauri/target/**/Argus.app
 ```
 
-CI (`.github/workflows/ci.yml`) typechecks the root and `web/`, runs `bun test`, verifies
-`build:web`, and runs a gitleaks secret scan on every push/PR. Development runs `src/cli.ts`
+CI (`.github/workflows/ci.yml`) typechecks the root and `web/`, runs `bun test`, and verifies
+`build:web` on every push/PR. Development runs `src/cli.ts`
 directly with Bun. There is no Node-targeted bundle: the CLI compiles to a self-contained binary
 with `bun build --compile` (it uses `bun:sqlite`, so it needs no Node/node-gyp). `bun run build:npm`
 emits per-OS packages under `dist/npm/` — a launcher package (`@agentdeploymentco/argus`, the
