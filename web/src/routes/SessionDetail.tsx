@@ -1,10 +1,10 @@
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
 import { useSnapshot } from "../lib/snapshot";
-import { sessionTitle } from "./Sessions";
+import { sessionTitle, type SessionsSearch } from "./Sessions";
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
   return (
@@ -42,9 +42,13 @@ export function SessionDetail() {
     <div className="session-detail-inner">
       <header className="session-detail-head">
         <div className="session-detail-eyebrow">
-          <span>{s.source}</span>
+          <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="eyebrow-link" title={`Filter to ${s.source}`}>
+            {s.source}
+          </Link>
           <span className="muted">·</span>
-          <span className="truncate" title={s.project}>{compactProject(s.project)}</span>
+          <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="eyebrow-link truncate" title={`Filter to ${s.project}`}>
+            {compactProject(s.project)}
+          </Link>
           {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
           <span className="muted">·</span>
           <code className="session-id">{s.sessionId}</code>

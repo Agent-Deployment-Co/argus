@@ -96,8 +96,14 @@ main { padding: 30px 32px 64px; }
 main:has(.sessions-split) { padding: 0; }
 .sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: 100vh; }
 .session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg); }
-.session-list-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.session-search-row { display: flex; align-items: center; gap: 8px; }
 .session-search { flex: 1 1 auto; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.session-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--pill-cool-line); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool) 14%, transparent); color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.filter-pill:hover { border-color: var(--accent); }
+.filter-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: var(--hover); font-size: 13px; line-height: 1; }
+.filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
 .session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .session-count { flex: 0 0 auto; color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; white-space: nowrap; }
 .session-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
@@ -116,6 +122,8 @@ main:has(.sessions-split) { padding: 0; }
 .session-detail-head { margin-bottom: 20px; }
 .session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
+.eyebrow-link { color: var(--link); }
+.eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
 .session-detail-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
 .session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .session-id { display: inline-block; font-size: 11px; }

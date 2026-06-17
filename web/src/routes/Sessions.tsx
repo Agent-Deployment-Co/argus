@@ -1,8 +1,27 @@
-import { Link, Outlet } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { Link, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt } from "../lib/format";
 import { useSnapshot } from "../lib/snapshot";
 import type { SessionRow } from "../types";
+
+type FilterKey = "project" | "source";
+
+export interface SessionsSearch {
+  project?: string;
+  source?: string;
+}
+
+/**
+ * Pull a `project:value` / `source:value` token out of the raw search text. While typing we only
+ * commit a token terminated by whitespace (so "project:a" mid-type stays as text); on Enter we
+ * commit it bare.
+ */
+function extractFilterToken(raw: string, requireTerminator: boolean): { key: FilterKey; value: string; rest: string } | null {
+  const m = raw.match(requireTerminator ? /(^|\s)(project|source):(\S+)\s/i : /(^|\s)(project|source):(\S+)/i);
+  if (!m) return null;
+  const rest = (raw.slice(0, m.index) + raw.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim();
+  return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
+}
 
 /** A human-facing title for a session: its opening prompt, else the summary, else a placeholder. */
 export function sessionTitle(s: SessionRow): string {
@@ -15,31 +34,85 @@ export function sessionTitle(s: SessionRow): string {
 
 function SessionList() {
   const { dashboard: d } = useSnapshot();
+  const navigate = useNavigate();
+  const { project, source } = useSearch({ from: "/sessions" });
+  const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
   const [query, setQuery] = useState("");
+  const activeRef = useRef<HTMLAnchorElement | null>(null);
+
+  const setFilter = (key: FilterKey, value: string | undefined) =>
+    navigate({ to: ".", search: (prev: SessionsSearch) => ({ ...prev, [key]: value || undefined }) });
+
+  // Convert a typed `project:value ` / `source:value ` token (terminated by a space) into a filter.
+  const onQueryChange = (raw: string) => {
+    const token = extractFilterToken(raw, true);
+    if (token) {
+      setFilter(token.key, token.value);
+      setQuery(token.rest);
+    } else {
+      setQuery(raw);
+    }
+  };
+
+  // Enter commits a bare token (no trailing space needed).
+  const onQueryKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    const token = extractFilterToken(query, false);
+    if (token) {
+      e.preventDefault();
+      setFilter(token.key, token.value);
+      setQuery(token.rest);
+    }
+  };
 
   const sorted = useMemo(() => [...d.sessions].sort((a, b) => b.start - a.start), [d.sessions]);
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
-    if (!term) return sorted;
-    return sorted.filter(
-      (s) =>
+    const proj = project?.toLowerCase();
+    const src = source?.toLowerCase();
+    return sorted.filter((s) => {
+      if (proj && !s.project.toLowerCase().includes(proj)) return false;
+      if (src && (s.source ?? "").toLowerCase() !== src) return false;
+      if (!term) return true;
+      return (
         sessionTitle(s).toLowerCase().includes(term) ||
         s.project.toLowerCase().includes(term) ||
-        (s.source ?? "").toLowerCase().includes(term),
-    );
-  }, [sorted, query]);
+        (s.source ?? "").toLowerCase().includes(term)
+      );
+    });
+  }, [sorted, query, project, source]);
+
+  const activeFilters = ([["project", project], ["source", source]] as const).filter(([, v]) => Boolean(v));
+
+  // Bring the selected session into view (e.g. on a deep link to /sessions/:id).
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedId, filtered]);
 
   return (
     <aside className="session-list" aria-label="Sessions">
       <div className="session-list-head">
-        <input
-          className="session-search"
-          type="search"
-          placeholder="Filter sessions…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <span className="session-count">{filtered.length === sorted.length ? sorted.length : `${filtered.length} / ${sorted.length}`}</span>
+        <div className="session-search-row">
+          <input
+            className="session-search"
+            type="search"
+            placeholder="Filter sessions… (try project:name)"
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            onKeyDown={onQueryKeyDown}
+          />
+          <span className="session-count">{filtered.length === sorted.length ? sorted.length : `${filtered.length} / ${sorted.length}`}</span>
+        </div>
+        {activeFilters.length > 0 && (
+          <div className="session-filters">
+            {activeFilters.map(([key, value]) => (
+              <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
+                {key}: {value}
+                <span className="filter-pill-x" aria-hidden>×</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <ul className="session-items">
         {filtered.map((s) => (
@@ -47,8 +120,10 @@ function SessionList() {
             <Link
               to="/sessions/$sessionId"
               params={{ sessionId: s.sessionId }}
+              search={(prev: SessionsSearch) => prev}
               className="session-item"
               activeProps={{ className: "active" }}
+              ref={s.sessionId === selectedId ? activeRef : undefined}
             >
               <div className="session-item-title">{sessionTitle(s)}</div>
               <div className="session-item-meta">
@@ -63,7 +138,7 @@ function SessionList() {
             </Link>
           </li>
         ))}
-        {!filtered.length && <li className="session-empty-row">No sessions match “{query}”.</li>}
+        {!filtered.length && <li className="session-empty-row">No sessions match your filters.</li>}
       </ul>
     </aside>
   );

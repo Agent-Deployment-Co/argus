@@ -9,7 +9,15 @@ import { Tools } from "./routes/Tools";
 
 const rootRoute = createRootRoute({ component: Layout });
 
-const sessionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sessions", component: Sessions });
+const sessionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions",
+  component: Sessions,
+  validateSearch: (search: Record<string, unknown>): { project?: string; source?: string } => ({
+    project: typeof search.project === "string" && search.project ? search.project : undefined,
+    source: typeof search.source === "string" && search.source ? search.source : undefined,
+  }),
+});
 
 const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/", component: Activity }),
