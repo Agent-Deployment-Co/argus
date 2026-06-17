@@ -58,7 +58,7 @@ describe("Codex fragment discovery", () => {
     expect(createCodexTranscriptParserAdapter().parser).toEqual({
       name: "codex-jsonl",
       source: "codex",
-      version: "8",
+      version: "9",
     });
   });
 });
@@ -332,7 +332,7 @@ describe("Codex transcript fragments", () => {
     expect(fragment.facts.tasks).toEqual([]);
   });
 
-  test("counts raw Codex turns and user message events without double-counting response items", () => {
+  test("counts raw Codex turns, user messages, and agent messages without double-counting response items", () => {
     const file = createFileIdentity({
       source: "codex",
       rootId: "test",
@@ -362,6 +362,16 @@ describe("Codex transcript fragments", () => {
         payload: { type: "message", role: "user", content: [{ type: "input_text", text: "first" }] },
       }),
       JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.500Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message: "first response" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.500Z",
+        type: "response_item",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "first response" }] },
+      }),
+      JSON.stringify({
         timestamp: "2026-06-11T15:00:02.000Z",
         type: "event_msg",
         payload: { type: "task_complete", turn_id: "turn-1" },
@@ -387,6 +397,16 @@ describe("Codex transcript fragments", () => {
         payload: { type: "task_complete", turn_id: "turn-2" },
       }),
       JSON.stringify({
+        timestamp: "2026-06-11T15:00:04.500Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message: "second response" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:04.500Z",
+        type: "response_item",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "second response" }] },
+      }),
+      JSON.stringify({
         timestamp: "2026-06-11T15:00:05.000Z",
         type: "event_msg",
         payload: {
@@ -408,6 +428,7 @@ describe("Codex transcript fragments", () => {
 
     expect(fragment.facts.sessions[0]).toMatchObject({
       userMessages: 2,
+      agentMessages: 2,
       rawTurns: 2,
     });
     expect(fragment.facts.messages).toHaveLength(1);

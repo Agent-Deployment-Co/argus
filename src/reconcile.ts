@@ -274,6 +274,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     const firstPrompt =
       firstPrompts.get(sid)?.text ?? firstPrompts.get(fact.sourceSessionId)?.text ?? fact.firstPrompt;
     const userMessages = fact.userMessages;
+    const agentMessages = fact.agentMessages;
     const rawTurns = fact.rawTurns;
     const existing = sessions.get(sid);
     if (!existing) {
@@ -285,6 +286,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
         filePath: fact.transcriptPath,
         ...(firstPrompt ? { firstPrompt } : {}),
         ...(userMessages != null ? { userMessages } : {}),
+        ...(agentMessages != null ? { agentMessages } : {}),
         ...(rawTurns != null ? { rawTurns } : {}),
       });
       continue;
@@ -295,6 +297,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     }
     if (!existing.firstPrompt && firstPrompt) existing.firstPrompt = firstPrompt;
     if (userMessages != null) existing.userMessages = Math.max(existing.userMessages ?? 0, userMessages);
+    if (agentMessages != null) existing.agentMessages = Math.max(existing.agentMessages ?? 0, agentMessages);
     if (rawTurns != null) existing.rawTurns = Math.max(existing.rawTurns ?? 0, rawTurns);
   }
 

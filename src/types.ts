@@ -24,6 +24,8 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;
   /** CLI-only: raw user-message count when the source exposes it. */
   userMessages: number | null;
+  /** CLI-only: raw agent-message count when the source exposes it. */
+  agentMessages: number | null;
   /** CLI-only: raw turn count when the source exposes it. */
   rawTurns: number | null;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
@@ -204,6 +206,8 @@ export interface SessionMeta {
   firstPrompt?: string;
   /** Raw user-message events observed in this session, when the source exposes them. */
   userMessages?: number;
+  /** Raw agent-message events observed in this session, when the source exposes them. */
+  agentMessages?: number;
   /** Raw conversational turns observed in this session, when the source exposes them. */
   rawTurns?: number;
   /** Present only for sessions parsed from native Claude transcripts. */

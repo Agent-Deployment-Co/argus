@@ -39,7 +39,7 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "8",
+  version: "9",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
@@ -489,7 +489,9 @@ export function parseCodexTranscript(
   const rawTurnIds = new Set<string>();
   let rawTurnsWithoutId = 0;
   let userMessageEvents = 0;
+  let agentMessageEvents = 0;
   let responseUserMessages = 0;
+  let responseAssistantMessages = 0;
 
   for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
     const record = records[recordIndex]!;
@@ -505,6 +507,10 @@ export function parseCodexTranscript(
 
     if (recordType === "event_msg" && payloadType === "user_message") {
       userMessageEvents++;
+    }
+
+    if (recordType === "event_msg" && payloadType === "agent_message") {
+      agentMessageEvents++;
     }
 
     if (recordType === "session_meta") {
@@ -543,6 +549,11 @@ export function parseCodexTranscript(
         if (taskTimestamp != null) task.timestampMs = taskTimestamp;
         taskCandidates.push(task);
       }
+      continue;
+    }
+
+    if (recordType === "response_item" && payloadType === "message" && payload.role === "assistant") {
+      responseAssistantMessages++;
       continue;
     }
 
@@ -732,8 +743,10 @@ export function parseCodexTranscript(
     if (sessionCwd) Object.assign(session, { cwd: sessionCwd });
     if (firstPrompt) Object.assign(session, { firstPrompt });
     const userMessages = userMessageEvents || responseUserMessages;
+    const agentMessages = agentMessageEvents || responseAssistantMessages;
     const rawTurns = rawTurnIds.size + rawTurnsWithoutId || userMessages || undefined;
     if (userMessages) Object.assign(session, { userMessages });
+    if (agentMessages) Object.assign(session, { agentMessages });
     if (rawTurns) Object.assign(session, { rawTurns });
     facts.sessions.push(session);
   }

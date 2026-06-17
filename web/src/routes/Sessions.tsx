@@ -142,7 +142,7 @@ function SessionList() {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
-                <span>{s.messages} msg</span>
+                {s.agentMessages != null && <span>{fmt(s.agentMessages)} agent</span>}
                 <span>{fmt(s.total)} tok</span>
               </div>
             </Link>
