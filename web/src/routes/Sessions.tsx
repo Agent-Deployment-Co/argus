@@ -56,7 +56,8 @@ function SessionList() {
   const setFilter = (key: FilterKey, value: string | undefined) =>
     navigate({ to: ".", search: (prev: SessionsSearch) => ({ ...prev, [key]: value || undefined }) });
 
-  // Convert a typed `project:value ` / `source:value ` token (terminated by a space) into a filter.
+  // Filter as you type. A `project:value ` / `source:value ` token (terminated by a space) becomes
+  // a filter; anything else is free text.
   const onQueryChange = (raw: string) => {
     const token = extractFilterToken(raw, true);
     if (token) {
@@ -105,7 +106,7 @@ function SessionList() {
           <input
             className="session-search"
             type="search"
-            placeholder="Filter sessions… (try project:name)"
+            placeholder="Filter sessions…"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={onQueryKeyDown}
