@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +11,6 @@ import { join } from "node:path";
 // as a subprocess and asserts the exit code and message.
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
-const FIXTURES = join(import.meta.dir, "fixtures");
 
 /** Run the CLI with isolated, empty config/data dirs so it never reads the developer's real store. */
 function cliEnv(dir: string): NodeJS.ProcessEnv {
@@ -104,159 +103,6 @@ describe("cli argument validation", () => {
     expect(stderr).not.toContain("Unexpected argument");
   });
 
-  test("facts prints Codex task facts for a synced session", () => {
-    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
-    cpSync(join(FIXTURES, "codex-sessions"), join(dir, "codex", "sessions"), {
-      recursive: true,
-    });
-    const extractor = join(dir, "task-extractor.js");
-    writeFileSync(
-      extractor,
-      `let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => input += chunk);
-process.stdin.on("end", () => {
-  console.log(JSON.stringify({ tasks: [{ description: "extracted fixture task", messageIndexes: [0] }] }));
-});`,
-    );
-    chmodSync(extractor, 0o755);
-    const command = `"${process.execPath}" "${extractor}"`;
-
-    const synced = runCli(["index", "--source", "codex", "--no-agentsview"], dir);
-    expect(synced.status).toBe(0);
-
-    const before = runCli(["facts", "codex:codex-sess1"], dir);
-    expect(before.status).toBe(0);
-    expect(before.stderr).toContain("No tasks found for codex:codex-sess1");
-
-    const facts = runCli([
-      "facts",
-      "codex:codex-sess1",
-      "--extract",
-      "--task-provider",
-      "command",
-      "--task-command",
-      command,
-    ], dir);
-    expect(facts.status).toBe(0);
-    expect(facts.stderr).toContain("Saved 1 task for codex:codex-sess1");
-    expect(facts.stdout).toContain("Tasks for codex:codex-sess1");
-    expect(facts.stdout).toContain("extracted fixture task");
-    expect(facts.stdout).not.toContain("codex hello");
-  });
-
-  test("facts extracts task facts for a synced Claude session", () => {
-    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
-    cpSync(join(FIXTURES, "projects"), join(dir, "claude", "projects"), {
-      recursive: true,
-    });
-    const extractor = join(dir, "task-extractor.js");
-    writeFileSync(
-      extractor,
-      `let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => input += chunk);
-process.stdin.on("end", () => {
-  console.log(JSON.stringify({ tasks: [{ description: "extracted claude task", messageIndexes: [0] }] }));
-});`,
-    );
-    chmodSync(extractor, 0o755);
-    const command = `"${process.execPath}" "${extractor}"`;
-
-    const synced = runCli(["index", "--source", "claude", "--no-agentsview"], dir);
-    expect(synced.status).toBe(0);
-
-    const facts = runCli([
-      "facts",
-      "sess1",
-      "--extract",
-      "--task-provider",
-      "command",
-      "--task-command",
-      command,
-    ], dir);
-    expect(facts.status).toBe(0);
-    expect(facts.stderr).toContain("Saved 1 task for sess1");
-    expect(facts.stdout).toContain("Tasks for sess1");
-    expect(facts.stdout).toContain("extracted claude task");
-    expect(facts.stdout).not.toContain("hello there");
-  });
-
-  test("facts extracts task facts for a synced Gemini session", () => {
-    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
-    cpSync(join(FIXTURES, "gemini"), join(dir, ".gemini"), {
-      recursive: true,
-    });
-    const extractor = join(dir, "task-extractor.js");
-    writeFileSync(
-      extractor,
-      `let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => input += chunk);
-process.stdin.on("end", () => {
-  console.log(JSON.stringify({ tasks: [{ description: "extracted gemini task", messageIndexes: [0, 1] }] }));
-});`,
-    );
-    chmodSync(extractor, 0o755);
-    const command = `"${process.execPath}" "${extractor}"`;
-
-    const synced = runCli(["index", "--source", "gemini", "--no-agentsview"], dir);
-    expect(synced.status).toBe(0);
-
-    const facts = runCli([
-      "facts",
-      "gemini:gemini-main",
-      "--extract",
-      "--task-provider",
-      "command",
-      "--task-command",
-      command,
-    ], dir);
-    expect(facts.status).toBe(0);
-    expect(facts.stderr).toContain("Saved 1 task for gemini:gemini-main");
-    expect(facts.stdout).toContain("Tasks for gemini:gemini-main");
-    expect(facts.stdout).toContain("extracted gemini task");
-    expect(facts.stdout).not.toContain("gemini hello");
-  });
-
-  test("facts extracts task facts for a synced Cowork session", () => {
-    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
-    cpSync(
-      join(FIXTURES, "cowork-sessions"),
-      join(dir, "Library", "Application Support", "Claude", "local-agent-mode-sessions"),
-      { recursive: true },
-    );
-    const extractor = join(dir, "task-extractor.js");
-    writeFileSync(
-      extractor,
-      `let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => input += chunk);
-process.stdin.on("end", () => {
-  console.log(JSON.stringify({ tasks: [{ description: "extracted cowork task", messageIndexes: [0, 1] }] }));
-});`,
-    );
-    chmodSync(extractor, 0o755);
-    const command = `"${process.execPath}" "${extractor}"`;
-
-    const synced = runCli(["index", "--source", "cowork", "--no-agentsview"], dir);
-    expect(synced.status).toBe(0);
-
-    const facts = runCli([
-      "facts",
-      "cowork:inner-session-id-111",
-      "--extract",
-      "--task-provider",
-      "command",
-      "--task-command",
-      command,
-    ], dir);
-    expect(facts.status).toBe(0);
-    expect(facts.stderr).toContain("Saved 1 task for cowork:inner-session-id-111");
-    expect(facts.stdout).toContain("Tasks for cowork:inner-session-id-111");
-    expect(facts.stdout).toContain("extracted cowork task");
-    expect(facts.stdout).not.toContain("Do something");
-  });
 });
 
 describe("index command group", () => {
@@ -281,7 +127,7 @@ describe("index command group", () => {
 });
 
 describe("removed verbs", () => {
-  for (const verb of ["push", "reindex", "forget", "sync"]) {
+  for (const verb of ["push", "reindex", "forget", "facts", "sync"]) {
     test(`\`${verb}\` is gone (or repurposed) — old indexing/push aliases are not silently accepted`, () => {
       const { status, stderr } = runCli([verb, "--bogus-flag-xyz"]);
       // `sync` now exists (upload) and rejects the unknown flag (exit 2); the others are unknown
@@ -293,6 +139,11 @@ describe("removed verbs", () => {
 
   test("`reindex` reports an unknown command", () => {
     const { stderr } = runCli(["reindex"]);
+    expect(stderr).toContain("Unknown command");
+  });
+
+  test("`facts` reports an unknown command", () => {
+    const { stderr } = runCli(["facts"]);
     expect(stderr).toContain("Unknown command");
   });
 });

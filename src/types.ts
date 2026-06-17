@@ -24,7 +24,7 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
-  /** CLI-only: task facts generated for this session via `argus facts --extract`. */
+  /** CLI-only: tasks generated for this session via session task extraction. */
   tasks?: TaskFact[];
 };
 
