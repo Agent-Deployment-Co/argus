@@ -114,10 +114,11 @@ main:has(.sessions-split) { padding: 0; }
 .session-detail-inner { padding: 28px 32px 64px; }
 .session-empty { display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
 .session-detail-head { margin-bottom: 20px; }
-.session-detail-title { margin: 0 0 6px; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
-.session-detail-sub { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; color: var(--text); font-size: 13px; }
-.session-detail-sub .truncate { max-width: 340px; }
-.session-id { display: inline-block; margin-top: 8px; font-size: 11px; }
+.session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
+.session-detail-eyebrow .truncate { max-width: 280px; }
+.session-detail-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
+.session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
 .session-detail-inner h3 { margin: 0 0 10px; color: var(--heading); font-size: 14px; font-weight: 700; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 22px; }

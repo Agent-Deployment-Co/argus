@@ -2,7 +2,7 @@ import { useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
-import { compactProject, dt, dur, fmt, modelFamilyColor, usd } from "../lib/format";
+import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
 import { useSnapshot } from "../lib/snapshot";
 import { sessionTitle } from "./Sessions";
 
@@ -41,15 +41,16 @@ export function SessionDetail() {
   return (
     <div className="session-detail-inner">
       <header className="session-detail-head">
-        <h2 className="session-detail-title">{sessionTitle(s)}</h2>
-        <div className="session-detail-sub">
-          <span className="truncate" title={s.project}>{compactProject(s.project)}</span>
-          <span className="muted">·</span>
+        <div className="session-detail-eyebrow">
           <span>{s.source}</span>
+          <span className="muted">·</span>
+          <span className="truncate" title={s.project}>{compactProject(s.project)}</span>
           {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
-          <span className="muted">· {dt(s.start)} → {dt(s.end)}</span>
+          <span className="muted">·</span>
+          <code className="session-id">{s.sessionId}</code>
         </div>
-        <code className="session-id">{s.sessionId}</code>
+        <h2 className="session-detail-title">{sessionTitle(s)}</h2>
+        <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
       </header>
 
       <StatCards stats={cards} />
