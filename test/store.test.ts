@@ -47,6 +47,7 @@ function emptyFacts() {
     messages: [],
     invocations: [],
     toolResults: [],
+    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -139,6 +140,7 @@ function transcriptWithFacts(id: string): ParsedFileFragment {
         position: position(3),
       },
     ],
+    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -639,9 +641,20 @@ describe("SQLite store", () => {
         sourceSessionId: "codex:task-session",
         timestampMs: 1_780_000_000_000,
         description: "add the facts command",
-        evidence: "add the facts command",
-        evidenceKind: "user_message" as const,
+        evidence: "message indexes: 0",
+        evidenceKind: "llm_inference" as const,
         position: { originKey: "file:codex-task-session", recordIndex: 2, itemIndex: 0 },
+      };
+      const earlierTask = {
+        ...task,
+        id: "task:codex:earlier",
+        timestampMs: 1_779_999_999_000,
+        description: "read the existing facts command",
+      };
+      const { timestampMs: _timestampMs, ...untimestampedTask } = {
+        ...task,
+        id: "task:codex:untimestamped",
+        description: "document the extraction behavior",
       };
       await store.materializeSessions("codex", [
         {
@@ -654,12 +667,26 @@ describe("SQLite store", () => {
           },
           messages: [],
           toolResults: [],
-          tasks: [task],
+          tasks: [task, untimestampedTask, earlierTask],
         },
       ]);
 
-      expect(await store.readSessionTasks("codex:task-session")).toEqual([task]);
+      expect(await store.readSessionTasks("codex:task-session")).toEqual([
+        earlierTask,
+        task,
+        untimestampedTask,
+      ]);
       expect(await store.readSessionTasks("codex:missing")).toEqual([]);
+
+      const replacement = {
+        ...task,
+        id: "task:codex:two",
+        description: "extract one task from the session",
+        evidence: "message indexes: 1",
+      };
+      expect(await store.replaceSessionTasks("codex:task-session", [replacement])).toBe(true);
+      expect(await store.replaceSessionTasks("codex:missing", [replacement])).toBe(false);
+      expect(await store.readSessionTasks("codex:task-session")).toEqual([replacement]);
     } finally {
       await store.close();
     }

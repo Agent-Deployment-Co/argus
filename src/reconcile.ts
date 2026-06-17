@@ -173,7 +173,7 @@ function orderedMessages(fragments: ParsedFileFragment[]) {
 
 function orderedTasks(fragments: ParsedFileFragment[]): TaskFact[] {
   return fragments
-    .flatMap((fragment) => fragment.facts.tasks)
+    .flatMap((fragment) => fragment.facts.tasks ?? [])
     .sort((a, b) =>
       compareReconciliationOrder(
         {
@@ -400,7 +400,13 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     perSession.set(name, sessionStat);
   }
 
-  return { messages, sessions, toolResults, toolResultsBySession, tasksBySession };
+  return {
+    messages,
+    sessions,
+    toolResults,
+    toolResultsBySession,
+    tasksBySession,
+  };
 }
 
 /** Convert an external import fragment into transcript shape so the engine treats it uniformly. */

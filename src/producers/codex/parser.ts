@@ -19,7 +19,7 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
-  type TaskFact,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -33,7 +33,7 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "2",
+  version: "4",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
@@ -448,7 +448,11 @@ function isAgentsInstructionsText(text: string): boolean {
 }
 
 function isTurnAbortedText(text: string): boolean {
-  return text.trim() === "<turn_aborted>";
+  const trimmed = text.trim();
+  return (
+    /^<turn_aborted\b[^>]*\/?>$/i.test(trimmed) ||
+    /^<turn_aborted\b[^>]*>\s*<\/turn_aborted>$/i.test(trimmed)
+  );
 }
 
 function directlyFollowedByTurnAborted(records: ParsedRecord[], index: number): boolean {
@@ -491,7 +495,7 @@ export function parseCodexTranscript(
   const pendingResults: PendingToolResult[] = [];
   const messages: MessageFact[] = [];
   const invocations: InvocationFact[] = [];
-  const tasks: TaskFact[] = [];
+  const taskCandidates: TaskCandidateFact[] = [];
 
   for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
     const record = records[recordIndex]!;
@@ -522,17 +526,15 @@ export function parseCodexTranscript(
       if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
         if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
         const taskTimestamp = timestampMs(record.value.timestamp);
-        const task: TaskFact = {
-          id: createFactId("task", "codex", sourceSessionId, record.position, "user_message"),
+        const task: TaskCandidateFact = {
+          id: createFactId("task_candidate", "codex", sourceSessionId, record.position, "user_message"),
           source: "codex",
           sourceSessionId,
-          description: taskText,
-          evidence: taskText,
-          evidenceKind: "user_message",
+          text: taskText,
           position: record.position,
         };
         if (taskTimestamp != null) task.timestampMs = taskTimestamp;
-        tasks.push(task);
+        taskCandidates.push(task);
       }
       continue;
     }
@@ -707,7 +709,8 @@ export function parseCodexTranscript(
     messages,
     invocations,
     toolResults,
-    tasks,
+    taskCandidates,
+    tasks: [],
     relationships: [],
   };
   if (records.length > 0) {
@@ -841,6 +844,31 @@ export function parseCodexFile(
 }
 
 export const parseCodexTranscriptFile = parseCodexFile;
+
+export function parseCodexTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = resolve(CODEX_SESSIONS_DIR);
+  const relativePath = normalizedRelativePath(rootPath, absolutePath);
+  const file = createFileIdentity({
+    source: "codex",
+    rootId: CODEX_ROOT_ID,
+    role: "transcript",
+    relativePath,
+    path: absolutePath,
+  });
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintCodexFile(absolutePath);
+  } catch (error) {
+    return {
+      status: snapshotFailureStatus(error),
+      file,
+      observations: [],
+      diagnostics: [snapshotFailureDiagnostic(error, absolutePath)],
+    };
+  }
+  return parseCodexFile({ file, fingerprint });
+}
 
 export class CodexDiscoveryAdapter implements TranscriptDiscoveryAdapter {
   readonly source = "codex";

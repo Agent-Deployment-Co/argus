@@ -1136,10 +1136,40 @@ export class SqliteStore implements Store {
     return this.schedule(async () => {
       const rows = await all<{ task_json: string }>(
         this.db,
-        "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+        "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY ts IS NULL, ts, seq",
         [sessionId],
       );
       return rows.map((row) => JSON.parse(row.task_json) as TaskFact);
+    });
+  }
+
+  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean> {
+    return this.schedule(async () => {
+      let found = false;
+      await transaction(this.db, async () => {
+        const existing = await get<{ session_id: string }>(
+          this.db,
+          "SELECT session_id FROM resolved_sessions WHERE session_id = ?",
+          [sessionId],
+        );
+        if (!existing) return;
+        found = true;
+        await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
+        await insertRows(
+          this.db,
+          "resolved_tasks",
+          ["session_id", "seq", "source", "ts", "task_json"],
+          tasks.map((task, seq) => [
+            sessionId,
+            seq,
+            task.source,
+            task.timestampMs ?? null,
+            JSON.stringify(task),
+          ]),
+        );
+      });
+      if (found) secureSqliteFiles(this.path);
+      return found;
     });
   }
 

@@ -390,6 +390,7 @@ function parseCoworkTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
+    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
