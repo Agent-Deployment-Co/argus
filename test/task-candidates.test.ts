@@ -50,6 +50,16 @@ Filtered user messages:
     expect(taskExtractionPromptTitle("add task extraction to the session screen")).toBeUndefined();
   });
 
+  test("skips the Codex environment_context block so it is not used as the opening prompt", () => {
+    const text = `<environment_context>
+  <cwd>/Users/me/Documents/Account Research</cwd>
+  <shell>zsh</shell>
+  <current_date>2026-06-18</current_date>
+</environment_context>`;
+
+    expect(shouldSkipTaskCandidateText(text)).toBe(true);
+  });
+
   test("skips Argus session analysis prompts and labels their target session", () => {
     const text = `Analyze this coding-agent session. Return JSON only with these string fields: title, attempted, outcome, outcomeReason.
 

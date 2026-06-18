@@ -51,6 +51,14 @@ export function isAgentsInstructionsText(text: string): boolean {
   return /^#?\s*AGENTS\.md instructions for\b/i.test(text.trimStart());
 }
 
+// Codex injects an `<environment_context>` block (cwd, shell, date, sandbox
+// permissions) as the first user-role message, ahead of the real prompt. It's
+// system-generated context, not something the user typed, so it must not be
+// mistaken for the opening prompt or a task.
+export function isCodexEnvironmentContextText(text: string): boolean {
+  return /^<environment_context[\s>]/i.test(text.trimStart());
+}
+
 export function isTurnAbortedText(text: string): boolean {
   const trimmed = text.trim();
   return (
@@ -155,6 +163,7 @@ export function argusGeneratedPromptTitle(text: string): string | undefined {
 export function shouldSkipTaskCandidateText(text: string, nextText?: string): boolean {
   return (
     isAgentsInstructionsText(text) ||
+    isCodexEnvironmentContextText(text) ||
     isTurnAbortedText(text) ||
     argusGeneratedPromptTitle(text) != null ||
     (nextText ? isTurnAbortedText(nextText) : false)
