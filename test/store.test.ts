@@ -731,7 +731,11 @@ describe("SQLite store", () => {
           filePath: "/tmp/p/rollout.jsonl",
         },
         messages: [message(ts)],
-        toolResults: [{ name: "shell", count: 1, approxTokens: 2 }],
+        toolResults: [
+          { name: "apply_patch", count: 1, approxTokens: 2 },
+          { name: "Bash", count: 1, approxTokens: 3 },
+          { name: "Edit", count: 1, approxTokens: 5 },
+        ],
       });
 
       await store.materializeSessions("codex", [materialized(1000)]);
