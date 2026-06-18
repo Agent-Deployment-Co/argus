@@ -332,6 +332,68 @@ describe("Codex transcript fragments", () => {
     expect(fragment.facts.tasks).toEqual([]);
   });
 
+  test("skips the injected environment_context block and uses the first real prompt", () => {
+    const file = createFileIdentity({
+      source: "codex",
+      rootId: "test",
+      role: "transcript",
+      relativePath: "env-context.jsonl",
+      path: "/tmp/env-context.jsonl",
+    });
+    const raw = [
+      JSON.stringify({
+        timestamp: "2026-06-18T15:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "env-context", cwd: "/Users/me/Documents/Account Research" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-18T15:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "<environment_context>\n  <cwd>/Users/me/Documents/Account Research</cwd>\n  <shell>zsh</shell>\n</environment_context>",
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-18T15:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "research the company Luxury Presence and tell me about any public statements",
+            },
+          ],
+        },
+      }),
+    ].join("\n");
+
+    const fragment = parseCodexTranscript(raw, {
+      file,
+      fingerprint: {
+        sizeBytes: String(Buffer.byteLength(raw)),
+        mtimeNs: "1",
+        ctimeNs: "1",
+      },
+      attempts: 1,
+    });
+
+    expect(fragment.facts.sessions[0]?.firstPrompt).toBe(
+      "research the company Luxury Presence and tell me about any public statements",
+    );
+    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+      "research the company Luxury Presence and tell me about any public statements",
+    ]);
+  });
+
   test("counts raw Codex turns, user messages, and agent messages without double-counting response items", () => {
     const file = createFileIdentity({
       source: "codex",
