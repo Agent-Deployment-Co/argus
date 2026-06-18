@@ -471,6 +471,8 @@ export interface Store {
    * discovery, not a count dip). Returns the ids it kept (skipped) that way.
    */
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
+  /** Metadata for a single resolved session, without loading messages or tasks. */
+  readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
   /** Replace only the task facts for one resolved session. Returns false if the session is unknown. */

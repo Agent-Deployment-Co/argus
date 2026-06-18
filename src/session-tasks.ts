@@ -15,8 +15,7 @@ export async function extractSessionTasks(
   opts: { sessionId: string; taskExtraction?: TaskExtractionOptions },
 ): Promise<ExtractSessionTasksResult> {
   logTaskExtractionDebug(opts.taskExtraction, `requested session ${opts.sessionId}`);
-  const parsed = await store.readResolved();
-  const meta = parsed.sessions.get(opts.sessionId);
+  const meta = await store.readSessionMeta(opts.sessionId);
   if (!meta) {
     logTaskExtractionDebug(opts.taskExtraction, `session ${opts.sessionId} was not found`);
     return {
@@ -66,7 +65,7 @@ export async function extractSessionTasks(
     opts.taskExtraction,
     `using ${candidates.length} filtered user messages for ${opts.sessionId}`,
   );
-  const extracted = extractTasksForSession(opts.sessionId, candidates, opts.taskExtraction);
+  const extracted = await extractTasksForSession(opts.sessionId, candidates, opts.taskExtraction);
   if (extracted.diagnostics.length) {
     logTaskExtractionDebug(
       opts.taskExtraction,

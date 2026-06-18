@@ -63,9 +63,9 @@ describe("task extraction", () => {
     ]);
   });
 
-  test("emits debug logs through the configured sink", () => {
+  test("emits debug logs through the configured sink", async () => {
     const logs: string[] = [];
-    const result = extractTasksForSession("codex:one", candidates, {
+    const result = await extractTasksForSession("codex:one", candidates, {
       provider: "off",
       debugLog: (message) => logs.push(message),
     });

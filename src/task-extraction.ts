@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
   createFactId,
@@ -224,29 +224,49 @@ export function splitCommand(command: string): string[] {
   return args;
 }
 
-function runClaude(prompt: string, options: TaskExtractionOptions | undefined): ProviderResult {
-  const args = ["-p", prompt];
-  if (options?.model) args.push("--model", options.model);
-  const result = spawnSync("claude", args, {
-    encoding: "utf8",
-    maxBuffer: MAX_LLM_BUFFER_BYTES,
+function spawnWithStdin(file: string, args: string[], input: string): Promise<ProviderResult> {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let bytesOut = 0;
+    let truncated = false;
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      bytesOut += chunk.length;
+      if (bytesOut <= MAX_LLM_BUFFER_BYTES) {
+        stdout += chunk.toString("utf8");
+      } else {
+        truncated = true;
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.stdin.end(input, "utf8");
+
+    child.on("close", (code) => {
+      const error = truncated
+        ? "provider output exceeded buffer limit"
+        : code !== 0
+          ? stderr.trim() || `exited with status ${code}`
+          : undefined;
+      resolve({ ok: !error && !!stdout.trim(), stdout, error, stderr, status: code });
+    });
+
+    child.on("error", (err) => {
+      resolve({ ok: false, stdout: "", error: err.message, stderr, status: undefined });
+    });
   });
-  const stderr = result.stderr ?? "";
-  const error = result.error
-    ? result.error.message
-    : result.status !== 0
-      ? stderr.trim() || `exited with status ${result.status}`
-      : undefined;
-  return {
-    ok: !error && !!result.stdout?.trim(),
-    stdout: result.stdout ?? "",
-    error,
-    stderr,
-    status: result.status,
-  };
 }
 
-function runCommand(prompt: string, command: string | undefined): ProviderResult {
+async function runClaude(prompt: string, options: TaskExtractionOptions | undefined): Promise<ProviderResult> {
+  const args = ["-p", "-"];
+  if (options?.model) args.push("--model", options.model);
+  return spawnWithStdin("claude", args, prompt);
+}
+
+async function runCommand(prompt: string, command: string | undefined): Promise<ProviderResult> {
   if (!command?.trim()) return { ok: false, stdout: "", error: "no task command configured" };
   let argv: string[];
   try {
@@ -259,31 +279,14 @@ function runCommand(prompt: string, command: string | undefined): ProviderResult
     };
   }
   if (!argv.length) return { ok: false, stdout: "", error: "no task command configured" };
-  const result = spawnSync(argv[0]!, argv.slice(1), {
-    input: prompt,
-    encoding: "utf8",
-    maxBuffer: MAX_LLM_BUFFER_BYTES,
-  });
-  const stderr = result.stderr ?? "";
-  const error = result.error
-    ? result.error.message
-    : result.status !== 0
-      ? stderr.trim() || `exited with status ${result.status}`
-      : undefined;
-  return {
-    ok: !error && !!result.stdout?.trim(),
-    stdout: result.stdout ?? "",
-    error,
-    stderr,
-    status: result.status,
-  };
+  return spawnWithStdin(argv[0]!, argv.slice(1), prompt);
 }
 
-function runProvider(
+async function runProvider(
   provider: TaskExtractionProvider,
   prompt: string,
   options: TaskExtractionOptions | undefined,
-): ProviderResult {
+): Promise<ProviderResult> {
   if (provider === "claude") return runClaude(prompt, options);
   if (provider === "command") return runCommand(prompt, options?.command);
   return { ok: true, stdout: "{\"tasks\":[]}" };
@@ -329,11 +332,11 @@ export function taskFactsFromSpecs(
   });
 }
 
-export function extractTasksForSession(
+export async function extractTasksForSession(
   sessionId: string,
   candidates: TaskCandidateFact[],
   options: TaskExtractionOptions | undefined,
-): { tasks: TaskFact[]; diagnostics: ParserDiagnostic[] } {
+): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
   logTaskExtractionDebug(
@@ -372,7 +375,7 @@ export function extractTasksForSession(
   } else if (provider === "command") {
     logTaskExtractionDebug(options, `running command provider: ${options?.command ?? "(none)"}`);
   }
-  const result = runProvider(provider, prompt, options);
+  const result = await runProvider(provider, prompt, options);
   logTaskExtractionDebug(
     options,
     `provider finished: ok=${result.ok}${result.status == null ? "" : ` status=${result.status}`}${
