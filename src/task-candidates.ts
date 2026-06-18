@@ -19,6 +19,34 @@ export function textFromUserContent(content: unknown, limit = TASK_TEXT_LIMIT): 
     .slice(0, limit);
 }
 
+export function textFromClaudeUserContent(content: unknown, limit = TASK_TEXT_LIMIT): string {
+  return textFromUserContent(content, limit);
+}
+
+export function hasClaudeToolResultContent(content: unknown): boolean {
+  return Array.isArray(content) && content.some((part) => objectValue(part).type === "tool_result");
+}
+
+export function isClaudeGeneratedContextText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<bash-stdout>") ||
+    trimmed.startsWith("<bash-stderr>") ||
+    trimmed.startsWith("Base directory for this skill:") ||
+    argusGeneratedPromptTitle(trimmed) != null
+  );
+}
+
+export function isCountableClaudeUserMessage(record: unknown): boolean {
+  const values = objectValue(record);
+  if (values.type !== "user" || values.isCompactSummary === true) return false;
+  const content = objectValue(values.message).content;
+  if (hasClaudeToolResultContent(content)) return false;
+  const text = textFromClaudeUserContent(content);
+  return Boolean(text.trim() && !isClaudeGeneratedContextText(text));
+}
+
 export function isAgentsInstructionsText(text: string): boolean {
   return /^#?\s*AGENTS\.md instructions for\b/i.test(text.trimStart());
 }

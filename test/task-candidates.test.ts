@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   argusGeneratedPromptTitle,
+  isCountableClaudeUserMessage,
   sessionAnalysisPromptTitle,
   shouldSkipTaskCandidateText,
   taskExtractionPromptTitle,
@@ -69,5 +70,26 @@ USER: add a new session analysis mode`;
     expect(argusGeneratedPromptTitle(text)).toBe(
       "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
     );
+  });
+
+  test("identifies countable Claude user messages without accepting generated context", () => {
+    expect(
+      isCountableClaudeUserMessage({
+        type: "user",
+        message: { content: "fix the task extraction bug" },
+      }),
+    ).toBe(true);
+    expect(
+      isCountableClaudeUserMessage({
+        type: "user",
+        message: { content: [{ type: "tool_result", content: "done" }] },
+      }),
+    ).toBe(false);
+    expect(
+      isCountableClaudeUserMessage({
+        type: "user",
+        message: { content: "<local-command-caveat>shell output follows</local-command-caveat>" },
+      }),
+    ).toBe(false);
   });
 });

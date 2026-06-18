@@ -22,6 +22,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { CODEX_SESSIONS_DIR, COWORK_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
+import { isCountableClaudeUserMessage } from "./task-candidates.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
   emptyUsage,
@@ -161,51 +162,6 @@ function estimateTokens(content: unknown): number {
     chars = JSON.stringify(content).length;
   }
   return Math.round(chars / 4);
-}
-
-function textFromClaudeUserContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => {
-      if (!part || typeof part !== "object") return "";
-      const text = (part as any).text;
-      return typeof text === "string" ? text : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function hasClaudeToolResultContent(content: unknown): boolean {
-  return Array.isArray(content) && content.some((part) => part?.type === "tool_result");
-}
-
-function isArgusGeneratedClaudePrompt(text: string): boolean {
-  const trimmed = text.trimStart();
-  return (
-    (trimmed.startsWith("You identify the actual tasks a user was trying to accomplish in a coding-agent session.") &&
-      trimmed.includes("Filtered user messages:")) ||
-    trimmed.startsWith("Analyze this coding-agent session.")
-  );
-}
-
-function isClaudeGeneratedContextText(text: string): boolean {
-  const trimmed = text.trimStart();
-  return (
-    trimmed.startsWith("<local-command-caveat>") ||
-    trimmed.startsWith("<bash-stdout>") ||
-    trimmed.startsWith("<bash-stderr>") ||
-    trimmed.startsWith("Base directory for this skill:") ||
-    isArgusGeneratedClaudePrompt(trimmed)
-  );
-}
-
-function isCountableClaudeUserMessage(record: any): boolean {
-  if (record.type !== "user" || record.isCompactSummary === true) return false;
-  const content = record.message?.content;
-  if (hasClaudeToolResultContent(content)) return false;
-  const text = textFromClaudeUserContent(content);
-  return Boolean(text.trim() && !isClaudeGeneratedContextText(text));
 }
 
 function toolUsesFrom(content: any[]): ToolUse[] {
