@@ -362,6 +362,68 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+interface ResolvedSessionSnapshot {
+  metaJson: string;
+  messageJsons: string[];
+  toolResults: Array<{ name: string; count: number; approxTokens: number }>;
+  tasks: TaskFact[];
+}
+
+async function readResolvedSessionSnapshot(
+  db: Database,
+  sessionId: string,
+): Promise<ResolvedSessionSnapshot | undefined> {
+  const row = await get<{ meta_json: string }>(
+    db,
+    "SELECT meta_json FROM resolved_sessions WHERE session_id = ?",
+    [sessionId],
+  );
+  if (!row) return undefined;
+  const messageRows = await all<{ record_json: string }>(
+    db,
+    "SELECT record_json FROM resolved_messages WHERE session_id = ? ORDER BY seq",
+    [sessionId],
+  );
+  const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
+    db,
+    "SELECT name, count, approx_tokens FROM resolved_tool_results WHERE session_id = ? ORDER BY name",
+    [sessionId],
+  );
+  const taskRows = await all<{ task_json: string }>(
+    db,
+    "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+    [sessionId],
+  );
+  return {
+    metaJson: row.meta_json,
+    messageJsons: messageRows.map((message) => message.record_json),
+    toolResults: toolRows.map((tool) => ({
+      name: tool.name,
+      count: tool.count,
+      approxTokens: tool.approx_tokens,
+    })),
+    tasks: taskRows.map((task) => JSON.parse(task.task_json) as TaskFact),
+  };
+}
+
+function sortedToolResults(
+  toolResults: MaterializeSession["toolResults"],
+): MaterializeSession["toolResults"] {
+  return [...toolResults].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function materializedSessionMatchesSnapshot(
+  session: MaterializeSession,
+  snapshot: ResolvedSessionSnapshot,
+): boolean {
+  return (
+    snapshot.metaJson === JSON.stringify(session.meta) &&
+    snapshot.messageJsons.length === session.messages.length &&
+    snapshot.messageJsons.every((json, index) => json === JSON.stringify(session.messages[index])) &&
+    JSON.stringify(snapshot.toolResults) === JSON.stringify(sortedToolResults(session.toolResults))
+  );
+}
+
 /** Insert many rows in as few statements as possible (multi-row INSERT, chunked by param limit). */
 async function insertRows(
   db: Database,
@@ -1240,6 +1302,7 @@ export class SqliteStore implements Store {
       await transaction(this.db, async () => {
         for (const session of sessions) {
           const sid = session.meta.sessionId;
+          const incomingTasks = session.tasks ?? [];
           // Don't-regress guard: transcripts are append-only, so a re-parse yielding FEWER messages
           // than already stored means some of the session's files are missing/unreadable this run, or
           // another producer already holds a richer copy. Keep the fuller stored row rather than
@@ -1256,6 +1319,13 @@ export class SqliteStore implements Store {
             keptFuller.push(sid);
             continue;
           }
+          const existingSnapshot = incomingTasks.length
+            ? undefined
+            : await readResolvedSessionSnapshot(this.db, sid);
+          const tasks =
+            existingSnapshot && materializedSessionMatchesSnapshot(session, existingSnapshot)
+              ? existingSnapshot.tasks
+              : incomingTasks;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
@@ -1295,7 +1365,6 @@ export class SqliteStore implements Store {
               JSON.stringify(message),
             ]),
           );
-          const tasks = session.tasks ?? [];
           await insertRows(
             this.db,
             "resolved_tasks",
