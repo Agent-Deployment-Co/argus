@@ -104,6 +104,10 @@ main:has(.sessions-split) { padding: 0; }
 .filter-pill:hover { border-color: var(--accent); }
 .filter-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: var(--hover); font-size: 13px; line-height: 1; }
 .filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
+.filter-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; user-select: none; }
+.filter-toggle:hover { border-color: var(--accent); }
+.filter-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
+.filter-toggle-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .session-count { flex: 0 0 auto; color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; white-space: nowrap; }
 .session-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
@@ -131,6 +135,12 @@ main:has(.sessions-split) { padding: 0; }
 .session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
 .session-detail-inner h3 { margin: 0 0 10px; color: var(--heading); font-size: 14px; font-weight: 700; }
+.section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.section-title-row h3 { margin: 0; }
+.task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; white-space: nowrap; }
+.task-action:hover:not(:disabled) { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
+.task-action:disabled { opacity: .65; cursor: wait; }
+.task-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 22px; }
 .kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .kv-k { color: var(--muted); font-size: 13px; }
@@ -141,6 +151,12 @@ main:has(.sessions-split) { padding: 0; }
 .file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .file-list li { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .first-prompt { margin: 0; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 8px 8px 0; color: var(--text); font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+.tasks { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.tasks li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.task-text { color: var(--text); font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; }
+.task-meta { margin-top: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-empty { margin: 0; color: var(--muted); font-size: 13px; }
+.task-error { margin-bottom: 8px; color: var(--racing-red); font-size: 12.5px; line-height: 1.4; }
 
 section { margin: 0 0 42px; }
 section h2 { font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: .14em; color: var(--accent); margin: 0 0 14px; font-weight: 600; }

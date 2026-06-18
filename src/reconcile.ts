@@ -18,6 +18,7 @@ import {
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type SessionFact,
+  type TaskFact,
 } from "./store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { projectLabel } from "./parse.ts";
@@ -56,6 +57,7 @@ export interface ReconcileInput {
 /** reconcileSessions output: a ParseResult plus tool-result stats attributed per session. */
 export interface ReconcileResult extends ParseResult {
   toolResultsBySession: Map<string, Map<string, ToolResultStat>>;
+  tasksBySession: Map<string, TaskFact[]>;
 }
 
 /**
@@ -169,6 +171,29 @@ function orderedMessages(fragments: ParsedFileFragment[]) {
     );
 }
 
+function orderedTasks(fragments: ParsedFileFragment[]): TaskFact[] {
+  return fragments
+    .flatMap((fragment) => fragment.facts.tasks ?? [])
+    .sort((a, b) =>
+      compareReconciliationOrder(
+        {
+          timestampMs: a.timestampMs ?? 0,
+          source: a.source,
+          sourceSessionId: a.sourceSessionId,
+          position: a.position,
+          stableId: a.id,
+        },
+        {
+          timestampMs: b.timestampMs ?? 0,
+          source: b.source,
+          sourceSessionId: b.sourceSessionId,
+          position: b.position,
+          stableId: b.id,
+        },
+      ),
+    );
+}
+
 /**
  * Reconcile one producer's fragments into sessions + messages + tool-result stats. Generic over
  * `caps`; optionally scoped to `canonicalIds`. Mirrors the legacy monolithic reconciler for a single
@@ -248,6 +273,9 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     const cwd = cwdForSession(fact);
     const firstPrompt =
       firstPrompts.get(sid)?.text ?? firstPrompts.get(fact.sourceSessionId)?.text ?? fact.firstPrompt;
+    const userMessages = fact.userMessages;
+    const agentMessages = fact.agentMessages;
+    const rawTurns = fact.rawTurns;
     const existing = sessions.get(sid);
     if (!existing) {
       sessions.set(sid, {
@@ -257,6 +285,9 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
         cwd,
         filePath: fact.transcriptPath,
         ...(firstPrompt ? { firstPrompt } : {}),
+        ...(userMessages != null ? { userMessages } : {}),
+        ...(agentMessages != null ? { agentMessages } : {}),
+        ...(rawTurns != null ? { rawTurns } : {}),
       });
       continue;
     }
@@ -265,6 +296,9 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       existing.project = projectLabel(cwd);
     }
     if (!existing.firstPrompt && firstPrompt) existing.firstPrompt = firstPrompt;
+    if (userMessages != null) existing.userMessages = Math.max(existing.userMessages ?? 0, userMessages);
+    if (agentMessages != null) existing.agentMessages = Math.max(existing.agentMessages ?? 0, agentMessages);
+    if (rawTurns != null) existing.rawTurns = Math.max(existing.rawTurns ?? 0, rawTurns);
   }
 
   // Friction (#37): folded only for producers that observe it; absence then means zero, not unknown.
@@ -340,6 +374,15 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     });
   }
 
+  const tasksBySession = new Map<string, TaskFact[]>();
+  for (const fact of orderedTasks(fragments)) {
+    const sessionId = canonicalSessionId(fact.sourceSessionId);
+    if (!wanted(sessionId)) continue;
+    const tasks = tasksBySession.get(sessionId) ?? [];
+    tasks.push(fact);
+    tasksBySession.set(sessionId, tasks);
+  }
+
   const toolResults = new Map<string, ToolResultStat>();
   const toolResultsBySession = new Map<string, Map<string, ToolResultStat>>();
   for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
@@ -366,7 +409,13 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     perSession.set(name, sessionStat);
   }
 
-  return { messages, sessions, toolResults, toolResultsBySession };
+  return {
+    messages,
+    sessions,
+    toolResults,
+    toolResultsBySession,
+    tasksBySession,
+  };
 }
 
 /** Convert an external import fragment into transcript shape so the engine treats it uniformly. */

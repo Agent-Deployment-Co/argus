@@ -9,6 +9,7 @@ type FilterKey = "project" | "source";
 export interface SessionsSearch {
   project?: string;
   source?: string;
+  showGenerated?: boolean;
 }
 
 /**
@@ -23,13 +24,24 @@ function extractFilterToken(raw: string, requireTerminator: boolean): { key: Fil
   return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
 }
 
-/** Sessions sorted newest-first and narrowed by the URL filters (project/source). */
-function sessionsForSearch(sessions: SessionRow[], { project, source }: SessionsSearch): SessionRow[] {
+export function isArgusGeneratedSession(session: SessionRow): boolean {
+  const title = session.firstPrompt?.trim();
+  return Boolean(
+    title === "Task extraction run" ||
+      title === "Session analysis run" ||
+      title?.startsWith("Task extraction for ") ||
+      title?.startsWith("Session analysis for "),
+  );
+}
+
+/** Sessions sorted newest-first and narrowed by the URL filters. */
+function sessionsForSearch(sessions: SessionRow[], { project, source, showGenerated }: SessionsSearch): SessionRow[] {
   const proj = project?.toLowerCase();
   const src = source?.toLowerCase();
   return [...sessions]
     .sort((a, b) => b.start - a.start)
     .filter((s) => {
+      if (!showGenerated && isArgusGeneratedSession(s)) return false;
       if (proj && !s.project.toLowerCase().includes(proj)) return false;
       if (src && (s.source ?? "").toLowerCase() !== src) return false;
       return true;
@@ -48,13 +60,15 @@ export function sessionTitle(s: SessionRow): string {
 function SessionList() {
   const { dashboard: d } = useSnapshot();
   const navigate = useNavigate();
-  const { project, source } = useSearch({ from: "/sessions" });
+  const { project, source, showGenerated } = useSearch({ from: "/sessions" });
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
   const [query, setQuery] = useState("");
   const activeRef = useRef<HTMLAnchorElement | null>(null);
 
   const setFilter = (key: FilterKey, value: string | undefined) =>
     navigate({ to: ".", search: (prev: SessionsSearch) => ({ ...prev, [key]: value || undefined }) });
+  const setShowGenerated = (value: boolean) =>
+    navigate({ to: ".", search: (prev: SessionsSearch) => ({ ...prev, showGenerated: value || undefined }) });
 
   // Filter as you type. A `project:value ` / `source:value ` token (terminated by a space) becomes
   // a filter; anything else is free text.
@@ -79,7 +93,11 @@ function SessionList() {
     }
   };
 
-  const byUrl = useMemo(() => sessionsForSearch(d.sessions, { project, source }), [d.sessions, project, source]);
+  const generatedCount = useMemo(() => d.sessions.filter(isArgusGeneratedSession).length, [d.sessions]);
+  const byUrl = useMemo(
+    () => sessionsForSearch(d.sessions, { project, source, showGenerated }),
+    [d.sessions, project, source, showGenerated],
+  );
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
     if (!term) return byUrl;
@@ -113,7 +131,7 @@ function SessionList() {
           />
           <span className="session-count">{filtered.length === total ? total : `${filtered.length} / ${total}`}</span>
         </div>
-        {activeFilters.length > 0 && (
+        {(activeFilters.length > 0 || generatedCount > 0) && (
           <div className="session-filters">
             {activeFilters.map(([key, value]) => (
               <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
@@ -121,6 +139,17 @@ function SessionList() {
                 <span className="filter-pill-x" aria-hidden>×</span>
               </button>
             ))}
+            {generatedCount > 0 && (
+              <label className="filter-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(showGenerated)}
+                  onChange={(event) => setShowGenerated(event.target.checked)}
+                />
+                <span>Argus sessions</span>
+                <span className="filter-toggle-count">{generatedCount}</span>
+              </label>
+            )}
           </div>
         )}
       </div>
@@ -142,7 +171,8 @@ function SessionList() {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
-                <span>{s.messages} msg</span>
+                {s.userMessages != null && <span>{fmt(s.userMessages)} user</span>}
+                {s.agentMessages != null && <span>{fmt(s.agentMessages)} agent</span>}
                 <span>{fmt(s.total)} tok</span>
               </div>
             </Link>

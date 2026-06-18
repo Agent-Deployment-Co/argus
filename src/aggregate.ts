@@ -401,6 +401,9 @@ export function aggregate(
       end,
       durationMs: end - start,
       messages: msgs.length,
+      userMessages: meta?.userMessages ?? null,
+      agentMessages: meta?.agentMessages ?? null,
+      rawTurns: meta?.rawTurns ?? null,
       models: [...models],
       topSkills,
       toolCounts,
@@ -409,7 +412,11 @@ export function aggregate(
       cost: c,
       firstPrompt: meta?.firstPrompt || "",
       summary: summaries.get(sid) || "",
-      health: sessionHealth(msgs, meta?.friction),
+      health: {
+        ...sessionHealth(msgs, meta?.friction),
+        turns: meta?.rawTurns ?? meta?.friction?.turns ?? null,
+      },
+      tasks: parsed.tasksBySession?.get(sid) ?? [],
     });
   }
   sessionRows.sort((a, b) => b.start - a.start);

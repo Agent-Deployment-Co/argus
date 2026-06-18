@@ -66,7 +66,14 @@ export interface SourcePosition {
   byteOffset?: number;
 }
 
-export type FactKind = "session" | "message" | "invocation" | "tool_result" | "relationship";
+export type FactKind =
+  | "session"
+  | "message"
+  | "invocation"
+  | "tool_result"
+  | "task_candidate"
+  | "relationship"
+  | "task";
 
 export interface ParserDiagnostic {
   code: string;
@@ -117,6 +124,12 @@ export interface SessionFact {
   rawProjectId?: string;
   /** Native prompt when the transcript itself owns it (for example Codex or Gemini). */
   firstPrompt?: string;
+  /** Raw user-message events observed in this session, when the source exposes them. */
+  userMessages?: number;
+  /** Raw agent-message events observed in this session, when the source exposes them. */
+  agentMessages?: number;
+  /** Raw conversational turns observed in this session, when the source exposes them. */
+  rawTurns?: number;
   /**
    * Session friction events (#37) observed in this file, identified stably so the
    * reconciler can dedupe replays across resumed-session files. Claude only.
@@ -171,6 +184,30 @@ export interface ToolResultFact {
   position: SourcePosition;
 }
 
+export interface TaskFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  /** Present when referenced source messages carried a valid timestamp. */
+  timestampMs?: number;
+  /** What the user was trying to accomplish, derived from one or more filtered user messages. */
+  description: string;
+  evidence: string;
+  evidenceKind: "llm_inference" | "user_message";
+  position: SourcePosition;
+}
+
+export interface TaskCandidateFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  /** Present when the source user-message record carried a valid timestamp. */
+  timestampMs?: number;
+  /** Filtered user-authored text made available to the task extractor. Not materialized as a task. */
+  text: string;
+  position: SourcePosition;
+}
+
 export interface SessionRelationshipFact {
   id: string;
   source: AgentSource;
@@ -185,6 +222,8 @@ export interface NormalizedFacts {
   messages: MessageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
+  taskCandidates: TaskCandidateFact[];
+  tasks: TaskFact[];
   relationships: SessionRelationshipFact[];
 }
 
@@ -377,6 +416,7 @@ export interface MaterializeSession {
   meta: SessionMeta;
   messages: MessageRecord[];
   toolResults: Array<{ name: string; count: number; approxTokens: number }>;
+  tasks?: TaskFact[];
 }
 
 /** Per-source freshness attestation. */
@@ -431,6 +471,12 @@ export interface Store {
    * discovery, not a count dip). Returns the ids it kept (skipped) that way.
    */
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
+  /** Metadata for a single resolved session, without loading messages or tasks. */
+  readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
+  /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
+  readSessionTasks(sessionId: string): Promise<TaskFact[]>;
+  /** Replace only the task facts for one resolved session. Returns false if the session is unknown. */
+  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

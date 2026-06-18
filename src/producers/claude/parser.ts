@@ -26,12 +26,20 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
 } from "../../store-contract.ts";
 import { claudeFrictionEvents } from "../../friction.ts";
 import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
+import {
+  TASK_TEXT_LIMIT,
+  argusGeneratedPromptTitle,
+  isCountableClaudeUserMessage,
+  shouldSkipTaskCandidateText,
+  textFromUserContent,
+} from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage, type Usage } from "../../types.ts";
 
@@ -42,7 +50,12 @@ export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 // v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
-export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "4";
+// v5: emits filtered user task candidates for explicit per-session task extraction.
+// v6: excludes Argus task-extraction prompts from task candidates.
+// v7: labels Argus task-extraction sessions with their target session.
+// v8: excludes and labels Argus session-analysis prompts.
+// v9: emits source-owned user-message and agent-message counts.
+export const CLAUDE_TRANSCRIPT_PARSER_VERSION = "9";
 export const CLAUDE_AUXILIARY_PARSER_VERSION = "1";
 export const CLAUDE_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-jsonl",
@@ -75,6 +88,7 @@ interface OpenAssistantMessage {
 interface SessionState {
   fact: SessionFact;
   parentSourceSessionId?: string;
+  agentMessageIds: Set<string>;
 }
 
 interface SnapshotRead {
@@ -528,6 +542,11 @@ function contentParts(record: Record<string, any>): any[] {
   return Array.isArray(record.message?.content) ? record.message.content : [];
 }
 
+function claudeUserMessageText(record: PositionedRecord, limit = TASK_TEXT_LIMIT): string | undefined {
+  if (record.value.type !== "user") return undefined;
+  return textFromUserContent(record.value.message?.content, limit) || undefined;
+}
+
 function invocationMapKey(sourceSessionId: string, invocationId: string): string {
   return `${sourceSessionId}\u0000${invocationId}`;
 }
@@ -655,6 +674,8 @@ function parseTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
+    taskCandidates: [],
+    tasks: [],
     relationships: [],
   };
   const diagnostics: ParserDiagnostic[] = [];
@@ -692,7 +713,11 @@ function parseTranscript(
           : {}),
         position: record.position,
       };
-      state = { fact, parentSourceSessionId: identity.parentSourceSessionId };
+      state = {
+        fact,
+        parentSourceSessionId: identity.parentSourceSessionId,
+        agentMessageIds: new Set(),
+      };
       sessions.set(identity.sourceSessionId, state);
       facts.sessions.push(fact);
       if (identity.parentSourceSessionId) {
@@ -727,7 +752,14 @@ function parseTranscript(
     return state;
   };
 
-  for (const record of records) {
+  const nextUserText = (recordIndex: number, parentSourceSessionId: string): string | undefined => {
+    const next = records[recordIndex + 1];
+    if (!next || next.value.sessionId !== parentSourceSessionId) return undefined;
+    return claudeUserMessageText(next);
+  };
+
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+    const record = records[recordIndex]!;
     const parentSourceSessionId =
       typeof record.value.sessionId === "string" && record.value.sessionId
         ? record.value.sessionId
@@ -746,6 +778,20 @@ function parseTranscript(
     }
 
     if (record.value.type === "assistant") {
+      if (record.value.message?.model !== "<synthetic>") {
+        const providerMessageId =
+          typeof record.value.message?.id === "string" && record.value.message.id
+            ? record.value.message.id
+            : undefined;
+        if (providerMessageId) {
+          if (!session.agentMessageIds.has(providerMessageId)) {
+            session.agentMessageIds.add(providerMessageId);
+            session.fact.agentMessages = (session.fact.agentMessages ?? 0) + 1;
+          }
+        } else {
+          session.fact.agentMessages = (session.fact.agentMessages ?? 0) + 1;
+        }
+      }
       for (const part of content) {
         if (
           part?.type === "tool_use" &&
@@ -760,6 +806,36 @@ function parseTranscript(
     if (record.value.type !== "assistant") open = undefined;
 
     if (record.value.type === "user") {
+      if (isCountableClaudeUserMessage(record.value)) {
+        session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
+      }
+      const taskText = claudeUserMessageText(record);
+      const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (generatedTitle && !session.fact.firstPrompt) {
+        session.fact.firstPrompt = generatedTitle;
+      }
+      if (
+        taskText &&
+        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
+      ) {
+        const taskTimestamp = timestampMs(record.value.timestamp);
+        const task: TaskCandidateFact = {
+          id: createFactId(
+            "task_candidate",
+            "claude",
+            sourceSessionId,
+            record.position,
+            "user_message",
+          ),
+          source: "claude",
+          sourceSessionId,
+          text: taskText,
+          position: record.position,
+        };
+        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
+        facts.taskCandidates.push(task);
+      }
+
       for (const [itemIndex, part] of content.entries()) {
         if (
           !part ||
@@ -920,6 +996,40 @@ export function parseClaudeTranscriptFile(
       ],
     };
   }
+}
+
+export function parseClaudeTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = resolve(PROJECTS_DIR);
+  const file = fileIdentity(
+    absolutePath,
+    rootPath,
+    CLAUDE_TRANSCRIPT_ROOT_ID,
+    "transcript",
+  );
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintClaudeFile(absolutePath);
+  } catch (error) {
+    const missing = errorCode(error) === "ENOENT";
+    return {
+      status: missing ? "missing" : "unreadable",
+      file,
+      observations: [],
+      diagnostics: [
+        diagnostic(
+          missing ? "missing_file" : "unreadable_file",
+          "snapshot",
+          missing
+            ? `Claude transcript disappeared before parsing: ${absolutePath}`
+            : `Unable to fingerprint Claude transcript: ${absolutePath}`,
+          undefined,
+          missing ? "warning" : "error",
+        ),
+      ],
+    };
+  }
+  return parseClaudeTranscriptFile({ file, fingerprint });
 }
 
 export function parseClaudeHistoryFile(

@@ -58,7 +58,7 @@ describe("Codex fragment discovery", () => {
     expect(createCodexTranscriptParserAdapter().parser).toEqual({
       name: "codex-jsonl",
       source: "codex",
-      version: "1",
+      version: "9",
     });
   });
 });
@@ -103,6 +103,16 @@ describe("Codex transcript fragments", () => {
       cwd: "/Users/fixture/codex-proj",
       firstPrompt: "codex hello",
     });
+    expect(fragment.facts.taskCandidates).toEqual([
+      expect.objectContaining({
+        source: "codex",
+        sourceSessionId: "codex:codex-sess1",
+        timestampMs: Date.parse("2026-06-03T13:00:02.000Z"),
+        text: "codex hello",
+        position: expect.objectContaining({ recordIndex: 2 }),
+      }),
+    ]);
+    expect(fragment.facts.tasks).toEqual([]);
   });
 
   test("preserves context, positive token events, total-only usage, and pending-call flushes", () => {
@@ -232,6 +242,196 @@ describe("Codex transcript fragments", () => {
     expect(fragment.diagnostics).toEqual([
       expect.objectContaining({ code: "invalid_token_timestamp", phase: "parse" }),
     ]);
+  });
+
+  test("excludes AGENTS.md and immediately aborted user messages from task candidates", () => {
+    const file = createFileIdentity({
+      source: "codex",
+      rootId: "test",
+      role: "transcript",
+      relativePath: "filtered-tasks.jsonl",
+      path: "/tmp/filtered-tasks.jsonl",
+    });
+    const raw = [
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "filtered-tasks", cwd: "/tmp" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "# AGENTS.md instructions for /tmp\n<INSTRUCTIONS>..." }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "real task" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "instruction that gets aborted" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "<turn_aborted>" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: '<turn_aborted reason="user_cancelled"></turn_aborted>' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "after abort task" }],
+        },
+      }),
+    ].join("\n");
+
+    const fragment = parseCodexTranscript(raw, {
+      file,
+      fingerprint: {
+        sizeBytes: String(Buffer.byteLength(raw)),
+        mtimeNs: "1",
+        ctimeNs: "1",
+      },
+      attempts: 1,
+    });
+
+    expect(fragment.facts.sessions[0]?.firstPrompt).toBe("real task");
+    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+      "real task",
+      "after abort task",
+    ]);
+    expect(fragment.facts.tasks).toEqual([]);
+  });
+
+  test("counts raw Codex turns, user messages, and agent messages without double-counting response items", () => {
+    const file = createFileIdentity({
+      source: "codex",
+      rootId: "test",
+      role: "transcript",
+      relativePath: "raw-turns.jsonl",
+      path: "/tmp/raw-turns.jsonl",
+    });
+    const raw = [
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "raw-turns", cwd: "/tmp" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.000Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-1" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "first" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.000Z",
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "first" }] },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.500Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message: "first response" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.500Z",
+        type: "response_item",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "first response" }] },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:02.000Z",
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-1" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:03.000Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-2" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:03.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "[Request interrupted by user]" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:03.000Z",
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "[Request interrupted by user]" }] },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:04.000Z",
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-2" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:04.500Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message: "second response" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:04.500Z",
+        type: "response_item",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "second response" }] },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:05.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: { last_token_usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+        },
+      }),
+    ].join("\n");
+
+    const fragment = parseCodexTranscript(raw, {
+      file,
+      fingerprint: {
+        sizeBytes: String(Buffer.byteLength(raw)),
+        mtimeNs: "1",
+        ctimeNs: "1",
+      },
+      attempts: 1,
+    });
+
+    expect(fragment.facts.sessions[0]).toMatchObject({
+      userMessages: 2,
+      agentMessages: 2,
+      rawTurns: 2,
+    });
+    expect(fragment.facts.messages).toHaveLength(1);
   });
 
   test("emits IDs, timestamps, arguments, paths, MCP details, and custom calls", () => {

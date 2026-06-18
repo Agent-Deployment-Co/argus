@@ -18,12 +18,19 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
 } from "../../store-contract.ts";
 import { type FrictionEvent } from "../../friction.ts";
 import { COWORK_SESSIONS_DIR } from "../../paths.ts";
+import {
+  TASK_TEXT_LIMIT,
+  argusGeneratedPromptTitle,
+  shouldSkipTaskCandidateText,
+  textFromUserContent,
+} from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage } from "../../types.ts";
 import {
@@ -34,7 +41,11 @@ import {
 
 export const COWORK_SESSIONS_ROOT_ID = "cowork-sessions";
 // v1: initial implementation.
-export const COWORK_TRANSCRIPT_PARSER_VERSION = "1";
+// v2: emits filtered user task candidates for explicit per-session task extraction.
+// v3: excludes Argus task-extraction prompts from task candidates.
+// v4: labels Argus task-extraction sessions with their target session.
+// v5: excludes and labels Argus session-analysis prompts.
+export const COWORK_TRANSCRIPT_PARSER_VERSION = "5";
 export const COWORK_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "cowork-jsonl",
   source: "cowork",
@@ -88,6 +99,11 @@ function contentParts(record: Record<string, any>): any[] {
   return Array.isArray(record.message?.content) ? record.message.content : [];
 }
 
+function coworkUserMessageText(record: PositionedRecord, limit = TASK_TEXT_LIMIT): string | undefined {
+  if (record.value.type !== "user") return undefined;
+  return textFromUserContent(record.value.message?.content, limit) || undefined;
+}
+
 function timestampMs(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return NaN;
@@ -121,8 +137,8 @@ function discoveryFailure(rootPath: string, error: unknown): DiscoveryResult {
         missing ? "missing_root" : "unreadable_root",
         "discovery",
         missing
-          ? `CoWork sessions root does not exist: ${rootPath}`
-          : `Unable to read CoWork sessions root: ${rootPath}`,
+          ? `Cowork sessions root does not exist: ${rootPath}`
+          : `Unable to read Cowork sessions root: ${rootPath}`,
         undefined,
         missing ? "warning" : "error",
       ),
@@ -154,7 +170,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
         diagnostic(
           "missing_root",
           "discovery",
-          "CoWork sessions directory is not available on this platform",
+          "Cowork sessions directory is not available on this platform",
           undefined,
           "warning",
         ),
@@ -175,7 +191,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
           diagnostic(
             "root_not_directory",
             "discovery",
-            `CoWork sessions root is not a directory: ${rootPath}`,
+            `Cowork sessions root is not a directory: ${rootPath}`,
             undefined,
             "error",
           ),
@@ -200,7 +216,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
         diagnostic(
           "unreadable_directory",
           "discovery",
-          `Unable to read CoWork directory: ${dir}`,
+          `Unable to read Cowork directory: ${dir}`,
           undefined,
           "error",
         ),
@@ -224,7 +240,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
           diagnostic(
             "unreadable_file",
             "discovery",
-            `Unable to fingerprint CoWork transcript: ${path}`,
+            `Unable to fingerprint Cowork transcript: ${path}`,
             undefined,
             "error",
           ),
@@ -390,6 +406,8 @@ function parseCoworkTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
+    taskCandidates: [],
+    tasks: [],
     relationships: [],
   };
   const diagnostics: ParserDiagnostic[] = [];
@@ -405,7 +423,14 @@ function parseCoworkTranscript(
     ? undefined
     : (metadata?.title ?? metadata?.processName ?? undefined);
 
-  for (const record of records) {
+  const nextUserText = (recordIndex: number, nativeSessionId: string): string | undefined => {
+    const next = records[recordIndex + 1];
+    if (!next || next.value.session_id !== nativeSessionId) return undefined;
+    return coworkUserMessageText(next);
+  };
+
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+    const record = records[recordIndex]!;
     // system/thinking_tokens: streaming progress events, no useful data
     if (record.value.type === "system" && record.value.subtype === "thinking_tokens") continue;
 
@@ -450,6 +475,34 @@ function parseCoworkTranscript(
       const content = Array.isArray(record.value.message?.content)
         ? record.value.message.content
         : [];
+      const taskText = coworkUserMessageText(record);
+      const nativeSessionId =
+        typeof record.value.session_id === "string" ? record.value.session_id : "";
+      const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (generatedTitle && !sessionFact.firstPrompt) {
+        sessionFact.firstPrompt = generatedTitle;
+      }
+      if (
+        taskText &&
+        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
+      ) {
+        const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
+        const task: TaskCandidateFact = {
+          id: createFactId(
+            "task_candidate",
+            "cowork",
+            sourceSessionId,
+            record.position,
+            "user_message",
+          ),
+          source: "cowork",
+          sourceSessionId,
+          text: taskText,
+          position: record.position,
+        };
+        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
+        facts.taskCandidates.push(task);
+      }
       for (const [itemIndex, part] of content.entries()) {
         if (!part || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
         const position = { ...record.position, itemIndex };
@@ -535,7 +588,7 @@ function parseCoworkTranscript(
         diagnostic(
           "invalid_message_timestamp",
           "parse",
-          "Skipped CoWork assistant message with an invalid timestamp",
+          "Skipped Cowork assistant message with an invalid timestamp",
           record.position,
         ),
       );
@@ -599,7 +652,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
         diagnostic(
           "invalid_file_role",
           "parse",
-          `CoWork transcript parser cannot parse ${file.file.role} file ${file.file.path}`,
+          `Cowork transcript parser cannot parse ${file.file.role} file ${file.file.path}`,
           undefined,
           "error",
         ),
@@ -627,8 +680,8 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
             code === "ENOENT" ? "missing_file" : "unreadable_file",
             "snapshot",
             code === "ENOENT"
-              ? `CoWork transcript disappeared before parsing: ${file.file.path}`
-              : `Unable to fingerprint CoWork transcript: ${file.file.path}`,
+              ? `Cowork transcript disappeared before parsing: ${file.file.path}`
+              : `Unable to fingerprint Cowork transcript: ${file.file.path}`,
             undefined,
             code === "ENOENT" ? "warning" : "error",
           ),
@@ -650,8 +703,8 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
             code === "ENOENT" ? "missing_file" : "unreadable_file",
             "snapshot",
             code === "ENOENT"
-              ? `CoWork transcript disappeared while reading: ${file.file.path}`
-              : `Unable to read CoWork transcript: ${file.file.path}`,
+              ? `Cowork transcript disappeared while reading: ${file.file.path}`
+              : `Unable to read Cowork transcript: ${file.file.path}`,
             undefined,
             code === "ENOENT" ? "warning" : "error",
           ),
@@ -673,7 +726,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
           diagnostic(
             "unreadable_file",
             "snapshot",
-            `Unable to fingerprint CoWork transcript after reading: ${file.file.path}`,
+            `Unable to fingerprint Cowork transcript after reading: ${file.file.path}`,
             undefined,
             "error",
           ),
@@ -706,7 +759,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
             diagnostic(
               "parse_failed",
               "parse",
-              `Unable to parse CoWork transcript: ${file.file.path}`,
+              `Unable to parse Cowork transcript: ${file.file.path}`,
               undefined,
               "error",
             ),
@@ -724,12 +777,41 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
       diagnostic(
         "unstable_file",
         "snapshot",
-        `CoWork transcript changed during ${maxAttempts} parse attempt${maxAttempts === 1 ? "" : "s"}: ${file.file.path}`,
+        `Cowork transcript changed during ${maxAttempts} parse attempt${maxAttempts === 1 ? "" : "s"}: ${file.file.path}`,
         undefined,
         "warning",
       ),
     ],
   };
+}
+
+export function parseCoworkTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = COWORK_SESSIONS_DIR ? resolve(COWORK_SESSIONS_DIR) : dirname(absolutePath);
+  const file = fileIdentity(absolutePath, rootPath);
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintClaudeFile(absolutePath);
+  } catch (error) {
+    const missing = errorCode(error) === "ENOENT";
+    return {
+      status: missing ? "missing" : "unreadable",
+      file,
+      observations: [],
+      diagnostics: [
+        diagnostic(
+          missing ? "missing_file" : "unreadable_file",
+          "snapshot",
+          missing
+            ? `Cowork transcript disappeared before parsing: ${absolutePath}`
+            : `Unable to fingerprint Cowork transcript: ${absolutePath}`,
+          undefined,
+          missing ? "warning" : "error",
+        ),
+      ],
+    };
+  }
+  return parseCoworkTranscriptFile({ file, fingerprint });
 }
 
 export function createCoworkTranscriptDiscoveryAdapter(

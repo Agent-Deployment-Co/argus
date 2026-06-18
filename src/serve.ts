@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 import type { Dashboard } from "./aggregate.ts";
 import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
+import { extractSessionTasks, type ExtractSessionTasksResult } from "./session-tasks.ts";
+import { openStore } from "./store.ts";
+import type { TaskFact } from "./store-contract.ts";
+import type { TaskExtractionOptions } from "./task-extraction.ts";
 
 export interface ServeOptions {
   port: number;
@@ -18,6 +22,8 @@ export interface ServeOptions {
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
+  /** Provider settings used by the session-detail task extraction action. */
+  taskExtraction: TaskExtractionOptions;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
   installSignalHandlers?: boolean;
@@ -37,8 +43,18 @@ export interface Snapshot {
   generatedAtMs: number;
 }
 
+export interface ExtractTasksResponse {
+  tasks: TaskFact[];
+}
+
 /** Builds the snapshot for a request. `force` bypasses any caching the caller layered on. */
 export type SnapshotSource = (force: boolean) => Promise<Snapshot>;
+export type TaskExtractor = (sessionId: string) => Promise<ExtractSessionTasksResult>;
+
+interface AppOptions {
+  extractTasks?: TaskExtractor;
+  onTasksChanged?: () => void;
+}
 
 /** How long a built dashboard is reused before the next request triggers a fresh read. */
 const CACHE_TTL_MS = 30_000;
@@ -86,12 +102,33 @@ dev server with <code>bun run dev:web</code> for live-reloading development.</p>
 
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
-export function createApp(getSnapshot: SnapshotSource, webRoot: string | null): Hono {
+export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
 
   app.get("/api/snapshot", async (c) => {
     const snap = await getSnapshot(c.req.query("refresh") != null);
     return c.json(snap);
+  });
+
+  app.post("/api/tasks/extract", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const sessionId =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? String((body as Record<string, unknown>).sessionId ?? "").trim()
+        : "";
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.extractTasks) return c.json({ error: "Task extraction is unavailable in this process." }, 503);
+
+    const extracted = await opts.extractTasks(sessionId);
+    if (!extracted.ok) {
+      return c.json(
+        { error: extracted.message, diagnostics: extracted.diagnostics ?? [] },
+        extracted.status,
+      );
+    }
+
+    opts.onTasksChanged?.();
+    return c.json({ tasks: extracted.tasks } satisfies ExtractTasksResponse);
   });
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
@@ -142,7 +179,21 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     }
   }
 
-  const app = createApp(snapshot, webRoot);
+  const clearCachedSnapshot = () => {
+    cached = null;
+    cachedAt = 0;
+  };
+
+  const extractTasks: TaskExtractor = async (sessionId) => {
+    const store = await openStore();
+    try {
+      return await extractSessionTasks(store, { sessionId, taskExtraction: opts.taskExtraction });
+    } finally {
+      await store.close();
+    }
+  };
+
+  const app = createApp(snapshot, webRoot, { extractTasks, onTasksChanged: clearCachedSnapshot });
 
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {

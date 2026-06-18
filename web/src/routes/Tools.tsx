@@ -30,7 +30,7 @@ const pluginColumns: Column<PluginRow>[] = [
         : <span className="pill">disabled</span>,
   },
   { id: "skills", label: "Skills used", sortValue: (r) => r.skills.length, cell: (r) => <Skills skills={r.skills} /> },
-  { id: "skillMessages", label: "Msgs", num: true, sortValue: (r) => r.skillMessages, cell: (r) => fmt(r.skillMessages) },
+  { id: "skillMessages", label: "Responses", num: true, sortValue: (r) => r.skillMessages, cell: (r) => fmt(r.skillMessages) },
   { id: "skillTokens", label: "Tokens", num: true, sortValue: (r) => r.skillTokens, cell: (r) => fmt(r.skillTokens) },
   { id: "mcpCalls", label: "MCP calls", num: true, sortValue: (r) => r.mcpCalls, cell: (r) => (r.mcpCalls ? r.mcpCalls : <Dash />) },
   { id: "skillCost", label: "Cost", num: true, sortValue: (r) => r.skillCost, cell: (r) => (r.skillCost ? usd(r.skillCost) : <Dash />) },

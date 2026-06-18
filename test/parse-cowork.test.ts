@@ -114,6 +114,21 @@ describe("parseCoworkTranscriptFile", () => {
       expect(toolResults[0]!.invocationId).toBe("tool_1");
     });
 
+    test("emits task candidates from replayed user messages without duplicating bare events", () => {
+      const file = discoverOne("session-111");
+      const result = parseCoworkTranscriptFile(file);
+      if (result.status !== "current") throw new Error("parse failed");
+      expect(result.fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+        "Hello",
+        "Do something",
+      ]);
+      expect(result.fragment.facts.taskCandidates.map((task) => task.timestampMs)).toEqual([
+        Date.parse("2026-05-23T10:00:01.000Z"),
+        Date.parse("2026-05-23T10:00:11.000Z"),
+      ]);
+      expect(result.fragment.facts.tasks).toEqual([]);
+    });
+
     test("thinking_tokens records are skipped", () => {
       const file = discoverOne("session-111");
       const result = parseCoworkTranscriptFile(file);
@@ -141,7 +156,7 @@ describe("parseCoworkTranscriptFile", () => {
       expect(invocations[0]!.source).toBe("cowork");
     });
 
-    test("no relationships emitted (no subagents in CoWork)", () => {
+    test("no relationships emitted (no subagents in Cowork)", () => {
       const file = discoverOne("session-111");
       const result = parseCoworkTranscriptFile(file);
       if (result.status !== "current") throw new Error("parse failed");

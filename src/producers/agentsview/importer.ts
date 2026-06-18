@@ -455,7 +455,15 @@ function buildFragments(
   const factsFor = (source: AgentSource): NormalizedFacts => {
     let facts = factsBySource.get(source);
     if (!facts) {
-      facts = { sessions: [], messages: [], invocations: [], toolResults: [], relationships: [] };
+      facts = {
+        sessions: [],
+        messages: [],
+        invocations: [],
+        toolResults: [],
+        taskCandidates: [],
+        tasks: [],
+        relationships: [],
+      };
       factsBySource.set(source, facts);
     }
     return facts;

@@ -1,9 +1,12 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
+import { ListTodo, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
-import { useSnapshot } from "../lib/snapshot";
+import { extractSessionTasks, SNAPSHOT_QUERY_KEY, useSnapshot } from "../lib/snapshot";
+import type { Snapshot } from "../types";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
@@ -19,8 +22,28 @@ const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
 export function SessionDetail() {
   const { dashboard: d } = useSnapshot();
+  const queryClient = useQueryClient();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const s = d.sessions.find((x) => x.sessionId === sessionId);
+
+  const extractTasks = useMutation({
+    mutationFn: extractSessionTasks,
+    onSuccess: (data, extractedSessionId) => {
+      queryClient.setQueryData<Snapshot>(SNAPSHOT_QUERY_KEY, (snap) => {
+        if (!snap) return snap;
+        return {
+          ...snap,
+          dashboard: {
+            ...snap.dashboard,
+            sessions: snap.dashboard.sessions.map((session) =>
+              session.sessionId === extractedSessionId ? { ...session, tasks: data.tasks } : session,
+            ),
+          },
+        };
+      });
+      void queryClient.invalidateQueries({ queryKey: SNAPSHOT_QUERY_KEY });
+    },
+  });
 
   if (!s) {
     return <div className="session-empty">Session not found — it may have aged out of the current window.</div>;
@@ -30,13 +53,20 @@ export function SessionDetail() {
   const cards: Stat[] = [
     { label: "Tokens", value: fmt(s.total) },
     { label: "Est. cost", value: usd(s.cost) },
-    { label: "Messages", value: String(s.messages) },
+    { label: "User messages", value: s.userMessages != null ? String(s.userMessages) : "—" },
+    { label: "Agent messages", value: s.agentMessages != null ? String(s.agentMessages) : "—" },
     { label: "Duration", value: dur(s.durationMs) },
     { label: "Turns", value: h.turns != null ? String(h.turns) : "—" },
   ];
 
   const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);
   const stops = h.stopReasons ? Object.entries(h.stopReasons).sort((a, b) => b[1] - a[1]) : [];
+  const tasks = s.tasks ?? [];
+  const extractingThisSession = extractTasks.isPending && extractTasks.variables === s.sessionId;
+  const extractionError =
+    !extractTasks.isPending && extractTasks.variables === s.sessionId && extractTasks.error instanceof Error
+      ? extractTasks.error.message
+      : null;
 
   return (
     <div className="session-detail-inner">
@@ -58,6 +88,36 @@ export function SessionDetail() {
       </header>
 
       <StatCards stats={cards} />
+
+      <section>
+        <div className="section-title-row">
+          <h3>Tasks <span className="muted">({tasks.length})</span></h3>
+          <button
+            type="button"
+            className="task-action"
+            onClick={() => extractTasks.mutate(s.sessionId)}
+            disabled={extractingThisSession}
+          >
+            {tasks.length ? <RefreshCw size={14} strokeWidth={1.75} aria-hidden /> : <ListTodo size={14} strokeWidth={1.75} aria-hidden />}
+            <span>{extractingThisSession ? "Extracting..." : tasks.length ? "Refresh tasks" : "Extract tasks"}</span>
+          </button>
+        </div>
+        {extractionError && <div className="task-error" role="alert">{extractionError}</div>}
+        {tasks.length > 0 ? (
+          <ol className="tasks">
+            {tasks.map((task) => (
+              <li key={task.id}>
+                <div className="task-text">{task.description}</div>
+                {task.timestampMs != null && (
+                  <div className="task-meta">{dtAmPm(task.timestampMs)}</div>
+                )}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="task-empty">No tasks yet.</p>
+        )}
+      </section>
 
       <section>
         <h3>Outcome &amp; friction</h3>

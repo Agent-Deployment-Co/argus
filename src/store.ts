@@ -16,6 +16,7 @@ import type {
   FragmentMetadata,
   CompleteDiscovery,
   Store,
+  TaskFact,
   FileFingerprint,
   FileIdentity,
   FileRole,
@@ -30,7 +31,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 6;
+export const STORE_SCHEMA_VERSION = 7;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -230,6 +231,17 @@ const CREATE_SCHEMA_SQL = `
   CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
   CREATE INDEX resolved_messages_source ON resolved_messages(source);
 
+  CREATE TABLE resolved_tasks (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    ts INTEGER,
+    task_json TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  );
+  CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
+  CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
+
   -- Tool-result stats per session (global dashboard total = SUM across all sessions).
   CREATE TABLE resolved_tool_results (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -348,6 +360,68 @@ function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+interface ResolvedSessionSnapshot {
+  metaJson: string;
+  messageJsons: string[];
+  toolResults: Array<{ name: string; count: number; approxTokens: number }>;
+  tasks: TaskFact[];
+}
+
+async function readResolvedSessionSnapshot(
+  db: Database,
+  sessionId: string,
+): Promise<ResolvedSessionSnapshot | undefined> {
+  const row = await get<{ meta_json: string }>(
+    db,
+    "SELECT meta_json FROM resolved_sessions WHERE session_id = ?",
+    [sessionId],
+  );
+  if (!row) return undefined;
+  const messageRows = await all<{ record_json: string }>(
+    db,
+    "SELECT record_json FROM resolved_messages WHERE session_id = ? ORDER BY seq",
+    [sessionId],
+  );
+  const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
+    db,
+    "SELECT name, count, approx_tokens FROM resolved_tool_results WHERE session_id = ? ORDER BY name",
+    [sessionId],
+  );
+  const taskRows = await all<{ task_json: string }>(
+    db,
+    "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+    [sessionId],
+  );
+  return {
+    metaJson: row.meta_json,
+    messageJsons: messageRows.map((message) => message.record_json),
+    toolResults: toolRows.map((tool) => ({
+      name: tool.name,
+      count: tool.count,
+      approxTokens: tool.approx_tokens,
+    })),
+    tasks: taskRows.map((task) => JSON.parse(task.task_json) as TaskFact),
+  };
+}
+
+function sortedToolResults(
+  toolResults: MaterializeSession["toolResults"],
+): MaterializeSession["toolResults"] {
+  return [...toolResults].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+function materializedSessionMatchesSnapshot(
+  session: MaterializeSession,
+  snapshot: ResolvedSessionSnapshot,
+): boolean {
+  return (
+    snapshot.metaJson === JSON.stringify(session.meta) &&
+    snapshot.messageJsons.length === session.messages.length &&
+    snapshot.messageJsons.every((json, index) => json === JSON.stringify(session.messages[index])) &&
+    JSON.stringify(sortedToolResults(snapshot.toolResults)) === JSON.stringify(sortedToolResults(session.toolResults))
+  );
 }
 
 /** Insert many rows in as few statements as possible (multi-row INSERT, chunked by param limit). */
@@ -587,6 +661,23 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       CREATE INDEX index_files_identity ON index_files(file_identity);
     `,
   },
+  // 6 -> 7: Task facts. Preserve retained sessions and add a side table populated on the next
+  // materialization of each session.
+  6: {
+    to: 7,
+    sql: `
+      CREATE TABLE resolved_tasks (
+        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        ts INTEGER,
+        task_json TEXT NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+      CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
+      CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -643,6 +734,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
     if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
@@ -1102,6 +1194,58 @@ export class SqliteStore implements Store {
     return this.schedule(() => this.readResolvedCore(query));
   }
 
+  readSessionMeta(sessionId: string): Promise<SessionMeta | undefined> {
+    return this.schedule(async () => {
+      const row = await get<{ meta_json: string }>(
+        this.db,
+        "SELECT meta_json FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row ? (JSON.parse(row.meta_json) as SessionMeta) : undefined;
+    });
+  }
+
+  readSessionTasks(sessionId: string): Promise<TaskFact[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ task_json: string }>(
+        this.db,
+        "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY ts IS NULL, ts, seq",
+        [sessionId],
+      );
+      return rows.map((row) => JSON.parse(row.task_json) as TaskFact);
+    });
+  }
+
+  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean> {
+    return this.schedule(async () => {
+      let found = false;
+      await transaction(this.db, async () => {
+        const existing = await get<{ session_id: string }>(
+          this.db,
+          "SELECT session_id FROM resolved_sessions WHERE session_id = ?",
+          [sessionId],
+        );
+        if (!existing) return;
+        found = true;
+        await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
+        await insertRows(
+          this.db,
+          "resolved_tasks",
+          ["session_id", "seq", "source", "ts", "task_json"],
+          tasks.map((task, seq) => [
+            sessionId,
+            seq,
+            task.source,
+            task.timestampMs ?? null,
+            JSON.stringify(task),
+          ]),
+        );
+      });
+      if (found) secureSqliteFiles(this.path);
+      return found;
+    });
+  }
+
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(
@@ -1128,8 +1272,25 @@ export class SqliteStore implements Store {
       for (const row of sessionRows) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
     }
 
-    // Tool-result totals are unfiltered by date/project but scoped to the requested sources.
     const sourceJoin = buildResolvedFilters(query, "s.source");
+    const taskRows = await all<{ session_id: string; task_json: string }>(
+      this.db,
+      `SELECT t.session_id, t.task_json
+       FROM resolved_tasks t
+       JOIN resolved_sessions s ON s.session_id = t.session_id
+       ${sourceJoin.sourceWhere}
+       ORDER BY t.session_id, t.ts IS NULL, t.ts, t.seq`,
+      sourceJoin.sourceParams,
+    );
+    const tasksBySession = new Map<string, TaskFact[]>();
+    for (const row of taskRows) {
+      if (!sessions.has(row.session_id)) continue;
+      const tasks = tasksBySession.get(row.session_id) ?? [];
+      tasks.push(JSON.parse(row.task_json) as TaskFact);
+      tasksBySession.set(row.session_id, tasks);
+    }
+
+    // Tool-result totals are unfiltered by date/project but scoped to the requested sources.
     const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
       this.db,
       `SELECT tr.name AS name, SUM(tr.count) AS count, SUM(tr.approx_tokens) AS approx_tokens
@@ -1142,7 +1303,7 @@ export class SqliteStore implements Store {
     const toolResults = new Map<string, ToolResultStat>();
     for (const row of toolRows) toolResults.set(row.name, { count: row.count, approxTokens: row.approx_tokens });
 
-    return { messages, sessions, toolResults };
+    return { messages, sessions, toolResults, tasksBySession };
   }
 
   materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]> {
@@ -1152,6 +1313,7 @@ export class SqliteStore implements Store {
       await transaction(this.db, async () => {
         for (const session of sessions) {
           const sid = session.meta.sessionId;
+          const incomingTasks = session.tasks ?? [];
           // Don't-regress guard: transcripts are append-only, so a re-parse yielding FEWER messages
           // than already stored means some of the session's files are missing/unreadable this run, or
           // another producer already holds a richer copy. Keep the fuller stored row rather than
@@ -1168,7 +1330,14 @@ export class SqliteStore implements Store {
             keptFuller.push(sid);
             continue;
           }
-          // Replace this session wholesale (messages + tool results cascade via FK). A freshly
+          const existingSnapshot = incomingTasks.length
+            ? undefined
+            : await readResolvedSessionSnapshot(this.db, sid);
+          const tasks =
+            existingSnapshot && materializedSessionMatchesSnapshot(session, existingSnapshot)
+              ? existingSnapshot.tasks
+              : incomingTasks;
+          // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
@@ -1205,6 +1374,18 @@ export class SqliteStore implements Store {
               message.cwd ?? "",
               message.project,
               JSON.stringify(message),
+            ]),
+          );
+          await insertRows(
+            this.db,
+            "resolved_tasks",
+            ["session_id", "seq", "source", "ts", "task_json"],
+            tasks.map((task, seq) => [
+              sid,
+              seq,
+              task.source,
+              task.timestampMs ?? null,
+              JSON.stringify(task),
             ]),
           );
           await insertRows(
