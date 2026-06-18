@@ -522,8 +522,15 @@ const main = defineCommand({
 });
 
 async function run() {
-  printBanner();
   const argv = process.argv.slice(2);
+  // `argus --version` / `argus -v`: print just the version and exit cleanly, with no banner. citty
+  // would also answer this (meta.version is set), but only after the banner, which is noise for a
+  // bare version query.
+  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
+    process.stdout.write(pkg.version + "\n");
+    return;
+  }
+  printBanner();
   // A bare `argus` (no subcommand) shows the usage/help with a success exit code; citty's own
   // "no command specified" path would treat the same input as an error. `argus <command>` and
   // `argus --help` flow through citty normally.

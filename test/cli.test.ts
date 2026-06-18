@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 // These exercise the citty argument layer end-to-end by running the real CLI. citty parses
 // non-strictly, so src/cli.ts adds an explicit guard (validateArgs) for unknown flags, value-less
@@ -55,6 +56,23 @@ function freePort(): Promise<number> {
     });
   });
 }
+
+describe("version flag", () => {
+  for (const flag of ["--version", "-v"]) {
+    test(`\`${flag}\` prints the package version on stdout and exits 0`, () => {
+      const { status, stdout } = runCli([flag]);
+      expect(status).toBe(0);
+      expect(stdout.trim()).toBe(pkg.version);
+    });
+
+    test(`\`${flag}\` prints only the version — no banner noise`, () => {
+      // The version query short-circuits before the ARGUS banner, so stdout is just the version.
+      const { stdout } = runCli([flag]);
+      expect(stdout.trim().split("\n")).toEqual([pkg.version]);
+      expect(stdout).not.toContain("Argus by ADC");
+    });
+  }
+});
 
 describe("cli argument validation", () => {
   test("report rejects an unknown flag instead of silently ignoring it", () => {
