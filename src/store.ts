@@ -1194,6 +1194,17 @@ export class SqliteStore implements Store {
     return this.schedule(() => this.readResolvedCore(query));
   }
 
+  readSessionMeta(sessionId: string): Promise<SessionMeta | undefined> {
+    return this.schedule(async () => {
+      const row = await get<{ meta_json: string }>(
+        this.db,
+        "SELECT meta_json FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row ? (JSON.parse(row.meta_json) as SessionMeta) : undefined;
+    });
+  }
+
   readSessionTasks(sessionId: string): Promise<TaskFact[]> {
     return this.schedule(async () => {
       const rows = await all<{ task_json: string }>(
