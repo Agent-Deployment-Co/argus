@@ -7,6 +7,7 @@ import type {
   AuxiliaryParserAdapter,
   DiscoveryResult,
   ExternalFragmentImporter,
+  FileParseResult,
   TranscriptParserAdapter,
 } from "./store-contract.ts";
 import type { ProducerCapabilities } from "./reconcile.ts";
@@ -31,6 +32,8 @@ export interface NativeProducer {
   /** Authoritative transcript discovery for this run. */
   discoverTranscripts(ctx: ProducerContext): DiscoveryResult;
   transcriptParser(): TranscriptParserAdapter;
+  /** Parse one transcript path directly, for source-owned per-session operations. */
+  parseTranscriptPath(path: string): FileParseResult;
   /** Optional auxiliary inputs (claude history first-prompts, gemini project roots). */
   discoverAuxiliary?(ctx: ProducerContext): DiscoveryResult;
   auxiliaryParser?(): AuxiliaryParserAdapter;

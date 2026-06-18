@@ -1,31 +1,14 @@
-import { parseClaudeTranscriptPath } from "./producers/claude/parser.ts";
-import { parseCodexTranscriptPath } from "./producers/codex/parser.ts";
-import { parseCoworkTranscriptPath } from "./producers/cowork/parser.ts";
-import { parseGeminiTranscriptPath } from "./producers/gemini/parser.ts";
-import type { FileParseResult, ParserDiagnostic, Store, TaskFact } from "./store-contract.ts";
+import { nativeProducerForSource } from "./producers/index.ts";
+import type { ParserDiagnostic, Store, TaskFact } from "./store-contract.ts";
 import {
   extractTasksForSession,
   logTaskExtractionDebug,
   type TaskExtractionOptions,
 } from "./task-extraction.ts";
-import type { AgentSource } from "./types.ts";
 
 export type ExtractSessionTasksResult =
   | { ok: true; tasks: TaskFact[] }
   | { ok: false; status: 404 | 422 | 502; message: string; diagnostics?: ParserDiagnostic[] };
-
-function parseTranscriptForTaskExtraction(source: AgentSource, path: string): FileParseResult {
-  switch (source) {
-    case "claude":
-      return parseClaudeTranscriptPath(path);
-    case "codex":
-      return parseCodexTranscriptPath(path);
-    case "cowork":
-      return parseCoworkTranscriptPath(path);
-    case "gemini":
-      return parseGeminiTranscriptPath(path);
-  }
-}
 
 export async function extractSessionTasks(
   store: Store,
@@ -47,7 +30,16 @@ export async function extractSessionTasks(
     opts.taskExtraction,
     `session ${opts.sessionId}: source=${meta.source}, transcript=${meta.filePath}`,
   );
-  const parsedTranscript = parseTranscriptForTaskExtraction(meta.source, meta.filePath);
+  const producer = nativeProducerForSource(meta.source);
+  const parsedTranscript = producer?.parseTranscriptPath(meta.filePath);
+  if (!parsedTranscript) {
+    logTaskExtractionDebug(opts.taskExtraction, `no transcript parser registered for ${meta.source}`);
+    return {
+      ok: false,
+      status: 422,
+      message: `Couldn't extract tasks for ${opts.sessionId}: no transcript reader is registered for ${meta.source}.`,
+    };
+  }
   if (parsedTranscript.status !== "current") {
     logTaskExtractionDebug(
       opts.taskExtraction,
