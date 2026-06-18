@@ -156,7 +156,7 @@ describe("parseCoworkTranscriptFile", () => {
       expect(invocations[0]!.source).toBe("cowork");
     });
 
-    test("no relationships emitted (no subagents in CoWork)", () => {
+    test("no relationships emitted (no subagents in Cowork)", () => {
       const file = discoverOne("session-111");
       const result = parseCoworkTranscriptFile(file);
       if (result.status !== "current") throw new Error("parse failed");

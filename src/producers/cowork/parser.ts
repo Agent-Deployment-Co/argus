@@ -137,8 +137,8 @@ function discoveryFailure(rootPath: string, error: unknown): DiscoveryResult {
         missing ? "missing_root" : "unreadable_root",
         "discovery",
         missing
-          ? `CoWork sessions root does not exist: ${rootPath}`
-          : `Unable to read CoWork sessions root: ${rootPath}`,
+          ? `Cowork sessions root does not exist: ${rootPath}`
+          : `Unable to read Cowork sessions root: ${rootPath}`,
         undefined,
         missing ? "warning" : "error",
       ),
@@ -170,7 +170,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
         diagnostic(
           "missing_root",
           "discovery",
-          "CoWork sessions directory is not available on this platform",
+          "Cowork sessions directory is not available on this platform",
           undefined,
           "warning",
         ),
@@ -191,7 +191,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
           diagnostic(
             "root_not_directory",
             "discovery",
-            `CoWork sessions root is not a directory: ${rootPath}`,
+            `Cowork sessions root is not a directory: ${rootPath}`,
             undefined,
             "error",
           ),
@@ -216,7 +216,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
         diagnostic(
           "unreadable_directory",
           "discovery",
-          `Unable to read CoWork directory: ${dir}`,
+          `Unable to read Cowork directory: ${dir}`,
           undefined,
           "error",
         ),
@@ -240,7 +240,7 @@ export function discoverCoworkTranscripts(sessionsDir?: string): DiscoveryResult
           diagnostic(
             "unreadable_file",
             "discovery",
-            `Unable to fingerprint CoWork transcript: ${path}`,
+            `Unable to fingerprint Cowork transcript: ${path}`,
             undefined,
             "error",
           ),
@@ -588,7 +588,7 @@ function parseCoworkTranscript(
         diagnostic(
           "invalid_message_timestamp",
           "parse",
-          "Skipped CoWork assistant message with an invalid timestamp",
+          "Skipped Cowork assistant message with an invalid timestamp",
           record.position,
         ),
       );
@@ -652,7 +652,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
         diagnostic(
           "invalid_file_role",
           "parse",
-          `CoWork transcript parser cannot parse ${file.file.role} file ${file.file.path}`,
+          `Cowork transcript parser cannot parse ${file.file.role} file ${file.file.path}`,
           undefined,
           "error",
         ),
@@ -680,8 +680,8 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
             code === "ENOENT" ? "missing_file" : "unreadable_file",
             "snapshot",
             code === "ENOENT"
-              ? `CoWork transcript disappeared before parsing: ${file.file.path}`
-              : `Unable to fingerprint CoWork transcript: ${file.file.path}`,
+              ? `Cowork transcript disappeared before parsing: ${file.file.path}`
+              : `Unable to fingerprint Cowork transcript: ${file.file.path}`,
             undefined,
             code === "ENOENT" ? "warning" : "error",
           ),
@@ -703,8 +703,8 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
             code === "ENOENT" ? "missing_file" : "unreadable_file",
             "snapshot",
             code === "ENOENT"
-              ? `CoWork transcript disappeared while reading: ${file.file.path}`
-              : `Unable to read CoWork transcript: ${file.file.path}`,
+              ? `Cowork transcript disappeared while reading: ${file.file.path}`
+              : `Unable to read Cowork transcript: ${file.file.path}`,
             undefined,
             code === "ENOENT" ? "warning" : "error",
           ),
@@ -726,7 +726,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
           diagnostic(
             "unreadable_file",
             "snapshot",
-            `Unable to fingerprint CoWork transcript after reading: ${file.file.path}`,
+            `Unable to fingerprint Cowork transcript after reading: ${file.file.path}`,
             undefined,
             "error",
           ),
@@ -759,7 +759,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
             diagnostic(
               "parse_failed",
               "parse",
-              `Unable to parse CoWork transcript: ${file.file.path}`,
+              `Unable to parse Cowork transcript: ${file.file.path}`,
               undefined,
               "error",
             ),
@@ -777,7 +777,7 @@ export function parseCoworkTranscriptFile(file: DiscoveredFile): FileParseResult
       diagnostic(
         "unstable_file",
         "snapshot",
-        `CoWork transcript changed during ${maxAttempts} parse attempt${maxAttempts === 1 ? "" : "s"}: ${file.file.path}`,
+        `Cowork transcript changed during ${maxAttempts} parse attempt${maxAttempts === 1 ? "" : "s"}: ${file.file.path}`,
         undefined,
         "warning",
       ),
@@ -803,8 +803,8 @@ export function parseCoworkTranscriptPath(path: string): FileParseResult {
           missing ? "missing_file" : "unreadable_file",
           "snapshot",
           missing
-            ? `CoWork transcript disappeared before parsing: ${absolutePath}`
-            : `Unable to fingerprint CoWork transcript: ${absolutePath}`,
+            ? `Cowork transcript disappeared before parsing: ${absolutePath}`
+            : `Unable to fingerprint Cowork transcript: ${absolutePath}`,
           undefined,
           missing ? "warning" : "error",
         ),
