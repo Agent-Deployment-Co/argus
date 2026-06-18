@@ -36,6 +36,7 @@ import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   argusGeneratedPromptTitle,
+  isCountableClaudeUserMessage,
   shouldSkipTaskCandidateText,
   textFromUserContent,
 } from "../../task-candidates.ts";
@@ -546,29 +547,6 @@ function claudeUserMessageText(record: PositionedRecord, limit = TASK_TEXT_LIMIT
   return textFromUserContent(record.value.message?.content, limit) || undefined;
 }
 
-function hasToolResultContent(content: unknown): boolean {
-  return Array.isArray(content) && content.some((part) => part?.type === "tool_result");
-}
-
-function isClaudeGeneratedContextText(text: string): boolean {
-  const trimmed = text.trimStart();
-  return (
-    trimmed.startsWith("<local-command-caveat>") ||
-    trimmed.startsWith("<bash-stdout>") ||
-    trimmed.startsWith("<bash-stderr>") ||
-    trimmed.startsWith("Base directory for this skill:") ||
-    argusGeneratedPromptTitle(trimmed) != null
-  );
-}
-
-function isCountableClaudeUserMessage(record: PositionedRecord): boolean {
-  if (record.value.type !== "user" || record.value.isCompactSummary === true) return false;
-  const content = record.value.message?.content;
-  if (hasToolResultContent(content)) return false;
-  const text = textFromUserContent(content, TASK_TEXT_LIMIT);
-  return Boolean(text.trim() && !isClaudeGeneratedContextText(text));
-}
-
 function invocationMapKey(sourceSessionId: string, invocationId: string): string {
   return `${sourceSessionId}\u0000${invocationId}`;
 }
@@ -828,7 +806,7 @@ function parseTranscript(
     if (record.value.type !== "assistant") open = undefined;
 
     if (record.value.type === "user") {
-      if (isCountableClaudeUserMessage(record)) {
+      if (isCountableClaudeUserMessage(record.value)) {
         session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
       }
       const taskText = claudeUserMessageText(record);
