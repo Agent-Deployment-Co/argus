@@ -409,7 +409,7 @@ async function readResolvedSessionSnapshot(
 function sortedToolResults(
   toolResults: MaterializeSession["toolResults"],
 ): MaterializeSession["toolResults"] {
-  return [...toolResults].sort((a, b) => a.name.localeCompare(b.name));
+  return [...toolResults].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 function materializedSessionMatchesSnapshot(
@@ -420,7 +420,7 @@ function materializedSessionMatchesSnapshot(
     snapshot.metaJson === JSON.stringify(session.meta) &&
     snapshot.messageJsons.length === session.messages.length &&
     snapshot.messageJsons.every((json, index) => json === JSON.stringify(session.messages[index])) &&
-    JSON.stringify(snapshot.toolResults) === JSON.stringify(sortedToolResults(session.toolResults))
+    JSON.stringify(sortedToolResults(snapshot.toolResults)) === JSON.stringify(sortedToolResults(session.toolResults))
   );
 }
 
