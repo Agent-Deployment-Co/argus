@@ -695,6 +695,58 @@ describe("SQLite store", () => {
     }
   });
 
+  test("materializeSessions preserves extracted tasks only when the session is unchanged", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const task = {
+        id: "task:codex:preserve",
+        source: "codex" as const,
+        sourceSessionId: "codex:preserve-tasks",
+        timestampMs: 1_780_000_000_000,
+        description: "keep extracted task facts",
+        evidence: "message indexes: 0",
+        evidenceKind: "llm_inference" as const,
+        position: { originKey: "file:codex-preserve-tasks", recordIndex: 1, itemIndex: 0 },
+      };
+      const message = (ts: number) => ({
+        source: "codex" as const,
+        sessionId: "codex:preserve-tasks",
+        project: "p",
+        cwd: "/tmp/p",
+        gitBranch: "",
+        ts,
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      const materialized = (ts: number) => ({
+        meta: {
+          source: "codex" as const,
+          sessionId: "codex:preserve-tasks",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [message(ts)],
+        toolResults: [{ name: "shell", count: 1, approxTokens: 2 }],
+      });
+
+      await store.materializeSessions("codex", [materialized(1000)]);
+      expect(await store.replaceSessionTasks("codex:preserve-tasks", [task])).toBe(true);
+
+      await store.materializeSessions("codex", [materialized(1000)]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
+
+      await store.materializeSessions("codex", [materialized(2000)]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("clearIndex drops the structural index but preserves the resolved read model", async () => {
     const path = storePath();
     const store = await openStore({ path });
