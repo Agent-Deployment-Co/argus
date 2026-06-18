@@ -91,4 +91,84 @@ describe("aggregate", () => {
     expect(result.byModel[0]?.cost).toBeCloseTo(0.375, 6);
     expect(result.totals.cost).toBeCloseTo(0.375, 6);
   });
+
+  test("attaches generated tasks to session rows", () => {
+    const task = {
+      id: "task:gemini:g1",
+      source: "gemini" as const,
+      sourceSessionId: "g1",
+      timestampMs: 1,
+      description: "Ship the Tasks panel",
+      evidence: "message indexes: 0",
+      evidenceKind: "llm_inference" as const,
+      position: { originKey: "fixture", recordIndex: 0, itemIndex: 0 },
+    };
+    const message: MessageRecord = {
+      source: "gemini",
+      sessionId: "g1",
+      project: "fixture/gemini",
+      cwd: "/Users/fixture/gemini",
+      gitBranch: "",
+      ts: 1,
+      date: "2026-06-01",
+      model: "gemini-2.5-flash",
+      usage: { ...emptyUsage(), input: 10 },
+      attributionSkill: null,
+      toolUses: [],
+    };
+    const parsedWithTask: ParseResult = {
+      messages: [message],
+      sessions: new Map(),
+      toolResults: new Map(),
+      tasksBySession: new Map([["g1", [task]]]),
+    };
+    const result = aggregate(parsedWithTask, new Map(), new Map());
+    expect(result.sessions[0]?.tasks).toEqual([task]);
+  });
+
+  test("attaches source-owned user message, agent message, and raw turn counts to session rows", () => {
+    const message: MessageRecord = {
+      source: "codex",
+      sessionId: "codex:turns",
+      project: "fixture/codex",
+      cwd: "/Users/fixture/codex",
+      gitBranch: "",
+      ts: 1,
+      date: "2026-06-01",
+      model: "gpt-5",
+      usage: { ...emptyUsage(), input: 10 },
+      attributionSkill: null,
+      toolUses: [],
+    };
+    const result = aggregate(
+      {
+        messages: [message],
+        sessions: new Map([
+          [
+            "codex:turns",
+            {
+              source: "codex",
+              sessionId: "codex:turns",
+              project: "fixture/codex",
+              cwd: "/Users/fixture/codex",
+              filePath: "/tmp/codex.jsonl",
+              userMessages: 8,
+              agentMessages: 287,
+              rawTurns: 8,
+            },
+          ],
+        ]),
+        toolResults: new Map(),
+      },
+      new Map(),
+      new Map(),
+    );
+    expect(result.sessions[0]).toMatchObject({
+      messages: 1,
+      userMessages: 8,
+      agentMessages: 287,
+      rawTurns: 8,
+      health: expect.objectContaining({ turns: 8 }),
+    });
+  });
 });

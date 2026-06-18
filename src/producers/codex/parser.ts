@@ -19,11 +19,18 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
+  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
 } from "../../store-contract.ts";
 import { CODEX_SESSIONS_DIR } from "../../paths.ts";
+import {
+  TASK_TEXT_LIMIT,
+  argusGeneratedPromptTitle,
+  isTurnAbortedText,
+  shouldSkipTaskCandidateText,
+} from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
@@ -32,11 +39,12 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "1",
+  version: "9",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
 const ARGUMENT_LIMIT = 280;
+const FIRST_PROMPT_LIMIT = 500;
 const DEFAULT_SNAPSHOT_ATTEMPTS = 3;
 
 interface ParsedRecord {
@@ -104,14 +112,14 @@ function normalizeCodexUsage(raw: unknown): Usage {
   return usage;
 }
 
-function textFromCodexContent(content: unknown): string {
-  if (typeof content === "string") return content.slice(0, 500);
+function textFromCodexContent(content: unknown, limit = FIRST_PROMPT_LIMIT): string {
+  if (typeof content === "string") return content.slice(0, limit);
   if (!Array.isArray(content)) return "";
   return content
     .map((part) => stringValue(objectValue(part).text) ?? "")
     .filter(Boolean)
     .join("\n")
-    .slice(0, 500);
+    .slice(0, limit);
 }
 
 function estimateTokens(content: unknown): number {
@@ -428,6 +436,28 @@ function scopedInvocationKey(sourceSessionId: string, invocationId: string): str
   return `${sourceSessionId}\0${invocationId}`;
 }
 
+function codexUserMessageText(record: ParsedRecord, limit = TASK_TEXT_LIMIT): string | undefined {
+  const payload = objectValue(record.value.payload);
+  if (
+    stringValue(record.value.type) !== "response_item" ||
+    stringValue(payload.type) !== "message" ||
+    payload.role !== "user"
+  ) {
+    return undefined;
+  }
+  return textFromCodexContent(payload.content, limit) || undefined;
+}
+
+function directlyFollowedByTurnAborted(records: ParsedRecord[], index: number): boolean {
+  const nextText = records[index + 1] ? codexUserMessageText(records[index + 1]!) : undefined;
+  return nextText ? isTurnAbortedText(nextText) : false;
+}
+
+function shouldSkipTaskMessage(records: ParsedRecord[], index: number, text: string): boolean {
+  const nextText = directlyFollowedByTurnAborted(records, index) ? "<turn_aborted>" : undefined;
+  return shouldSkipTaskCandidateText(text, nextText);
+}
+
 export function parseCodexTranscript(
   raw: string,
   snapshot: StableFileSnapshot,
@@ -455,11 +485,33 @@ export function parseCodexTranscript(
   const pendingResults: PendingToolResult[] = [];
   const messages: MessageFact[] = [];
   const invocations: InvocationFact[] = [];
+  const taskCandidates: TaskCandidateFact[] = [];
+  const rawTurnIds = new Set<string>();
+  let rawTurnsWithoutId = 0;
+  let userMessageEvents = 0;
+  let agentMessageEvents = 0;
+  let responseUserMessages = 0;
+  let responseAssistantMessages = 0;
 
-  for (const record of records) {
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+    const record = records[recordIndex]!;
     const payload = objectValue(record.value.payload);
     const recordType = stringValue(record.value.type);
     const payloadType = stringValue(payload.type);
+
+    if (recordType === "event_msg") {
+      const turnId = stringValue(payload.turn_id);
+      if (turnId) rawTurnIds.add(turnId);
+      else if (payloadType === "task_started") rawTurnsWithoutId++;
+    }
+
+    if (recordType === "event_msg" && payloadType === "user_message") {
+      userMessageEvents++;
+    }
+
+    if (recordType === "event_msg" && payloadType === "agent_message") {
+      agentMessageEvents++;
+    }
 
     if (recordType === "session_meta") {
       const cwd = stringValue(payload.cwd);
@@ -480,8 +532,28 @@ export function parseCodexTranscript(
     }
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
-      const prompt = textFromCodexContent(payload.content);
-      if (!firstPrompt && prompt) firstPrompt = prompt;
+      responseUserMessages++;
+      const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
+      const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
+      if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
+        if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
+        const taskTimestamp = timestampMs(record.value.timestamp);
+        const task: TaskCandidateFact = {
+          id: createFactId("task_candidate", "codex", sourceSessionId, record.position, "user_message"),
+          source: "codex",
+          sourceSessionId,
+          text: taskText,
+          position: record.position,
+        };
+        if (taskTimestamp != null) task.timestampMs = taskTimestamp;
+        taskCandidates.push(task);
+      }
+      continue;
+    }
+
+    if (recordType === "response_item" && payloadType === "message" && payload.role === "assistant") {
+      responseAssistantMessages++;
       continue;
     }
 
@@ -655,6 +727,8 @@ export function parseCodexTranscript(
     messages,
     invocations,
     toolResults,
+    taskCandidates,
+    tasks: [],
     relationships: [],
   };
   if (records.length > 0) {
@@ -668,6 +742,12 @@ export function parseCodexTranscript(
     };
     if (sessionCwd) Object.assign(session, { cwd: sessionCwd });
     if (firstPrompt) Object.assign(session, { firstPrompt });
+    const userMessages = userMessageEvents || responseUserMessages;
+    const agentMessages = agentMessageEvents || responseAssistantMessages;
+    const rawTurns = rawTurnIds.size + rawTurnsWithoutId || userMessages || undefined;
+    if (userMessages) Object.assign(session, { userMessages });
+    if (agentMessages) Object.assign(session, { agentMessages });
+    if (rawTurns) Object.assign(session, { rawTurns });
     facts.sessions.push(session);
   }
 
@@ -788,6 +868,31 @@ export function parseCodexFile(
 }
 
 export const parseCodexTranscriptFile = parseCodexFile;
+
+export function parseCodexTranscriptPath(path: string): FileParseResult {
+  const absolutePath = resolve(path);
+  const rootPath = resolve(CODEX_SESSIONS_DIR);
+  const relativePath = normalizedRelativePath(rootPath, absolutePath);
+  const file = createFileIdentity({
+    source: "codex",
+    rootId: CODEX_ROOT_ID,
+    role: "transcript",
+    relativePath,
+    path: absolutePath,
+  });
+  let fingerprint: FileFingerprint;
+  try {
+    fingerprint = fingerprintCodexFile(absolutePath);
+  } catch (error) {
+    return {
+      status: snapshotFailureStatus(error),
+      file,
+      observations: [],
+      diagnostics: [snapshotFailureDiagnostic(error, absolutePath)],
+    };
+  }
+  return parseCodexFile({ file, fingerprint });
+}
 
 export class CodexDiscoveryAdapter implements TranscriptDiscoveryAdapter {
   readonly source = "codex";

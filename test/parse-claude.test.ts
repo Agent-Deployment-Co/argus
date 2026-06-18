@@ -10,6 +10,7 @@ import {
   discoverClaudeHistory,
   discoverClaudeTranscripts,
   parseClaudeHistoryFile,
+  parseClaudeTranscriptPath,
   parseClaudeTranscriptFile,
 } from "../src/producers/claude/parser.ts";
 
@@ -97,7 +98,19 @@ describe("Claude transcript fragments", () => {
       sourceSessionId: "sess1",
       cwd: "/Users/fixture/proj",
       gitBranch: "main",
+      userMessages: 1,
+      agentMessages: 2,
     });
+    expect(fragment.facts.taskCandidates).toEqual([
+      expect.objectContaining({
+        source: "claude",
+        sourceSessionId: "sess1",
+        text: "hello there",
+        timestampMs: Date.parse("2026-06-01T17:00:00.000Z"),
+        position: expect.objectContaining({ recordIndex: 0 }),
+      }),
+    ]);
+    expect(fragment.facts.tasks).toEqual([]);
 
     const invocations = fragment.facts.invocations.filter(
       (invocation) => invocation.messageId === first.id,
@@ -155,6 +168,7 @@ describe("Claude transcript fragments", () => {
     const session = fragment.facts.sessions[0]!;
     expect(session.kind).toBe("subagent");
     expect(session.sourceSessionId).toBe("sess1:subagent:agent-a1");
+    expect(session.agentMessages).toBe(1);
     expect(fragment.facts.messages[0]?.sourceSessionId).toBe(session.sourceSessionId);
     expect(fragment.facts.relationships).toEqual([
       expect.objectContaining({
@@ -238,6 +252,169 @@ describe("Claude transcript fragments", () => {
         position: expect.objectContaining({ recordIndex: 3 }),
       }),
     ]);
+  });
+
+  test("counts real Claude user messages and unique agent messages", () => {
+    const root = temporaryDirectory();
+    const transcript = join(root, "session.jsonl");
+    const records = [
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:00.000Z",
+        message: { content: "<local-command-caveat>ignore command output</local-command-caveat>" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:01.000Z",
+        message: { content: "<bash-input>jj status</bash-input>" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:02.000Z",
+        message: { content: "<bash-stdout>clean</bash-stdout><bash-stderr></bash-stderr>" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:03.000Z",
+        message: { content: "update the parser" },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:04.000Z",
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-1", content: "ok" }] },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:05.000Z",
+        message: { content: [{ type: "text", text: "Base directory for this skill: /tmp/skill\n\n# Skill" }] },
+      },
+      {
+        type: "user",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:06.000Z",
+        message: {
+          content:
+            "You identify the actual tasks a user was trying to accomplish in a coding-agent session.\n\nFiltered user messages:\n{}",
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:07.000Z",
+        message: {
+          id: "message-1",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+          content: [{ type: "text", text: "working" }],
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:08.000Z",
+        message: {
+          id: "message-1",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+          content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
+        },
+      },
+      {
+        type: "assistant",
+        sessionId: "session",
+        timestamp: "2026-06-01T00:00:09.000Z",
+        message: {
+          id: "message-2",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+          content: [{ type: "text", text: "done" }],
+        },
+      },
+    ];
+    writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n"));
+
+    const parsed = parseClaudeTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.sessions[0]).toMatchObject({
+      userMessages: 2,
+      agentMessages: 2,
+    });
+  });
+
+  test("excludes Argus task extraction prompts from task candidates", () => {
+    const root = temporaryDirectory();
+    const transcript = join(root, "task-extraction.jsonl");
+    const prompt = `You identify the actual tasks a user was trying to accomplish in a coding-agent session.
+
+Return JSON only.
+
+Filtered user messages:
+{
+  "sessionId": "codex:one",
+  "messages": [
+    {
+      "index": 0,
+      "text": "add a facts command"
+    }
+  ]
+}`;
+    writeFileSync(
+      transcript,
+      `${JSON.stringify({
+        type: "user",
+        sessionId: "task-extraction-session",
+        timestamp: "2026-06-17T17:43:52.723Z",
+        message: { role: "user", content: prompt },
+        cwd: "/Users/fixture/proj",
+      })}\n`,
+    );
+
+    const parsed = parseClaudeTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe("Task extraction for codex:one");
+    expect(parsed.fragment.facts.taskCandidates).toEqual([]);
+  });
+
+  test("excludes Argus session analysis prompts from task candidates", () => {
+    const root = temporaryDirectory();
+    const transcript = join(root, "session-analysis.jsonl");
+    const prompt = `Analyze this coding-agent session. Return JSON only with these string fields: title, attempted, outcome, outcomeReason.
+
+FACTS:
+{
+  "sessionId": "codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+  "source": "codex",
+  "project": "adc/argus"
+}
+
+TRANSCRIPT:
+USER: add a new session analysis mode`;
+    writeFileSync(
+      transcript,
+      `${JSON.stringify({
+        type: "user",
+        sessionId: "session-analysis-session",
+        timestamp: "2026-06-16T21:09:17.281Z",
+        message: { role: "user", content: prompt },
+        cwd: "/Users/fixture/proj",
+      })}\n`,
+    );
+
+    const parsed = parseClaudeTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe(
+      "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
+    );
+    expect(parsed.fragment.facts.taskCandidates).toEqual([]);
   });
 });
 

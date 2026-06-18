@@ -111,6 +111,15 @@ describe("Gemini transcript fragments", () => {
       rawProjectId: "fixture-hash",
       firstPrompt: "gemini hello",
     });
+    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+      "gemini hello",
+      "run the checks",
+    ]);
+    expect(fragment.facts.taskCandidates.map((task) => task.timestampMs)).toEqual([
+      Date.parse("2026-06-01T10:00:00.000Z"),
+      Date.parse("2026-06-01T10:02:00.000Z"),
+    ]);
+    expect(fragment.facts.tasks).toEqual([]);
     expect(fragment.facts.messages.map((message) => message.providerMessageId)).toEqual([
       "g1",
       "g3",
@@ -185,6 +194,7 @@ describe("Gemini transcript fragments", () => {
       cwd: "/Users/fixture/gemini-legacy",
       firstPrompt: "search the docs",
     });
+    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual(["search the docs"]);
     expect(fragment.facts.messages[0]?.usage).toEqual({
       input: 15,
       output: 5,
@@ -212,6 +222,9 @@ describe("Gemini transcript fragments", () => {
       kind: "subagent",
       firstPrompt: "update the generated file",
     });
+    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+      "update the generated file",
+    ]);
     expect(fragment.facts.relationships).toEqual([
       expect.objectContaining({
         childSourceSessionId: "gemini:gemini-subagent",

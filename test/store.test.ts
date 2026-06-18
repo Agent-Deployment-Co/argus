@@ -47,6 +47,8 @@ function emptyFacts() {
     messages: [],
     invocations: [],
     toolResults: [],
+    taskCandidates: [],
+    tasks: [],
     relationships: [],
   };
 }
@@ -138,6 +140,8 @@ function transcriptWithFacts(id: string): ParsedFileFragment {
         position: position(3),
       },
     ],
+    taskCandidates: [],
+    tasks: [],
     relationships: [],
   };
   return fragment;
@@ -436,6 +440,9 @@ describe("SQLite store", () => {
     await initial.close();
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_archived");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_source");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_ts");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_tasks");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
       await rawExec(db, "PRAGMA user_version = 4");
     });
@@ -619,6 +626,126 @@ describe("SQLite store", () => {
       // An equal-or-larger re-parse replaces normally.
       expect(await store.materializeSessions("claude", [session(5)])).toEqual([]);
       expect(await countMessages()).toBe(5);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("stores and reads task facts for a materialized session", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const task = {
+        id: "task:codex:one",
+        source: "codex" as const,
+        sourceSessionId: "codex:task-session",
+        timestampMs: 1_780_000_000_000,
+        description: "add the facts command",
+        evidence: "message indexes: 0",
+        evidenceKind: "llm_inference" as const,
+        position: { originKey: "file:codex-task-session", recordIndex: 2, itemIndex: 0 },
+      };
+      const earlierTask = {
+        ...task,
+        id: "task:codex:earlier",
+        timestampMs: 1_779_999_999_000,
+        description: "read the existing facts command",
+      };
+      const { timestampMs: _timestampMs, ...untimestampedTask } = {
+        ...task,
+        id: "task:codex:untimestamped",
+        description: "document the extraction behavior",
+      };
+      await store.materializeSessions("codex", [
+        {
+          meta: {
+            source: "codex",
+            sessionId: "codex:task-session",
+            project: "p",
+            cwd: "/tmp/p",
+            filePath: "/tmp/p/rollout.jsonl",
+          },
+          messages: [],
+          toolResults: [],
+          tasks: [task, untimestampedTask, earlierTask],
+        },
+      ]);
+
+      expect(await store.readSessionTasks("codex:task-session")).toEqual([
+        earlierTask,
+        task,
+        untimestampedTask,
+      ]);
+      expect(await store.readSessionTasks("codex:missing")).toEqual([]);
+
+      const replacement = {
+        ...task,
+        id: "task:codex:two",
+        description: "extract one task from the session",
+        evidence: "message indexes: 1",
+      };
+      expect(await store.replaceSessionTasks("codex:task-session", [replacement])).toBe(true);
+      expect(await store.replaceSessionTasks("codex:missing", [replacement])).toBe(false);
+      expect(await store.readSessionTasks("codex:task-session")).toEqual([replacement]);
+      expect((await store.readResolved()).tasksBySession?.get("codex:task-session")).toEqual([
+        replacement,
+      ]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("materializeSessions preserves extracted tasks only when the session is unchanged", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const task = {
+        id: "task:codex:preserve",
+        source: "codex" as const,
+        sourceSessionId: "codex:preserve-tasks",
+        timestampMs: 1_780_000_000_000,
+        description: "keep extracted task facts",
+        evidence: "message indexes: 0",
+        evidenceKind: "llm_inference" as const,
+        position: { originKey: "file:codex-preserve-tasks", recordIndex: 1, itemIndex: 0 },
+      };
+      const message = (ts: number) => ({
+        source: "codex" as const,
+        sessionId: "codex:preserve-tasks",
+        project: "p",
+        cwd: "/tmp/p",
+        gitBranch: "",
+        ts,
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      const materialized = (ts: number) => ({
+        meta: {
+          source: "codex" as const,
+          sessionId: "codex:preserve-tasks",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [message(ts)],
+        toolResults: [
+          { name: "apply_patch", count: 1, approxTokens: 2 },
+          { name: "Bash", count: 1, approxTokens: 3 },
+          { name: "Edit", count: 1, approxTokens: 5 },
+        ],
+      });
+
+      await store.materializeSessions("codex", [materialized(1000)]);
+      expect(await store.replaceSessionTasks("codex:preserve-tasks", [task])).toBe(true);
+
+      await store.materializeSessions("codex", [materialized(1000)]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
+
+      await store.materializeSessions("codex", [materialized(2000)]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([]);
     } finally {
       await store.close();
     }

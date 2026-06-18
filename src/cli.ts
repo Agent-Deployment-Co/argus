@@ -16,6 +16,11 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
+import {
+  DEFAULT_TASK_EXTRACTION_PROVIDER,
+  type TaskExtractionOptions,
+  type TaskExtractionProvider,
+} from "./task-extraction.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -34,6 +39,13 @@ interface ReportOptions extends BuildDashboardOptions {
 interface ServeOptions extends BuildDashboardOptions {
   port: number;
   open: boolean;
+  taskExtraction: TaskExtractionOptions;
+}
+
+function toTaskProvider(value: string): TaskExtractionProvider {
+  if (value === "off" || value === "claude" || value === "command") return value;
+  console.error(`Invalid --task-provider: ${value} (expected claude, command, or off)`);
+  process.exit(2);
 }
 
 const log: Log = (s) => process.stderr.write(s + "\n");
@@ -210,6 +222,7 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
         summarize: opts.summarize,
         summarizeModel: opts.summarizeModel,
       },
+      taskExtraction: opts.taskExtraction,
     },
     log,
   );
@@ -366,6 +379,40 @@ const summarizeArgs = {
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
 } as const;
 
+/** Task extraction options for web/session-screen extraction. */
+const taskArgs = {
+  "task-provider": {
+    type: "string",
+    default: process.env.ARGUS_TASK_PROVIDER || DEFAULT_TASK_EXTRACTION_PROVIDER,
+    description: "Task extractor: claude, command, or off",
+    valueHint: "claude|command|off",
+  },
+  "task-model": {
+    type: "string",
+    default: process.env.ARGUS_TASK_MODEL,
+    description: "Model for task extraction when the provider supports it",
+    valueHint: "id",
+  },
+  "task-prompt": {
+    type: "string",
+    default: process.env.ARGUS_TASK_PROMPT,
+    description: "Custom task extraction prompt",
+    valueHint: "text",
+  },
+  "task-prompt-file": {
+    type: "string",
+    default: process.env.ARGUS_TASK_PROMPT_FILE,
+    description: "Read the task extraction prompt from a file",
+    valueHint: "path",
+  },
+  "task-command": {
+    type: "string",
+    default: process.env.ARGUS_TASK_COMMAND,
+    description: "Command provider; reads prompt on stdin and writes task JSON to stdout",
+    valueHint: "cmd",
+  },
+} as const;
+
 /** Inputs shared by report, serve, and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
@@ -382,6 +429,29 @@ const reportArgs = {
   open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
 
+type TaskArgs = {
+  "task-provider": string;
+  "task-model"?: string;
+  "task-prompt"?: string;
+  "task-prompt-file"?: string;
+  "task-command"?: string;
+};
+
+function taskExtractionOptions(
+  args: TaskArgs,
+  debugLog?: (message: string) => void,
+): TaskExtractionOptions {
+  const options: TaskExtractionOptions = {
+    provider: toTaskProvider(args["task-provider"]),
+  };
+  if (args["task-model"]) options.model = args["task-model"];
+  if (args["task-prompt"]) options.prompt = args["task-prompt"];
+  if (args["task-prompt-file"]) options.promptFile = args["task-prompt-file"];
+  if (args["task-command"]) options.command = args["task-command"];
+  if (debugLog) options.debugLog = debugLog;
+  return options;
+}
+
 const report = defineCommand({
   meta: { name: "report", description: "build the local HTML (or --json) dashboard" },
   args: reportArgs,
@@ -392,10 +462,21 @@ const serve = defineCommand({
   meta: { name: "serve", description: "serve the interactive dashboard at a local web address" },
   args: {
     ...buildArgs,
+    ...taskArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     open: { type: "boolean", default: false, description: "Open the dashboard in your browser once it's ready (macOS)" },
   },
-  run: handler((args) => runServe({ ...buildOptions(args), port: Number(args.port) || DEFAULT_PORT, open: args.open }, log)),
+  run: handler((args) =>
+    runServe(
+      {
+        ...buildOptions(args),
+        port: Number(args.port) || DEFAULT_PORT,
+        open: args.open,
+        taskExtraction: taskExtractionOptions(args),
+      },
+      log,
+    ),
+  ),
 });
 
 // `argus index` — the local store maintenance group. The bare command does an incremental read;
@@ -490,23 +571,29 @@ const runCmd = defineCommand({
   args: {
     ...sourceArg,
     ...agentsViewArgs,
+    ...taskArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
     "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
+    debug: { type: "boolean", default: false, description: "Print task extraction debug logs to stdout" },
   },
-  run: handler((args) =>
-    runRun(
+  run: handler((args) => {
+    const debugLog = args.debug
+      ? (message: string) => process.stdout.write(message + "\n")
+      : undefined;
+    return runRun(
       {
         ...syncOptions(args),
         port: Number(args.port) || DEFAULT_PORT,
         indexIntervalMin: Number(args["index-interval"]) || 5,
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
+        taskExtraction: taskExtractionOptions(args, debugLog),
       },
       log,
-    ),
-  ),
+    );
+  }),
 });
 
 const main = defineCommand({

@@ -1,6 +1,7 @@
 import {
   createCodexTranscriptDiscoveryAdapter,
   createCodexTranscriptParserAdapter,
+  parseCodexTranscriptPath,
 } from "./parser.ts";
 import type { NativeProducer, ProducerContext } from "../../producer.ts";
 
@@ -16,4 +17,5 @@ export const codexProducer: NativeProducer = {
   discoverTranscripts: (ctx: ProducerContext) =>
     createCodexTranscriptDiscoveryAdapter(ctx.codexSessionsDir).discover(),
   transcriptParser: () => createCodexTranscriptParserAdapter(),
+  parseTranscriptPath: parseCodexTranscriptPath,
 };

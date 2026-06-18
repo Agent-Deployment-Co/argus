@@ -22,6 +22,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { CODEX_SESSIONS_DIR, COWORK_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
+import { isCountableClaudeUserMessage } from "./task-candidates.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
   emptyUsage,
@@ -499,6 +500,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
   const frictionEventsBySession = new Map<string, FrictionEvent[]>();
   const seenFrictionEventIds = new Set<string>();
   const stopReasonsBySession = new Map<string, Record<string, number>>();
+  const claudeAgentMessageIdsBySession = new Map<string, Set<string>>();
   const countStopReason = (sid: string, stopReason: string): void => {
     const counts = stopReasonsBySession.get(sid) ?? {};
     if (!stopReasonsBySession.has(sid)) stopReasonsBySession.set(sid, counts);
@@ -583,6 +585,22 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
 
           const content = o.message?.content;
+          if (o.type === "user" && isCountableClaudeUserMessage(o)) {
+            existing.userMessages = (existing.userMessages ?? 0) + 1;
+          }
+          if (o.type === "assistant" && o.message?.model !== "<synthetic>") {
+            const providerMessageId = typeof o.message?.id === "string" && o.message.id ? o.message.id : undefined;
+            if (providerMessageId) {
+              const ids = claudeAgentMessageIdsBySession.get(sid) ?? new Set<string>();
+              if (!claudeAgentMessageIdsBySession.has(sid)) claudeAgentMessageIdsBySession.set(sid, ids);
+              if (!ids.has(providerMessageId)) {
+                ids.add(providerMessageId);
+                existing.agentMessages = (existing.agentMessages ?? 0) + 1;
+              }
+            } else {
+              existing.agentMessages = (existing.agentMessages ?? 0) + 1;
+            }
+          }
 
           // First pass: register tool_use ids -> names (for result attribution).
           if (o.type === "assistant" && Array.isArray(content)) {
@@ -688,6 +706,12 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
         let currentModel = "(unknown)";
         let pendingToolUses: ToolUse[] = [];
         const callIdToName = new Map<string, string>();
+        const rawTurnIds = new Set<string>();
+        let rawTurnsWithoutId = 0;
+        let userMessageEvents = 0;
+        let agentMessageEvents = 0;
+        let responseUserMessages = 0;
+        let responseAssistantMessages = 0;
 
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
@@ -698,6 +722,16 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             continue;
           }
           const payload = o.payload ?? {};
+          if (o.type === "event_msg") {
+            if (typeof payload.turn_id === "string" && payload.turn_id) rawTurnIds.add(payload.turn_id);
+            else if (payload.type === "task_started") rawTurnsWithoutId++;
+          }
+          if (o.type === "event_msg" && payload.type === "user_message") {
+            userMessageEvents++;
+          }
+          if (o.type === "event_msg" && payload.type === "agent_message") {
+            agentMessageEvents++;
+          }
           if (o.type === "session_meta") {
             sid = `codex:${codexSessionId(filePath, payload)}`;
             if (typeof payload.cwd === "string") currentCwd = payload.cwd;
@@ -715,8 +749,14 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
           }
 
           if (o.type === "response_item" && payload.type === "message" && payload.role === "user") {
+            responseUserMessages++;
             const prompt = textFromCodexContent(payload.content);
             if (prompt) ensureSession(sid, "codex", currentCwd, filePath, prompt);
+            continue;
+          }
+
+          if (o.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
+            responseAssistantMessages++;
             continue;
           }
 
@@ -774,6 +814,15 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
             }
             pendingToolUses = [];
           }
+        }
+        if (sid) {
+          const meta = ensureSession(sid, "codex", currentCwd, filePath);
+          const userMessages = userMessageEvents || responseUserMessages;
+          const agentMessages = agentMessageEvents || responseAssistantMessages;
+          const rawTurns = rawTurnIds.size + rawTurnsWithoutId || userMessages || undefined;
+          if (userMessages) meta.userMessages = userMessages;
+          if (agentMessages) meta.agentMessages = agentMessages;
+          if (rawTurns) meta.rawTurns = rawTurns;
         }
       }
     }

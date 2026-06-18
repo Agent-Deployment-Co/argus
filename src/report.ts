@@ -416,7 +416,7 @@ const BY_SOURCE = DATA.bySource || [];
 const u = DATA.totals.usage;
 const cards = [
   ['Sessions', String(DATA.totals.sessions)],
-  ['Messages', fmt(DATA.totals.messages)],
+  ['Model responses', fmt(DATA.totals.messages)],
   ['Total tokens', fmt(DATA.totals.total)],
   ['Est. cost', usd(DATA.totals.cost)],
   ['Cache read', Math.round(100*u.cacheRead/Math.max(1,DATA.totals.total))+'% <small>'+fmt(u.cacheRead)+'</small>'],
@@ -462,7 +462,8 @@ makeTable(document.getElementById('healthSessionTable'),[
   {label:'Turns', num:true, sort:r=>r.health&&r.health.turns!=null?r.health.turns:-1, cell:r=>r.health&&r.health.turns!=null?r.health.turns:'<span class="muted">—</span>'},
   {label:'Median turn', num:true, sort:r=>r.health&&r.health.medianTurnMs!=null?r.health.medianTurnMs:-1, cell:r=>r.health&&r.health.medianTurnMs!=null?dur(r.health.medianTurnMs):'<span class="muted">—</span>'},
   {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},
-  {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
+  {label:'User msgs', num:true, sort:r=>r.userMessages!=null?r.userMessages:-1, cell:r=>r.userMessages!=null?r.userMessages:'<span class="muted">—</span>'},
+  {label:'Agent msgs', num:true, sort:r=>r.agentMessages!=null?r.agentMessages:-1, cell:r=>r.agentMessages!=null?r.agentMessages:'<span class="muted">—</span>'},
   {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
 ], DATA.sessions);
 
@@ -615,7 +616,7 @@ if (DATA.byUser && DATA.byUser.length) {
   makeTable(document.getElementById('userTable'),[
     {label:'User', sort:r=>r.name, cell:r=>'<a href="?user='+encodeURIComponent(r.name)+'">'+esc(r.name)+'</a>'},
     {label:'Sessions', num:true, sort:r=>r.meta?.sessions||0, cell:r=>r.meta?.sessions||0},
-    {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
+    {label:'Responses', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
     {label:'Tokens', num:true, sort:r=>r.total, cell:r=>fmt(r.total)},
     {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
   ], DATA.byUser);
@@ -625,7 +626,7 @@ if (DATA.byUser && DATA.byUser.length) {
 makeTable(document.getElementById('projectTable'),[
   {label:'Project', sort:r=>r.name, cell:r=>esc(r.name)},
   {label:'Sessions', num:true, sort:r=>r.meta?.sessions||0, cell:r=>r.meta?.sessions||0},
-  {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
+  {label:'Responses', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
   {label:'Tokens', num:true, sort:r=>r.total, cell:r=>fmt(r.total)},
   {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
 ], DATA.byProject);
@@ -634,7 +635,7 @@ makeTable(document.getElementById('projectTable'),[
 makeTable(document.getElementById('sourceTable'),[
   {label:'Source', sort:r=>r.name, cell:r=>esc(r.name)},
   {label:'Sessions', num:true, sort:r=>r.meta?.sessions||0, cell:r=>r.meta?.sessions||0},
-  {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
+  {label:'Responses', num:true, sort:r=>r.messages, cell:r=>fmt(r.messages)},
   {label:'Tokens', num:true, sort:r=>r.total, cell:r=>fmt(r.total)},
   {label:'Cost', num:true, sort:r=>r.cost, cell:r=>usd(r.cost)},
 ], BY_SOURCE);
@@ -644,7 +645,7 @@ makeTable(document.getElementById('pluginTable'),[
   {label:'Plugin', sort:r=>r.name, cell:r=>esc(r.name)+(r.marketplace?' <span class="muted">@'+esc(r.marketplace)+'</span>':'')},
   {label:'Status', sort:r=>(r.enabled?2:0)+(r.used?1:0), cell:r=> r.used?'<span class="pill on">used</span>': r.enabled?'<span class="pill warn">enabled · unused</span>':'<span class="pill">disabled</span>'},
   {label:'Skills used', sort:r=>r.skills.length, cell:r=>r.skills.map(skillPill).join('')||'<span class="muted">—</span>'},
-  {label:'Msgs', num:true, sort:r=>r.skillMessages, cell:r=>fmt(r.skillMessages)},
+  {label:'Responses', num:true, sort:r=>r.skillMessages, cell:r=>fmt(r.skillMessages)},
   {label:'Tokens', num:true, sort:r=>r.skillTokens, cell:r=>fmt(r.skillTokens)},
   {label:'MCP calls', num:true, sort:r=>r.mcpCalls, cell:r=>r.mcpCalls||'<span class="muted">—</span>'},
   {label:'Cost', num:true, sort:r=>r.skillCost, cell:r=>r.skillCost?usd(r.skillCost):'<span class="muted">—</span>'},
@@ -674,7 +675,9 @@ const sessionCols = [
   {label:'Source', sort:r=>r.source||'', cell:r=>esc(r.source||'')},
   {label:'Project', className:'session-project', sort:r=>r.project, cell:r=>'<span class="truncate" title="'+esc(r.project)+'">'+esc(compactProject(r.project))+'</span>'},
   {label:'Dur', num:true, sort:r=>r.durationMs, cell:r=>dur(r.durationMs)},
-  {label:'Msgs', num:true, sort:r=>r.messages, cell:r=>r.messages},
+  {label:'User msgs', num:true, sort:r=>r.userMessages!=null?r.userMessages:-1, cell:r=>r.userMessages!=null?r.userMessages:'<span class="muted">—</span>'},
+  {label:'Agent msgs', num:true, sort:r=>r.agentMessages!=null?r.agentMessages:-1, cell:r=>r.agentMessages!=null?r.agentMessages:'<span class="muted">—</span>'},
+  {label:'Turns', num:true, sort:r=>r.rawTurns!=null?r.rawTurns:(r.health&&r.health.turns!=null?r.health.turns:-1), cell:r=>r.rawTurns!=null?r.rawTurns:(r.health&&r.health.turns!=null?r.health.turns:'<span class="muted">—</span>')},
   {label:'Outcome', sort:r=>(r.health&&r.health.outcome)||'', cell:r=>outcomeCell(r.health&&r.health.outcome)},
   {label:'Interrupts', num:true, sort:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:-1, cell:r=>r.health&&r.health.interruptions!=null?r.health.interruptions:'<span class="muted">—</span>'},
   {label:'Tok×', num:true, sort:r=>r.health&&r.health.tokenGrowth!=null?r.health.tokenGrowth:0, cell:r=>tokGrowthCell(r.health&&r.health.tokenGrowth)},

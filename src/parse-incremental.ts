@@ -290,7 +290,12 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
           approxTokens: stat.approxTokens,
         }))
       : [];
-    sessions.push({ meta, messages: messagesBySession.get(sid) ?? [], toolResults });
+    sessions.push({
+      meta,
+      messages: messagesBySession.get(sid) ?? [],
+      toolResults,
+      tasks: output.tasksBySession.get(sid) ?? [],
+    });
   }
   return sessions;
 }

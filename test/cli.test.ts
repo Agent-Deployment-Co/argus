@@ -14,19 +14,23 @@ import pkg from "../package.json" with { type: "json" };
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
 
 /** Run the CLI with isolated, empty config/data dirs so it never reads the developer's real store. */
-function runCli(args: string[]): { status: number; stderr: string; stdout: string } {
-  const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
+function cliEnv(dir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: dir,
+    ARGUS_DATA_DIR: join(dir, "data"),
+    ARGUS_CONFIG_DIR: join(dir, "config"),
+    CLAUDE_CONFIG_DIR: join(dir, "claude"),
+    CODEX_HOME: join(dir, "codex"),
+    GEMINI_CLI_HOME: dir,
+    NO_COLOR: "1",
+  };
+}
+
+function runCli(args: string[], dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"))): { status: number; stderr: string; stdout: string } {
   const result = spawnSync("bun", ["run", CLI, ...args], {
     encoding: "utf8",
-    env: {
-      ...process.env,
-      ARGUS_DATA_DIR: join(dir, "data"),
-      ARGUS_CONFIG_DIR: join(dir, "config"),
-      CLAUDE_CONFIG_DIR: join(dir, "claude"),
-      CODEX_HOME: join(dir, "codex"),
-      GEMINI_CLI_HOME: dir,
-      NO_COLOR: "1",
-    },
+    env: cliEnv(dir),
   });
   return { status: result.status ?? -1, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
 }
@@ -116,6 +120,7 @@ describe("cli argument validation", () => {
     expect(stderr).not.toContain("Missing value");
     expect(stderr).not.toContain("Unexpected argument");
   });
+
 });
 
 describe("index command group", () => {
@@ -140,7 +145,7 @@ describe("index command group", () => {
 });
 
 describe("removed verbs", () => {
-  for (const verb of ["push", "reindex", "forget", "sync"]) {
+  for (const verb of ["push", "reindex", "forget", "facts", "sync"]) {
     test(`\`${verb}\` is gone (or repurposed) — old indexing/push aliases are not silently accepted`, () => {
       const { status, stderr } = runCli([verb, "--bogus-flag-xyz"]);
       // `sync` now exists (upload) and rejects the unknown flag (exit 2); the others are unknown
@@ -154,6 +159,11 @@ describe("removed verbs", () => {
     const { stderr } = runCli(["reindex"]);
     expect(stderr).toContain("Unknown command");
   });
+
+  test("`facts` reports an unknown command", () => {
+    const { stderr } = runCli(["facts"]);
+    expect(stderr).toContain("Unknown command");
+  });
 });
 
 describe("run command", () => {
@@ -163,6 +173,7 @@ describe("run command", () => {
     expect(status).toBe(0);
     expect(out).toContain("index-interval");
     expect(out).toContain("sync-interval");
+    expect(out).toContain("debug");
   });
 
   test("starts all legs and shuts down cleanly on SIGTERM", async () => {
