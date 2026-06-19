@@ -149,6 +149,26 @@ describe("resolveTaskExtraction", () => {
     expect(resolveTaskExtraction({}, {}).enabled).toBe(false);
   });
 
+  test("an invalid provider warns and falls back instead of hard-exiting (#89 tolerant)", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (m?: unknown) => warnings.push(String(m));
+    try {
+      // A typo in argus.json must not kill an unrelated `index`/`serve`/`run`.
+      const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "cluade" as never } });
+      expect(resolved.provider).toBe("claude");
+      expect(warnings.join("\n")).toContain("Ignoring invalid task extraction provider");
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  test("an exported-but-empty env var is treated as unset, not a value", () => {
+    process.env.ARGUS_TASK_PROVIDER = "";
+    // "" must fall through to the file rather than route through provider validation.
+    expect(resolveTaskExtraction({}, { taskExtraction: { provider: "command" } }).provider).toBe("command");
+  });
+
   test("reattaches debugLog (not a persisted setting)", () => {
     const sink = () => {};
     expect(resolveTaskExtraction({}, {}, sink).debugLog).toBe(sink);
