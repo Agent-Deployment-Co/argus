@@ -184,6 +184,21 @@ export interface ToolResultFact {
   position: SourcePosition;
 }
 
+/** Did the user get what they wanted (judged from the whole task dialogue, not just the ending). */
+export type TaskOutcome = "success" | "failure" | "unclear";
+/** How frustrated the user seemed across the task (re-asks, escalating tone, refusals). */
+export type TaskFrustration = "none" | "low" | "high";
+
+/**
+ * A task's span over the reconciled session timeline (#88 "chapters"): an inclusive range of
+ * message seq. Subsequent facts fall under the chapter that contains them; the materializer stamps
+ * each message's owning task from these spans (resolved_messages.task_seq).
+ */
+export interface TaskChapter {
+  startSeq: number;
+  endSeq: number;
+}
+
 export interface TaskFact {
   id: string;
   source: AgentSource;
@@ -194,6 +209,15 @@ export interface TaskFact {
   description: string;
   evidence: string;
   evidenceKind: "llm_inference" | "user_message";
+  /** The chapter span this task owns over the session's reconciled messages (pass 1). */
+  chapter?: TaskChapter;
+  /** Per-task outcome, judged from the reconstructed task dialogue (pass 2). */
+  outcome?: TaskOutcome;
+  frustration?: TaskFrustration;
+  /** Short evidence tags for the outcome/frustration call (e.g. "repeated re-asks", "no access"). */
+  signals?: string[];
+  /** One-line rationale for the outcome judgement. */
+  outcomeReason?: string;
   position: SourcePosition;
 }
 

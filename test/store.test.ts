@@ -251,6 +251,15 @@ function rawGet<T>(db: Database, sql: string): Promise<T | undefined> {
   });
 }
 
+function rawAll<T>(db: Database, sql: string): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    db.all<T>(sql, (error, rows) => {
+      if (error) reject(error);
+      else resolve(rows);
+    });
+  });
+}
+
 function rawClose(db: Database): Promise<void> {
   return new Promise((resolve, reject) => {
     db.close((error) => {
@@ -443,6 +452,8 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_source");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_ts");
       await rawExec(db, "DROP TABLE IF EXISTS resolved_tasks");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_task");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN task_seq");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
       await rawExec(db, "PRAGMA user_version = 4");
     });
@@ -746,6 +757,61 @@ describe("SQLite store", () => {
 
       await store.materializeSessions("codex", [materialized(2000)]);
       expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("materializeSessions stamps resolved_messages.task_seq from task chapter spans", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const sid = "codex:chapters";
+      const message = (ts: number) => ({
+        source: "codex" as const,
+        sessionId: sid,
+        project: "p",
+        cwd: "/tmp/p",
+        gitBranch: "",
+        ts,
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      const task = (seqLabel: string, startSeq: number, endSeq: number) => ({
+        id: `task:${sid}:${seqLabel}`,
+        source: "codex" as const,
+        sourceSessionId: sid,
+        description: `task ${seqLabel}`,
+        evidence: `chapter ${startSeq}-${endSeq}`,
+        evidenceKind: "llm_inference" as const,
+        chapter: { startSeq, endSeq },
+        outcome: "success" as const,
+        position: { originKey: "file:chapters", recordIndex: startSeq, itemIndex: 0 },
+      });
+      // 4 messages, two chapters: [0,1] → task 0, [2,3] → task 1.
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+          messages: [message(1000), message(1001), message(1002), message(1003)],
+          toolResults: [],
+          tasks: [task("a", 0, 1), task("b", 2, 3)],
+        },
+      ]);
+
+      const rows = await withRawDatabase(path, (db) =>
+        rawAll<{ seq: number; task_seq: number | null }>(
+          db,
+          `SELECT seq, task_seq FROM resolved_messages WHERE session_id = '${sid}' ORDER BY seq`,
+        ),
+      );
+      expect(rows.map((r) => r.task_seq)).toEqual([0, 0, 1, 1]);
+      // Outcome + chapter round-trip through task_json.
+      const tasks = await store.readSessionTasks(sid);
+      expect(tasks[0]?.chapter).toEqual({ startSeq: 0, endSeq: 1 });
+      expect(tasks[0]?.outcome).toBe("success");
     } finally {
       await store.close();
     }
