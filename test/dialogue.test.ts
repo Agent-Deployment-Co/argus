@@ -41,6 +41,25 @@ describe("producer.reconstructDialogue", () => {
     ]);
   });
 
+  test("claude/cowork: assistant message split across tool-use then text records keeps the answer", () => {
+    // A single assistant message (one id) often spans records: a tool_use record with no dialogue
+    // text, then the record with the answer. The text record must not be dropped as a "duplicate"
+    // of the (empty) tool-use record — that made pass-2 think the assistant never replied.
+    const lines = [
+      { type: "user", timestamp: "2026-06-01T00:00:00Z", message: { content: "briefly research how llms do math" } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:05Z", message: { id: "a1", content: [{ type: "tool_use", name: "WebSearch" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:09Z", message: { id: "a1", content: [{ type: "text", text: "Here's the short version." }] } },
+      { type: "user", timestamp: "2026-06-01T00:00:20Z", message: { content: "ok thanks" } },
+    ];
+    const expected: DialogueTurn[] = [
+      { role: "user", text: "briefly research how llms do math", timestampMs: Date.parse("2026-06-01T00:00:00Z") },
+      { role: "assistant", text: "Here's the short version.", timestampMs: Date.parse("2026-06-01T00:00:09Z") },
+      { role: "user", text: "ok thanks", timestampMs: Date.parse("2026-06-01T00:00:20Z") },
+    ];
+    expect(claudeProducer.reconstructDialogue(transcript(lines))).toEqual(expected);
+    expect(coworkProducer.reconstructDialogue(transcript(lines))).toEqual(expected);
+  });
+
   test("codex: payload-wrapped messages; environment context skipped", () => {
     const path = transcript([
       { timestamp: "2026-06-01T00:00:00Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "text", text: "<environment_context>\ncwd: /x" }] } },
