@@ -186,6 +186,39 @@ describe("runIndexRefresh (targeted, #93)", () => {
     }
   });
 
+  test("preserves aux-derived firstPrompt (Claude history) — regression for the wipe-on-refresh bug", async () => {
+    const root = tempRoot();
+    const projectsDir = join(root, "projects");
+    cpSync(join(FIX, "projects"), projectsDir, { recursive: true });
+    const historyFile = join(root, "history.jsonl");
+    cpSync(join(FIX, "history.jsonl"), historyFile);
+    const storePath = join(root, "cache", "fragments.sqlite3");
+    // Full index resolves firstPrompt from history.jsonl (an auxiliary input).
+    await parseAllIncrementalDetailed({
+      projectsDir,
+      historyFile,
+      sources: ["claude"] as AgentSource[],
+      storePath,
+      agentsView: "off",
+    });
+    const store = await openStore({ path: storePath });
+    try {
+      const resolved = await store.readResolved();
+      const withPrompt = [...resolved.sessions.values()].find(
+        (s) => s.source === "claude" && (s.firstPrompt?.trim().length ?? 0) > 0,
+      );
+      expect(withPrompt).toBeDefined();
+      const id = withPrompt!.sessionId;
+      const prompt = withPrompt!.firstPrompt;
+      // Targeted refresh in isolation: must keep the aux-derived firstPrompt, not wipe it back to empty.
+      const res = await reindexSession(id, { store, context: { historyFile, projectsDir } });
+      expect(res.ok).toBe(true);
+      expect((await store.readSessionMeta(id))?.firstPrompt).toBe(prompt);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("a missing session reports a clear error, changes nothing, and exits non-zero", async () => {
     const root = tempRoot();
     const storePath = await indexCodex(root);

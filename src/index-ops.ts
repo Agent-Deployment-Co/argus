@@ -116,20 +116,30 @@ export async function runIndexRefresh(opts: RefreshOptions, log: Log): Promise<v
  *  transcript has left disk reports a clear error and changes nothing for that session. */
 async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
   const taskExtraction = resolveExtraction(opts.extractTasks);
+  const extracting = taskExtraction.enabled && taskExtraction.provider !== "off";
   const store = await openStore(opts.storePath ? { path: opts.storePath } : undefined);
   let refreshed = 0;
   let failed = 0;
   try {
     for (const id of opts.ids) {
       const result = await reindexSession(id, { store, taskExtraction });
-      if (result.ok) {
-        refreshed++;
-        const n = result.tasks.length;
-        log(n ? `Refreshed ${id} (${n} task${n === 1 ? "" : "s"}).` : `Refreshed ${id}.`);
-      } else {
+      if (!result.ok) {
         failed++;
         log(result.message);
+        continue;
       }
+      refreshed++;
+      const n = result.tasks.length;
+      // Distinguish "extracted N tasks" / "extraction ran, found none" / "extraction off this run",
+      // so an empty result isn't silently ambiguous.
+      const note = !extracting
+        ? ""
+        : n
+          ? ` (${n} task${n === 1 ? "" : "s"})`
+          : " (no tasks found)";
+      log(`Refreshed ${id}${note}.`);
+      // Surface any extraction warnings (e.g. the provider failed) rather than swallowing them.
+      for (const diag of result.diagnostics) log(`  ! ${diag.message}`);
     }
   } finally {
     await store.close();
