@@ -5,14 +5,19 @@ import { sourcesFor, type Log } from "./dashboard-builder.ts";
 import { syncStatsSummary } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
 import { openStore, rebuildStore } from "./store.ts";
+import { loadConfig, resolveTaskExtraction } from "./config.ts";
 import type { DeleteOptions, SyncOptions } from "./cli-options.ts";
 
-/** Bring the store up to date for the requested sources (producers reconcile + materialize). */
+/** Bring the store up to date for the requested sources (producers reconcile + materialize). When
+ *  task extraction is enabled in argus.json (#89/#91), indexing a changed session also extracts its
+ *  tasks; otherwise indexing behaves exactly as before. */
 export async function runIndex(opts: SyncOptions, log: Log): Promise<void> {
+  const taskExtraction = resolveTaskExtraction({}, loadConfig());
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
     agentsView: opts.agentsView,
     agentsViewDatabasePath: opts.agentsViewDatabasePath,
+    taskExtraction,
   });
   try {
     const parsed = await store.read({});

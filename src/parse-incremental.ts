@@ -25,8 +25,12 @@ import {
   type ReconcileResult,
 } from "./reconcile.ts";
 import type { ImportProducer, ProducerContext } from "./producer.ts";
-import { IMPORT_PRODUCERS, NATIVE_PRODUCERS } from "./producers/index.ts";
+import { IMPORT_PRODUCERS, NATIVE_PRODUCERS, nativeProducerForSource } from "./producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
+import type { TaskCandidateFact, TaskFact } from "./store-contract.ts";
+import { reconstructDialogue } from "./dialogue.ts";
+import { extractTasksWithOutcome } from "./task-extraction.ts";
+import type { ResolvedTaskExtraction } from "./config.ts";
 
 export interface SyncStats {
   hits: number;
@@ -60,6 +64,9 @@ export interface IncrementalParseOptions extends ParseOptions {
   /** Read the already-materialized store without reconciling/materializing first (no writes). Used by
    *  the read-only legs of `argus run`, where the index leg is the sole writer. */
   skipSync?: boolean;
+  /** Opt-in index-time task extraction (#91). When enabled, indexing a changed session also runs the
+   *  two-pass extraction and materializes its tasks. Off/unset → indexing behaves exactly as today. */
+  taskExtraction?: ResolvedTaskExtraction;
 }
 
 const EMPTY_STATS: SyncStats = {
@@ -300,6 +307,54 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   return sessions;
 }
 
+/** True when index-time task extraction should run for this call. */
+function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined): boolean {
+  return !!taskExtraction?.enabled && taskExtraction.provider !== "off";
+}
+
+/**
+ * Run the two-pass task extraction (#91) for the given materialized sessions, attaching the result
+ * to each session before it's stored (so the chapters' messages get task_seq at materialize). Only
+ * sessions in `targets` (the ones whose transcripts actually changed) are re-extracted; others keep
+ * their stored tasks via the materializer's preserve-on-unchanged guard. The reconstructed dialogue
+ * is an in-memory intermediate — nothing with message text is persisted.
+ */
+async function extractTasksForSessions(
+  sessions: MaterializeSession[],
+  fragments: ParsedFileFragment[],
+  toCanonical: (sourceSessionId: string) => string,
+  targets: Set<string>,
+  taskExtraction: ResolvedTaskExtraction,
+  diagnostics: ParserDiagnostic[],
+): Promise<void> {
+  const candidatesBySession = new Map<string, TaskCandidateFact[]>();
+  for (const fragment of fragments) {
+    for (const candidate of fragment.facts.taskCandidates) {
+      const id = toCanonical(candidate.sourceSessionId);
+      const list = candidatesBySession.get(id) ?? [];
+      list.push(candidate);
+      candidatesBySession.set(id, list);
+    }
+  }
+  for (const session of sessions) {
+    const sid = session.meta.sessionId;
+    if (!targets.has(sid)) continue;
+    const candidates = candidatesBySession.get(sid) ?? [];
+    if (!candidates.length) continue;
+    const messageTimestamps = session.messages.map((message) => message.ts);
+    const dialogue = reconstructDialogue(session.meta.source, session.meta.filePath);
+    const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
+      sid,
+      candidates,
+      messageTimestamps,
+      dialogue,
+      taskExtraction,
+    );
+    diagnostics.push(...extractionDiagnostics);
+    session.tasks = tasks;
+  }
+}
+
 /** Map a source session id to its canonical id (subagent child -> parent) for a producer. */
 function canonicalizer(
   caps: { canonicalizeSubagents: boolean },
@@ -454,9 +509,23 @@ async function syncStore(
         auxiliaryFragments: aux,
         canonicalIds: touched,
       });
+      const materialize = toMaterializeSessions(output);
+      // Opt-in (#91): re-extract tasks only for sessions whose files actually changed — the widened
+      // touched set (deletions / aux changes) re-materializes without new tasks, so the materializer
+      // preserves their stored tasks rather than paying for an LLM call per unchanged session.
+      if (taskExtractionActive(opts.taskExtraction)) {
+        await extractTasksForSessions(
+          materialize,
+          fragments,
+          canon,
+          canonicalSessionIds(producer.capabilities, changedFragments),
+          opts.taskExtraction!,
+          diagnostics,
+        );
+      }
       // Marks these present (archived = 0); the store's don't-regress guard keeps the fuller stored
       // copy if a re-parse came back short (e.g. a file partly aged out or failed to parse this run).
-      await store.materializeSessions(producer.id, toMaterializeSessions(output));
+      await store.materializeSessions(producer.id, materialize);
     }
 
     // Durable archive: sessions we owned that are no longer discoverable on disk are RETAINED and
@@ -624,6 +693,83 @@ export async function parseAllIncremental(
   opts: IncrementalParseOptions = {},
 ): Promise<ParseResult> {
   return (await parseAllIncrementalDetailed(opts)).parsed;
+}
+
+export type ReindexSessionResult =
+  | { ok: true; tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }
+  | { ok: false; status: 404 | 422; message: string; diagnostics?: ParserDiagnostic[] };
+
+/**
+ * Re-index a SINGLE session in isolation: re-parse its transcript from disk and reconcile just that
+ * session into the store, instead of the full discovery over all sources. This is the shared
+ * primitive the web Refresh (#92) and CLI `index refresh <id>` (#93) build on. When task extraction
+ * is active for the call, runs the two-pass extraction so the refreshed session gains chapters +
+ * outcome. Errors (404/422) if the session is unknown or its transcript is no longer readable on disk.
+ */
+export async function reindexSession(
+  sessionId: string,
+  opts: { store?: Store; storePath?: string; taskExtraction?: ResolvedTaskExtraction } = {},
+): Promise<ReindexSessionResult> {
+  let store = opts.store;
+  let ownsStore = false;
+  if (!store) {
+    store = await openStore({ path: opts.storePath });
+    ownsStore = true;
+  }
+  try {
+    const meta = await store.readSessionMeta(sessionId);
+    if (!meta) {
+      return {
+        ok: false,
+        status: 404,
+        message: `No session found for ${sessionId}. Run \`argus index\` to read sessions into the local store.`,
+      };
+    }
+    const producer = nativeProducerForSource(meta.source);
+    if (!producer) {
+      return {
+        ok: false,
+        status: 422,
+        message: `Couldn't re-index ${sessionId}: no transcript reader is registered for ${meta.source}.`,
+      };
+    }
+    const parsed = producer.parseTranscriptPath(meta.filePath);
+    if (parsed.status !== "current") {
+      const detail = parsed.diagnostics[0]?.message ?? `Couldn't read ${meta.filePath}`;
+      return {
+        ok: false,
+        status: 422,
+        message: `Couldn't re-index ${sessionId}: ${detail}`,
+        diagnostics: parsed.diagnostics,
+      };
+    }
+    const fragment = parsed.fragment;
+    // A single transcript carries no subagent relationships, so canonicalize against an empty set.
+    const toCanonical = canonicalizer(producer.capabilities, []);
+    const output = reconcileSessions({
+      caps: producer.capabilities,
+      fragments: [fragment],
+      auxiliaryFragments: [],
+      canonicalIds: new Set([sessionId]),
+    });
+    const materialize = toMaterializeSessions(output);
+    const diagnostics: ParserDiagnostic[] = [];
+    if (taskExtractionActive(opts.taskExtraction)) {
+      await extractTasksForSessions(
+        materialize,
+        [fragment],
+        toCanonical,
+        new Set([sessionId]),
+        opts.taskExtraction!,
+        diagnostics,
+      );
+    }
+    await store.materializeSessions(producer.id, materialize);
+    const tasks = materialize.find((session) => session.meta.sessionId === sessionId)?.tasks ?? [];
+    return { ok: true, tasks, diagnostics };
+  } finally {
+    if (ownsStore && store) await store.close();
+  }
 }
 
 /** Per-source freshness attestation: what the store has indexed vs. what's currently on disk. */
