@@ -80,19 +80,18 @@ describe("task extraction", () => {
     expect(logs.join("\n")).toContain("task extraction is off");
   });
 
-  test("claude provider runs bare, without session persistence, on haiku by default", () => {
+  test("claude provider runs without session persistence, on haiku by default", () => {
+    // --bare is intentionally absent: in -p mode it fails "Not logged in".
     expect(claudeProviderArgs(undefined)).toEqual([
       "-p",
-      "--bare",
       "--no-session-persistence",
       "--model",
       "haiku",
       "-",
     ]);
-    // A configured model overrides the default; the flags stay on.
+    // A configured model overrides the default; the flag stays on.
     expect(claudeProviderArgs({ model: "opus" })).toEqual([
       "-p",
-      "--bare",
       "--no-session-persistence",
       "--model",
       "opus",
