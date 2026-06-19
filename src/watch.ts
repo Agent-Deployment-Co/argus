@@ -22,11 +22,13 @@ const MIN_INTERVAL_MIN = 1;
 export interface WatchIndexOptions extends SyncOptions {
   /** Minutes between reads. */
   intervalMin: number;
+  /** Tri-state `--extract-tasks` override threaded to each pass (undefined = defer to argus.json). */
+  extractTasks?: boolean;
 }
 
 /** Test seam: override the one-shot index pass (defaults to the real `runIndex`). */
 export interface WatchIndexDeps {
-  index?: (opts: SyncOptions, log: Log) => Promise<void>;
+  index?: (opts: SyncOptions, log: Log, extractTasks?: boolean) => Promise<void>;
 }
 
 /**
@@ -41,7 +43,7 @@ export async function watchIndex(opts: WatchIndexOptions, log: Log, signal: Abor
     "indexing",
     async (sig) => {
       while (!sig.aborted) {
-        await indexPass(opts, log);
+        await indexPass(opts, log, opts.extractTasks);
         await sleep(intervalMs, sig);
       }
     },

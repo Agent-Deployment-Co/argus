@@ -4,6 +4,7 @@ import {
   createGeminiTranscriptParserAdapter,
   discoverGeminiAuxiliaryFiles,
   parseGeminiTranscriptPath,
+  reconstructGeminiDialogue,
 } from "./parser.ts";
 import type { NativeProducer, ProducerContext } from "../../producer.ts";
 import { defaultUnknownProjectLabel } from "../../reconcile.ts";
@@ -23,6 +24,7 @@ export const geminiProducer: NativeProducer = {
     createGeminiTranscriptDiscoveryAdapter(ctx.geminiDir).discover(),
   transcriptParser: () => createGeminiTranscriptParserAdapter(),
   parseTranscriptPath: parseGeminiTranscriptPath,
+  reconstructDialogue: reconstructGeminiDialogue,
   discoverAuxiliary: (ctx: ProducerContext) => discoverGeminiAuxiliaryFiles(ctx.geminiDir),
   auxiliaryParser: () => createGeminiAuxiliaryParserAdapter(),
 };

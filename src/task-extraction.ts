@@ -6,11 +6,16 @@ import {
   type SourcePosition,
   type TaskCandidateFact,
   type TaskFact,
+  type TaskFrustration,
+  type TaskOutcome,
 } from "./store-contract.ts";
+import { sliceDialogueByTime, type DialogueTurn } from "./dialogue.ts";
 
 const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
 
 export const DEFAULT_TASK_EXTRACTION_PROVIDER = "claude";
+/** Default model for the claude provider — a cheap, fast model for the per-session interpret calls. */
+export const DEFAULT_TASK_EXTRACTION_MODEL = "haiku";
 
 export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in a coding-agent session.
 
@@ -260,10 +265,20 @@ function spawnWithStdin(file: string, args: string[], input: string): Promise<Pr
   });
 }
 
+/**
+ * Args for the headless `claude` provider. Defaults: `--no-session-persistence` (don't leave a
+ * transcript on disk — these interpret calls would otherwise be re-indexed as bogus sessions) and a
+ * cheap default model. `-` reads the prompt from stdin; a configured `--task-model` /
+ * `taskExtraction.model` overrides the model. (Note: `--bare` is deliberately NOT used — in `-p`
+ * mode it skips credential loading and the call fails "Not logged in"; the output parser already
+ * tolerates the normal fenced/wrapped output, so it buys nothing here.)
+ */
+export function claudeProviderArgs(options: TaskExtractionOptions | undefined): string[] {
+  return ["-p", "--no-session-persistence", "--model", options?.model || DEFAULT_TASK_EXTRACTION_MODEL, "-"];
+}
+
 async function runClaude(prompt: string, options: TaskExtractionOptions | undefined): Promise<ProviderResult> {
-  const args = ["-p", "-"];
-  if (options?.model) args.push("--model", options.model);
-  return spawnWithStdin("claude", args, prompt);
+  return spawnWithStdin("claude", claudeProviderArgs(options), prompt);
 }
 
 async function runCommand(prompt: string, command: string | undefined): Promise<ProviderResult> {
@@ -370,7 +385,7 @@ export async function extractTasksForSession(
   if (provider === "claude") {
     logTaskExtractionDebug(
       options,
-      `running claude provider${options?.model ? ` with model ${options.model}` : ""}`,
+      `running claude provider with model ${options?.model || DEFAULT_TASK_EXTRACTION_MODEL}`,
     );
   } else if (provider === "command") {
     logTaskExtractionDebug(options, `running command provider: ${options?.command ?? "(none)"}`);
@@ -421,4 +436,194 @@ export async function extractTasksForSession(
     );
     return { tasks: [], diagnostics };
   }
+}
+
+// --- Pass 2: per-task outcome and frustration (#91) ---
+
+export const DEFAULT_TASK_OUTCOME_PROMPT = `You judge how a single task in a coding-agent session turned out, from the dialogue between the user and the assistant.
+
+Return JSON only. Use this exact shape:
+{"outcome":"success","frustration":"none","signals":["short tag"],"reason":"one sentence"}
+
+Rules:
+- outcome is one of: "success" (the user got what they asked for), "failure" (they clearly did not), "unclear" (you can't tell).
+- Judge from the WHOLE exchange, not just the final message. Users sometimes give up mid-task, and assistants sometimes over-claim success.
+- frustration is one of: "none", "low", "high" — how frustrated the user seemed across the task (repeated re-asks, corrections, escalating tone, or the assistant repeatedly saying it can't do something / lacks access).
+- signals: a few short evidence tags, e.g. "repeated re-asks", "no access", "assistant over-claimed". Omit or use [] if there are none.
+- reason: one concise sentence explaining the call.`;
+
+export interface TaskOutcomeJudgment {
+  outcome: TaskOutcome;
+  frustration: TaskFrustration;
+  signals?: string[];
+  outcomeReason?: string;
+}
+
+export function buildTaskOutcomePrompt(
+  description: string,
+  dialogue: DialogueTurn[],
+  instructions = DEFAULT_TASK_OUTCOME_PROMPT,
+): string {
+  const turns = dialogue.map((turn) => ({ role: turn.role, text: turn.text }));
+  return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
+}
+
+function toOutcome(value: unknown): TaskOutcome {
+  return value === "success" || value === "failure" ? value : "unclear";
+}
+
+function toFrustration(value: unknown): TaskFrustration {
+  return value === "low" || value === "high" ? value : "none";
+}
+
+export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
+  const parsed = JSON.parse(stripJsonFence(raw)) as unknown;
+  const values =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const judgment: TaskOutcomeJudgment = {
+    outcome: toOutcome(values.outcome),
+    frustration: toFrustration(values.frustration),
+  };
+  const signals = Array.isArray(values.signals)
+    ? values.signals.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    : [];
+  if (signals.length) judgment.signals = signals;
+  const reason = typeof values.reason === "string" ? values.reason.trim() : "";
+  if (reason) judgment.outcomeReason = reason;
+  return judgment;
+}
+
+/** Judge one task's outcome from its dialogue slice. Returns undefined when it can't be determined. */
+export async function judgeTaskOutcome(
+  description: string,
+  dialogue: DialogueTurn[],
+  options: TaskExtractionOptions | undefined,
+): Promise<{ judgment?: TaskOutcomeJudgment; diagnostics: ParserDiagnostic[] }> {
+  const provider = taskExtractionProvider(options);
+  const diagnostics: ParserDiagnostic[] = [];
+  if (provider === "off" || dialogue.length === 0) return { diagnostics };
+
+  const prompt = buildTaskOutcomePrompt(description, dialogue);
+  const result = await runProvider(provider, prompt, options);
+  if (!result.ok) {
+    diagnostics.push(
+      diagnostic(
+        "task_outcome_failed",
+        `Couldn't judge task outcome: ${result.error ?? "no output"}`,
+      ),
+    );
+    return { diagnostics };
+  }
+  try {
+    return { judgment: parseTaskOutcomeOutput(result.stdout), diagnostics };
+  } catch (error) {
+    diagnostics.push(
+      diagnostic(
+        "task_outcome_bad_response",
+        `Couldn't read task outcome output: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+    return { diagnostics };
+  }
+}
+
+/**
+ * Assign each task a chapter span over the reconciled message timeline by timestamp (bookmark
+ * semantics): a message belongs to the latest task that started at or before it. `messageTimestamps`
+ * is indexed by message seq (resolved_messages.seq) and is assumed ascending, as the reconciler
+ * orders messages. Tasks without a timestamp get no chapter (their messages stay unattributed).
+ */
+export function assignChapters(tasks: TaskFact[], messageTimestamps: number[]): void {
+  const dated = tasks
+    .filter((task): task is TaskFact & { timestampMs: number } => task.timestampMs != null)
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+  if (!dated.length || !messageTimestamps.length) return;
+
+  const bounds = new Map<TaskFact, { startSeq: number; endSeq: number }>();
+  for (let seq = 0; seq < messageTimestamps.length; seq++) {
+    const ts = messageTimestamps[seq]!;
+    let owner: TaskFact | undefined;
+    for (const task of dated) {
+      if (task.timestampMs <= ts) owner = task;
+      else break;
+    }
+    if (!owner) continue;
+    const current = bounds.get(owner);
+    if (!current) bounds.set(owner, { startSeq: seq, endSeq: seq });
+    else current.endSeq = seq;
+  }
+  for (const [task, span] of bounds) task.chapter = span;
+}
+
+/** Run async work over items with a small concurrency cap, preserving input order in the result. */
+async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * The full two-pass extraction (#91): pass 1 segments the user messages into tasks/chapters, pass 2
+ * judges each chapter's outcome from its slice of the reconstructed dialogue. `messageTimestamps`
+ * (by reconciled message seq) anchors the chapter spans; `dialogue` is the in-memory intermediate
+ * (never stored). Returns task facts carrying chapter spans + outcome fields.
+ */
+export async function extractTasksWithOutcome(
+  sessionId: string,
+  candidates: TaskCandidateFact[],
+  messageTimestamps: number[],
+  dialogue: DialogueTurn[],
+  options: TaskExtractionOptions | undefined,
+): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
+  const pass1 = await extractTasksForSession(sessionId, candidates, options);
+  const diagnostics = [...pass1.diagnostics];
+  if (!pass1.tasks.length) return { tasks: pass1.tasks, diagnostics };
+
+  // Chronological order so resolved_tasks.seq (and thus task_seq) increases along the timeline.
+  const tasks = [...pass1.tasks].sort(
+    (a, b) => (a.timestampMs ?? Infinity) - (b.timestampMs ?? Infinity),
+  );
+  assignChapters(tasks, messageTimestamps);
+
+  const dated = tasks.filter(
+    (task): task is TaskFact & { timestampMs: number } => task.timestampMs != null,
+  );
+  logTaskExtractionDebug(
+    options,
+    `judging outcome for ${dated.length}/${tasks.length} tasks in ${sessionId}`,
+  );
+  // `dated` is sorted ascending, so each task's chapter ends where the next begins — `dated[i + 1]`,
+  // not an O(n) rescan. Using the immediate neighbor also handles ties consistently with
+  // assignChapters' last-wins bookmark: tasks sharing a timestamp get an empty [start, start) slice
+  // for all but the last, rather than overlapping windows.
+  await mapWithLimit(
+    dated.map((task, i) => ({ task, start: task.timestampMs, end: dated[i + 1]?.timestampMs })),
+    4,
+    async ({ task, start, end }) => {
+      const slice = sliceDialogueByTime(dialogue, start, end);
+      const { judgment, diagnostics: outcomeDiagnostics } = await judgeTaskOutcome(
+        task.description,
+        slice,
+        options,
+      );
+      diagnostics.push(...outcomeDiagnostics);
+      if (judgment) {
+        task.outcome = judgment.outcome;
+        task.frustration = judgment.frustration;
+        if (judgment.signals) task.signals = judgment.signals;
+        if (judgment.outcomeReason) task.outcomeReason = judgment.outcomeReason;
+      }
+    },
+  );
+
+  return { tasks, diagnostics };
 }
