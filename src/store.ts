@@ -31,7 +31,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 7;
+export const STORE_SCHEMA_VERSION = 8;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -225,11 +225,15 @@ const CREATE_SCHEMA_SQL = `
     cwd TEXT NOT NULL,
     project TEXT NOT NULL,
     record_json TEXT NOT NULL,
+    -- The task (chapter) this message falls under, as resolved_tasks.seq in the same session.
+    -- NULL = unattributed (no task extracted, or message outside any chapter).
+    task_seq INTEGER,
     PRIMARY KEY (session_id, seq)
   );
   CREATE INDEX resolved_messages_date ON resolved_messages(date);
   CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
   CREATE INDEX resolved_messages_source ON resolved_messages(source);
+  CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -678,6 +682,15 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
     `,
   },
+  // 7 -> 8: fact→task attribution. Stamp each message with the task (chapter) it falls under.
+  // Existing rows get NULL (unattributed) until their session is re-indexed with task extraction on.
+  7: {
+    to: 8,
+    sql: `
+      ALTER TABLE resolved_messages ADD COLUMN task_seq INTEGER;
+      CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -734,6 +747,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT task_seq FROM resolved_messages LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
@@ -1361,10 +1375,21 @@ export class SqliteStore implements Store {
               JSON.stringify(session.meta),
             ],
           );
+          // Stamp each message with the task (chapter) it falls under, by message seq. The chapter
+          // spans live on the tasks we're about to write (incoming or the preserved snapshot), so the
+          // attribution stays consistent with resolved_tasks.seq and survives a re-materialization
+          // that reuses the stored tasks.
+          const taskSeqForMessage = (msgSeq: number): number | null => {
+            for (let t = 0; t < tasks.length; t++) {
+              const chapter = tasks[t]!.chapter;
+              if (chapter && msgSeq >= chapter.startSeq && msgSeq <= chapter.endSeq) return t;
+            }
+            return null;
+          };
           await insertRows(
             this.db,
             "resolved_messages",
-            ["session_id", "seq", "source", "ts", "date", "cwd", "project", "record_json"],
+            ["session_id", "seq", "source", "ts", "date", "cwd", "project", "record_json", "task_seq"],
             session.messages.map((message, seq) => [
               sid,
               seq,
@@ -1374,6 +1399,7 @@ export class SqliteStore implements Store {
               message.cwd ?? "",
               message.project,
               JSON.stringify(message),
+              taskSeqForMessage(seq),
             ]),
           );
           await insertRows(

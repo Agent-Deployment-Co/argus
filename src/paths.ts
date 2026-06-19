@@ -38,6 +38,9 @@ export const STORE_FILE = join(ARGUS_DATA_DIR, "argus.db");
 export const SUMMARY_CACHE_FILE = join(ARGUS_DATA_DIR, "summaries.json");
 export const ACCESS_TOKEN_FILE = join(ARGUS_CONFIG_DIR, "token.json");
 export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
+// The app-owned settings file (the config peer of argus.db). Holds general settings — not secrets
+// (token.json) or hand-authored price tables (pricing.json), which stay as their own files.
+export const CONFIG_FILE = join(ARGUS_CONFIG_DIR, "argus.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
 export const COWORK_SESSIONS_DIR: string | undefined =
   platform === "darwin"

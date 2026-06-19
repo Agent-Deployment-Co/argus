@@ -24,9 +24,12 @@ import {
   reconcileSessions,
   type ReconcileResult,
 } from "./reconcile.ts";
-import type { ImportProducer, ProducerContext } from "./producer.ts";
-import { IMPORT_PRODUCERS, NATIVE_PRODUCERS } from "./producers/index.ts";
+import type { ImportProducer, NativeProducer, ProducerContext } from "./producer.ts";
+import { IMPORT_PRODUCERS, NATIVE_PRODUCERS, nativeProducerForSource } from "./producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
+import type { TaskCandidateFact, TaskFact } from "./store-contract.ts";
+import { extractTasksWithOutcome } from "./task-extraction.ts";
+import type { ResolvedTaskExtraction } from "./config.ts";
 
 export interface SyncStats {
   hits: number;
@@ -60,6 +63,12 @@ export interface IncrementalParseOptions extends ParseOptions {
   /** Read the already-materialized store without reconciling/materializing first (no writes). Used by
    *  the read-only legs of `argus run`, where the index leg is the sole writer. */
   skipSync?: boolean;
+  /** Opt-in index-time task extraction (#91). When enabled, indexing a changed session also runs the
+   *  two-pass extraction and materializes its tasks. Off/unset → indexing behaves exactly as today. */
+  taskExtraction?: ResolvedTaskExtraction;
+  /** Optional progress sink for the long-running parts (task extraction). The terminal commands wire
+   *  this to their logger so the user sees a heartbeat; read-only/embedded callers can omit it. */
+  log?: (message: string) => void;
 }
 
 const EMPTY_STATS: SyncStats = {
@@ -269,6 +278,28 @@ function producerContext(opts: IncrementalParseOptions): ProducerContext {
   };
 }
 
+/**
+ * Parse a producer's auxiliary fragments fresh (no store caching) for a one-off reconcile. The
+ * single-session reindex needs these — Claude history first-prompts, Gemini project roots — so it
+ * resolves the same aux-derived session fields (firstPrompt, cwd/project) as a full index; without
+ * them a targeted refresh would wipe those fields back to empty.
+ */
+function auxiliaryFragmentsForProducer(
+  producer: NativeProducer,
+  ctx: ProducerContext,
+): ParsedAuxiliaryFragment[] {
+  if (!producer.discoverAuxiliary || !producer.auxiliaryParser) return [];
+  const discovery = producer.discoverAuxiliary(ctx);
+  if (!isAuthoritativeDiscovery(discovery)) return [];
+  const parser = producer.auxiliaryParser();
+  const fragments: ParsedAuxiliaryFragment[] = [];
+  for (const file of discovery.files) {
+    const result = parser.parseFile(file);
+    if (result.status === "current") fragments.push(result.fragment);
+  }
+  return fragments;
+}
+
 /** Group a reconcile result into per-session payloads ready to materialize. */
 function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   const messagesBySession = new Map<string, MessageRecord[]>();
@@ -298,6 +329,72 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
     });
   }
   return sessions;
+}
+
+/** True when index-time task extraction should run for this call. */
+function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined): boolean {
+  return !!taskExtraction?.enabled && taskExtraction.provider !== "off";
+}
+
+/**
+ * Run the two-pass task extraction (#91) for the given materialized sessions, attaching the result
+ * to each session before it's stored (so the chapters' messages get task_seq at materialize). Only
+ * sessions in `targets` (the ones whose transcripts actually changed) are re-extracted; others keep
+ * their stored tasks via the materializer's preserve-on-unchanged guard. The reconstructed dialogue
+ * is an in-memory intermediate — nothing with message text is persisted.
+ */
+/** A short, human-facing label for progress output: the project plus a short session id. */
+function sessionProgressLabel(session: MaterializeSession): string {
+  const shortId = session.meta.sessionId.replace(/^[^:]+:/, "").slice(0, 8);
+  return `${session.meta.project} (${shortId})`;
+}
+
+async function extractTasksForSessions(
+  producer: NativeProducer,
+  sessions: MaterializeSession[],
+  fragments: ParsedFileFragment[],
+  toCanonical: (sourceSessionId: string) => string,
+  targets: Set<string>,
+  taskExtraction: ResolvedTaskExtraction,
+  diagnostics: ParserDiagnostic[],
+  log?: (message: string) => void,
+): Promise<void> {
+  const candidatesBySession = new Map<string, TaskCandidateFact[]>();
+  for (const fragment of fragments) {
+    for (const candidate of fragment.facts.taskCandidates) {
+      const id = toCanonical(candidate.sourceSessionId);
+      const list = candidatesBySession.get(id) ?? [];
+      list.push(candidate);
+      candidatesBySession.set(id, list);
+    }
+  }
+  const toExtract = sessions.filter(
+    (session) =>
+      targets.has(session.meta.sessionId) &&
+      (candidatesBySession.get(session.meta.sessionId)?.length ?? 0) > 0,
+  );
+  if (!toExtract.length) return;
+  // Task extraction runs an AI model per session, so it can take a while — emit a heartbeat as each
+  // session starts so the command doesn't look stuck.
+  log?.(
+    `Extracting tasks from ${toExtract.length} session${toExtract.length === 1 ? "" : "s"} — this runs an AI model on each and can take a while…`,
+  );
+  let done = 0;
+  for (const session of toExtract) {
+    const sid = session.meta.sessionId;
+    log?.(`  [${++done}/${toExtract.length}] ${sessionProgressLabel(session)}…`);
+    const messageTimestamps = session.messages.map((message) => message.ts);
+    const dialogue = producer.reconstructDialogue(session.meta.filePath);
+    const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
+      sid,
+      candidatesBySession.get(sid)!,
+      messageTimestamps,
+      dialogue,
+      taskExtraction,
+    );
+    diagnostics.push(...extractionDiagnostics);
+    session.tasks = tasks;
+  }
 }
 
 /** Map a source session id to its canonical id (subagent child -> parent) for a producer. */
@@ -454,9 +551,25 @@ async function syncStore(
         auxiliaryFragments: aux,
         canonicalIds: touched,
       });
+      const materialize = toMaterializeSessions(output);
+      // Opt-in (#91): re-extract tasks only for sessions whose files actually changed — the widened
+      // touched set (deletions / aux changes) re-materializes without new tasks, so the materializer
+      // preserves their stored tasks rather than paying for an LLM call per unchanged session.
+      if (taskExtractionActive(opts.taskExtraction)) {
+        await extractTasksForSessions(
+          producer,
+          materialize,
+          fragments,
+          canon,
+          canonicalSessionIds(producer.capabilities, changedFragments),
+          opts.taskExtraction!,
+          diagnostics,
+          opts.log,
+        );
+      }
       // Marks these present (archived = 0); the store's don't-regress guard keeps the fuller stored
       // copy if a re-parse came back short (e.g. a file partly aged out or failed to parse this run).
-      await store.materializeSessions(producer.id, toMaterializeSessions(output));
+      await store.materializeSessions(producer.id, materialize);
     }
 
     // Durable archive: sessions we owned that are no longer discoverable on disk are RETAINED and
@@ -624,6 +737,120 @@ export async function parseAllIncremental(
   opts: IncrementalParseOptions = {},
 ): Promise<ParseResult> {
   return (await parseAllIncrementalDetailed(opts)).parsed;
+}
+
+export type ReindexSessionResult =
+  | { ok: true; tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }
+  | { ok: false; status: 404 | 422; message: string; diagnostics?: ParserDiagnostic[] };
+
+/**
+ * Re-index a SINGLE session in isolation: re-parse its transcript from disk and reconcile just that
+ * session into the store, instead of the full discovery over all sources. This is the shared
+ * primitive the web Refresh (#92) and CLI `index refresh <id>` (#93) build on. When task extraction
+ * is active for the call, runs the two-pass extraction so the refreshed session gains chapters +
+ * outcome. Errors (404/422) if the session is unknown or its transcript is no longer readable on disk.
+ */
+export async function reindexSession(
+  sessionId: string,
+  opts: {
+    store?: Store;
+    storePath?: string;
+    taskExtraction?: ResolvedTaskExtraction;
+    /** Discovery locations for auxiliary inputs (history/project roots). Defaults to the real paths;
+     *  tests pass fixture dirs. */
+    context?: ProducerContext;
+  } = {},
+): Promise<ReindexSessionResult> {
+  let store = opts.store;
+  let ownsStore = false;
+  if (!store) {
+    store = await openStore({ path: opts.storePath });
+    ownsStore = true;
+  }
+  try {
+    const meta = await store.readSessionMeta(sessionId);
+    if (!meta) {
+      return {
+        ok: false,
+        status: 404,
+        message: `No session found for ${sessionId}. Run \`argus index\` to read sessions into the local store.`,
+      };
+    }
+    const producer = nativeProducerForSource(meta.source);
+    if (!producer) {
+      return {
+        ok: false,
+        status: 422,
+        message: `Couldn't re-index ${sessionId}: no transcript reader is registered for ${meta.source}.`,
+      };
+    }
+    // Imported sessions (e.g. AgentsView) live under a native source but have no local transcript to
+    // re-parse — say so plainly rather than the misleading "transcript no longer readable".
+    if (!meta.filePath) {
+      return {
+        ok: false,
+        status: 422,
+        message: `Couldn't re-index ${sessionId}: it has no local transcript on disk (imported sessions can't be refreshed this way).`,
+      };
+    }
+    // Re-parse EVERY transcript for this session, discovered fresh from disk — the main transcript
+    // plus any subagent transcripts — so a targeted refresh folds in subagent messages/usage like a
+    // full index AND captures subagent files added since the last index (the producer owns the
+    // on-disk layout). Subagent relationships come from the freshly parsed fragments, so the children
+    // canonicalize onto this session.
+    const paths = producer.discoverSessionTranscripts?.(meta.filePath) ?? [meta.filePath];
+    const diagnostics: ParserDiagnostic[] = [];
+    const fragments: ParsedFileFragment[] = [];
+    for (const path of paths) {
+      const result = producer.parseTranscriptPath(path);
+      if (result.status === "current") fragments.push(result.fragment);
+      else diagnostics.push(...result.diagnostics);
+    }
+    if (!fragments.length) {
+      return {
+        ok: false,
+        status: 422,
+        message: `Couldn't re-index ${sessionId}: ${diagnostics[0]?.message ?? `couldn't read ${meta.filePath}`}`,
+        diagnostics,
+      };
+    }
+    const toCanonical = canonicalizer(
+      producer.capabilities,
+      fragments.flatMap((fragment) =>
+        fragment.facts.relationships.map((r) => ({
+          child: r.childSourceSessionId,
+          parent: r.parentSourceSessionId,
+        })),
+      ),
+    );
+    // Reconcile WITH the producer's auxiliary fragments (Claude history first-prompts, Gemini project
+    // roots) so the refreshed session keeps its aux-derived fields (firstPrompt, cwd/project) — a bare
+    // transcript reconcile would otherwise wipe them, regressing the session vs. a full index.
+    const auxiliaryFragments = auxiliaryFragmentsForProducer(producer, opts.context ?? producerContext({}));
+    const output = reconcileSessions({
+      caps: producer.capabilities,
+      fragments,
+      auxiliaryFragments,
+      canonicalIds: new Set([sessionId]),
+    });
+    const materialize = toMaterializeSessions(output);
+    if (taskExtractionActive(opts.taskExtraction)) {
+      await extractTasksForSessions(
+        producer,
+        materialize,
+        fragments,
+        toCanonical,
+        new Set([sessionId]),
+        opts.taskExtraction!,
+        diagnostics,
+      );
+    }
+    await store.materializeSessions(producer.id, materialize);
+    const tasks = materialize.find((session) => session.meta.sessionId === sessionId)?.tasks ?? [];
+    return { ok: true, tasks, diagnostics };
+  } finally {
+    if (ownsStore && store) await store.close();
+  }
 }
 
 /** Per-source freshness attestation: what the store has indexed vs. what's currently on disk. */

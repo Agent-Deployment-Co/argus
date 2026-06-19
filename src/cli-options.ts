@@ -19,6 +19,15 @@ export interface DeleteOptions {
   ids: string[];
 }
 
+/** `argus index refresh`: bare (ids empty) re-reads all; with ids, reindexes only those sessions.
+ *  `extractTasks` is the tri-state `--extract-tasks` override (undefined = defer to argus.json). */
+export interface RefreshOptions extends SyncOptions {
+  ids: string[];
+  extractTasks?: boolean;
+  /** Test seam: override the store path for targeted refresh (the CLI uses the default store). */
+  storePath?: string;
+}
+
 /** Narrow a raw `--source` value to the accepted set, exiting with a clear message otherwise. */
 export function toSource(value: string): Source {
   if (value === "all" || value === "claude" || value === "codex" || value === "gemini" || value === "cowork") return value;

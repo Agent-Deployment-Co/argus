@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/
+/tmp/
 *.html
 *.db
 !web/index.html

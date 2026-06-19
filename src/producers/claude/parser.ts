@@ -5,7 +5,7 @@ import {
   type BigIntStats,
   type Dirent,
 } from "node:fs";
-import { basename, dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   createFactId,
@@ -41,6 +41,7 @@ import {
   textFromUserContent,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
+import { dialogueTurn, type DialogueTurn } from "../../dialogue.ts";
 import { emptyUsage, type Usage } from "../../types.ts";
 
 export const CLAUDE_PROJECTS_ROOT_ID = "claude-projects";
@@ -470,6 +471,71 @@ function timestampMs(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return NaN;
   return Date.parse(value);
+}
+
+/**
+ * All transcript files for one Claude session, discovered fresh from disk: the main transcript plus
+ * any subagent transcripts under `<session>/subagents/**`. Used by single-session reindex so a
+ * targeted refresh picks up subagent transcripts — including ones added since the last full index.
+ */
+export function discoverClaudeSessionTranscripts(mainTranscriptPath: string): string[] {
+  const files = [mainTranscriptPath];
+  const sessionDir = join(dirname(mainTranscriptPath), basename(mainTranscriptPath, ".jsonl"));
+  const walk = (dir: string): void => {
+    let entries: Dirent[] = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // no subagent directory for this session
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(full);
+    }
+  };
+  walk(sessionDir);
+  return files;
+}
+
+/**
+ * Reconstruct the human↔assistant dialogue from a Claude JSONL transcript (#91). Reuses the same
+ * "real user turn" gate as task-candidate extraction so the user half matches, takes assistant text
+ * blocks (tool_use parts contribute no text), and dedupes resumed-session replays by message id.
+ */
+export function reconstructClaudeDialogue(path: string): DialogueTurn[] {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const turns: DialogueTurn[] = [];
+  const seenAssistant = new Set<string>();
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let value: Record<string, any>;
+    try {
+      const parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      value = parsed;
+    } catch {
+      continue;
+    }
+    const ts = timestampMs(value.timestamp);
+    if (value.type === "user") {
+      if (!isCountableClaudeUserMessage(value)) continue;
+      const turn = dialogueTurn("user", textFromUserContent(value.message?.content), ts);
+      if (turn) turns.push(turn);
+    } else if (value.type === "assistant") {
+      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
+      if (id && seenAssistant.has(id)) continue;
+      if (id) seenAssistant.add(id);
+      const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
+      if (turn) turns.push(turn);
+    }
+  }
+  return turns;
 }
 
 function numberOrZero(value: unknown): number {

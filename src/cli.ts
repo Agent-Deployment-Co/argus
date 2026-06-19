@@ -16,11 +16,8 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import {
-  DEFAULT_TASK_EXTRACTION_PROVIDER,
-  type TaskExtractionOptions,
-  type TaskExtractionProvider,
-} from "./task-extraction.ts";
+import { type TaskExtractionOptions } from "./task-extraction.ts";
+import { loadConfig, resolveTaskExtraction } from "./config.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -42,13 +39,18 @@ interface ServeOptions extends BuildDashboardOptions {
   taskExtraction: TaskExtractionOptions;
 }
 
-function toTaskProvider(value: string): TaskExtractionProvider {
-  if (value === "off" || value === "claude" || value === "command") return value;
-  console.error(`Invalid --task-provider: ${value} (expected claude, command, or off)`);
+const log: Log = (s) => process.stderr.write(s + "\n");
+
+/** Parse the tri-state `--extract-tasks` flag: unset → undefined (defer to argus.json), else the
+ *  explicit boolean override. Anything other than true/false is a usage error. */
+function toExtractTasksOverride(value: string | undefined): boolean | undefined {
+  if (value == null) return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === "true") return true;
+  if (v === "false") return false;
+  console.error(`Invalid --extract-tasks: ${value} (expected true or false)`);
   process.exit(2);
 }
-
-const log: Log = (s) => process.stderr.write(s + "\n");
 
 /** Build an AbortController wired to one-shot SIGINT/SIGTERM handlers, for the `--watch` commands. */
 function abortOnSignals(): AbortController {
@@ -379,37 +381,44 @@ const summarizeArgs = {
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
 } as const;
 
-/** Task extraction options for web/session-screen extraction. */
+// Task extraction options for web/session-screen extraction. Flags carry no env-var defaults: an
+// unset flag resolves to `undefined` so the config resolver can honor CLI flag > env > argus.json >
+// default in one place (see resolveTaskExtraction in config.ts).
 const taskArgs = {
   "task-provider": {
     type: "string",
-    default: process.env.ARGUS_TASK_PROVIDER || DEFAULT_TASK_EXTRACTION_PROVIDER,
-    description: "Task extractor: claude, command, or off",
+    description: "Task extractor: claude, command, or off (env ARGUS_TASK_PROVIDER)",
     valueHint: "claude|command|off",
   },
   "task-model": {
     type: "string",
-    default: process.env.ARGUS_TASK_MODEL,
-    description: "Model for task extraction when the provider supports it",
+    description: "Model for task extraction when the provider supports it (env ARGUS_TASK_MODEL)",
     valueHint: "id",
   },
   "task-prompt": {
     type: "string",
-    default: process.env.ARGUS_TASK_PROMPT,
-    description: "Custom task extraction prompt",
+    description: "Custom task extraction prompt (env ARGUS_TASK_PROMPT)",
     valueHint: "text",
   },
   "task-prompt-file": {
     type: "string",
-    default: process.env.ARGUS_TASK_PROMPT_FILE,
-    description: "Read the task extraction prompt from a file",
+    description: "Read the task extraction prompt from a file (env ARGUS_TASK_PROMPT_FILE)",
     valueHint: "path",
   },
   "task-command": {
     type: "string",
-    default: process.env.ARGUS_TASK_COMMAND,
-    description: "Command provider; reads prompt on stdin and writes task JSON to stdout",
+    description: "Command provider; reads prompt on stdin and writes task JSON to stdout (env ARGUS_TASK_COMMAND)",
     valueHint: "cmd",
+  },
+} as const;
+
+/** The opt-in task-extraction override shared by the indexing commands (index, rebuild, refresh).
+ *  Tri-state: unset defers to argus.json; true/false overrides it for the run (see #93). */
+const extractTasksArg = {
+  "extract-tasks": {
+    type: "string",
+    description: "Extract tasks this run: true|false (overrides argus.json). Omit to use the config setting.",
+    valueHint: "true|false",
   },
 } as const;
 
@@ -429,27 +438,13 @@ const reportArgs = {
   open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
 
-type TaskArgs = {
-  "task-provider": string;
-  "task-model"?: string;
-  "task-prompt"?: string;
-  "task-prompt-file"?: string;
-  "task-command"?: string;
-};
-
+/** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
+ *  > argus.json > default). The `enabled` toggle is unused here — these commands extract on demand. */
 function taskExtractionOptions(
-  args: TaskArgs,
+  args: Record<string, unknown>,
   debugLog?: (message: string) => void,
 ): TaskExtractionOptions {
-  const options: TaskExtractionOptions = {
-    provider: toTaskProvider(args["task-provider"]),
-  };
-  if (args["task-model"]) options.model = args["task-model"];
-  if (args["task-prompt"]) options.prompt = args["task-prompt"];
-  if (args["task-prompt-file"]) options.promptFile = args["task-prompt-file"];
-  if (args["task-command"]) options.command = args["task-command"];
-  if (debugLog) options.debugLog = debugLog;
-  return options;
+  return resolveTaskExtraction(args, loadConfig(), debugLog);
 }
 
 const report = defineCommand({
@@ -486,15 +481,32 @@ const indexRebuild = defineCommand({
   args: {
     ...sourceArg,
     ...agentsViewArgs,
+    ...extractTasksArg,
     force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
-  run: handler((args) => runIndexRebuild({ ...syncOptions(args), force: args.force }, log)),
+  run: handler((args) =>
+    runIndexRebuild(
+      { ...syncOptions(args), force: args.force },
+      log,
+      toExtractTasksOverride(args["extract-tasks"]),
+    ),
+  ),
 });
 
 const indexRefresh = defineCommand({
-  meta: { name: "refresh", description: "re-read all transcripts from disk (keeps sessions no longer on disk)" },
-  args: { ...sourceArg, ...agentsViewArgs },
-  run: handler((args) => runIndexRefresh(syncOptions(args), log)),
+  meta: { name: "refresh", description: "re-read transcripts from disk; pass session id(s) to refresh only those" },
+  args: {
+    id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
+    ...sourceArg,
+    ...agentsViewArgs,
+    ...extractTasksArg,
+  },
+  run: handler((args) =>
+    runIndexRefresh(
+      { ...syncOptions(args), ids: args._, extractTasks: toExtractTasksOverride(args["extract-tasks"]) },
+      log,
+    ),
+  ),
 });
 
 const indexDelete = defineCommand({
@@ -512,6 +524,7 @@ const index = defineCommand({
   args: {
     ...sourceArg,
     ...agentsViewArgs,
+    ...extractTasksArg,
     watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
   },
@@ -522,11 +535,12 @@ const index = defineCommand({
     validateArgs(ctx);
     return guard(async () => {
       const args = ctx.args;
+      const extractTasks = toExtractTasksOverride(args["extract-tasks"]);
       if (args.watch) {
         const ac = abortOnSignals();
-        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5 }, log, ac.signal);
+        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks }, log, ac.signal);
       } else {
-        await runIndex(syncOptions(args), log);
+        await runIndex(syncOptions(args), log, extractTasks);
       }
     });
   },

@@ -131,13 +131,34 @@ The pipeline is a one-way data flow; each stage is its own module:
   validation.
 
 - **`paths.ts`** — All filesystem locations, honoring `CLAUDE_CONFIG_DIR`, `CODEX_HOME`/`CODEX_CONFIG_DIR`.
+  `CONFIG_FILE` = `$ARGUS_CONFIG_DIR/argus.json` (the settings store; see `config.ts`).
+
+- **`config.ts`** — The `argus.json` settings store (the config peer of `argus.db`; full design in
+  `docs/configuration.md`). Tolerant loader (missing → defaults; malformed/bad value → warn + default,
+  never crash) plus a **settings registry + resolver**: each setting binds its kebab/SCREAMING_SNAKE/
+  camelCase names + `parse()` in one descriptor, and `resolveSetting` walks `flag > env > argus.json >
+  default` (empty values count as absent). `resolveTaskExtraction` produces the effective
+  `TaskExtractionOptions` + `enabled` toggle. Settings only — `token.json`/`pricing.json` stay separate.
+
+- **`task-extraction.ts` / `task-candidates.ts` / `session-tasks.ts` / `dialogue.ts`** — The task
+  *interpretation* layer (#88/#91; full design in `docs/task-interpretation.md`). `task-candidates.ts`
+  filters user-authored text into `TaskCandidateFact`s and recognizes Argus's own `claude -p` prompts
+  so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments
+  tasks/chapters, pass 2 judges per-task outcome/frustration from the reconstructed dialogue — via the
+  `off`/`claude`/`command` providers (the claude provider runs `claude -p --no-session-persistence
+  --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
+  per-source reconstruction lives in each producer's parser (`NativeProducer.reconstructDialogue`) and
+  is an in-memory intermediate — **no message text is stored**. `session-tasks.ts` is the legacy
+  on-demand web extraction path (retired by #92).
 
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`report`, `serve`,
   `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly
   `push`; + `--watch`], `run`, `status`, `login`) with [citty](https://github.com/unjs/citty): each
   declares its own flags, `--help` scopes per subcommand, and flag types flow into the handlers. There
   is no default command: a bare `argus` (no subcommand) prints the usage/help. The terminal overview
-  is `argus report --console`. Holds the `run*` handlers that wire flags into `dashboard-builder.ts`
+  is `argus report --console`. `index refresh` takes space-separated session ids (per-session reindex,
+  matching `index delete`); `--extract-tasks <true|false>` on `index`/`rebuild`/`refresh` overrides the
+  `argus.json` task-interpretation setting for the run. Holds the `run*` handlers that wire flags into `dashboard-builder.ts`
   and the pipeline. Note: citty runs a parent command's `run` *even after* dispatching to a
   subcommand, so `index`'s parent `run` bails via `dispatchedSubcommand(ctx)` when a subcommand
   handled the call. The store-maintenance bodies live in `index-ops.ts`; the long-running `--watch`
@@ -145,7 +166,9 @@ The pipeline is a one-way data flow; each stage is its own module:
 
 - **`index-ops.ts`** — The `argus index` command bodies (`runIndex`, `runIndexRebuild` with its
   confirmation prompt, `runIndexRefresh`, `runIndexDelete`), extracted so both `cli.ts` and the watch
-  loop share them. The only writers to the store.
+  loop share them. The only writers to the store. `runIndexRefresh` takes optional session ids: bare =
+  full re-read; with ids = per-session reindex via `reindexSession` (in `parse-incremental.ts`). All
+  three resolve task interpretation through `config.ts`, with an optional `--extract-tasks` override.
 
 - **`backoff.ts`** — Shared loop primitives for the long-running commands: cancellable `sleep`, a
   jittered/capped `Backoff`, a `RepeatCollapser` (collapses repeated identical failure logs), and
@@ -169,3 +192,9 @@ Stable types come from the external package `@agentdeploymentco/argus-schema` (p
 `test/contract.test.ts` builds a dashboard from fixtures and validates it against the schema's
 `PushPayloadSchema`, so any drift between the CLI's output and the wire contract **fails CI**. When
 changing the `Dashboard` shape, update the schema package and bump its pinned version here in lockstep.
+
+Not everything is on the wire: `TaskFact` and the task-interpretation fields (chapter span, outcome,
+frustration) live in `store-contract.ts` and are **local-only** — they are not pushed by `sync`, so
+adding/changing them needs no schema-package bump. `store-contract.ts` (the parse→store fact contract,
+including `PARSED_FRAGMENT_CONTRACT_VERSION`) is separate from the `@agentdeploymentco/argus-schema`
+wire contract.
