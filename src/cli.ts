@@ -16,11 +16,8 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import {
-  DEFAULT_TASK_EXTRACTION_PROVIDER,
-  type TaskExtractionOptions,
-  type TaskExtractionProvider,
-} from "./task-extraction.ts";
+import { type TaskExtractionOptions } from "./task-extraction.ts";
+import { loadConfig, resolveTaskExtraction } from "./config.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -40,12 +37,6 @@ interface ServeOptions extends BuildDashboardOptions {
   port: number;
   open: boolean;
   taskExtraction: TaskExtractionOptions;
-}
-
-function toTaskProvider(value: string): TaskExtractionProvider {
-  if (value === "off" || value === "claude" || value === "command") return value;
-  console.error(`Invalid --task-provider: ${value} (expected claude, command, or off)`);
-  process.exit(2);
 }
 
 const log: Log = (s) => process.stderr.write(s + "\n");
@@ -379,36 +370,33 @@ const summarizeArgs = {
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
 } as const;
 
-/** Task extraction options for web/session-screen extraction. */
+// Task extraction options for web/session-screen extraction. Flags carry no env-var defaults: an
+// unset flag resolves to `undefined` so the config resolver can honor CLI flag > env > argus.json >
+// default in one place (see resolveTaskExtraction in config.ts).
 const taskArgs = {
   "task-provider": {
     type: "string",
-    default: process.env.ARGUS_TASK_PROVIDER || DEFAULT_TASK_EXTRACTION_PROVIDER,
-    description: "Task extractor: claude, command, or off",
+    description: "Task extractor: claude, command, or off (env ARGUS_TASK_PROVIDER)",
     valueHint: "claude|command|off",
   },
   "task-model": {
     type: "string",
-    default: process.env.ARGUS_TASK_MODEL,
-    description: "Model for task extraction when the provider supports it",
+    description: "Model for task extraction when the provider supports it (env ARGUS_TASK_MODEL)",
     valueHint: "id",
   },
   "task-prompt": {
     type: "string",
-    default: process.env.ARGUS_TASK_PROMPT,
-    description: "Custom task extraction prompt",
+    description: "Custom task extraction prompt (env ARGUS_TASK_PROMPT)",
     valueHint: "text",
   },
   "task-prompt-file": {
     type: "string",
-    default: process.env.ARGUS_TASK_PROMPT_FILE,
-    description: "Read the task extraction prompt from a file",
+    description: "Read the task extraction prompt from a file (env ARGUS_TASK_PROMPT_FILE)",
     valueHint: "path",
   },
   "task-command": {
     type: "string",
-    default: process.env.ARGUS_TASK_COMMAND,
-    description: "Command provider; reads prompt on stdin and writes task JSON to stdout",
+    description: "Command provider; reads prompt on stdin and writes task JSON to stdout (env ARGUS_TASK_COMMAND)",
     valueHint: "cmd",
   },
 } as const;
@@ -429,27 +417,13 @@ const reportArgs = {
   open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
 
-type TaskArgs = {
-  "task-provider": string;
-  "task-model"?: string;
-  "task-prompt"?: string;
-  "task-prompt-file"?: string;
-  "task-command"?: string;
-};
-
+/** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
+ *  > argus.json > default). The `enabled` toggle is unused here — these commands extract on demand. */
 function taskExtractionOptions(
-  args: TaskArgs,
+  args: Record<string, unknown>,
   debugLog?: (message: string) => void,
 ): TaskExtractionOptions {
-  const options: TaskExtractionOptions = {
-    provider: toTaskProvider(args["task-provider"]),
-  };
-  if (args["task-model"]) options.model = args["task-model"];
-  if (args["task-prompt"]) options.prompt = args["task-prompt"];
-  if (args["task-prompt-file"]) options.promptFile = args["task-prompt-file"];
-  if (args["task-command"]) options.command = args["task-command"];
-  if (debugLog) options.debugLog = debugLog;
-  return options;
+  return resolveTaskExtraction(args, loadConfig(), debugLog);
 }
 
 const report = defineCommand({
