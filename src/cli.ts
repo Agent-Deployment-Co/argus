@@ -41,6 +41,17 @@ interface ServeOptions extends BuildDashboardOptions {
 
 const log: Log = (s) => process.stderr.write(s + "\n");
 
+/** Parse the tri-state `--extract-tasks` flag: unset → undefined (defer to argus.json), else the
+ *  explicit boolean override. Anything other than true/false is a usage error. */
+function toExtractTasksOverride(value: string | undefined): boolean | undefined {
+  if (value == null) return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === "true") return true;
+  if (v === "false") return false;
+  console.error(`Invalid --extract-tasks: ${value} (expected true or false)`);
+  process.exit(2);
+}
+
 /** Build an AbortController wired to one-shot SIGINT/SIGTERM handlers, for the `--watch` commands. */
 function abortOnSignals(): AbortController {
   const ac = new AbortController();
@@ -401,6 +412,16 @@ const taskArgs = {
   },
 } as const;
 
+/** The opt-in task-extraction override shared by the indexing commands (index, rebuild, refresh).
+ *  Tri-state: unset defers to argus.json; true/false overrides it for the run (see #93). */
+const extractTasksArg = {
+  "extract-tasks": {
+    type: "string",
+    description: "Extract tasks this run: true|false (overrides argus.json). Omit to use the config setting.",
+    valueHint: "true|false",
+  },
+} as const;
+
 /** Inputs shared by report, serve, and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
@@ -460,15 +481,32 @@ const indexRebuild = defineCommand({
   args: {
     ...sourceArg,
     ...agentsViewArgs,
+    ...extractTasksArg,
     force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
-  run: handler((args) => runIndexRebuild({ ...syncOptions(args), force: args.force }, log)),
+  run: handler((args) =>
+    runIndexRebuild(
+      { ...syncOptions(args), force: args.force },
+      log,
+      toExtractTasksOverride(args["extract-tasks"]),
+    ),
+  ),
 });
 
 const indexRefresh = defineCommand({
-  meta: { name: "refresh", description: "re-read all transcripts from disk (keeps sessions no longer on disk)" },
-  args: { ...sourceArg, ...agentsViewArgs },
-  run: handler((args) => runIndexRefresh(syncOptions(args), log)),
+  meta: { name: "refresh", description: "re-read transcripts from disk; pass session id(s) to refresh only those" },
+  args: {
+    id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
+    ...sourceArg,
+    ...agentsViewArgs,
+    ...extractTasksArg,
+  },
+  run: handler((args) =>
+    runIndexRefresh(
+      { ...syncOptions(args), ids: args._, extractTasks: toExtractTasksOverride(args["extract-tasks"]) },
+      log,
+    ),
+  ),
 });
 
 const indexDelete = defineCommand({
@@ -486,6 +524,7 @@ const index = defineCommand({
   args: {
     ...sourceArg,
     ...agentsViewArgs,
+    ...extractTasksArg,
     watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
   },
@@ -496,11 +535,12 @@ const index = defineCommand({
     validateArgs(ctx);
     return guard(async () => {
       const args = ctx.args;
+      const extractTasks = toExtractTasksOverride(args["extract-tasks"]);
       if (args.watch) {
         const ac = abortOnSignals();
-        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5 }, log, ac.signal);
+        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks }, log, ac.signal);
       } else {
-        await runIndex(syncOptions(args), log);
+        await runIndex(syncOptions(args), log, extractTasks);
       }
     });
   },
