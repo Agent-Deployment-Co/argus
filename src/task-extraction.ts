@@ -14,6 +14,8 @@ import { sliceDialogueByTime, type DialogueTurn } from "./dialogue.ts";
 const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
 
 export const DEFAULT_TASK_EXTRACTION_PROVIDER = "claude";
+/** Default model for the claude provider — a cheap, fast model for the per-session interpret calls. */
+export const DEFAULT_TASK_EXTRACTION_MODEL = "haiku";
 
 export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in a coding-agent session.
 
@@ -263,10 +265,25 @@ function spawnWithStdin(file: string, args: string[], input: string): Promise<Pr
   });
 }
 
+/**
+ * Args for the headless `claude` provider. Defaults: `--bare` (no wrapper output, just the model's
+ * text), `--no-session-persistence` (don't leave a transcript on disk — these interpret calls would
+ * otherwise be re-indexed as bogus sessions), and a cheap default model. `-` reads the prompt from
+ * stdin. A configured `--task-model` / `taskExtraction.model` overrides the default.
+ */
+export function claudeProviderArgs(options: TaskExtractionOptions | undefined): string[] {
+  return [
+    "-p",
+    "--bare",
+    "--no-session-persistence",
+    "--model",
+    options?.model || DEFAULT_TASK_EXTRACTION_MODEL,
+    "-",
+  ];
+}
+
 async function runClaude(prompt: string, options: TaskExtractionOptions | undefined): Promise<ProviderResult> {
-  const args = ["-p", "-"];
-  if (options?.model) args.push("--model", options.model);
-  return spawnWithStdin("claude", args, prompt);
+  return spawnWithStdin("claude", claudeProviderArgs(options), prompt);
 }
 
 async function runCommand(prompt: string, command: string | undefined): Promise<ProviderResult> {
@@ -373,7 +390,7 @@ export async function extractTasksForSession(
   if (provider === "claude") {
     logTaskExtractionDebug(
       options,
-      `running claude provider${options?.model ? ` with model ${options.model}` : ""}`,
+      `running claude provider with model ${options?.model || DEFAULT_TASK_EXTRACTION_MODEL}`,
     );
   } else if (provider === "command") {
     logTaskExtractionDebug(options, `running command provider: ${options?.command ?? "(none)"}`);

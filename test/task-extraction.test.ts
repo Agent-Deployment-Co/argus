@@ -3,6 +3,7 @@ import {
   assignChapters,
   buildTaskExtractionPrompt,
   buildTaskOutcomePrompt,
+  claudeProviderArgs,
   extractTasksForSession,
   judgeTaskOutcome,
   parseTaskExtractionOutput,
@@ -77,6 +78,26 @@ describe("task extraction", () => {
     expect(logs.join("\n")).toContain("[task extraction] starting extraction for codex:one");
     expect(logs.join("\n")).toContain("provider=off");
     expect(logs.join("\n")).toContain("task extraction is off");
+  });
+
+  test("claude provider runs bare, without session persistence, on haiku by default", () => {
+    expect(claudeProviderArgs(undefined)).toEqual([
+      "-p",
+      "--bare",
+      "--no-session-persistence",
+      "--model",
+      "haiku",
+      "-",
+    ]);
+    // A configured model overrides the default; the flags stay on.
+    expect(claudeProviderArgs({ model: "opus" })).toEqual([
+      "-p",
+      "--bare",
+      "--no-session-persistence",
+      "--model",
+      "opus",
+      "-",
+    ]);
   });
 
   test("splits custom provider commands without invoking a shell", () => {
