@@ -601,23 +601,29 @@ export async function extractTasksWithOutcome(
     options,
     `judging outcome for ${dated.length}/${tasks.length} tasks in ${sessionId}`,
   );
-  await mapWithLimit(dated, 4, async (task) => {
-    const start = task.timestampMs;
-    const nextStart = dated.find((other) => other.timestampMs > start)?.timestampMs;
-    const slice = sliceDialogueByTime(dialogue, start, nextStart);
-    const { judgment, diagnostics: outcomeDiagnostics } = await judgeTaskOutcome(
-      task.description,
-      slice,
-      options,
-    );
-    diagnostics.push(...outcomeDiagnostics);
-    if (judgment) {
-      task.outcome = judgment.outcome;
-      task.frustration = judgment.frustration;
-      if (judgment.signals) task.signals = judgment.signals;
-      if (judgment.outcomeReason) task.outcomeReason = judgment.outcomeReason;
-    }
-  });
+  // `dated` is sorted ascending, so each task's chapter ends where the next begins — `dated[i + 1]`,
+  // not an O(n) rescan. Using the immediate neighbor also handles ties consistently with
+  // assignChapters' last-wins bookmark: tasks sharing a timestamp get an empty [start, start) slice
+  // for all but the last, rather than overlapping windows.
+  await mapWithLimit(
+    dated.map((task, i) => ({ task, start: task.timestampMs, end: dated[i + 1]?.timestampMs })),
+    4,
+    async ({ task, start, end }) => {
+      const slice = sliceDialogueByTime(dialogue, start, end);
+      const { judgment, diagnostics: outcomeDiagnostics } = await judgeTaskOutcome(
+        task.description,
+        slice,
+        options,
+      );
+      diagnostics.push(...outcomeDiagnostics);
+      if (judgment) {
+        task.outcome = judgment.outcome;
+        task.frustration = judgment.frustration;
+        if (judgment.signals) task.signals = judgment.signals;
+        if (judgment.outcomeReason) task.outcomeReason = judgment.outcomeReason;
+      }
+    },
+  );
 
   return { tasks, diagnostics };
 }
