@@ -9,6 +9,7 @@ import {
 import type { TranscriptSource } from "./parse.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
 import type { AgentSource, ParseResult } from "./types.ts";
+import type { ResolvedTaskExtraction } from "./config.ts";
 
 /** Filters applied to the materialized read model at read time (SQL pushdown). */
 export interface SessionQuery {
@@ -35,6 +36,8 @@ export interface SessionStoreOptions {
   /** Read the already-materialized store without reconciling first (no writes). For callers that must
    *  not write — e.g. the serve/upload legs of `argus run`, where the index leg is the only writer. */
   readOnly?: boolean;
+  /** Opt-in index-time task extraction (#91). Passed through to the sync; off/unset → no extraction. */
+  taskExtraction?: ResolvedTaskExtraction;
 }
 
 export interface SessionStore {
@@ -61,6 +64,7 @@ class StoreBackedSessionStore implements SessionStore {
       agentsView: this.opts.agentsView,
       agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
       skipSync: this.opts.readOnly,
+      taskExtraction: this.opts.taskExtraction,
       query,
     });
     this.stats = details.stats;
