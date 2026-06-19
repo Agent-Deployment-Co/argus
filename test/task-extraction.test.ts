@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assignChapters,
   buildTaskExtractionPrompt,
+  buildTaskOutcomePrompt,
   extractTasksForSession,
+  judgeTaskOutcome,
   parseTaskExtractionOutput,
+  parseTaskOutcomeOutput,
   splitCommand,
   taskFactsFromSpecs,
 } from "../src/task-extraction.ts";
-import type { TaskCandidateFact } from "../src/store-contract.ts";
+import type { TaskCandidateFact, TaskFact } from "../src/store-contract.ts";
 
 const candidates: TaskCandidateFact[] = [
   {
@@ -81,5 +85,65 @@ describe("task extraction", () => {
       "--model",
       "fast model",
     ]);
+  });
+});
+
+describe("task outcome (pass 2)", () => {
+  test("parses outcome JSON, defaulting unknown enums and dropping blank fields", () => {
+    expect(
+      parseTaskOutcomeOutput(
+        '```json\n{"outcome":"success","frustration":"high","signals":["no access",""],"reason":"shipped"}\n```',
+      ),
+    ).toEqual({ outcome: "success", frustration: "high", signals: ["no access"], outcomeReason: "shipped" });
+    // Unknown/missing enums fall back to the safe defaults; no signals/reason → omitted.
+    expect(parseTaskOutcomeOutput('{"outcome":"weird"}')).toEqual({ outcome: "unclear", frustration: "none" });
+  });
+
+  test("builds a prompt carrying the task and role-tagged dialogue", () => {
+    const prompt = buildTaskOutcomePrompt("Add a facts command", [
+      { role: "user", text: "add it", timestampMs: 1 },
+      { role: "assistant", text: "done", timestampMs: 2 },
+    ]);
+    expect(prompt).toContain("Task: Add a facts command");
+    expect(prompt).toContain('"role": "user"');
+    expect(prompt).toContain('"text": "done"');
+    // Timestamps are an internal alignment detail — not sent to the judge.
+    expect(prompt).not.toContain("timestampMs");
+  });
+
+  test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {
+    expect(await judgeTaskOutcome("t", [{ role: "user", text: "x" }], { provider: "off" })).toEqual({
+      diagnostics: [],
+    });
+    expect(await judgeTaskOutcome("t", [], { provider: "claude" })).toEqual({ diagnostics: [] });
+  });
+});
+
+describe("assignChapters", () => {
+  function task(id: string, timestampMs?: number): TaskFact {
+    return {
+      id,
+      source: "codex",
+      sourceSessionId: "codex:chapters",
+      description: id,
+      evidence: "",
+      evidenceKind: "llm_inference",
+      position: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+      ...(timestampMs != null ? { timestampMs } : {}),
+    };
+  }
+
+  test("bookmarks the timeline: each message joins the latest task started at/before it", () => {
+    const tasks = [task("a", 100), task("b", 300)];
+    // Message timestamps by reconciled seq (ascending). seq 0 precedes any task.
+    assignChapters(tasks, [50, 120, 200, 350, 400]);
+    expect(tasks[0]!.chapter).toEqual({ startSeq: 1, endSeq: 2 }); // task a owns [120,200]
+    expect(tasks[1]!.chapter).toEqual({ startSeq: 3, endSeq: 4 }); // task b owns [350,400]
+  });
+
+  test("tasks without a timestamp get no chapter", () => {
+    const tasks = [task("a")];
+    assignChapters(tasks, [100, 200]);
+    expect(tasks[0]!.chapter).toBeUndefined();
   });
 });
