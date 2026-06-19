@@ -135,7 +135,7 @@ npx @agentdeploymentco/argus status                  # show the store location a
 |---------|-------------|
 | `index` | Read new and changed sessions into the local store. |
 | `index --watch [--interval N]` | Keep reading on an interval (N minutes, default 5). Runs until `Ctrl-C`. |
-| `index refresh` | Re-read every transcript from disk; sessions no longer on disk are kept. |
+| `index refresh [<id>…]` | Bare: re-read every transcript from disk (sessions no longer on disk are kept). With session id(s): re-index just those sessions. |
 | `index rebuild [--force]` | Rebuild from scratch — **drops sessions no longer on disk**. Prompts for confirmation unless `--force`. |
 | `index delete <id>… \| --archived` | Permanently remove sessions from the store. |
 
@@ -143,6 +143,33 @@ When a compatible local AgentsView database is available, Argus imports read-onl
 into the same store. Native transcript parsing remains authoritative for sources that have
 local transcript fragments; AgentsView facts are used only for selected sources without native
 fragments. Use `--no-agentsview` to disable this bridge.
+
+## Task interpretation (opt-in)
+
+Argus can interpret each session into the **tasks** you asked for and how they turned out — a
+description, the span of the session it covers, and a judged outcome (success / failure / unclear)
+with a frustration signal. This runs an AI model on each session, so it's **off by default**.
+
+Turn it on in `argus.json` (under `$ARGUS_CONFIG_DIR`, macOS:
+`~/Library/Application Support/argus/argus.json`):
+
+```json
+{ "taskExtraction": { "enabled": true, "provider": "claude" } }
+```
+
+With it enabled, `index` extracts tasks for sessions as it reads them. To try it on specific sessions
+without enabling it globally, force it per run:
+
+```bash
+npx @agentdeploymentco/argus index refresh <session-id> --extract-tasks true
+```
+
+`--extract-tasks <true|false>` (on `index`, `index rebuild`, and `index refresh`) overrides the
+config for that run. The `claude` provider uses `claude -p` with a fast, cheap model by default and
+leaves no extra session behind. The reconstructed dialogue used to judge outcomes is never stored —
+only the task description and outcome are. See
+[docs/configuration.md](docs/configuration.md) and
+[docs/task-interpretation.md](docs/task-interpretation.md).
 
 ## Keep and analyze data over time
 

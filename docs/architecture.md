@@ -11,7 +11,7 @@ one-directional:
                 └───────────────┬────────────────────────────┘
                                 ▼
                       the coordinator (indexing)
-                 reconcile → materialize per session
+            reconcile → interpret (opt-in) → materialize per session
                                 ▼
                       the store  (argus.db)
                                 ▼
@@ -41,6 +41,13 @@ There are two kinds:
     "couldn't read" result).
   - `transcriptParser()` — read one file into a fragment of *normalized facts* (sessions, messages,
     tool calls, tool results, subagent relationships).
+  - `parseTranscriptPath(path)` / `discoverSessionTranscripts(path)` *(optional)* — parse one file, or
+    list all of a session's transcripts from disk (Claude's main file plus its `<session>/subagents/**`
+    transcripts). Used by single-session reindex so a refresh sees subagent files added since the last
+    index. File layout is a producer concern.
+  - `reconstructDialogue(path)` — rebuild the ordered human↔assistant **text** for a transcript, for
+    the task-interpretation passes (see [task-interpretation.md](./task-interpretation.md)). This text
+    is an in-memory intermediate and is never stored.
   - `discoverAuxiliary()` / `auxiliaryParser()` *(optional)* — side inputs like Claude's
     `history.jsonl` first prompts or Gemini's project roots.
   - `capabilities` — flags the reconcile engine reads generically (e.g. `canonicalizeSubagents`,
@@ -65,9 +72,12 @@ One SQLite file, `argus.db` (`src/store.ts`). Three layers:
    (for change detection), and which sessions each file maps to*. No message content. **Fully
    re-derivable from disk** — `index refresh` rebuilds it freely.
 
-2. **Trusted read model** — `resolved_sessions` / `resolved_messages` / `resolved_tool_results`.
-   The finished, reconciled rows consumers read directly. **Not re-derivable** once a transcript ages
-   off disk, so it is preserved across schema changes via real migrations (never silently dropped).
+2. **Trusted read model** — `resolved_sessions` / `resolved_messages` / `resolved_tool_results` /
+   `resolved_tasks`. The finished, reconciled rows consumers read directly. **Not re-derivable** once a
+   transcript ages off disk, so it is preserved across schema changes via real migrations (never
+   silently dropped). `resolved_messages.task_seq` links each message to the task ("chapter") it falls
+   under; `resolved_tasks` holds the per-task interpretation (see
+   [task-interpretation.md](./task-interpretation.md)).
 
 3. **Bookkeeping** — `source_coverage` (per-source freshness digest) and `session_ownership`
    (which producer owns each canonical session).
@@ -108,11 +118,21 @@ session and recording which producer owns it (`materializeSessions` in `src/stor
 means **stored as real rows a consumer can `SELECT` as-is**, not a view recomputed on every read. It is
 the "save the answer" step that makes reads cheap and reconcile-free.
 
+### What "interpret" means (opt-in)
+
+Reconcile and materialize produce **facts** — deterministic, one-right-answer output. *Interpret* is a
+separate, opt-in step between them that derives **interpretations** the transcript doesn't state: it
+runs an AI model over a session to extract its tasks ("chapters") and judge each task's outcome. It's
+non-deterministic and costs a model call per session, so it's off by default and gated by `argus.json`.
+When enabled, indexing a *changed* session also runs interpretation and attaches the tasks before the
+session is materialized (so chapter messages get their `task_seq`). Full design:
+[task-interpretation.md](./task-interpretation.md).
+
 ### Per run, per native producer
 
 1. Discover files; **parse only the ones whose fingerprint changed** (unchanged files are skipped).
-2. **Reconcile** each *touched* session and **materialize** it into `resolved_*` (replacing its old
-   rows).
+2. **Reconcile** each *touched* session; if interpretation is enabled, **interpret** the changed ones;
+   then **materialize** into `resolved_*` (replacing its old rows).
 3. **Archive, don't delete:** sessions the producer used to own that are no longer on disk are flagged
    `archived` and retained. (A partial re-read of a session whose files partly aged out can't shrink
    the stored copy — the fuller one wins.)
@@ -122,6 +142,16 @@ makes hand-offs clean: when a native source gains a file for a session AgentsVie
 native producer takes ownership and the AgentsView copy steps aside.
 
 Both steps happen **here**, once, at write time — never on read.
+
+### Single-session reindex
+
+`reindexSession(id)` (`src/parse-incremental.ts`) re-indexes **one** session in isolation instead of a
+full discovery: it rediscovers that session's transcripts from disk (the producer's
+`discoverSessionTranscripts` — main file plus subagents), re-parses them, reconciles just that session
+**with** its auxiliary inputs (so Claude's `firstPrompt` and Gemini's project/cwd aren't lost), and
+materializes it — optionally running interpretation. It errors clearly when the session is unknown
+(404) or has no local transcript, e.g. an imported session (422). It's the shared primitive behind the
+CLI's `index refresh <id>` and the web Refresh.
 
 ---
 
@@ -147,8 +177,8 @@ are gone.
 
 | Command  | Touches the store | What it does |
 |----------|-------------------|--------------|
-| `index`  | writes            | Read new/changed transcripts; update the store. `--watch` keeps reading on an interval. |
-| `index refresh` | rebuilds index | Re-read all transcripts; keeps sessions no longer on disk. |
+| `index`  | writes            | Read new/changed transcripts; update the store. `--watch` keeps reading on an interval. `--extract-tasks <true\|false>` overrides task interpretation for the run. |
+| `index refresh [<id>…]` | rebuilds index / one session | Bare: re-read all transcripts (keeps sessions no longer on disk). With session id(s): reindex just those from disk (see single-session reindex). |
 | `index rebuild` | rebuilds store | Rebuild from scratch; **drops sessions no longer on disk** (confirm, or `--force`). |
 | `index delete` | deletes      | Permanently remove sessions (`<id>…` or `--archived`). |
 | `report` | reads (+ indexes) | Build the dashboard from the store as a self-contained HTML file. |
@@ -169,6 +199,12 @@ are gone.
   `report` and `serve` are entirely local.
 - **Indexing is the only writer.** Under `run`, the index leg writes; `serve` and the upload leg only
   read. SQLite WAL makes one writer + concurrent readers safe.
+
+## Configuration
+
+User settings live in `argus.json` under `$ARGUS_CONFIG_DIR` (the config peer of `argus.db`), resolved
+through a uniform `flag > env > argus.json > default` chain. It's the home for the task-interpretation
+opt-in and provider settings. See [configuration.md](./configuration.md).
 
 ## Adding a source
 
