@@ -95,6 +95,64 @@ describe("reindexSession", () => {
     }
   });
 
+  test("reports an imported / no-local-transcript session clearly, not 'not readable' (#93)", async () => {
+    const root = tempRoot();
+    const storePath = join(root, "cache", "fragments.sqlite3");
+    const store = await openStore({ path: storePath });
+    try {
+      // Imported sessions are stored under a native source but carry an empty filePath.
+      await store.materializeSessions("agentsview", [
+        {
+          meta: { source: "codex", sessionId: "codex:imported1", project: "p", cwd: "/tmp/p", filePath: "" },
+          messages: [],
+          toolResults: [],
+        },
+      ]);
+      const result = await reindexSession("codex:imported1", { store });
+      expect(result).toMatchObject({ ok: false, status: 422 });
+      if (!result.ok) expect(result.message).toContain("no local transcript");
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("folds in subagent transcripts, not just the main one (#2)", async () => {
+    const root = tempRoot();
+    const projectsDir = join(root, "projects");
+    cpSync(join(FIX, "projects"), projectsDir, { recursive: true });
+    const storePath = join(root, "cache", "fragments.sqlite3");
+    await parseAllIncrementalDetailed({
+      projectsDir,
+      sources: ["claude"] as AgentSource[],
+      storePath,
+      agentsView: "off",
+    });
+    const store = await openStore({ path: storePath });
+    try {
+      const resolved = await store.readResolved();
+      const countOf = (rs: typeof resolved, id: string) =>
+        rs.messages.filter((m) => m.sessionId === id).length;
+      // The fixture's sess1 has a subagent under sess1/subagents/, folded into the parent.
+      const parent = [...resolved.sessions.values()].find(
+        (s) => s.source === "claude" && /sess1\.jsonl$/.test(s.filePath),
+      );
+      expect(parent).toBeDefined();
+      const id = parent!.sessionId;
+      const fullCount = countOf(resolved, id);
+      expect(fullCount).toBeGreaterThan(1); // main + subagent messages
+      // Seed the stored row LOW so the don't-regress guard can't mask a subagent-dropping reindex.
+      const oneMessage = resolved.messages.find((m) => m.sessionId === id)!;
+      await store.retractSessions([id]);
+      await store.materializeSessions("claude", [{ meta: parent!, messages: [oneMessage], toolResults: [] }]);
+      const result = await reindexSession(id, { store, context: { projectsDir } });
+      expect(result.ok).toBe(true);
+      // A subagent-aware reindex restores the full count; the buggy main-only path would fall short.
+      expect(countOf(await store.readResolved(), id)).toBe(fullCount);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("404 for an unknown session", async () => {
     const root = tempRoot();
     const storePath = await indexCodex(root);

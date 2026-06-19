@@ -784,36 +784,59 @@ export async function reindexSession(
         message: `Couldn't re-index ${sessionId}: no transcript reader is registered for ${meta.source}.`,
       };
     }
-    const parsed = producer.parseTranscriptPath(meta.filePath);
-    if (parsed.status !== "current") {
-      const detail = parsed.diagnostics[0]?.message ?? `Couldn't read ${meta.filePath}`;
+    // Imported sessions (e.g. AgentsView) live under a native source but have no local transcript to
+    // re-parse — say so plainly rather than the misleading "transcript no longer readable".
+    if (!meta.filePath) {
       return {
         ok: false,
         status: 422,
-        message: `Couldn't re-index ${sessionId}: ${detail}`,
-        diagnostics: parsed.diagnostics,
+        message: `Couldn't re-index ${sessionId}: it has no local transcript on disk (imported sessions can't be refreshed this way).`,
       };
     }
-    const fragment = parsed.fragment;
-    // A single transcript carries no subagent relationships, so canonicalize against an empty set.
-    const toCanonical = canonicalizer(producer.capabilities, []);
+    // Re-parse EVERY transcript that maps to this session — the main transcript and any subagent
+    // transcripts — using the structural index's file list + subagent relationships, so a targeted
+    // refresh folds in subagent messages/usage exactly like a full index. Fall back to the session's
+    // own transcript when the index has no entry for it (e.g. right after a bare `index refresh`).
+    const parser = producer.transcriptParser();
+    const index = await store.transcriptIndex(meta.source);
+    const toCanonical = canonicalizer(producer.capabilities, index.relationships);
+    const entries = index.fragments.filter((entry) =>
+      entry.sourceSessionIds.some((sid) => toCanonical(sid) === sessionId),
+    );
+    const diagnostics: ParserDiagnostic[] = [];
+    const fragments: ParsedFileFragment[] = [];
+    const inputs = entries.length
+      ? entries.map((entry) => () => parser.parseFile({ file: entry.file, fingerprint: entry.fingerprint }))
+      : [() => producer.parseTranscriptPath(meta.filePath)];
+    for (const parse of inputs) {
+      const result = parse();
+      if (result.status === "current") fragments.push(result.fragment);
+      else diagnostics.push(...result.diagnostics);
+    }
+    if (!fragments.length) {
+      return {
+        ok: false,
+        status: 422,
+        message: `Couldn't re-index ${sessionId}: ${diagnostics[0]?.message ?? `couldn't read ${meta.filePath}`}`,
+        diagnostics,
+      };
+    }
     // Reconcile WITH the producer's auxiliary fragments (Claude history first-prompts, Gemini project
     // roots) so the refreshed session keeps its aux-derived fields (firstPrompt, cwd/project) — a bare
     // transcript reconcile would otherwise wipe them, regressing the session vs. a full index.
     const auxiliaryFragments = auxiliaryFragmentsForProducer(producer, opts.context ?? producerContext({}));
     const output = reconcileSessions({
       caps: producer.capabilities,
-      fragments: [fragment],
+      fragments,
       auxiliaryFragments,
       canonicalIds: new Set([sessionId]),
     });
     const materialize = toMaterializeSessions(output);
-    const diagnostics: ParserDiagnostic[] = [];
     if (taskExtractionActive(opts.taskExtraction)) {
       await extractTasksForSessions(
         producer,
         materialize,
-        [fragment],
+        fragments,
         toCanonical,
         new Set([sessionId]),
         opts.taskExtraction!,
