@@ -275,6 +275,28 @@ function producerContext(opts: IncrementalParseOptions): ProducerContext {
   };
 }
 
+/**
+ * Parse a producer's auxiliary fragments fresh (no store caching) for a one-off reconcile. The
+ * single-session reindex needs these — Claude history first-prompts, Gemini project roots — so it
+ * resolves the same aux-derived session fields (firstPrompt, cwd/project) as a full index; without
+ * them a targeted refresh would wipe those fields back to empty.
+ */
+function auxiliaryFragmentsForProducer(
+  producer: NativeProducer,
+  ctx: ProducerContext,
+): ParsedAuxiliaryFragment[] {
+  if (!producer.discoverAuxiliary || !producer.auxiliaryParser) return [];
+  const discovery = producer.discoverAuxiliary(ctx);
+  if (!isAuthoritativeDiscovery(discovery)) return [];
+  const parser = producer.auxiliaryParser();
+  const fragments: ParsedAuxiliaryFragment[] = [];
+  for (const file of discovery.files) {
+    const result = parser.parseFile(file);
+    if (result.status === "current") fragments.push(result.fragment);
+  }
+  return fragments;
+}
+
 /** Group a reconcile result into per-session payloads ready to materialize. */
 function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   const messagesBySession = new Map<string, MessageRecord[]>();
@@ -709,7 +731,14 @@ export type ReindexSessionResult =
  */
 export async function reindexSession(
   sessionId: string,
-  opts: { store?: Store; storePath?: string; taskExtraction?: ResolvedTaskExtraction } = {},
+  opts: {
+    store?: Store;
+    storePath?: string;
+    taskExtraction?: ResolvedTaskExtraction;
+    /** Discovery locations for auxiliary inputs (history/project roots). Defaults to the real paths;
+     *  tests pass fixture dirs. */
+    context?: ProducerContext;
+  } = {},
 ): Promise<ReindexSessionResult> {
   let store = opts.store;
   let ownsStore = false;
@@ -747,10 +776,14 @@ export async function reindexSession(
     const fragment = parsed.fragment;
     // A single transcript carries no subagent relationships, so canonicalize against an empty set.
     const toCanonical = canonicalizer(producer.capabilities, []);
+    // Reconcile WITH the producer's auxiliary fragments (Claude history first-prompts, Gemini project
+    // roots) so the refreshed session keeps its aux-derived fields (firstPrompt, cwd/project) — a bare
+    // transcript reconcile would otherwise wipe them, regressing the session vs. a full index.
+    const auxiliaryFragments = auxiliaryFragmentsForProducer(producer, opts.context ?? producerContext({}));
     const output = reconcileSessions({
       caps: producer.capabilities,
       fragments: [fragment],
-      auxiliaryFragments: [],
+      auxiliaryFragments,
       canonicalIds: new Set([sessionId]),
     });
     const materialize = toMaterializeSessions(output);
