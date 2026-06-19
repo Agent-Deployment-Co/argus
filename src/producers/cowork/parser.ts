@@ -148,11 +148,18 @@ export function reconstructCoworkDialogue(path: string): DialogueTurn[] {
         if (turn) turns.push(turn);
       }
     } else if (value.type === "assistant") {
-      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
-      if (id && seenAssistant.has(id)) continue;
-      if (id) seenAssistant.add(id);
+      // Same fix as the Claude parser: a single assistant message is often split across records (a
+      // tool_use record with no text, then the text record), so only let a NON-EMPTY turn claim the
+      // dedup slot — otherwise the answer record (same id) is dropped and outcome judging thinks the
+      // assistant never replied. First non-empty occurrence per id wins (re-appends still dedup).
       const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
-      if (turn) turns.push(turn);
+      if (!turn) continue;
+      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
+      if (id) {
+        if (seenAssistant.has(id)) continue;
+        seenAssistant.add(id);
+      }
+      turns.push(turn);
     }
   }
   return turns;
