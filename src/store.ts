@@ -1230,6 +1230,26 @@ export class SqliteStore implements Store {
     });
   }
 
+  readTaskMessages(sessionId: string, taskId: string): Promise<MessageRecord[] | undefined> {
+    return this.schedule(async () => {
+      // Map the task id -> its seq (resolved_messages.task_seq references resolved_tasks.seq), then
+      // pull the attributed messages. Tasks are few per session, so the id match in JS is cheap.
+      const taskRows = await all<{ seq: number; task_json: string }>(
+        this.db,
+        "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      const match = taskRows.find((row) => (JSON.parse(row.task_json) as TaskFact).id === taskId);
+      if (!match) return undefined;
+      const rows = await all<{ record_json: string }>(
+        this.db,
+        "SELECT record_json FROM resolved_messages WHERE session_id = ? AND task_seq = ? ORDER BY seq",
+        [sessionId, match.seq],
+      );
+      return rows.map((row) => JSON.parse(row.record_json) as MessageRecord);
+    });
+  }
+
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(

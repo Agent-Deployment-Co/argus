@@ -499,6 +499,9 @@ export interface Store {
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
+  /** Messages attributed to one task (by resolved_messages.task_seq), oldest first. Undefined when
+   *  the task isn't in the store; empty when the task exists but owns no attributed messages. */
+  readTaskMessages(sessionId: string, taskId: string): Promise<MessageRecord[] | undefined>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

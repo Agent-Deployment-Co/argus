@@ -1,9 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
+import { OutcomeBadge, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
 import { reindexSession, useSnapshot } from "../lib/snapshot";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
@@ -23,6 +24,7 @@ export function SessionDetail() {
   const { dashboard: d } = useSnapshot();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const s = d.sessions.find((x) => x.sessionId === sessionId);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   // Reindexing refreshes the whole session and rebuilds the server-side snapshot, so reload the page
   // once it's done — the user gets the fully updated session without a manual refresh.
@@ -50,6 +52,7 @@ export function SessionDetail() {
   const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);
   const stops = h.stopReasons ? Object.entries(h.stopReasons).sort((a, b) => b[1] - a[1]) : [];
   const tasks = s.tasks ?? [];
+  const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
   const refreshingThisSession = refresh.isPending && refresh.variables === s.sessionId;
   const refreshError =
     !refresh.isPending && refresh.variables === s.sessionId && refresh.error instanceof Error
@@ -57,6 +60,7 @@ export function SessionDetail() {
       : null;
 
   return (
+    <>
     <div className="session-detail-inner">
       <header className="session-detail-head">
         <div className="session-detail-headline">
@@ -97,10 +101,18 @@ export function SessionDetail() {
           <ol className="tasks">
             {tasks.map((task) => (
               <li key={task.id}>
-                <div className="task-text">{task.description}</div>
-                {task.timestampMs != null && (
-                  <div className="task-meta">{dtAmPm(task.timestampMs)}</div>
-                )}
+                <button
+                  type="button"
+                  className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
+                  onClick={() => setSelectedTaskId(task.id)}
+                  aria-pressed={task.id === selectedTaskId}
+                >
+                  <div className="task-text">{task.description}</div>
+                  <div className="task-meta">
+                    {task.timestampMs != null && <span>{dtAmPm(task.timestampMs)}</span>}
+                    {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                  </div>
+                </button>
               </li>
             ))}
           </ol>
@@ -175,5 +187,7 @@ export function SessionDetail() {
         </section>
       )}
     </div>
+    {selectedTask && <TaskPanel sessionId={s.sessionId} task={selectedTask} onClose={() => setSelectedTaskId(null)} />}
+    </>
   );
 }

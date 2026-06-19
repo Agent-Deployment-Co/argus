@@ -805,6 +805,14 @@ describe("SQLite store", () => {
       const tasks = await store.readSessionTasks(sid);
       expect(tasks[0]?.chapter).toEqual({ startSeq: 0, endSeq: 1 });
       expect(tasks[0]?.outcome).toBe("success");
+
+      // readTaskMessages returns just the messages attributed to each task (by task_seq).
+      const taskA = await store.readTaskMessages(sid, `task:${sid}:a`);
+      expect(taskA?.map((m) => m.ts)).toEqual([1000, 1001]);
+      const taskB = await store.readTaskMessages(sid, `task:${sid}:b`);
+      expect(taskB?.map((m) => m.ts)).toEqual([1002, 1003]);
+      // Unknown task id → undefined (distinct from a task that owns no messages, which is []).
+      expect(await store.readTaskMessages(sid, "task:nope")).toBeUndefined();
     } finally {
       await store.close();
     }
