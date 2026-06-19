@@ -66,6 +66,9 @@ export interface IncrementalParseOptions extends ParseOptions {
   /** Opt-in index-time task extraction (#91). When enabled, indexing a changed session also runs the
    *  two-pass extraction and materializes its tasks. Off/unset → indexing behaves exactly as today. */
   taskExtraction?: ResolvedTaskExtraction;
+  /** Optional progress sink for the long-running parts (task extraction). The terminal commands wire
+   *  this to their logger so the user sees a heartbeat; read-only/embedded callers can omit it. */
+  log?: (message: string) => void;
 }
 
 const EMPTY_STATS: SyncStats = {
@@ -340,6 +343,12 @@ function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined
  * their stored tasks via the materializer's preserve-on-unchanged guard. The reconstructed dialogue
  * is an in-memory intermediate — nothing with message text is persisted.
  */
+/** A short, human-facing label for progress output: the project plus a short session id. */
+function sessionProgressLabel(session: MaterializeSession): string {
+  const shortId = session.meta.sessionId.replace(/^[^:]+:/, "").slice(0, 8);
+  return `${session.meta.project} (${shortId})`;
+}
+
 async function extractTasksForSessions(
   producer: NativeProducer,
   sessions: MaterializeSession[],
@@ -348,6 +357,7 @@ async function extractTasksForSessions(
   targets: Set<string>,
   taskExtraction: ResolvedTaskExtraction,
   diagnostics: ParserDiagnostic[],
+  log?: (message: string) => void,
 ): Promise<void> {
   const candidatesBySession = new Map<string, TaskCandidateFact[]>();
   for (const fragment of fragments) {
@@ -358,16 +368,26 @@ async function extractTasksForSessions(
       candidatesBySession.set(id, list);
     }
   }
-  for (const session of sessions) {
+  const toExtract = sessions.filter(
+    (session) =>
+      targets.has(session.meta.sessionId) &&
+      (candidatesBySession.get(session.meta.sessionId)?.length ?? 0) > 0,
+  );
+  if (!toExtract.length) return;
+  // Task extraction runs an AI model per session, so it can take a while — emit a heartbeat as each
+  // session starts so the command doesn't look stuck.
+  log?.(
+    `Extracting tasks from ${toExtract.length} session${toExtract.length === 1 ? "" : "s"} — this runs an AI model on each and can take a while…`,
+  );
+  let done = 0;
+  for (const session of toExtract) {
     const sid = session.meta.sessionId;
-    if (!targets.has(sid)) continue;
-    const candidates = candidatesBySession.get(sid) ?? [];
-    if (!candidates.length) continue;
+    log?.(`  [${++done}/${toExtract.length}] ${sessionProgressLabel(session)}…`);
     const messageTimestamps = session.messages.map((message) => message.ts);
     const dialogue = producer.reconstructDialogue(session.meta.filePath);
     const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
       sid,
-      candidates,
+      candidatesBySession.get(sid)!,
       messageTimestamps,
       dialogue,
       taskExtraction,
@@ -544,6 +564,7 @@ async function syncStore(
           canonicalSessionIds(producer.capabilities, changedFragments),
           opts.taskExtraction!,
           diagnostics,
+          opts.log,
         );
       }
       // Marks these present (archived = 0); the store's don't-regress guard keeps the fuller stored

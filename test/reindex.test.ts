@@ -143,6 +143,24 @@ describe("index-time extraction hook", () => {
       await store.close();
     }
   });
+
+  test("emits a progress heartbeat while extracting during a bulk index", async () => {
+    const root = tempRoot();
+    const codexSessionsDir = join(root, "codex-sessions");
+    cpSync(join(FIX, "codex-sessions"), codexSessionsDir, { recursive: true });
+    const storePath = join(root, "cache", "fragments.sqlite3");
+    const logs: string[] = [];
+    await parseAllIncrementalDetailed({
+      codexSessionsDir,
+      sources: ["codex"] as AgentSource[],
+      storePath,
+      agentsView: "off",
+      taskExtraction: commandExtraction(root),
+      log: (s) => logs.push(s),
+    });
+    expect(logs.some((l) => l.includes("Extracting tasks from 1 session"))).toBe(true);
+    expect(logs.some((l) => /\[1\/1\]/.test(l))).toBe(true);
+  });
 });
 
 describe("runIndexRefresh (targeted, #93)", () => {

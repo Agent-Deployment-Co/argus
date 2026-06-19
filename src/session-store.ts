@@ -38,6 +38,8 @@ export interface SessionStoreOptions {
   readOnly?: boolean;
   /** Opt-in index-time task extraction (#91). Passed through to the sync; off/unset → no extraction. */
   taskExtraction?: ResolvedTaskExtraction;
+  /** Optional progress sink for long-running work (task extraction), wired to the command's logger. */
+  log?: (message: string) => void;
 }
 
 export interface SessionStore {
@@ -65,6 +67,7 @@ class StoreBackedSessionStore implements SessionStore {
       agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
       skipSync: this.opts.readOnly,
       taskExtraction: this.opts.taskExtraction,
+      log: this.opts.log,
       query,
     });
     this.stats = details.stats;
