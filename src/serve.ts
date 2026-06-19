@@ -13,6 +13,7 @@ import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboar
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
+import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import type { ResolvedTaskExtraction } from "./config.ts";
 import { openStore } from "./store.ts";
 import type { ParserDiagnostic, TaskFact } from "./store-contract.ts";
@@ -50,21 +51,25 @@ export interface ReindexResponse {
   diagnostics?: ParserDiagnostic[];
 }
 
-export interface TaskMetricsResponse {
-  metrics: TaskMetrics;
+export interface SessionTaskMetricsResponse {
+  /** Per-task metrics for the session, keyed by task id. Tasks with no activity are absent. */
+  metrics: Record<string, TaskMetrics>;
 }
 
 /** Builds the snapshot for a request. `force` bypasses any caching the caller layered on. */
 export type SnapshotSource = (force: boolean) => Promise<Snapshot>;
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
-/** Roll up one task's metrics on demand. Resolves to undefined when the task isn't in the store. */
-export type TaskMetricsReader = (sessionId: string, taskId: string) => Promise<TaskMetrics | undefined>;
+/** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
+export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
+/** Gather the /debug payload (settings, env, paths, store/index status). */
+export type DebugInfoReader = () => Promise<DebugInfo>;
 
 interface AppOptions {
   reindex?: SessionReindexer;
   /** Called after a successful reindex so the caller can drop its cached snapshot. */
   onStoreChanged?: () => void;
-  taskMetrics?: TaskMetricsReader;
+  sessionTaskMetrics?: SessionTaskMetricsReader;
+  debugInfo?: DebugInfoReader;
 }
 
 /** How long a built dashboard is reused before the next request triggers a fresh read. */
@@ -139,17 +144,21 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json({ tasks: result.tasks, diagnostics: result.diagnostics } satisfies ReindexResponse);
   });
 
-  // Per-task metrics, computed on demand from the messages attributed to the task (not shipped in the
-  // big snapshot). 404 when the task isn't in the store.
-  app.get("/api/sessions/:id/tasks/:taskId", async (c) => {
+  // Per-task metrics for a whole session, computed on demand from the messages attributed to each
+  // task (not shipped in the big snapshot). One fetch backs both the task list and the detail drawer.
+  app.get("/api/sessions/:id/task-metrics", async (c) => {
     const sessionId = c.req.param("id").trim();
-    const taskId = c.req.param("taskId").trim();
-    if (!sessionId || !taskId) return c.json({ error: "Missing session or task id." }, 400);
-    if (!opts.taskMetrics) return c.json({ error: "Task metrics are unavailable in this process." }, 503);
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.sessionTaskMetrics) return c.json({ error: "Task metrics are unavailable in this process." }, 503);
 
-    const metrics = await opts.taskMetrics(sessionId, taskId);
-    if (!metrics) return c.json({ error: "No such task in this session." }, 404);
-    return c.json({ metrics } satisfies TaskMetricsResponse);
+    const metrics = await opts.sessionTaskMetrics(sessionId);
+    return c.json({ metrics } satisfies SessionTaskMetricsResponse);
+  });
+
+  // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
+  app.get("/api/debug", async (c) => {
+    if (!opts.debugInfo) return c.json({ error: "Debug info is unavailable in this process." }, 503);
+    return c.json(await opts.debugInfo());
   });
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
@@ -218,11 +227,13 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     }
   };
 
-  const taskMetrics: TaskMetricsReader = async (sessionId, taskId) => {
+  const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
     const store = await openStore();
     try {
-      const messages = await store.readTaskMessages(sessionId, taskId);
-      return messages ? computeTaskMetrics(messages) : undefined;
+      const byTask = await store.readSessionTaskMessages(sessionId);
+      const out: Record<string, TaskMetrics> = {};
+      for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+      return out;
     } finally {
       await store.close();
     }
@@ -231,7 +242,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   const app = createApp(snapshot, webRoot, {
     reindex,
     onStoreChanged: clearCachedSnapshot,
-    taskMetrics,
+    sessionTaskMetrics,
+    debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
   });
 
   let resolveClosed!: () => void;

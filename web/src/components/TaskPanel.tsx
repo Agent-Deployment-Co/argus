@@ -1,8 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { dtAmPm, fmt, usd } from "../lib/format";
-import { fetchTaskMetrics } from "../lib/snapshot";
+import { useSessionTaskMetrics } from "../lib/snapshot";
 import type { SessionRow } from "../types";
 
 // The task shape comes straight from the snapshot (TaskFact, re-exported via SessionRow).
@@ -41,12 +40,10 @@ export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; tas
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Metrics are fetched on demand (not part of the snapshot) — see GET /api/sessions/:id/tasks/:taskId.
-  const metricsQuery = useQuery({
-    queryKey: ["task-metrics", sessionId, task.id],
-    queryFn: () => fetchTaskMetrics(sessionId, task.id),
-  });
-  const metrics = metricsQuery.data;
+  // Metrics are fetched on demand for the whole session (not part of the snapshot) and shared with the
+  // task list via React Query's cache; we pick this task's entry.
+  const metricsQuery = useSessionTaskMetrics(sessionId);
+  const metrics = metricsQuery.data?.[task.id];
   const toolEntries = metrics ? Object.entries(metrics.toolCounts) : [];
 
   return (
@@ -101,19 +98,16 @@ export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; tas
               <span className="muted">Loading…</span>
             ) : metricsQuery.isError ? (
               <span className="task-error">{(metricsQuery.error as Error).message}</span>
-            ) : metrics ? (
-              metrics.messages === 0 ? (
-                <span className="muted">No assistant activity attributed to this task.</span>
-              ) : (
-                <div className="task-metrics">
-                  <div className="task-metric"><span className="task-metric-n">{fmt(metrics.totalTokens)}</span> tokens</div>
-                  <div className="task-metric"><span className="task-metric-n">{usd(metrics.cost)}</span> est. cost</div>
-                  <div className="task-metric"><span className="task-metric-n">{metrics.toolCalls}</span> tool calls</div>
-                  <div className="task-metric"><span className="task-metric-n">{metrics.messages}</span> messages</div>
-                </div>
-              )
+            ) : metrics && metrics.messages > 0 ? (
+              <div className="task-metrics">
+                <div className="task-metric"><span className="task-metric-n">{fmt(metrics.totalTokens)}</span> tokens</div>
+                <div className="task-metric"><span className="task-metric-n">{usd(metrics.cost)}</span> est. cost</div>
+                <div className="task-metric"><span className="task-metric-n">{metrics.toolCalls}</span> tool calls</div>
+                <div className="task-metric"><span className="task-metric-n">{metrics.messages}</span> messages</div>
+              </div>
             ) : (
-              <span className="muted">—</span>
+              // Loaded, but this task has no attributed assistant messages.
+              <span className="muted">No assistant activity attributed to this task.</span>
             )}
           </Field>
 
