@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext, type ReactNode } from "react";
-import type { Dashboard, SessionRow, Snapshot, TaskMetrics } from "../types";
+import type { Dashboard, DebugInfo, SessionRow, Snapshot, TaskMetrics } from "../types";
 
 export const SNAPSHOT_QUERY_KEY = ["snapshot"] as const;
 
@@ -33,12 +33,13 @@ export async function reindexSession(sessionId: string): Promise<ReindexResponse
   return body as ReindexResponse;
 }
 
-/** Fetch one task's metrics (tokens, cost, tool calls) on demand — computed server-side from the
- *  messages attributed to the task, not shipped in the snapshot. */
-export async function fetchTaskMetrics(sessionId: string, taskId: string): Promise<TaskMetrics> {
-  const res = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}`,
-  );
+/** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
+ *  server-side from the messages attributed to each task, not shipped in the snapshot. Backs both the
+ *  task list (tokens per row) and the detail drawer. */
+export async function fetchSessionTaskMetrics(
+  sessionId: string,
+): Promise<Record<string, TaskMetrics>> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-metrics`);
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const message =
@@ -47,7 +48,23 @@ export async function fetchTaskMetrics(sessionId: string, taskId: string): Promi
         : `Failed to load task metrics (${res.status})`;
     throw new Error(message);
   }
-  return (body as { metrics: TaskMetrics }).metrics;
+  return (body as { metrics: Record<string, TaskMetrics> }).metrics;
+}
+
+/** Fetch the /debug payload (settings, env, paths, store/index status). Hidden diagnostics page. */
+export async function fetchDebugInfo(): Promise<DebugInfo> {
+  const res = await fetch("/api/debug");
+  if (!res.ok) throw new Error(`Failed to load debug info (${res.status})`);
+  return res.json();
+}
+
+/** Shared query for a session's per-task metrics. The list and the drawer both call this with the
+ *  same key, so React Query dedupes them into one request. */
+export function useSessionTaskMetrics(sessionId: string) {
+  return useQuery({
+    queryKey: ["session-task-metrics", sessionId],
+    queryFn: () => fetchSessionTaskMetrics(sessionId),
+  });
 }
 
 /** Fetch the dashboard snapshot. Cached by React Query so navigating between screens is instant. */

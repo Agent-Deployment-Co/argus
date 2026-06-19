@@ -806,13 +806,12 @@ describe("SQLite store", () => {
       expect(tasks[0]?.chapter).toEqual({ startSeq: 0, endSeq: 1 });
       expect(tasks[0]?.outcome).toBe("success");
 
-      // readTaskMessages returns just the messages attributed to each task (by task_seq).
-      const taskA = await store.readTaskMessages(sid, `task:${sid}:a`);
-      expect(taskA?.map((m) => m.ts)).toEqual([1000, 1001]);
-      const taskB = await store.readTaskMessages(sid, `task:${sid}:b`);
-      expect(taskB?.map((m) => m.ts)).toEqual([1002, 1003]);
-      // Unknown task id → undefined (distinct from a task that owns no messages, which is []).
-      expect(await store.readTaskMessages(sid, "task:nope")).toBeUndefined();
+      // readSessionTaskMessages buckets each task's attributed messages (by task_seq) under its id.
+      const byTask = await store.readSessionTaskMessages(sid);
+      expect(byTask.get(`task:${sid}:a`)?.map((m) => m.ts)).toEqual([1000, 1001]);
+      expect(byTask.get(`task:${sid}:b`)?.map((m) => m.ts)).toEqual([1002, 1003]);
+      // A task that owns no attributed messages is simply absent from the map.
+      expect(byTask.has("task:nope")).toBe(false);
     } finally {
       await store.close();
     }

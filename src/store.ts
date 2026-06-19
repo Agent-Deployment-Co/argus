@@ -26,6 +26,7 @@ import type {
   ReconstructedFragments,
   ResolvedQuery,
   SourceCoverageRow,
+  StoreStats,
   TranscriptIndex,
 } from "./store-contract.ts";
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
@@ -1230,23 +1231,32 @@ export class SqliteStore implements Store {
     });
   }
 
-  readTaskMessages(sessionId: string, taskId: string): Promise<MessageRecord[] | undefined> {
+  readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>> {
     return this.schedule(async () => {
-      // Map the task id -> its seq (resolved_messages.task_seq references resolved_tasks.seq), then
-      // pull the attributed messages. Tasks are few per session, so the id match in JS is cheap.
+      // One pass for the whole session: map each task's seq -> id, then bucket the attributed
+      // messages (resolved_messages.task_seq references resolved_tasks.seq) by task id. Tasks with no
+      // attributed messages simply don't appear in the map (callers treat that as zero).
       const taskRows = await all<{ seq: number; task_json: string }>(
         this.db,
         "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
         [sessionId],
       );
-      const match = taskRows.find((row) => (JSON.parse(row.task_json) as TaskFact).id === taskId);
-      if (!match) return undefined;
-      const rows = await all<{ record_json: string }>(
+      const idBySeq = new Map<number, string>();
+      for (const row of taskRows) idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+
+      const rows = await all<{ record_json: string; task_seq: number | null }>(
         this.db,
-        "SELECT record_json FROM resolved_messages WHERE session_id = ? AND task_seq = ? ORDER BY seq",
-        [sessionId, match.seq],
+        "SELECT record_json, task_seq FROM resolved_messages WHERE session_id = ? AND task_seq IS NOT NULL ORDER BY seq",
+        [sessionId],
       );
-      return rows.map((row) => JSON.parse(row.record_json) as MessageRecord);
+      const byTask = new Map<string, MessageRecord[]>();
+      for (const row of rows) {
+        const id = row.task_seq != null ? idBySeq.get(row.task_seq) : undefined;
+        if (!id) continue;
+        const list = byTask.get(id) ?? byTask.set(id, []).get(id)!;
+        list.push(JSON.parse(row.record_json) as MessageRecord);
+      }
+      return byTask;
     });
   }
 
@@ -1489,6 +1499,21 @@ export class SqliteStore implements Store {
          FROM resolved_sessions GROUP BY owner ORDER BY owner`,
       );
       return rows.map((row) => ({ owner: row.owner, present: row.present, archived: row.archived }));
+    });
+  }
+
+  storeStats(): Promise<StoreStats> {
+    return this.schedule(async () => {
+      const count = async (sql: string) => (await get<{ n: number }>(this.db, sql))?.n ?? 0;
+      return {
+        schemaVersion: await pragmaNumber(this.db, "user_version"),
+        sessions: await count("SELECT COUNT(*) AS n FROM resolved_sessions"),
+        messages: await count("SELECT COUNT(*) AS n FROM resolved_messages"),
+        tasks: await count("SELECT COUNT(*) AS n FROM resolved_tasks"),
+        messagesWithTask: await count(
+          "SELECT COUNT(*) AS n FROM resolved_messages WHERE task_seq IS NOT NULL",
+        ),
+      };
     });
   }
 

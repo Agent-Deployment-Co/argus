@@ -1,6 +1,7 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
 import { Activity } from "./routes/Activity";
+import { Debug } from "./routes/Debug";
 import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
@@ -29,6 +30,8 @@ const routeTree = rootRoute.addChildren([
   ]),
   createRoute({ getParentRoute: () => rootRoute, path: "/tools", component: Tools }),
   createRoute({ getParentRoute: () => rootRoute, path: "/health", component: Health }),
+  // Hidden diagnostics page — no rail link; reachable by typing /debug.
+  createRoute({ getParentRoute: () => rootRoute, path: "/debug", component: Debug }),
 ]);
 
 export const router = createRouter({ routeTree });

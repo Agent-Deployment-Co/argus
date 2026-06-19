@@ -6,7 +6,7 @@ import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
-import { reindexSession, useSnapshot } from "../lib/snapshot";
+import { reindexSession, useSessionTaskMetrics, useSnapshot } from "../lib/snapshot";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
@@ -28,6 +28,10 @@ export function SessionDetail() {
 
   // Reindexing refreshes the whole session and rebuilds the server-side snapshot, so reload the page
   // once it's done — the user gets the fully updated session without a manual refresh.
+  // Per-task metrics (tokens/cost/tools) fetched on demand for the whole session — shared with the
+  // detail drawer via React Query's cache.
+  const taskMetrics = useSessionTaskMetrics(sessionId ?? "").data;
+
   const refresh = useMutation({
     mutationFn: reindexSession,
     onSuccess: () => {
@@ -107,11 +111,11 @@ export function SessionDetail() {
                   onClick={() => setSelectedTaskId(task.id)}
                   aria-pressed={task.id === selectedTaskId}
                 >
-                  <div className="task-text">{task.description}</div>
-                  <div className="task-meta">
-                    {task.timestampMs != null && <span>{dtAmPm(task.timestampMs)}</span>}
-                    {task.outcome && <OutcomeBadge outcome={task.outcome} />}
-                  </div>
+                  <span className="task-item-desc" title={task.description}>{task.description}</span>
+                  {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                  <span className="task-item-tokens">
+                    {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
+                  </span>
                 </button>
               </li>
             ))}
