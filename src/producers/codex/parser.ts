@@ -28,10 +28,12 @@ import { CODEX_SESSIONS_DIR } from "../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   argusGeneratedPromptTitle,
+  isCodexEnvironmentContextText,
   isTurnAbortedText,
   shouldSkipTaskCandidateText,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
+import { dialogueTurn, type DialogueTurn } from "../../dialogue.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
 export const CODEX_SESSIONS_ROOT_ID = "codex-sessions";
@@ -96,6 +98,46 @@ function timestampMs(value: unknown): number | undefined {
 function numericToken(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/**
+ * Reconstruct the human↔assistant dialogue from a Codex JSONL transcript (#91). Codex wraps each
+ * message in `payload` (role on payload.role); skips the synthetic <environment_context> user turn,
+ * matching task-candidate extraction.
+ */
+export function reconstructCodexDialogue(path: string): DialogueTurn[] {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const turns: DialogueTurn[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let value: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      value = parsed;
+    } catch {
+      continue;
+    }
+    const payload = objectValue(value.payload);
+    if (stringValue(payload.type) !== "message") continue;
+    const ts = timestampMs(value.timestamp);
+    const text = textFromCodexContent(payload.content, TASK_TEXT_LIMIT);
+    if (payload.role === "user") {
+      if (text && !isCodexEnvironmentContextText(text)) {
+        const turn = dialogueTurn("user", text, ts);
+        if (turn) turns.push(turn);
+      }
+    } else if (payload.role === "assistant") {
+      const turn = dialogueTurn("assistant", text, ts);
+      if (turn) turns.push(turn);
+    }
+  }
+  return turns;
 }
 
 function normalizeCodexUsage(raw: unknown): Usage {

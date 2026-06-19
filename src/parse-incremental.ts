@@ -24,11 +24,10 @@ import {
   reconcileSessions,
   type ReconcileResult,
 } from "./reconcile.ts";
-import type { ImportProducer, ProducerContext } from "./producer.ts";
+import type { ImportProducer, NativeProducer, ProducerContext } from "./producer.ts";
 import { IMPORT_PRODUCERS, NATIVE_PRODUCERS, nativeProducerForSource } from "./producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
 import type { TaskCandidateFact, TaskFact } from "./store-contract.ts";
-import { reconstructDialogue } from "./dialogue.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
 import type { ResolvedTaskExtraction } from "./config.ts";
 
@@ -320,6 +319,7 @@ function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined
  * is an in-memory intermediate — nothing with message text is persisted.
  */
 async function extractTasksForSessions(
+  producer: NativeProducer,
   sessions: MaterializeSession[],
   fragments: ParsedFileFragment[],
   toCanonical: (sourceSessionId: string) => string,
@@ -342,7 +342,7 @@ async function extractTasksForSessions(
     const candidates = candidatesBySession.get(sid) ?? [];
     if (!candidates.length) continue;
     const messageTimestamps = session.messages.map((message) => message.ts);
-    const dialogue = reconstructDialogue(session.meta.source, session.meta.filePath);
+    const dialogue = producer.reconstructDialogue(session.meta.filePath);
     const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
       sid,
       candidates,
@@ -515,6 +515,7 @@ async function syncStore(
       // preserves their stored tasks rather than paying for an LLM call per unchanged session.
       if (taskExtractionActive(opts.taskExtraction)) {
         await extractTasksForSessions(
+          producer,
           materialize,
           fragments,
           canon,
@@ -756,6 +757,7 @@ export async function reindexSession(
     const diagnostics: ParserDiagnostic[] = [];
     if (taskExtractionActive(opts.taskExtraction)) {
       await extractTasksForSessions(
+        producer,
         materialize,
         [fragment],
         toCanonical,

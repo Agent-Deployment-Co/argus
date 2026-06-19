@@ -4,6 +4,7 @@ import {
   createClaudeTranscriptParserAdapter,
   discoverClaudeHistory,
   parseClaudeTranscriptPath,
+  reconstructClaudeDialogue,
 } from "./parser.ts";
 import type { NativeProducer, ProducerContext } from "../../producer.ts";
 
@@ -20,6 +21,7 @@ export const claudeProducer: NativeProducer = {
     createClaudeTranscriptDiscoveryAdapter(ctx.projectsDir).discover(),
   transcriptParser: () => createClaudeTranscriptParserAdapter(),
   parseTranscriptPath: parseClaudeTranscriptPath,
+  reconstructDialogue: reconstructClaudeDialogue,
   discoverAuxiliary: (ctx: ProducerContext) => discoverClaudeHistory(ctx.historyFile),
   auxiliaryParser: () => createClaudeHistoryParserAdapter(),
 };
