@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAllIncrementalDetailed, reindexSession } from "../src/parse-incremental.ts";
@@ -116,7 +116,7 @@ describe("reindexSession", () => {
     }
   });
 
-  test("folds in subagent transcripts, not just the main one (#2)", async () => {
+  test("rediscovers subagent transcripts from disk, including ones added since the last index (#2)", async () => {
     const root = tempRoot();
     const projectsDir = join(root, "projects");
     cpSync(join(FIX, "projects"), projectsDir, { recursive: true });
@@ -129,25 +129,26 @@ describe("reindexSession", () => {
     });
     const store = await openStore({ path: storePath });
     try {
-      const resolved = await store.readResolved();
-      const countOf = (rs: typeof resolved, id: string) =>
+      const countFor = (rs: { messages: { sessionId: string }[] }, id: string) =>
         rs.messages.filter((m) => m.sessionId === id).length;
-      // The fixture's sess1 has a subagent under sess1/subagents/, folded into the parent.
-      const parent = [...resolved.sessions.values()].find(
+      const before = await store.readResolved();
+      const parent = [...before.sessions.values()].find(
         (s) => s.source === "claude" && /sess1\.jsonl$/.test(s.filePath),
       );
       expect(parent).toBeDefined();
       const id = parent!.sessionId;
-      const fullCount = countOf(resolved, id);
-      expect(fullCount).toBeGreaterThan(1); // main + subagent messages
-      // Seed the stored row LOW so the don't-regress guard can't mask a subagent-dropping reindex.
-      const oneMessage = resolved.messages.find((m) => m.sessionId === id)!;
-      await store.retractSessions([id]);
-      await store.materializeSessions("claude", [{ meta: parent!, messages: [oneMessage], toolResults: [] }]);
+      const countBefore = countFor(before, id);
+
+      // Add a NEW subagent transcript on disk AFTER indexing — the structural index doesn't know it,
+      // so only a from-disk rediscovery will fold it in. Distinct message id so it isn't deduped.
+      const subDir = join(projectsDir, "-Users-fixture-proj", "sess1", "subagents");
+      const a1 = readFileSync(join(subDir, "agent-a1.jsonl"), "utf8");
+      writeFileSync(join(subDir, "agent-a2.jsonl"), a1.replace(/"m3"/g, '"m4"'));
+
       const result = await reindexSession(id, { store, context: { projectsDir } });
       expect(result.ok).toBe(true);
-      // A subagent-aware reindex restores the full count; the buggy main-only path would fall short.
-      expect(countOf(await store.readResolved(), id)).toBe(fullCount);
+      // Growth isn't masked by the don't-regress guard, so this fails if the new subagent is missed.
+      expect(countFor(await store.readResolved(), id)).toBe(countBefore + 1);
     } finally {
       await store.close();
     }

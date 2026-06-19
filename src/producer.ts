@@ -36,6 +36,12 @@ export interface NativeProducer {
   /** Parse one transcript path directly, for source-owned per-session operations. */
   parseTranscriptPath(path: string): FileParseResult;
   /**
+   * All transcript files for one session, discovered fresh from disk given its main transcript path
+   * — e.g. Claude's main transcript plus its subagent transcripts. Lets single-session reindex pick
+   * up files (subagents) added since the last full index. Omit when a session is always one file.
+   */
+  discoverSessionTranscripts?(mainTranscriptPath: string): string[];
+  /**
    * Reconstruct the ordered human↔assistant dialogue for one transcript (#91), stripping tool-call
    * noise. The transcript file format is this producer's concern, so each owns its reconstruction.
    * The result is an in-memory analysis intermediate — never persisted.

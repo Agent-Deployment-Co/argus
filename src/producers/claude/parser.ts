@@ -5,7 +5,7 @@ import {
   type BigIntStats,
   type Dirent,
 } from "node:fs";
-import { basename, dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   createFactId,
@@ -471,6 +471,31 @@ function timestampMs(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return NaN;
   return Date.parse(value);
+}
+
+/**
+ * All transcript files for one Claude session, discovered fresh from disk: the main transcript plus
+ * any subagent transcripts under `<session>/subagents/**`. Used by single-session reindex so a
+ * targeted refresh picks up subagent transcripts — including ones added since the last full index.
+ */
+export function discoverClaudeSessionTranscripts(mainTranscriptPath: string): string[] {
+  const files = [mainTranscriptPath];
+  const sessionDir = join(dirname(mainTranscriptPath), basename(mainTranscriptPath, ".jsonl"));
+  const walk = (dir: string): void => {
+    let entries: Dirent[] = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // no subagent directory for this session
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(full);
+    }
+  };
+  walk(sessionDir);
+  return files;
 }
 
 /**
