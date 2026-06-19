@@ -5,7 +5,9 @@ import {
   sessionAnalysisPromptTitle,
   shouldSkipTaskCandidateText,
   taskExtractionPromptTitle,
+  taskOutcomePromptTitle,
 } from "../src/task-candidates.ts";
+import { buildTaskOutcomePrompt } from "../src/task-extraction.ts";
 
 describe("task candidate filtering", () => {
   test("skips Argus task extraction prompts so embedded source sessions are not re-extracted", () => {
@@ -80,6 +82,19 @@ USER: add a new session analysis mode`;
     expect(argusGeneratedPromptTitle(text)).toBe(
       "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
     );
+  });
+
+  test("recognizes the pass-2 task outcome prompt that claude -p leaves behind (#91)", () => {
+    // The real generated prompt, so the detector can't drift from what task extraction emits.
+    const text = buildTaskOutcomePrompt("Add a facts command", [
+      { role: "user", text: "add a facts command" },
+      { role: "assistant", text: "Done." },
+    ]);
+    expect(taskOutcomePromptTitle(text)).toBe("Task outcome run");
+    expect(argusGeneratedPromptTitle(text)).toBe("Task outcome run");
+    expect(shouldSkipTaskCandidateText(text)).toBe(true);
+    // A user message carrying it is not counted as a real opening prompt.
+    expect(isCountableClaudeUserMessage({ type: "user", message: { content: text } })).toBe(false);
   });
 
   test("identifies countable Claude user messages without accepting generated context", () => {
