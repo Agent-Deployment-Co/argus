@@ -92,7 +92,9 @@ JSON to stdout.
   (forced on with `--extract-tasks true`, regardless of config). This is the way to try interpretation
   on specific sessions, or to backfill existing ones, without enabling it globally. See
   [single-session reindex](./architecture.md#single-session-reindex).
-- The legacy web "Extract tasks" button still works until the task-centric UI replaces it.
+- **From the web app.** The session detail page's **Refresh** button re-indexes that one session
+  (via the same single-session reindex), with task extraction always on. It replaced the older
+  on-demand "Extract tasks" button.
 
 ## Cost and scope
 

@@ -499,8 +499,6 @@ export interface Store {
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
-  /** Replace only the task facts for one resolved session. Returns false if the session is unknown. */
-  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

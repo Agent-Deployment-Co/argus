@@ -51,7 +51,7 @@ describe("serve API", () => {
     expect(calls).toBe(1);
   });
 
-  test("POST /api/tasks/extract returns tasks and reports that tasks changed", async () => {
+  test("POST /api/sessions/:id/reindex returns tasks and reports that the store changed", async () => {
     const task: TaskFact = {
       id: "task:fixture",
       source: "codex",
@@ -64,32 +64,49 @@ describe("serve API", () => {
     };
     let changed = 0;
     const app = createApp(async () => fixtureSnapshot(), null, {
-      extractTasks: async (sessionId) => ({ ok: true, tasks: [{ ...task, sourceSessionId: sessionId }] }),
-      onTasksChanged: () => { changed++; },
+      reindex: async (sessionId) => ({ ok: true, tasks: [{ ...task, sourceSessionId: sessionId }], diagnostics: [] }),
+      onStoreChanged: () => { changed++; },
     });
 
-    const res = await app.request("/api/tasks/extract", {
-      method: "POST",
-      body: JSON.stringify({ sessionId: "codex:codex-sess1" }),
-      headers: { "content-type": "application/json" },
-    });
+    const res = await app.request("/api/sessions/codex:codex-sess1/reindex", { method: "POST" });
     expect(res.status).toBe(200);
     expect(changed).toBe(1);
-    expect(await res.json()).toEqual({ tasks: [{ ...task, sourceSessionId: "codex:codex-sess1" }] });
+    expect(await res.json()).toEqual({
+      tasks: [{ ...task, sourceSessionId: "codex:codex-sess1" }],
+      diagnostics: [],
+    });
   });
 
-  test("POST /api/tasks/extract returns a plain error when extraction fails", async () => {
+  test("POST /api/sessions/:id/reindex returns a clear error when the transcript is gone", async () => {
+    let changed = 0;
     const app = createApp(async () => fixtureSnapshot(), null, {
-      extractTasks: async () => ({ ok: false, status: 404, message: "No session found for missing." }),
+      reindex: async () => ({ ok: false, status: 422, message: "Couldn't re-index missing: it has no local transcript on disk." }),
+      onStoreChanged: () => { changed++; },
     });
 
-    const res = await app.request("/api/tasks/extract", {
-      method: "POST",
-      body: JSON.stringify({ sessionId: "missing" }),
-      headers: { "content-type": "application/json" },
+    const res = await app.request("/api/sessions/missing/reindex", { method: "POST" });
+    expect(res.status).toBe(422);
+    expect(changed).toBe(0);
+    expect(await res.json()).toEqual({
+      error: "Couldn't re-index missing: it has no local transcript on disk.",
+      diagnostics: [],
     });
+  });
+
+  test("POST /api/sessions/:id/reindex surfaces a 404 for an unknown session", async () => {
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      reindex: async () => ({ ok: false, status: 404, message: "No session found for missing." }),
+    });
+
+    const res = await app.request("/api/sessions/missing/reindex", { method: "POST" });
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "No session found for missing.", diagnostics: [] });
+  });
+
+  test("POST /api/sessions/:id/reindex is 503 when reindexing isn't wired up", async () => {
+    const app = createApp(async () => fixtureSnapshot(), null);
+    const res = await app.request("/api/sessions/whatever/reindex", { method: "POST" });
+    expect(res.status).toBe(503);
   });
 
   test("unknown paths fall back to the SPA (placeholder when unbuilt)", async () => {
