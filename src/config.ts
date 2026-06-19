@@ -85,17 +85,24 @@ export interface Setting<T> {
  * Resolve one setting through CLI flag > env var > argus.json > default. Any absent layer yields
  * undefined and falls through, so the same chain works for settings that don't populate every layer.
  */
+/** A layer is "present" only when set to a non-empty value — so `ARGUS_TASK_PROVIDER=""` (an exported
+ *  but blank env var) or a blank flag/file value falls through to the next layer rather than being
+ *  parsed as a real setting. */
+function present(value: unknown): boolean {
+  return value != null && value !== "";
+}
+
 export function resolveSetting<T>(
   setting: Setting<T>,
   flags: Record<string, unknown>,
   file: ArgusConfig,
 ): T {
   const fromFlag = setting.flag ? flags[setting.flag] : undefined;
-  if (fromFlag != null) return setting.parse(fromFlag);
+  if (present(fromFlag)) return setting.parse(fromFlag);
   const fromEnv = setting.env ? process.env[setting.env] : undefined;
-  if (fromEnv != null) return setting.parse(fromEnv);
+  if (present(fromEnv)) return setting.parse(fromEnv);
   const fromFile = getPath(file, setting.path);
-  if (fromFile != null) return setting.parse(fromFile);
+  if (present(fromFile)) return setting.parse(fromFile);
   return setting.default;
 }
 
@@ -105,11 +112,15 @@ function parseBool(raw: unknown): boolean {
   return s === "true" || s === "1" || s === "yes" || s === "on";
 }
 
+// Tolerant, like loadConfig: an invalid provider (a typo in argus.json or env) must not hard-exit an
+// unrelated `index`/`serve`/`run` — warn and fall back to the default instead.
 function parseProvider(raw: unknown): TaskExtractionProvider {
   const value = String(raw);
   if (value === "off" || value === "claude" || value === "command") return value;
-  console.error(`Invalid task extraction provider: ${value} (expected claude, command, or off)`);
-  process.exit(2);
+  console.warn(
+    `Ignoring invalid task extraction provider ${JSON.stringify(value)} (expected claude, command, or off); using "${DEFAULT_TASK_EXTRACTION_PROVIDER}".`,
+  );
+  return DEFAULT_TASK_EXTRACTION_PROVIDER as TaskExtractionProvider;
 }
 
 function parseString(raw: unknown): string {
