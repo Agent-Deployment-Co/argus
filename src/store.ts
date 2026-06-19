@@ -1230,36 +1230,6 @@ export class SqliteStore implements Store {
     });
   }
 
-  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean> {
-    return this.schedule(async () => {
-      let found = false;
-      await transaction(this.db, async () => {
-        const existing = await get<{ session_id: string }>(
-          this.db,
-          "SELECT session_id FROM resolved_sessions WHERE session_id = ?",
-          [sessionId],
-        );
-        if (!existing) return;
-        found = true;
-        await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
-        await insertRows(
-          this.db,
-          "resolved_tasks",
-          ["session_id", "seq", "source", "ts", "task_json"],
-          tasks.map((task, seq) => [
-            sessionId,
-            seq,
-            task.source,
-            task.timestampMs ?? null,
-            JSON.stringify(task),
-          ]),
-        );
-      });
-      if (found) secureSqliteFiles(this.path);
-      return found;
-    });
-  }
-
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(

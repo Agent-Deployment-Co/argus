@@ -123,7 +123,8 @@ main:has(.sessions-split) { padding: 0; }
 .session-detail { overflow-y: auto; min-height: 0; }
 .session-detail-inner { padding: 28px 32px 64px; }
 .session-empty { display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
-.session-detail-head { margin-bottom: 20px; }
+.session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.session-detail-headline { min-width: 0; }
 .session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
 .eyebrow-link { color: var(--link); }
@@ -157,6 +158,9 @@ main:has(.sessions-split) { padding: 0; }
 .task-meta { margin-top: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .task-empty { margin: 0; color: var(--muted); font-size: 13px; }
 .task-error { margin-bottom: 8px; color: var(--racing-red); font-size: 12.5px; line-height: 1.4; }
+.session-detail-head .task-action { flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.task-action .spin { animation: spin 0.8s linear infinite; transform-origin: center; }
 
 section { margin: 0 0 42px; }
 section h2 { font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: .14em; color: var(--accent); margin: 0 0 14px; font-weight: 600; }

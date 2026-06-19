@@ -689,17 +689,10 @@ describe("SQLite store", () => {
       ]);
       expect(await store.readSessionTasks("codex:missing")).toEqual([]);
 
-      const replacement = {
-        ...task,
-        id: "task:codex:two",
-        description: "extract one task from the session",
-        evidence: "message indexes: 1",
-      };
-      expect(await store.replaceSessionTasks("codex:task-session", [replacement])).toBe(true);
-      expect(await store.replaceSessionTasks("codex:missing", [replacement])).toBe(false);
-      expect(await store.readSessionTasks("codex:task-session")).toEqual([replacement]);
       expect((await store.readResolved()).tasksBySession?.get("codex:task-session")).toEqual([
-        replacement,
+        earlierTask,
+        task,
+        untimestampedTask,
       ]);
     } finally {
       await store.close();
@@ -749,8 +742,8 @@ describe("SQLite store", () => {
         ],
       });
 
-      await store.materializeSessions("codex", [materialized(1000)]);
-      expect(await store.replaceSessionTasks("codex:preserve-tasks", [task])).toBe(true);
+      await store.materializeSessions("codex", [{ ...materialized(1000), tasks: [task] }]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
 
       await store.materializeSessions("codex", [materialized(1000)]);
       expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);

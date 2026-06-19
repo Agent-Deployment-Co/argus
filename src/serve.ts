@@ -11,9 +11,10 @@ import { fileURLToPath } from "node:url";
 import type { Dashboard } from "./aggregate.ts";
 import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
-import { extractSessionTasks, type ExtractSessionTasksResult } from "./session-tasks.ts";
+import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
+import type { ResolvedTaskExtraction } from "./config.ts";
 import { openStore } from "./store.ts";
-import type { TaskFact } from "./store-contract.ts";
+import type { ParserDiagnostic, TaskFact } from "./store-contract.ts";
 import type { TaskExtractionOptions } from "./task-extraction.ts";
 
 export interface ServeOptions {
@@ -22,7 +23,7 @@ export interface ServeOptions {
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
-  /** Provider settings used by the session-detail task extraction action. */
+  /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
   taskExtraction: TaskExtractionOptions;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
@@ -43,17 +44,19 @@ export interface Snapshot {
   generatedAtMs: number;
 }
 
-export interface ExtractTasksResponse {
+export interface ReindexResponse {
   tasks: TaskFact[];
+  diagnostics?: ParserDiagnostic[];
 }
 
 /** Builds the snapshot for a request. `force` bypasses any caching the caller layered on. */
 export type SnapshotSource = (force: boolean) => Promise<Snapshot>;
-export type TaskExtractor = (sessionId: string) => Promise<ExtractSessionTasksResult>;
+export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 
 interface AppOptions {
-  extractTasks?: TaskExtractor;
-  onTasksChanged?: () => void;
+  reindex?: SessionReindexer;
+  /** Called after a successful reindex so the caller can drop its cached snapshot. */
+  onStoreChanged?: () => void;
 }
 
 /** How long a built dashboard is reused before the next request triggers a fresh read. */
@@ -110,25 +113,22 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json(snap);
   });
 
-  app.post("/api/tasks/extract", async (c) => {
-    const body = await c.req.json().catch(() => null);
-    const sessionId =
-      body && typeof body === "object" && !Array.isArray(body)
-        ? String((body as Record<string, unknown>).sessionId ?? "").trim()
-        : "";
+  // Re-index a single session: re-read its transcript from disk and refresh it in the store
+  // (sessions/messages/invocations/tasks), with task processing always on. 404 if the session is
+  // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
+  // diagnostics — the session is still structurally refreshed.
+  app.post("/api/sessions/:id/reindex", async (c) => {
+    const sessionId = c.req.param("id").trim();
     if (!sessionId) return c.json({ error: "Missing session id." }, 400);
-    if (!opts.extractTasks) return c.json({ error: "Task extraction is unavailable in this process." }, 503);
+    if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);
 
-    const extracted = await opts.extractTasks(sessionId);
-    if (!extracted.ok) {
-      return c.json(
-        { error: extracted.message, diagnostics: extracted.diagnostics ?? [] },
-        extracted.status,
-      );
+    const result = await opts.reindex(sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message, diagnostics: result.diagnostics ?? [] }, result.status);
     }
 
-    opts.onTasksChanged?.();
-    return c.json({ tasks: extracted.tasks } satisfies ExtractTasksResponse);
+    opts.onStoreChanged?.();
+    return c.json({ tasks: result.tasks, diagnostics: result.diagnostics } satisfies ReindexResponse);
   });
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
@@ -184,16 +184,20 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     cachedAt = 0;
   };
 
-  const extractTasks: TaskExtractor = async (sessionId) => {
+  // Task extraction is always on for an explicit single-session Refresh (deliberately unlike the CLI
+  // `index refresh`, which defers to the config opt-in): force `enabled` on while keeping the
+  // configured provider/model. A provider explicitly set to "off" stays off.
+  const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: true };
+  const reindex: SessionReindexer = async (sessionId) => {
     const store = await openStore();
     try {
-      return await extractSessionTasks(store, { sessionId, taskExtraction: opts.taskExtraction });
+      return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction });
     } finally {
       await store.close();
     }
   };
 
-  const app = createApp(snapshot, webRoot, { extractTasks, onTasksChanged: clearCachedSnapshot });
+  const app = createApp(snapshot, webRoot, { reindex, onStoreChanged: clearCachedSnapshot });
 
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {

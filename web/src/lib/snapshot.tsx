@@ -4,8 +4,9 @@ import type { Dashboard, SessionRow, Snapshot } from "../types";
 
 export const SNAPSHOT_QUERY_KEY = ["snapshot"] as const;
 
-export interface ExtractTasksResponse {
+export interface ReindexResponse {
   tasks: NonNullable<SessionRow["tasks"]>;
+  diagnostics?: { message: string }[];
 }
 
 async function fetchSnapshot(): Promise<Snapshot> {
@@ -14,21 +15,22 @@ async function fetchSnapshot(): Promise<Snapshot> {
   return res.json();
 }
 
-export async function extractSessionTasks(sessionId: string): Promise<ExtractTasksResponse> {
-  const res = await fetch("/api/tasks/extract", {
+/** Re-index a single session: re-read its transcript from disk and refresh it in the local store
+ *  (sessions/messages/tools/tasks), with task processing on. Throws with a clear message when the
+ *  transcript is gone (the session can't be reindexed). */
+export async function reindexSession(sessionId: string): Promise<ReindexResponse> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/reindex`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId }),
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const message =
       body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
-        : `Failed to extract tasks (${res.status})`;
+        : `Failed to refresh (${res.status})`;
     throw new Error(message);
   }
-  return body as ExtractTasksResponse;
+  return body as ReindexResponse;
 }
 
 /** Fetch the dashboard snapshot. Cached by React Query so navigating between screens is instant. */
