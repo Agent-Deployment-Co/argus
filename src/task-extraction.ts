@@ -266,20 +266,15 @@ function spawnWithStdin(file: string, args: string[], input: string): Promise<Pr
 }
 
 /**
- * Args for the headless `claude` provider. Defaults: `--bare` (no wrapper output, just the model's
- * text), `--no-session-persistence` (don't leave a transcript on disk — these interpret calls would
- * otherwise be re-indexed as bogus sessions), and a cheap default model. `-` reads the prompt from
- * stdin. A configured `--task-model` / `taskExtraction.model` overrides the default.
+ * Args for the headless `claude` provider. Defaults: `--no-session-persistence` (don't leave a
+ * transcript on disk — these interpret calls would otherwise be re-indexed as bogus sessions) and a
+ * cheap default model. `-` reads the prompt from stdin; a configured `--task-model` /
+ * `taskExtraction.model` overrides the model. (Note: `--bare` is deliberately NOT used — in `-p`
+ * mode it skips credential loading and the call fails "Not logged in"; the output parser already
+ * tolerates the normal fenced/wrapped output, so it buys nothing here.)
  */
 export function claudeProviderArgs(options: TaskExtractionOptions | undefined): string[] {
-  return [
-    "-p",
-    "--bare",
-    "--no-session-persistence",
-    "--model",
-    options?.model || DEFAULT_TASK_EXTRACTION_MODEL,
-    "-",
-  ];
+  return ["-p", "--no-session-persistence", "--model", options?.model || DEFAULT_TASK_EXTRACTION_MODEL, "-"];
 }
 
 async function runClaude(prompt: string, options: TaskExtractionOptions | undefined): Promise<ProviderResult> {
