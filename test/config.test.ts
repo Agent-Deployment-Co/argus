@@ -125,6 +125,14 @@ describe("resolveTaskExtraction", () => {
     expect(resolved.provider).toBe("command");
   });
 
+  test("#93: --extract-tasks false forces off even when the file enables it", () => {
+    const file = { taskExtraction: { enabled: true } };
+    expect(resolveTaskExtraction({ "extract-tasks": false }, file).enabled).toBe(false);
+    expect(resolveTaskExtraction({ "extract-tasks": true }, { taskExtraction: { enabled: false } }).enabled).toBe(true);
+    // Unset (omitted) defers to the file.
+    expect(resolveTaskExtraction({}, file).enabled).toBe(true);
+  });
+
   test("flag overrides env and file", () => {
     process.env.ARGUS_TASK_PROVIDER = "command";
     const resolved = resolveTaskExtraction(

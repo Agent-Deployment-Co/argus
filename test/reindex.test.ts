@@ -3,6 +3,7 @@ import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAllIncrementalDetailed, reindexSession } from "../src/parse-incremental.ts";
+import { runIndexRefresh } from "../src/index-ops.ts";
 import { openStore } from "../src/store.ts";
 import type { ResolvedTaskExtraction } from "../src/config.ts";
 import type { AgentSource } from "../src/types.ts";
@@ -11,6 +12,9 @@ const FIX = join(import.meta.dir, "fixtures");
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  delete process.env.ARGUS_TASK_PROVIDER;
+  delete process.env.ARGUS_TASK_COMMAND;
+  process.exitCode = 0; // a targeted refresh of a missing id sets exitCode; don't leak to the runner
 });
 
 function tempRoot(): string {
@@ -135,6 +139,65 @@ describe("index-time extraction hook", () => {
       const tasks = await store.readSessionTasks("codex:codex-sess1");
       expect(tasks).toHaveLength(1);
       expect(tasks[0]?.outcome).toBe("success");
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe("runIndexRefresh (targeted, #93)", () => {
+  const base = { source: "codex" as const, agentsView: "off" as const };
+
+  test("refreshes a named session and reports it; --extract-tasks false forces no extraction", async () => {
+    const root = tempRoot();
+    const storePath = await indexCodex(root);
+    const logs: string[] = [];
+    await runIndexRefresh(
+      { ...base, ids: ["codex:codex-sess1"], extractTasks: false, storePath },
+      (s) => logs.push(s),
+    );
+    expect(logs).toContain("Refreshed codex:codex-sess1.");
+    expect(logs).toContain("Refreshed 1 session(s).");
+    const store = await openStore({ path: storePath });
+    try {
+      expect(await store.readSessionTasks("codex:codex-sess1")).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("--extract-tasks true extracts for the targeted session (provider via env)", async () => {
+    const root = tempRoot();
+    const storePath = await indexCodex(root);
+    // index commands expose no --task-provider, so the provider comes from config/env; inject a fake.
+    process.env.ARGUS_TASK_PROVIDER = "command";
+    process.env.ARGUS_TASK_COMMAND = fakeProviderCommand(root);
+    const logs: string[] = [];
+    await runIndexRefresh(
+      { ...base, ids: ["codex:codex-sess1"], extractTasks: true, storePath },
+      (s) => logs.push(s),
+    );
+    expect(logs).toContain("Refreshed codex:codex-sess1 (1 task).");
+    const store = await openStore({ path: storePath });
+    try {
+      expect((await store.readSessionTasks("codex:codex-sess1"))[0]?.outcome).toBe("success");
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a missing session reports a clear error, changes nothing, and exits non-zero", async () => {
+    const root = tempRoot();
+    const storePath = await indexCodex(root);
+    const logs: string[] = [];
+    await runIndexRefresh({ ...base, ids: ["codex:nope"], storePath }, (s) => logs.push(s));
+    expect(logs.some((l) => l.includes("No session found for codex:nope"))).toBe(true);
+    expect(logs).toContain("Refreshed 0 session(s), 1 couldn't be refreshed.");
+    expect(process.exitCode).toBe(1);
+    // The real session is untouched.
+    const store = await openStore({ path: storePath });
+    try {
+      expect((await store.readResolved()).sessions.has("codex:codex-sess1")).toBe(true);
     } finally {
       await store.close();
     }
