@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reconstructDialogue, sliceDialogueByTime, type DialogueTurn } from "../src/dialogue.ts";
+import { sliceDialogueByTime, type DialogueTurn } from "../src/dialogue.ts";
+import { claudeProducer } from "../src/producers/claude/index.ts";
+import { codexProducer } from "../src/producers/codex/index.ts";
+import { coworkProducer } from "../src/producers/cowork/index.ts";
+import { geminiProducer } from "../src/producers/gemini/index.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -18,7 +21,7 @@ function transcript(lines: object[]): string {
   return path;
 }
 
-describe("reconstructDialogue", () => {
+describe("producer.reconstructDialogue", () => {
   test("claude: text turns only, tool noise stripped, assistant deduped by id", () => {
     const path = transcript([
       { type: "user", timestamp: "2026-06-01T00:00:00Z", message: { content: "add a facts command" } },
@@ -32,7 +35,7 @@ describe("reconstructDialogue", () => {
       // Tool-result user turn is noise, not dialogue.
       { type: "user", timestamp: "2026-06-01T00:00:10Z", message: { content: [{ type: "tool_result", content: "ok" }] } },
     ]);
-    expect(reconstructDialogue("claude", path)).toEqual([
+    expect(claudeProducer.reconstructDialogue(path)).toEqual([
       { role: "user", text: "add a facts command", timestampMs: Date.parse("2026-06-01T00:00:00Z") },
       { role: "assistant", text: "Done, added it.", timestampMs: Date.parse("2026-06-01T00:00:05Z") },
     ]);
@@ -40,40 +43,42 @@ describe("reconstructDialogue", () => {
 
   test("codex: payload-wrapped messages; environment context skipped", () => {
     const path = transcript([
-      { timestamp: "2026-06-01T00:00:00Z", payload: { type: "message", role: "user", content: [{ type: "text", text: "<environment_context>\ncwd: /x" }] } },
-      { timestamp: "2026-06-01T00:00:01Z", payload: { type: "message", role: "user", content: [{ type: "text", text: "add a facts command" }] } },
-      { timestamp: "2026-06-01T00:00:05Z", payload: { type: "message", role: "assistant", content: [{ type: "text", text: "Added the command." }] } },
+      { timestamp: "2026-06-01T00:00:00Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "text", text: "<environment_context>\ncwd: /x" }] } },
+      { timestamp: "2026-06-01T00:00:01Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "text", text: "add a facts command" }] } },
+      { timestamp: "2026-06-01T00:00:05Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "text", text: "Added the command." }] } },
     ]);
-    expect(reconstructDialogue("codex", path)).toEqual([
+    expect(codexProducer.reconstructDialogue(path)).toEqual([
       { role: "user", text: "add a facts command", timestampMs: Date.parse("2026-06-01T00:00:01Z") },
       { role: "assistant", text: "Added the command.", timestampMs: Date.parse("2026-06-01T00:00:05Z") },
     ]);
   });
 
-  test("gemini: top-level content; type gemini is the assistant", () => {
+  test("gemini: replays user + gemini(assistant) records into turns", () => {
     const path = transcript([
-      { type: "user", timestamp: "2026-06-01T00:00:00Z", content: "fix the bug" },
-      { type: "gemini", timestamp: "2026-06-01T00:00:05Z", content: [{ type: "text", text: "Fixed it." }] },
+      { sessionId: "g1", projectHash: "ph" },
+      { id: "m1", type: "user", timestamp: "2026-06-01T00:00:00Z", content: "fix the bug" },
+      { id: "m2", type: "gemini", timestamp: "2026-06-01T00:00:05Z", content: [{ type: "text", text: "Fixed it." }] },
     ]);
-    expect(reconstructDialogue("gemini", path)).toEqual([
+    expect(geminiProducer.reconstructDialogue(path)).toEqual([
       { role: "user", text: "fix the bug", timestampMs: Date.parse("2026-06-01T00:00:00Z") },
       { role: "assistant", text: "Fixed it.", timestampMs: Date.parse("2026-06-01T00:00:05Z") },
     ]);
   });
 
-  test("cowork: claude-like, falls back to _audit_timestamp", () => {
+  test("cowork: claude-like, falls back to _audit_timestamp, skips replays", () => {
     const path = transcript([
       { type: "user", _audit_timestamp: "2026-06-01T00:00:00Z", message: { content: "deploy it" } },
+      { type: "user", isReplay: true, _audit_timestamp: "2026-06-01T00:00:00Z", message: { content: "deploy it" } },
       { type: "assistant", timestamp: "2026-06-01T00:00:02Z", message: { id: "c1", content: [{ type: "text", text: "Deployed." }] } },
     ]);
-    expect(reconstructDialogue("cowork", path)).toEqual([
+    expect(coworkProducer.reconstructDialogue(path)).toEqual([
       { role: "user", text: "deploy it", timestampMs: Date.parse("2026-06-01T00:00:00Z") },
       { role: "assistant", text: "Deployed.", timestampMs: Date.parse("2026-06-01T00:00:02Z") },
     ]);
   });
 
   test("missing file → empty", () => {
-    expect(reconstructDialogue("claude", join(tmpdir(), "nope.jsonl"))).toEqual([]);
+    expect(claudeProducer.reconstructDialogue(join(tmpdir(), "nope.jsonl"))).toEqual([]);
   });
 });
 

@@ -3,6 +3,7 @@ import {
   createCoworkTranscriptParserAdapter,
   discoverCoworkTranscripts,
   parseCoworkTranscriptPath,
+  reconstructCoworkDialogue,
 } from "./parser.ts";
 import type { NativeProducer, ProducerContext } from "../../producer.ts";
 
@@ -27,4 +28,5 @@ export const coworkProducer: NativeProducer = {
     discoverCoworkTranscripts(ctx.coworkSessionsDir),
   transcriptParser: () => createCoworkTranscriptParserAdapter(),
   parseTranscriptPath: parseCoworkTranscriptPath,
+  reconstructDialogue: reconstructCoworkDialogue,
 };

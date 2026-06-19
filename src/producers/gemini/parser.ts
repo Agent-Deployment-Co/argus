@@ -45,6 +45,7 @@ import {
   textFromUserContent,
 } from "../../task-candidates.ts";
 import { parseMcpTool } from "../../tool-categories.ts";
+import { dialogueTurn, type DialogueTurn } from "../../dialogue.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
 
 export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
@@ -548,6 +549,42 @@ export function normalizeGeminiUsage(raw: any): Usage {
   const total = raw.total ?? raw.totalTokenCount;
   if (totalTokens(usage) === 0 && total) usage.input = Number(total) || 0;
   return usage;
+}
+
+/**
+ * Reconstruct the human↔assistant dialogue from a Gemini transcript (#91). Reuses the producer's own
+ * append-only replay (legacy .json object or JSONL with rewind/$set), then maps user/gemini records
+ * to turns — so the file-format knowledge stays here, not duplicated in the dialogue consumer.
+ */
+export function reconstructGeminiDialogue(path: string): DialogueTurn[] {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const file = createFileIdentity({
+    source: "gemini",
+    rootId: "",
+    role: "transcript",
+    relativePath: path,
+    path,
+  });
+  const { conversation } = replayGeminiConversation(raw, file);
+  if (!conversation) return [];
+  const turns: DialogueTurn[] = [];
+  for (const positioned of conversation.messages) {
+    const message = positioned.value;
+    const ts = parseTimestamp(message.timestamp);
+    if (message.type === "user") {
+      const turn = dialogueTurn("user", textFromGeminiContent(message.content, TASK_TEXT_LIMIT), ts);
+      if (turn) turns.push(turn);
+    } else if (message.type === "gemini") {
+      const turn = dialogueTurn("assistant", textFromGeminiContent(message.content, TASK_TEXT_LIMIT), ts);
+      if (turn) turns.push(turn);
+    }
+  }
+  return turns;
 }
 
 export function textFromGeminiContent(content: unknown, limit = 500): string {
