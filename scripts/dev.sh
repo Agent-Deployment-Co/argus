@@ -32,6 +32,22 @@ if [ -z "${ARGUS_DATA_DIR:-}" ] && [ -f "$ROOT/tmp/data/argus.db" ]; then
   echo "→ Data store:  $ARGUS_DATA_DIR  (worktree test data)"
 fi
 
+# Surface the config dirs the server will actually use — these are inherited from your shell and are
+# captured at launch (bun --watch restarts on file changes, not env changes), so if you change one,
+# restart this script. Mismatches here (e.g. a tmp/data store built under a different CLAUDE_CONFIG_DIR)
+# are the usual cause of "the title/tasks are wrong".
+echo "→ CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-(unset → ~/.claude)}"
+echo "→ ARGUS_DATA_DIR:    ${ARGUS_DATA_DIR:-(unset → default)}"
+
+# Refuse to start if the API port is already taken. Otherwise the API server can't bind, Vite still
+# starts, and it proxies /api to whatever stale server already owns the port — so you'd debug a ghost
+# with the wrong env/data (exactly the trap that hid a CLAUDE_CONFIG_DIR mismatch).
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "✗ Port $PORT is already in use — stop the other server or set ARGUS_PORT=<n>." >&2
+  echo "  In use by PID(s): $(lsof -tnP -iTCP:"$PORT" -sTCP:LISTEN | tr '\n' ' ')" >&2
+  exit 1
+fi
+
 echo "→ API server:  http://localhost:$PORT  (restarts on src/ changes)"
 bun --watch run src/cli.ts serve --port "$PORT" &
 API_PID=$!
@@ -39,10 +55,23 @@ API_PID=$!
 cleanup() {
   echo
   echo "Shutting down dev servers…"
-  kill "$API_PID" 2>/dev/null || true
+  # SIGKILL, not TERM: `bun --watch` ignores SIGTERM, so a polite kill leaves it (and the port) alive,
+  # turning the next run into the ghost-server case above. Kill its children first, then the wrapper,
+  # then anything still on our port (pre-flight ensured it was free, so it's ours).
+  pkill -9 -P "$API_PID" 2>/dev/null || true
+  kill -9 "$API_PID" 2>/dev/null || true
+  lsof -tnP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
   wait "$API_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+
+# Wait until the API is actually listening before starting Vite, so the proxy never points at a dead
+# or stale server. Bail clearly if the API exits before binding (e.g. a compile error).
+for _ in $(seq 1 60); do
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 && break
+  kill -0 "$API_PID" 2>/dev/null || { echo "✗ API server exited before binding $PORT (see errors above)." >&2; exit 1; }
+  sleep 0.25
+done
 
 echo "→ Web server:  starting Vite (hot reload)…"
 # Foreground: Ctrl-C stops Vite, and the trap above stops the API server too.
