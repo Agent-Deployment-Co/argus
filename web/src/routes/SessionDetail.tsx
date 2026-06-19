@@ -4,7 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
-import { OutcomeBadge, TaskPanel } from "../components/TaskPanel";
+import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
 import { reindexSession, useSessionTaskMetrics, useSnapshot } from "../lib/snapshot";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
@@ -20,11 +20,18 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
+// How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
+// right-side panel. Flip this to compare; the drawer (TaskPanel) is kept, just suppressed in "card".
+const TASK_VIEW: "card" | "drawer" = "drawer";
+
 export function SessionDetail() {
   const { dashboard: d } = useSnapshot();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const s = d.sessions.find((x) => x.sessionId === sessionId);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
+  const onTaskClick = (id: string) =>
+    setSelectedTaskId((cur) => (TASK_VIEW === "card" && cur === id ? null : id));
 
   // Reindexing refreshes the whole session and rebuilds the server-side snapshot, so reload the page
   // once it's done — the user gets the fully updated session without a manual refresh.
@@ -54,7 +61,6 @@ export function SessionDetail() {
   ];
 
   const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);
-  const stops = h.stopReasons ? Object.entries(h.stopReasons).sort((a, b) => b[1] - a[1]) : [];
   const tasks = s.tasks ?? [];
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
   const refreshingThisSession = refresh.isPending && refresh.variables === s.sessionId;
@@ -108,8 +114,9 @@ export function SessionDetail() {
                 <button
                   type="button"
                   className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
-                  onClick={() => setSelectedTaskId(task.id)}
+                  onClick={() => onTaskClick(task.id)}
                   aria-pressed={task.id === selectedTaskId}
+                  aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
                 >
                   <span className="task-item-desc" title={task.description}>{task.description}</span>
                   {task.outcome && <OutcomeBadge outcome={task.outcome} />}
@@ -117,6 +124,11 @@ export function SessionDetail() {
                     {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
                   </span>
                 </button>
+                {TASK_VIEW === "card" && task.id === selectedTaskId && (
+                  <div className="task-card">
+                    <TaskDetails sessionId={s.sessionId} task={task} />
+                  </div>
+                )}
               </li>
             ))}
           </ol>
@@ -157,15 +169,6 @@ export function SessionDetail() {
         <div className="chips"><Skills skills={s.topSkills} /></div>
       </section>
 
-      {stops.length > 0 && (
-        <section>
-          <h3>Stop reasons</h3>
-          <div className="kv">
-            {stops.map(([reason, count]) => <Row key={reason} k={reason} v={count} />)}
-          </div>
-        </section>
-      )}
-
       {tools.length > 0 && (
         <section>
           <h3>Tools used</h3>
@@ -191,7 +194,9 @@ export function SessionDetail() {
         </section>
       )}
     </div>
-    {selectedTask && <TaskPanel sessionId={s.sessionId} task={selectedTask} onClose={() => setSelectedTaskId(null)} />}
+    {TASK_VIEW === "drawer" && selectedTask && (
+      <TaskPanel sessionId={s.sessionId} task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+    )}
     </>
   );
 }

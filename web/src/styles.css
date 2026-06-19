@@ -182,6 +182,9 @@ main:has(.sessions-split) { padding: 0; }
 .task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
 .task-item-tokens { flex: 0 0 auto; min-width: 64px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .task-item .pill { flex: 0 0 auto; margin: 0; }
+/* Inline expanded card: the clicked task's full detail, shown in-list instead of the drawer. Reuses
+   .task-panel-body for the field layout. */
+.task-card { border-top: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 
 /* Task detail drawer. */
 .task-panel-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 40; animation: panel-fade-in .22s ease both; }
