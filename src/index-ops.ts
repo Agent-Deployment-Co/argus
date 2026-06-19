@@ -28,8 +28,10 @@ export async function runIndex(opts: SyncOptions, log: Log, extractTasks?: boole
     agentsView: opts.agentsView,
     agentsViewDatabasePath: opts.agentsViewDatabasePath,
     taskExtraction,
+    log,
   });
   try {
+    log("Reading new and changed sessions…");
     const parsed = await store.read({});
     if (store.stats) log(syncStatsSummary(store.stats, store.diagnostics));
     log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
@@ -122,6 +124,8 @@ async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
   let failed = 0;
   try {
     for (const id of opts.ids) {
+      // Heartbeat before each — extraction (when on) runs an AI model and can take a moment.
+      log(extracting ? `Refreshing ${id} (extracting tasks)…` : `Refreshing ${id}…`);
       const result = await reindexSession(id, { store, taskExtraction });
       if (!result.ok) {
         failed++;
