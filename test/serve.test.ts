@@ -109,6 +109,47 @@ describe("serve API", () => {
     expect(res.status).toBe(503);
   });
 
+  test("GET /api/sessions/:id/tasks/:taskId returns the task's metrics", async () => {
+    const metrics = {
+      messages: 3,
+      usage: { input: 10, output: 5, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+      totalTokens: 15,
+      cost: 0.01,
+      toolCalls: 2,
+      toolCounts: { Bash: 2 },
+      models: ["claude-sonnet-4-5"],
+    };
+    let gotSession = "";
+    let gotTask = "";
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      taskMetrics: async (sessionId, taskId) => {
+        gotSession = sessionId;
+        gotTask = taskId;
+        return metrics;
+      },
+    });
+
+    const res = await app.request("/api/sessions/codex:sess1/tasks/fact:task:abc");
+    expect(res.status).toBe(200);
+    expect(gotSession).toBe("codex:sess1");
+    expect(gotTask).toBe("fact:task:abc");
+    expect(await res.json()).toEqual({ metrics });
+  });
+
+  test("GET /api/sessions/:id/tasks/:taskId is 404 for an unknown task", async () => {
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      taskMetrics: async () => undefined,
+    });
+    const res = await app.request("/api/sessions/s/tasks/missing");
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /api/sessions/:id/tasks/:taskId is 503 when metrics aren't wired up", async () => {
+    const app = createApp(async () => fixtureSnapshot(), null);
+    const res = await app.request("/api/sessions/s/tasks/whatever");
+    expect(res.status).toBe(503);
+  });
+
   test("unknown paths fall back to the SPA (placeholder when unbuilt)", async () => {
     const app = createApp(async () => fixtureSnapshot(), null);
     const res = await app.request("/projects");

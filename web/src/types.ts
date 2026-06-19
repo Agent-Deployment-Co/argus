@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "../../src/types";
 import type { Recommendation } from "../../src/recommendations";
+import type { TaskMetrics } from "../../src/task-metrics";
 
 export type {
   Dashboard,
@@ -23,6 +24,7 @@ export type {
   PluginRow,
   Recommendation,
   SessionRow,
+  TaskMetrics,
   ToolCategoryStat,
   ToolStat,
   Usage,
