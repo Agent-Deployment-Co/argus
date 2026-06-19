@@ -156,8 +156,23 @@ export function sessionAnalysisPromptTitle(text: string): string | undefined {
   return targetSessionId ? `Session analysis for ${targetSessionId}` : "Session analysis run";
 }
 
+// Pass 2 of task extraction (#91) sends an outcome-judging prompt to `claude -p`; like the pass-1
+// and session-analysis prompts, that call leaves its own transcript, which must be recognized as
+// Argus-generated rather than mistaken for a real user message/task.
+export function taskOutcomePromptTitle(text: string): string | undefined {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith("You judge how a single task in a coding-agent session turned out") &&
+    trimmed.includes("Dialogue:")
+    ? "Task outcome run"
+    : undefined;
+}
+
 export function argusGeneratedPromptTitle(text: string): string | undefined {
-  return taskExtractionPromptTitle(text) ?? sessionAnalysisPromptTitle(text);
+  return (
+    taskExtractionPromptTitle(text) ??
+    taskOutcomePromptTitle(text) ??
+    sessionAnalysisPromptTitle(text)
+  );
 }
 
 export function shouldSkipTaskCandidateText(text: string, nextText?: string): boolean {
