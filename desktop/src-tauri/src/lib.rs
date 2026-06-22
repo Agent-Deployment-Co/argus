@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::{
+    image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Wry,
@@ -258,10 +259,14 @@ pub fn run() {
                 stop_item,
             });
 
-            let mut tray = TrayIconBuilder::with_id("main")
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
+
+            TrayIconBuilder::with_id("main")
                 .tooltip("Argus")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
@@ -275,11 +280,8 @@ pub fn run() {
                         app.exit(0);
                     }
                     _ => {}
-                });
-            if let Some(icon) = app.default_window_icon().cloned() {
-                tray = tray.icon(icon).icon_as_template(true);
-            }
-            tray.build(app)?;
+                })
+                .build(app)?;
 
             // Start the background work immediately so the dashboard is live by the time the user
             // clicks "Open dashboard".
