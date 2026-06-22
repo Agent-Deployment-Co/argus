@@ -7,7 +7,6 @@ import {
   isAuthoritativeDiscovery,
   sameFileFingerprint,
   type DiscoveryResult,
-  type ImportedFragment,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
 } from "../src/store-contract.ts";
@@ -325,37 +324,9 @@ const auxiliary: ParsedAuxiliaryFragment = {
   diagnostics: [],
 };
 
-const imported: ImportedFragment = {
-  kind: "external",
-  id: "agentsview:import-1",
-  contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
-  provenance: {
-    importId: "import-1",
-    adapter: { name: "agentsview", version: "1" },
-    database: {
-      file: {
-        id: "agentsview:database",
-        rootId: "agentsview",
-        role: "external_database",
-        relativePath: "agentsview.db",
-        path: "/tmp/agentsview.db",
-      },
-      fingerprint: { sizeBytes: "4096", mtimeNs: "1717606000000000000" },
-      attempts: 1,
-    },
-    schemaFingerprint: "schema-v1",
-    sqlite: { userVersion: 2, dataVersion: 7 },
-    capabilities: { messages: "complete", attributionSkill: "missing" },
-    coverage: [{ source: "claude", completeness: "partial", sourceSessionIds: ["session-1"] }],
-    importedAtMs: 1_717_607_000_000,
-  },
-  facts: { sessions: [], messages: [], invocations: [], toolResults: [], taskCandidates: [], tasks: [], relationships: [] },
-  diagnostics: [],
-};
-
 describe("cache fragment contract", () => {
-  test("round-trips all native sources, auxiliary facts, and imported facts through JSON", () => {
-    for (const value of [fragment, codexFragment, geminiFragment, auxiliary, imported]) {
+  test("round-trips all native sources and auxiliary facts through JSON", () => {
+    for (const value of [fragment, codexFragment, geminiFragment, auxiliary]) {
       expect(JSON.parse(JSON.stringify(value))).toEqual(value);
     }
     expect(fragment.facts.invocations[0]?.invocationId).toBe("tool-1");

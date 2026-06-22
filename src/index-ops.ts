@@ -25,15 +25,13 @@ export async function runIndex(opts: SyncOptions, log: Log, extractTasks?: boole
   const taskExtraction = resolveExtraction(extractTasks);
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
-    agentsView: opts.agentsView,
-    agentsViewDatabasePath: opts.agentsViewDatabasePath,
     taskExtraction,
     log,
   });
   try {
     log("Reading new and changed sessions…");
     const parsed = await store.read({});
-    if (store.stats) log(syncStatsSummary(store.stats, store.diagnostics));
+    if (store.stats) log(syncStatsSummary(store.stats));
     log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
   } finally {
     await store.close();

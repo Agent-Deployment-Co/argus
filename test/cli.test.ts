@@ -104,13 +104,12 @@ describe("cli argument validation", () => {
     expect(stderr).toContain("Unexpected argument: extra");
   });
 
-  test("valid flags (including --source, --no-agentsview) are accepted", () => {
+  test("valid flags (including --source) are accepted", () => {
     // Runs against the isolated empty store, so it should complete cleanly without an arg error.
     const { status, stderr } = runCli([
       "index",
       "--source",
       "claude",
-      "--no-agentsview",
     ]);
     expect(status).toBe(0);
     expect(stderr).not.toContain("Unknown option");
@@ -122,7 +121,7 @@ describe("cli argument validation", () => {
 
 describe("index command group", () => {
   test("bare `index` performs an incremental read against the empty store", () => {
-    const { status, stderr } = runCli(["index", "--source", "claude", "--no-agentsview"]);
+    const { status, stderr } = runCli(["index", "--source", "claude"]);
     expect(status).toBe(0);
     expect(stderr).toContain("Local store now has");
   });
@@ -175,7 +174,7 @@ describe("run command", () => {
 
   test("starts all legs and shuts down cleanly on SIGTERM", async () => {
     const port = await freePort();
-    const child = spawn("bun", ["run", CLI, "run", "--source", "claude", "--no-agentsview", "--port", String(port)], {
+    const child = spawn("bun", ["run", CLI, "run", "--source", "claude", "--port", String(port)], {
       env: isolatedEnv(),
     });
     let stderr = "";

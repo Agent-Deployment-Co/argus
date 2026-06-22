@@ -23,7 +23,6 @@ import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   type StoredFragment,
   type CompleteDiscovery,
-  type ImportedFragment,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
 } from "../src/store-contract.ts";
@@ -180,36 +179,6 @@ function auxiliary(id: string): ParsedAuxiliaryFragment {
   };
 }
 
-function imported(id: string): ImportedFragment {
-  return {
-    kind: "external",
-    id,
-    contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
-    provenance: {
-      importId: `import:${id}`,
-      adapter: { name: "agentsview", version: "3" },
-      database: {
-        file: {
-          id: `database:${id}`,
-          rootId: "agentsview",
-          role: "external_database",
-          relativePath: "agentsview.db",
-          path: "/private/agentsview/agentsview.db",
-        },
-        fingerprint: { sizeBytes: "8192", mtimeNs: "1717600000000000002" },
-        attempts: 1,
-      },
-      schemaFingerprint: "agentsview-schema-v3",
-      sqlite: { applicationId: 9, userVersion: 3, dataVersion: 12 },
-      capabilities: { messages: "complete", attributionSkill: "partial" },
-      coverage: [{ source: "codex", completeness: "partial", sourceSessionIds: ["session-2"] }],
-      importedAtMs: 1_717_600_000_003,
-    },
-    facts: emptyFacts(),
-    diagnostics: [],
-  };
-}
-
 // Only auxiliary fragments round-trip through load() — transcripts/imports are re-parsed from disk,
 // so load() returns undefined for them and their presence is verified via list().
 async function expectStored(
@@ -287,7 +256,6 @@ describe("SQLite store", () => {
       transcript("codex", "codex:one"),
       transcript("gemini", "gemini:one"),
       auxiliary("auxiliary:one"),
-      imported("external:one"),
     ];
 
     for (const fragment of fragments) {
@@ -296,19 +264,13 @@ describe("SQLite store", () => {
     }
 
     expect((await cache.list("codex")).map(({ id }) => id)).toEqual(["codex:one"]);
-    expect(await cache.list()).toHaveLength(5);
+    expect(await cache.list()).toHaveLength(4);
 
     const schema = await withRawDatabase(path, async (db) => ({
       applicationId: (await rawGet<{ application_id: number }>(db, "PRAGMA application_id"))
         ?.application_id,
       userVersion: (await rawGet<{ user_version: number }>(db, "PRAGMA user_version"))
         ?.user_version,
-      provenance: (
-        await rawGet<{ import_provenance_json: string }>(
-          db,
-          "SELECT import_provenance_json FROM index_files WHERE id = 'external:one'",
-        )
-      )?.import_provenance_json,
       dependencies: (
         await rawGet<{ count: number }>(
           db,
@@ -318,7 +280,6 @@ describe("SQLite store", () => {
     }));
     expect(schema.applicationId).toBe(STORE_APPLICATION_ID);
     expect(schema.userVersion).toBe(STORE_SCHEMA_VERSION);
-    expect(JSON.parse(schema.provenance ?? "{}").schemaFingerprint).toBe("agentsview-schema-v3");
     expect(schema.dependencies).toBe(1);
 
     if (process.platform !== "win32") {
@@ -384,8 +345,7 @@ describe("SQLite store", () => {
     const missing = transcript("claude", "claude:missing", "shared-root");
     const otherRoot = transcript("claude", "claude:other-root", "other-root");
     const otherSource = transcript("codex", "codex:same-root", "shared-root");
-    const external = imported("external:keep");
-    for (const fragment of [keep, missing, otherRoot, otherSource, external]) {
+    for (const fragment of [keep, missing, otherRoot, otherSource]) {
       await cache.replace(fragment);
     }
 
@@ -404,7 +364,6 @@ describe("SQLite store", () => {
     expect(ids.has(missing.id)).toBe(false);
     expect(ids.has(otherRoot.id)).toBe(true);
     expect(ids.has(otherSource.id)).toBe(true);
-    expect(ids.has(external.id)).toBe(true);
     await cache.close();
   });
 
@@ -478,7 +437,7 @@ describe("SQLite store", () => {
   test("rejects an older schema with no migration path instead of silently rebuilding", async () => {
     const path = storePath();
     const initial = await openStore({ path });
-    await initial.replace(imported("external:old"));
+    await initial.replace(transcript("claude", "claude:old"));
     await initial.close();
 
     // A version with no migration entry must NOT be destroyed (the store is a durable archive).
@@ -627,7 +586,7 @@ describe("SQLite store", () => {
       expect(await store.listArchived()).toEqual([]);
 
       // The guard is owner-agnostic: a handoff to another producer with fewer messages can't regress.
-      const handoff = await store.materializeSessions("agentsview", [session(1)]);
+      const handoff = await store.materializeSessions("codex", [session(1)]);
       expect(handoff).toEqual(["claude:partial"]);
       expect(await countMessages()).toBe(3);
       expect(await store.resolvedSessionCounts()).toEqual([

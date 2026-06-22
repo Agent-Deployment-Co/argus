@@ -64,8 +64,6 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
 
   const src: SyncOptions = {
     source: opts.source,
-    agentsView: opts.agentsView,
-    agentsViewDatabasePath: opts.agentsViewDatabasePath,
   };
   // The web + upload legs read the store unfiltered; `run` exposes only source selection, not the
   // date/project filters. They read the store **read-only** — the index leg is the sole writer, so
