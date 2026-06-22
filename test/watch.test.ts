@@ -67,6 +67,7 @@ describe("watchSync", () => {
         pushed++;
         return ok();
       },
+      waitForTokenChange: async () => {},
     });
     while (pushed === 0) await sleep(10);
     ac.abort();

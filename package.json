@@ -22,7 +22,8 @@
     "build:npm": "bun run scripts/build-npm-packages.ts",
     "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
     "desktop:dev": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri dev",
-    "desktop:build": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles app"
+    "desktop:build": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles app",
+    "desktop:dmg": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles dmg"
   },
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
