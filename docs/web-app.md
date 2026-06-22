@@ -1,9 +1,8 @@
 # The web app (`argus serve`)
 
 `argus serve [--port N]` runs a local web server that presents the dashboard as an interactive
-app in the browser, instead of the single static file `argus report` writes. It is the **preferred
-way to explore usage** and the foundation for richer, interactive features (filtering, drill-downs,
-live updates) tracked under issue #57. `report` stays for the offline, shareable single-file case.
+app in the browser. It is the **preferred way to explore usage** and the foundation for richer,
+interactive features (filtering, drill-downs, live updates) tracked under issue #57.
 
 ```
                  browser  ─────────────────────────────┐
@@ -25,7 +24,7 @@ demand and caches it briefly.
 ## How it's wired
 
 - **`src/dashboard-builder.ts`** — `buildDashboard()`, extracted from the CLI entry point so the
-  `report`/`push` commands and the server share one code path. It reads the warm session store
+  `sync` command and the server share one code path. It reads the warm session store
   **incrementally** (only new/changed transcripts are parsed — see [architecture.md](./architecture.md)),
   not a cold re-parse from disk.
 - **`src/serve.ts`** — `createApp()` (pure route wiring, unit-testable) and `startServer()` (owns the
@@ -59,12 +58,12 @@ don't even re-run the incremental sync.
 | `components/charts/ChartCanvas.tsx` | react-chartjs-2 wrapper that merges the current theme's chrome into each chart's options. |
 | `lib/charts.ts` | Chart.js registration + theme-aware chrome. |
 | `lib/theme.tsx` | Theme context; mirrors/sets `documentElement.dataset.theme` + `localStorage`. |
-| `lib/format.ts` | `fmt`/`usd`/`dur`/`dt`, brand palettes, `modelFamilyColor` — ported from `report.ts`. |
+| `lib/format.ts` | `fmt`/`usd`/`dur`/`dt`, brand palettes, `modelFamilyColor`. |
 | `lib/snapshot.tsx` | `useSnapshotQuery` (React Query) + a context so routes read typed, non-null data. |
 | `types.ts` | Re-exports the CLI `Dashboard` types (type-only) so the API payload and UI never drift. |
 
-The visual design (CSS variables, the coffee-bean/antique-white themes, the brand fonts) is ported
-verbatim from `src/report.ts` so the app matches the static report.
+The visual design (CSS variables, the coffee-bean/antique-white themes, the brand fonts) lives in
+`web/src` and defines the Argus brand look.
 
 ---
 
@@ -112,13 +111,9 @@ without an SSR server.
 works); cached data fetching with a clean path to SSE live updates later; headless tables that
 replace the hand-rolled `makeTable` and scale to many screens.
 
-**Charts: keep Chart.js via `react-chartjs-2`.** Reuses the charting already used by `report` rather
-than introducing a new library. (Note: react-chartjs-2 v5 requires registering the controllers —
-`BarController`/`LineController`/`DoughnutController` — not just the elements; see `lib/charts.ts`.)
-
-**`report` kept alongside `serve`.** `report` still emits one self-contained, offline, shareable HTML
-file (email it, attach it to CI, open it with no server). `serve` is the preferred interactive view;
-`report` is the snapshot-to-share path. `src/report.ts` is untouched by the web app.
+**Charts: Chart.js via `react-chartjs-2`.** A mature charting library with a React binding. (Note:
+react-chartjs-2 v5 requires registering the controllers — `BarController`/`LineController`/
+`DoughnutController` — not just the elements; see `lib/charts.ts`.)
 
 ---
 
