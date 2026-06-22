@@ -163,7 +163,7 @@ Point your OS service manager at it. systemd (`~/.config/systemd/user/argus.serv
 ExecStart=/usr/local/bin/argus run
 Restart=on-failure
 # Service managers launch with a minimal environment. Argus needs to find your home directory to
-# locate transcripts and the store — set HOME (or ARGUS_DATA_DIR + ARGUS_CONFIG_DIR) explicitly.
+# locate transcripts and the store — set HOME (or ARGUS_HOME) explicitly.
 Environment=HOME=%h
 ```
 
@@ -178,6 +178,12 @@ launchd (`~/Library/LaunchAgents/co.agentdeployment.argus.plist`): set `ProgramA
 - **Transcript locations.** Argus reads `~/.claude`, `~/.codex`, and `~/.gemini` by default.
   Override them with `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `CODEX_CONFIG_DIR`, and
   `GEMINI_CLI_HOME`.
+- **Where Argus stores its own data.** By default the store and settings live under a
+  per-platform app directory (macOS: `~/Library/Application Support/argus`). Set `ARGUS_HOME` to
+  relocate everything: the store lands in `$ARGUS_HOME/data`, credentials and settings in
+  `$ARGUS_HOME/config`. For advanced setups (e.g. the store on a separate volume), `ARGUS_DATA_DIR`
+  and `ARGUS_CONFIG_DIR` override the data and config directories individually and take precedence
+  over `ARGUS_HOME`.
 - **Deduplication.** Resumed sessions can repeat earlier messages, and subagent transcripts
   live in nested directories. Argus walks recursively and deduplicates assistant messages by
   API message id.
