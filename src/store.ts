@@ -32,7 +32,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 8;
+export const STORE_SCHEMA_VERSION = 9;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -229,12 +229,24 @@ const CREATE_SCHEMA_SQL = `
     -- The task (chapter) this message falls under, as resolved_tasks.seq in the same session.
     -- NULL = unattributed (no task extracted, or message outside any chapter).
     task_seq INTEGER,
+    -- Usage/model promoted out of record_json so token & cost breakdowns can be done in SQL
+    -- (GROUP BY) instead of re-walking every message in JS. record_json stays authoritative;
+    -- these mirror message.usage.* / message.model / message.attributionSkill. Cost is NOT stored
+    -- (it's priced in JS, per-model, from these sums — pricing is linear so SUM-then-price is exact).
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read INTEGER,
+    cache_write_5m INTEGER,
+    cache_write_1h INTEGER,
+    model TEXT,
+    attribution_skill TEXT,
     PRIMARY KEY (session_id, seq)
   );
   CREATE INDEX resolved_messages_date ON resolved_messages(date);
   CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
   CREATE INDEX resolved_messages_source ON resolved_messages(source);
   CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
+  CREATE INDEX resolved_messages_date_model ON resolved_messages(date, model);
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -692,6 +704,30 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
     `,
   },
+  // 8 -> 9: promote usage/model/skill out of record_json into real columns so token & cost
+  // breakdowns can be computed in SQL (GROUP BY) instead of re-walking every message in JS.
+  // Backfill existing rows directly from the JSON blob — no JS re-parse needed.
+  8: {
+    to: 9,
+    sql: `
+      ALTER TABLE resolved_messages ADD COLUMN input_tokens INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN output_tokens INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN cache_read INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN cache_write_5m INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN cache_write_1h INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN model TEXT;
+      ALTER TABLE resolved_messages ADD COLUMN attribution_skill TEXT;
+      UPDATE resolved_messages SET
+        input_tokens = json_extract(record_json, '$.usage.input'),
+        output_tokens = json_extract(record_json, '$.usage.output'),
+        cache_read = json_extract(record_json, '$.usage.cacheRead'),
+        cache_write_5m = json_extract(record_json, '$.usage.cacheWrite5m'),
+        cache_write_1h = json_extract(record_json, '$.usage.cacheWrite1h'),
+        model = json_extract(record_json, '$.model'),
+        attribution_skill = json_extract(record_json, '$.attributionSkill');
+      CREATE INDEX resolved_messages_date_model ON resolved_messages(date, model);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -748,7 +784,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
-    await get(db, "SELECT task_seq FROM resolved_messages LIMIT 1");
+    await get(db, "SELECT task_seq, input_tokens, model, attribution_skill FROM resolved_messages LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
@@ -1363,7 +1399,26 @@ export class SqliteStore implements Store {
           await insertRows(
             this.db,
             "resolved_messages",
-            ["session_id", "seq", "source", "ts", "date", "cwd", "project", "record_json", "task_seq"],
+            // Usage/model/skill are mirrored into real columns (see resolved_messages DDL) so SQL
+            // can do token & cost GROUP BY without re-walking record_json in JS.
+            [
+              "session_id",
+              "seq",
+              "source",
+              "ts",
+              "date",
+              "cwd",
+              "project",
+              "record_json",
+              "task_seq",
+              "input_tokens",
+              "output_tokens",
+              "cache_read",
+              "cache_write_5m",
+              "cache_write_1h",
+              "model",
+              "attribution_skill",
+            ],
             session.messages.map((message, seq) => [
               sid,
               seq,
@@ -1374,6 +1429,13 @@ export class SqliteStore implements Store {
               message.project,
               JSON.stringify(message),
               taskSeqForMessage(seq),
+              message.usage.input,
+              message.usage.output,
+              message.usage.cacheRead,
+              message.usage.cacheWrite5m,
+              message.usage.cacheWrite1h,
+              message.model,
+              message.attributionSkill,
             ]),
           );
           await insertRows(
