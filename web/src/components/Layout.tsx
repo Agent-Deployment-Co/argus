@@ -1,6 +1,7 @@
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { Link, Outlet, useRouterState, useSearch } from "@tanstack/react-router";
 import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Sun, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useState } from "react";
+import { FilterBar } from "./FilterBar";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
 import { useTheme } from "../lib/theme";
 
@@ -69,7 +70,8 @@ export function Layout() {
   // fetch entirely there — otherwise a broken/slow /api/snapshot still fires in the background and
   // undermines the page as a diagnostic surface.
   const isDebug = useRouterState({ select: (s) => s.location.pathname === "/debug" });
-  const query = useSnapshotQuery(!isDebug);
+  const filters = useSearch({ strict: false, select: (s) => ({ since: s.since, until: s.until, source: s.source }) });
+  const query = useSnapshotQuery(filters, !isDebug);
   const snap = query.data;
   const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
 
@@ -123,6 +125,7 @@ export function Layout() {
         </div>
       </aside>
       <div className="content">
+        {!isDebug && <FilterBar refreshing={query.isFetching} />}
         <main>
           {isDebug ? (
             <Outlet />

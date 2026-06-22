@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, retainSearchParams } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
 import { Activity } from "./routes/Activity";
 import { Debug } from "./routes/Debug";
@@ -8,7 +8,23 @@ import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
 import { Tools } from "./routes/Tools";
 
-const rootRoute = createRootRoute({ component: Layout });
+/** Global dashboard filters live on the root so every view reflects them, and `retainSearchParams`
+ *  keeps them in the URL across navigations (so e.g. a date range survives switching tabs). */
+export interface RootSearch {
+  since?: string;
+  until?: string;
+  source?: string;
+}
+
+const rootRoute = createRootRoute({
+  component: Layout,
+  validateSearch: (search: Record<string, unknown>): RootSearch => ({
+    since: typeof search.since === "string" && search.since ? search.since : undefined,
+    until: typeof search.until === "string" && search.until ? search.until : undefined,
+    source: typeof search.source === "string" && search.source ? search.source : undefined,
+  }),
+  search: { middlewares: [retainSearchParams(["since", "until", "source"])] },
+});
 
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,

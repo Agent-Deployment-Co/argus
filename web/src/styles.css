@@ -57,7 +57,19 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
    strip (width driven by --rail-w) so wide views like the sessions split-pane get more canvas. */
 .app-shell { --rail-w: 184px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
 .app-shell.rail-collapsed { --rail-w: 60px; }
-.content { min-width: 0; }
+.content { min-width: 0; --filter-bar-h: 53px; }
+
+/* Global filter bar pinned above every view. Fixed height so the full-height Sessions split can
+   subtract it (see .sessions-split) without overflowing the viewport. */
+.filter-bar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: var(--filter-bar-h); display: flex; align-items: center; gap: 18px; padding: 0 32px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.filter-field { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; letter-spacing: .02em; text-transform: uppercase; }
+.filter-field input, .filter-field select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; color: var(--text); font: 13px "Aleo", Georgia, serif; text-transform: none; letter-spacing: 0; }
+.filter-field input:focus-visible, .filter-field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filter-clear { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.filter-clear:hover { border-color: var(--accent); color: var(--heading); }
+.filter-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filter-spinner { color: var(--muted); animation: filter-spin 1s linear infinite; }
+@keyframes filter-spin { to { transform: rotate(360deg); } }
 
 .rail { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
 .rail-brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 14px; }
@@ -94,7 +106,7 @@ main { padding: 30px 32px 64px; }
 /* Sessions: a full-height two-pane (selector list + detail). Drop main's padding for this route
    only so the list sits flush against the rail instead of floating inside the page gutters. */
 main:has(.sessions-split) { padding: 0; }
-.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: 100vh; }
+.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: calc(100vh - var(--filter-bar-h)); }
 .session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .session-search-row { display: flex; align-items: center; gap: 8px; }
@@ -275,4 +287,5 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .rail-brand, .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
   .rail-footer { flex-direction: column-reverse; }
   main { padding-left: 18px; padding-right: 18px; }
+  .filter-bar { padding-left: 18px; padding-right: 18px; gap: 12px; }
 }
