@@ -5,14 +5,12 @@ transcripts and can:
 
 - **Serve an interactive dashboard** at a local web address (`serve`) — the preferred way to
   explore your usage.
-- Generate a self-contained HTML report for a point-in-time snapshot you can share or open
-  offline (`report`).
 - Upload usage snapshots to the [Argus dashboard](https://argus.agentdeployment.co), where
   you can keep and analyze your data over time (`sync`).
 - **Run all of it as one always-on process** (`run`) — keep the local data current, serve the
   web app, and upload on a schedule, so the dashboard is live whenever you want it.
 
-Both the web app and the report include:
+The web app includes:
 
 - Tokens and estimated cost over time
 - Claude, Codex, and Gemini source breakdowns
@@ -27,12 +25,6 @@ Run `argus` directly with `npx`.
 Argus's published CLI requires Node.js 20.17 or newer. The repository uses Bun for
 development and tests, but the installed npm executable runs under Node.
 
-Print a compact overview in your terminal:
-
-```bash
-npx @agentdeploymentco/argus report --console
-```
-
 Open the interactive dashboard in your browser (recommended):
 
 ```bash
@@ -42,19 +34,10 @@ npx @agentdeploymentco/argus serve --open
 This starts a local web server (default `http://localhost:4242`) and opens it. Press `Ctrl-C`
 to stop. Nothing leaves your machine — it reads your local transcripts and serves them locally.
 
-Or generate a self-contained report file to share or open offline:
-
-```bash
-npx @agentdeploymentco/argus report --open
-```
-
-The report is written to `argus-report.html` by default and works fully offline.
-
 ## Web app
 
-`serve` is the preferred, interactive way to explore your usage: the same breakdowns as the
-report, in a live local web app that's the foundation for richer features over time. The report
-remains the right tool when you want a single file to email, attach to CI, or open without a server.
+`serve` is the preferred, interactive way to explore your usage: a live local web app that's the
+foundation for richer features over time.
 
 ```bash
 npx @agentdeploymentco/argus serve --open          # http://localhost:4242
@@ -65,63 +48,16 @@ npx @agentdeploymentco/argus serve --port 8080      # choose a port (or set ARGU
 |------|-------------|
 | `-p, --port <N>` | Local port to listen on (env `ARGUS_PORT`, default: `4242`) |
 | `--open` | Open the dashboard in your browser once it's ready (macOS) |
-| `--source`, `--since`, `--until`, `--project` | Same data filters as `report` |
 
-The web app reads from your local session store (the same data `report` uses) and refreshes it
-in the background; it does not re-parse every transcript on each page load.
-
-## Report options
-
-| Flag | Description |
-|------|-------------|
-| `--source <claude\|codex\|gemini\|all>` | Transcript source to parse (default: `all`) |
-| `--since <YYYY-MM-DD>` | Include messages on or after this date |
-| `--until <YYYY-MM-DD>` | Include messages on or before this date |
-| `--project <substr>` | Include sessions whose working directory matches the value |
-| `-o, --out <file>` | Output path (default: `argus-report.html`) |
-| `--summarize` | Generate richer per-session summaries with `claude -p` |
-| `--summarize-model <id>` | Model used for summaries |
-| `--open` | Open the generated report (macOS) |
-| `--json` | Write the aggregate data as JSON instead of HTML |
-| `--console` | Print a compact overview in your terminal instead of writing a file |
-| `--agentsview` | Import compatible AgentsView data when available (default) |
-| `--no-agentsview` | Disable AgentsView import |
-| `--agentsview-db <path>` | Read AgentsView data from a specific SQLite database path |
-| `-h, --help` | Show help |
-
-### Examples
-
-```bash
-# Custom output path
-npx @agentdeploymentco/argus report -o ~/Desktop/usage.html --open
-
-# One transcript source
-npx @agentdeploymentco/argus report --source claude
-
-# Date and project filters
-npx @agentdeploymentco/argus report --since 2026-05-01 --until 2026-06-01
-npx @agentdeploymentco/argus report --project argus
-
-# Richer session summaries
-npx @agentdeploymentco/argus report --summarize --open
-
-# Raw aggregate data
-npx @agentdeploymentco/argus report --json -o argus.json
-
-# Control optional AgentsView import
-npx @agentdeploymentco/argus report --no-agentsview
-npx @agentdeploymentco/argus report --agentsview-db /path/to/agentsview.sqlite3
-```
-
-Without `--summarize`, Argus creates an instant heuristic summary from the first prompt,
-skills, tools, and edited files. With `--summarize`, it uses `claude -p` to create a short
-narrative and caches the result in `$ARGUS_CACHE_DIR/summaries.json` (macOS: `~/Library/Caches/argus/summaries.json`). Only new or changed
-sessions are summarized again.
+The web app shows the whole local session store and refreshes it in the background; it does not
+re-parse every transcript on each page load. Session titles use an instant heuristic summary built
+from the first prompt, skills, tools, and edited files. To narrow which sources or dates land in the
+store, use the `index` command's filters.
 
 ## The local store
 
 Argus keeps your parsed sessions in a private local store so unchanged transcripts don't need to
-be reparsed on every run. `report`, `serve`, and `sync` all read from it. The `index` command keeps
+be reparsed on every run. `serve` and `sync` both read from it. The `index` command keeps
 it current:
 
 ```bash
@@ -139,10 +75,8 @@ npx @agentdeploymentco/argus status                  # show the store location a
 | `index rebuild [--force]` | Rebuild from scratch — **drops sessions no longer on disk**. Prompts for confirmation unless `--force`. |
 | `index delete <id>… \| --archived` | Permanently remove sessions from the store. |
 
-When a compatible local AgentsView database is available, Argus imports read-only provenance
-into the same store. Native transcript parsing remains authoritative for sources that have
-local transcript fragments; AgentsView facts are used only for selected sources without native
-fragments. Use `--no-agentsview` to disable this bridge.
+`index`, `index rebuild`, and `index refresh` accept `--source <claude|codex|gemini|cowork|all>`
+to scope which transcript sources are read.
 
 ## Task interpretation (opt-in)
 
@@ -173,7 +107,7 @@ only the task description and outcome are. See
 
 ## Keep and analyze data over time
 
-Local reports show the transcripts currently available on your machine. The
+The local web app shows the transcripts currently available on your machine. The
 [Argus dashboard](https://argus.agentdeployment.co) stores pushed snapshots so you can
 analyze usage over time, compare users, filter the organization view, and review trends.
 
@@ -191,11 +125,11 @@ the user id when needed:
 npx @agentdeploymentco/argus sync --user alice
 ```
 
-`sync` accepts the same source, date, project, and summary filters as `report`:
+`sync` accepts source, date, and project filters:
 
 ```bash
 npx @agentdeploymentco/argus sync --source claude --since 2026-05-01
-npx @agentdeploymentco/argus sync --project client-app --summarize
+npx @agentdeploymentco/argus sync --project client-app
 ```
 
 Run `sync` regularly to keep the dashboard current and build a useful history for analysis.
@@ -238,7 +172,7 @@ launchd (`~/Library/LaunchAgents/co.agentdeployment.argus.plist`): set `ProgramA
 
 ## Data and accuracy
 
-- **Local by default.** `report`, `serve`, and `index` read transcripts and work entirely on your
+- **Local by default.** `serve` and `index` read transcripts and work entirely on your
   machine. Data is sent to the hosted dashboard only when you run `sync` (including `sync --watch`,
   or the upload job inside `run`).
 - **Transcript locations.** Argus reads `~/.claude`, `~/.codex`, and `~/.gemini` by default.
