@@ -1,12 +1,12 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { ListTodo, RefreshCw } from "lucide-react";
-import type { ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
+import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
-import { extractSessionTasks, SNAPSHOT_QUERY_KEY, useSnapshot } from "../lib/snapshot";
-import type { Snapshot } from "../types";
+import { reindexSession, useSessionTaskMetrics, useSnapshot } from "../lib/snapshot";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
@@ -20,28 +20,29 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
+// How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
+// right-side panel. Flip this to compare; the drawer (TaskPanel) is kept, just suppressed in "card".
+const TASK_VIEW: "card" | "drawer" = "drawer";
+
 export function SessionDetail() {
   const { dashboard: d } = useSnapshot();
-  const queryClient = useQueryClient();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const s = d.sessions.find((x) => x.sessionId === sessionId);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
+  const onTaskClick = (id: string) =>
+    setSelectedTaskId((cur) => (TASK_VIEW === "card" && cur === id ? null : id));
 
-  const extractTasks = useMutation({
-    mutationFn: extractSessionTasks,
-    onSuccess: (data, extractedSessionId) => {
-      queryClient.setQueryData<Snapshot>(SNAPSHOT_QUERY_KEY, (snap) => {
-        if (!snap) return snap;
-        return {
-          ...snap,
-          dashboard: {
-            ...snap.dashboard,
-            sessions: snap.dashboard.sessions.map((session) =>
-              session.sessionId === extractedSessionId ? { ...session, tasks: data.tasks } : session,
-            ),
-          },
-        };
-      });
-      void queryClient.invalidateQueries({ queryKey: SNAPSHOT_QUERY_KEY });
+  // Reindexing refreshes the whole session and rebuilds the server-side snapshot, so reload the page
+  // once it's done — the user gets the fully updated session without a manual refresh.
+  // Per-task metrics (tokens/cost/tools) fetched on demand for the whole session — shared with the
+  // detail drawer via React Query's cache.
+  const taskMetrics = useSessionTaskMetrics(sessionId ?? "").data;
+
+  const refresh = useMutation({
+    mutationFn: reindexSession,
+    onSuccess: () => {
+      window.location.reload();
     },
   });
 
@@ -60,56 +61,73 @@ export function SessionDetail() {
   ];
 
   const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);
-  const stops = h.stopReasons ? Object.entries(h.stopReasons).sort((a, b) => b[1] - a[1]) : [];
   const tasks = s.tasks ?? [];
-  const extractingThisSession = extractTasks.isPending && extractTasks.variables === s.sessionId;
-  const extractionError =
-    !extractTasks.isPending && extractTasks.variables === s.sessionId && extractTasks.error instanceof Error
-      ? extractTasks.error.message
+  const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
+  const refreshingThisSession = refresh.isPending && refresh.variables === s.sessionId;
+  const refreshError =
+    !refresh.isPending && refresh.variables === s.sessionId && refresh.error instanceof Error
+      ? refresh.error.message
       : null;
 
   return (
+    <>
     <div className="session-detail-inner">
       <header className="session-detail-head">
-        <div className="session-detail-eyebrow">
-          <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="eyebrow-link" title={`Filter to ${s.source}`}>
-            {s.source}
-          </Link>
-          <span className="muted">·</span>
-          <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="eyebrow-link truncate" title={`Filter to ${s.project}`}>
-            {compactProject(s.project)}
-          </Link>
-          {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
-          <span className="muted">·</span>
-          <code className="session-id">{s.sessionId}</code>
+        <div className="session-detail-headline">
+          <div className="session-detail-eyebrow">
+            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="eyebrow-link" title={`Filter to ${s.source}`}>
+              {s.source}
+            </Link>
+            <span className="muted">·</span>
+            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="eyebrow-link truncate" title={`Filter to ${s.project}`}>
+              {compactProject(s.project)}
+            </Link>
+            {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
+            <span className="muted">·</span>
+            <code className="session-id">{s.sessionId}</code>
+          </div>
+          <h2 className="session-detail-title">{sessionTitle(s)}</h2>
+          <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
         </div>
-        <h2 className="session-detail-title">{sessionTitle(s)}</h2>
-        <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
+        <button
+          type="button"
+          className="task-action"
+          onClick={() => refresh.mutate(s.sessionId)}
+          disabled={refreshingThisSession}
+          title="Re-read this session's transcript from disk and update it"
+        >
+          <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
+          <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
+        </button>
       </header>
+
+      {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
 
       <StatCards stats={cards} />
 
       <section>
-        <div className="section-title-row">
-          <h3>Tasks <span className="muted">({tasks.length})</span></h3>
-          <button
-            type="button"
-            className="task-action"
-            onClick={() => extractTasks.mutate(s.sessionId)}
-            disabled={extractingThisSession}
-          >
-            {tasks.length ? <RefreshCw size={14} strokeWidth={1.75} aria-hidden /> : <ListTodo size={14} strokeWidth={1.75} aria-hidden />}
-            <span>{extractingThisSession ? "Extracting..." : tasks.length ? "Refresh tasks" : "Extract tasks"}</span>
-          </button>
-        </div>
-        {extractionError && <div className="task-error" role="alert">{extractionError}</div>}
+        <h3>Tasks <span className="muted">({tasks.length})</span></h3>
         {tasks.length > 0 ? (
           <ol className="tasks">
             {tasks.map((task) => (
               <li key={task.id}>
-                <div className="task-text">{task.description}</div>
-                {task.timestampMs != null && (
-                  <div className="task-meta">{dtAmPm(task.timestampMs)}</div>
+                <button
+                  type="button"
+                  className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
+                  onClick={() => onTaskClick(task.id)}
+                  aria-pressed={task.id === selectedTaskId}
+                  aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
+                >
+                  <span className="task-item-desc" title={task.description}>{task.description}</span>
+                  {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                  <span className="task-item-tokens">
+                    {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
+                  </span>
+                </button>
+                {TASK_VIEW === "card" && task.id === selectedTaskId && (
+                  <div className="task-card">
+                    <TaskDetails sessionId={s.sessionId} task={task} />
+                  </div>
                 )}
               </li>
             ))}
@@ -151,15 +169,6 @@ export function SessionDetail() {
         <div className="chips"><Skills skills={s.topSkills} /></div>
       </section>
 
-      {stops.length > 0 && (
-        <section>
-          <h3>Stop reasons</h3>
-          <div className="kv">
-            {stops.map(([reason, count]) => <Row key={reason} k={reason} v={count} />)}
-          </div>
-        </section>
-      )}
-
       {tools.length > 0 && (
         <section>
           <h3>Tools used</h3>
@@ -185,5 +194,9 @@ export function SessionDetail() {
         </section>
       )}
     </div>
+    {TASK_VIEW === "drawer" && selectedTask && (
+      <TaskPanel sessionId={s.sessionId} task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+    )}
+    </>
   );
 }

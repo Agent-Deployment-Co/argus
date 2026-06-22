@@ -223,6 +223,11 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
         project: opts.project,
         summarize: opts.summarize,
         summarizeModel: opts.summarizeModel,
+        // serve is a pure reader: read the already-materialized store, never reconcile/materialize on
+        // a page load. Writing on read silently destroyed extracted tasks (and firstPrompt) for any
+        // session whose transcript changed since the last index. The store is maintained by
+        // `index` / `argus run` (where extraction settings live). See #98.
+        readOnly: true,
       },
       taskExtraction: opts.taskExtraction,
     },

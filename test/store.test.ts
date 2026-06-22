@@ -689,17 +689,10 @@ describe("SQLite store", () => {
       ]);
       expect(await store.readSessionTasks("codex:missing")).toEqual([]);
 
-      const replacement = {
-        ...task,
-        id: "task:codex:two",
-        description: "extract one task from the session",
-        evidence: "message indexes: 1",
-      };
-      expect(await store.replaceSessionTasks("codex:task-session", [replacement])).toBe(true);
-      expect(await store.replaceSessionTasks("codex:missing", [replacement])).toBe(false);
-      expect(await store.readSessionTasks("codex:task-session")).toEqual([replacement]);
       expect((await store.readResolved()).tasksBySession?.get("codex:task-session")).toEqual([
-        replacement,
+        earlierTask,
+        task,
+        untimestampedTask,
       ]);
     } finally {
       await store.close();
@@ -749,8 +742,8 @@ describe("SQLite store", () => {
         ],
       });
 
-      await store.materializeSessions("codex", [materialized(1000)]);
-      expect(await store.replaceSessionTasks("codex:preserve-tasks", [task])).toBe(true);
+      await store.materializeSessions("codex", [{ ...materialized(1000), tasks: [task] }]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
 
       await store.materializeSessions("codex", [materialized(1000)]);
       expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
@@ -812,6 +805,13 @@ describe("SQLite store", () => {
       const tasks = await store.readSessionTasks(sid);
       expect(tasks[0]?.chapter).toEqual({ startSeq: 0, endSeq: 1 });
       expect(tasks[0]?.outcome).toBe("success");
+
+      // readSessionTaskMessages buckets each task's attributed messages (by task_seq) under its id.
+      const byTask = await store.readSessionTaskMessages(sid);
+      expect(byTask.get(`task:${sid}:a`)?.map((m) => m.ts)).toEqual([1000, 1001]);
+      expect(byTask.get(`task:${sid}:b`)?.map((m) => m.ts)).toEqual([1002, 1003]);
+      // A task that owns no attributed messages is simply absent from the map.
+      expect(byTask.has("task:nope")).toBe(false);
     } finally {
       await store.close();
     }

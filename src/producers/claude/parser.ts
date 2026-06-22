@@ -528,11 +528,20 @@ export function reconstructClaudeDialogue(path: string): DialogueTurn[] {
       const turn = dialogueTurn("user", textFromUserContent(value.message?.content), ts);
       if (turn) turns.push(turn);
     } else if (value.type === "assistant") {
-      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
-      if (id && seenAssistant.has(id)) continue;
-      if (id) seenAssistant.add(id);
+      // A single assistant message (one message.id) is often split across records — e.g. a tool_use
+      // record carrying no dialogue text, then the record with the answer text. Only let a NON-EMPTY
+      // turn claim the dedup slot, otherwise the leading empty/tool-only record marks the id as seen
+      // and the real answer (same id) gets dropped — which made pass-2 outcome judging conclude the
+      // assistant never responded. Dedup still drops resumed/compacted re-appends: first non-empty
+      // occurrence per id wins.
       const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
-      if (turn) turns.push(turn);
+      if (!turn) continue;
+      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
+      if (id) {
+        if (seenAssistant.has(id)) continue;
+        seenAssistant.add(id);
+      }
+      turns.push(turn);
     }
   }
   return turns;

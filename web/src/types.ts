@@ -14,15 +14,19 @@ import type {
   Usage,
 } from "../../src/types";
 import type { Recommendation } from "../../src/recommendations";
+import type { TaskMetrics } from "../../src/task-metrics";
+import type { DebugInfo } from "../../src/debug-info";
 
 export type {
   Dashboard,
   DayBucket,
+  DebugInfo,
   FrictionTotals,
   NamedUsage,
   PluginRow,
   Recommendation,
   SessionRow,
+  TaskMetrics,
   ToolCategoryStat,
   ToolStat,
   Usage,

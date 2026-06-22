@@ -66,6 +66,16 @@ export function logTaskExtractionDebug(
   options?.debugLog?.(`[task extraction] ${message}`);
 }
 
+// TEMP (remove): always-on estimate of the prompt/context size sent to the interpreter, so we can
+// see how big these calls get during a real run without enabling full debug logging.
+function logPromptSizeEstimate(label: string, prompt: string): void {
+  const bytes = Buffer.byteLength(prompt, "utf8");
+  const approxTokens = Math.round(bytes / 4); // rough ~4 bytes/token heuristic
+  console.error(
+    `[task interpretation] ${label}: ~${approxTokens.toLocaleString()} tokens (${bytes.toLocaleString()} bytes)`,
+  );
+}
+
 function logTaskExtractionBlock(
   options: TaskExtractionOptions | undefined,
   label: string,
@@ -380,6 +390,7 @@ export async function extractTasksForSession(
       : "default prompt";
   logTaskExtractionDebug(options, `using ${promptSource}`);
   const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions);
+  logPromptSizeEstimate(`pass 1 (segment) ${sessionId}`, prompt); // TEMP (remove)
   logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
   logTaskExtractionBlock(options, "prompt", prompt);
   if (provider === "claude") {
@@ -506,6 +517,7 @@ export async function judgeTaskOutcome(
   if (provider === "off" || dialogue.length === 0) return { diagnostics };
 
   const prompt = buildTaskOutcomePrompt(description, dialogue);
+  logPromptSizeEstimate(`pass 2 (outcome) "${description.slice(0, 60)}"`, prompt); // TEMP (remove)
   const result = await runProvider(provider, prompt, options);
   if (!result.ok) {
     diagnostics.push(
