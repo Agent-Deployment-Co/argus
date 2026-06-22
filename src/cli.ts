@@ -509,6 +509,7 @@ const runCmd = defineCommand({
     "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
     "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
+    "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
     debug: { type: "boolean", default: false, description: "Print task extraction debug logs to stdout" },
   },
   run: handler((args) => {
@@ -522,6 +523,7 @@ const runCmd = defineCommand({
         indexIntervalMin: Number(args["index-interval"]) || 5,
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
+        noSync: !!args["no-sync"],
         taskExtraction: taskExtractionOptions(args, debugLog),
       },
       log,

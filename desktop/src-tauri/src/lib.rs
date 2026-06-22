@@ -76,7 +76,7 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
         .shell()
         .sidecar("argus")
         .map_err(|e| format!("locating the argus sidecar: {e}"))?
-        .args(["run", "--port", &port.to_string()]);
+        .args(["run", "--port", &port.to_string(), "--no-sync"]);
     if let Some(root) = web_root(app) {
         command = command.env("ARGUS_WEB_ROOT", root);
     }
