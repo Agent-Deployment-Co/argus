@@ -10,6 +10,9 @@ import type { PluginInfo } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
 
+/** Same-origin marker the web app sends on mutating requests (see rejectCrossSite in serve.ts). */
+const SAME_ORIGIN = { headers: { "X-Argus-App": "1" }, method: "POST" } as const;
+
 function fixtureSnapshot(): Snapshot {
   const parsed = parseAll({
     projectsDir: join(FIX, "projects"),
@@ -68,7 +71,7 @@ describe("serve API", () => {
       onStoreChanged: () => { changed++; },
     });
 
-    const res = await app.request("/api/sessions/codex:codex-sess1/reindex", { method: "POST" });
+    const res = await app.request("/api/sessions/codex:codex-sess1/reindex", SAME_ORIGIN);
     expect(res.status).toBe(200);
     expect(changed).toBe(1);
     expect(await res.json()).toEqual({
@@ -84,7 +87,7 @@ describe("serve API", () => {
       onStoreChanged: () => { changed++; },
     });
 
-    const res = await app.request("/api/sessions/missing/reindex", { method: "POST" });
+    const res = await app.request("/api/sessions/missing/reindex", SAME_ORIGIN);
     expect(res.status).toBe(422);
     expect(changed).toBe(0);
     expect(await res.json()).toEqual({
@@ -98,15 +101,36 @@ describe("serve API", () => {
       reindex: async () => ({ ok: false, status: 404, message: "No session found for missing." }),
     });
 
-    const res = await app.request("/api/sessions/missing/reindex", { method: "POST" });
+    const res = await app.request("/api/sessions/missing/reindex", SAME_ORIGIN);
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "No session found for missing.", diagnostics: [] });
   });
 
   test("POST /api/sessions/:id/reindex is 503 when reindexing isn't wired up", async () => {
     const app = createApp(async () => fixtureSnapshot(), null);
-    const res = await app.request("/api/sessions/whatever/reindex", { method: "POST" });
+    const res = await app.request("/api/sessions/whatever/reindex", SAME_ORIGIN);
     expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/:id/reindex rejects cross-site requests (CSRF guard)", async () => {
+    let changed = 0;
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      reindex: async () => ({ ok: true, tasks: [], diagnostics: [] }) as never,
+      onStoreChanged: () => { changed++; },
+    });
+
+    // No same-origin marker → blocked before reindex runs.
+    const bare = await app.request("/api/sessions/codex:sess1/reindex", { method: "POST" });
+    expect(bare.status).toBe(403);
+
+    // A cross-site Sec-Fetch-Site is rejected even if the marker were present.
+    const crossSite = await app.request("/api/sessions/codex:sess1/reindex", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "Sec-Fetch-Site": "cross-site" },
+    });
+    expect(crossSite.status).toBe(403);
+
+    expect(changed).toBe(0);
   });
 
   test("GET /api/sessions/:id/task-metrics returns per-task metrics keyed by task id", async () => {

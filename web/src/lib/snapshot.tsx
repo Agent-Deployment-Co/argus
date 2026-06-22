@@ -21,6 +21,9 @@ async function fetchSnapshot(): Promise<Snapshot> {
 export async function reindexSession(sessionId: string): Promise<ReindexResponse> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/reindex`, {
     method: "POST",
+    // Same-origin marker: a cross-origin page can't set this without a CORS preflight the server
+    // never grants, so it blocks CSRF against this mutating endpoint. Keep in sync with serve.ts.
+    headers: { "X-Argus-App": "1" },
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
@@ -67,9 +70,11 @@ export function useSessionTaskMetrics(sessionId: string) {
   });
 }
 
-/** Fetch the dashboard snapshot. Cached by React Query so navigating between screens is instant. */
-export function useSnapshotQuery() {
-  return useQuery({ queryKey: SNAPSHOT_QUERY_KEY, queryFn: fetchSnapshot, staleTime: 30_000 });
+/** Fetch the dashboard snapshot. Cached by React Query so navigating between screens is instant.
+ *  Pass `enabled: false` to skip the fetch entirely — the /debug page does this so it stays usable
+ *  even when the snapshot read is broken or slow. */
+export function useSnapshotQuery(enabled = true) {
+  return useQuery({ queryKey: SNAPSHOT_QUERY_KEY, queryFn: fetchSnapshot, staleTime: 30_000, enabled });
 }
 
 const Ctx = createContext<Snapshot | null>(null);
