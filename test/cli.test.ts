@@ -79,8 +79,8 @@ describe("version flag", () => {
 });
 
 describe("cli argument validation", () => {
-  test("report rejects an unknown flag instead of silently ignoring it", () => {
-    const { status, stderr } = runCli(["report", "--opne", "--console"]);
+  test("rejects an unknown flag instead of silently ignoring it", () => {
+    const { status, stderr } = runCli(["sync", "--opne"]);
     expect(status).toBe(2);
     expect(stderr).toContain("Unknown option: --opne");
   });
@@ -92,28 +92,25 @@ describe("cli argument validation", () => {
   });
 
   test("a value-less string flag does not eat the following flag", () => {
-    // `--since` has no value, so citty would otherwise parse since="--out" and drop the real --out.
-    const { status, stderr } = runCli(["report", "--since", "--out", "foo.html"]);
+    // `--since` has no value, so citty would otherwise parse since="--org" and drop the real --org.
+    const { status, stderr } = runCli(["sync", "--since", "--org", "acme"]);
     expect(status).toBe(2);
     expect(stderr).toContain("Missing value for --since");
   });
 
   test("a command that takes no positionals rejects a stray argument", () => {
-    const { status, stderr } = runCli(["report", "extra"]);
+    const { status, stderr } = runCli(["status", "extra"]);
     expect(status).toBe(2);
     expect(stderr).toContain("Unexpected argument: extra");
   });
 
-  test("valid flags (including --source, --no-agentsview, -o) are accepted", () => {
+  test("valid flags (including --source, --no-agentsview) are accepted", () => {
     // Runs against the isolated empty store, so it should complete cleanly without an arg error.
     const { status, stderr } = runCli([
-      "report",
+      "index",
       "--source",
       "claude",
       "--no-agentsview",
-      "--since",
-      "2026-01-01",
-      "--console",
     ]);
     expect(status).toBe(0);
     expect(stderr).not.toContain("Unknown option");

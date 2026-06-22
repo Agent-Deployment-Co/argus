@@ -1,15 +1,12 @@
 #!/usr/bin/env bun
-import { spawnSync } from "node:child_process";
-import { statSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { statSync } from "node:fs";
 import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
 import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
 import { scanStore } from "./parse-incremental.ts";
-import { RENDERERS, type OutputFormat } from "./renderers.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
-import { buildDashboard, summaryLine, type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
+import { type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
 import { startServer } from "./serve.ts";
 import { openStore } from "./store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
@@ -27,12 +24,6 @@ const DEFAULT_PORT = Number(process.env.ARGUS_PORT) || 4242;
 // option shapes below layer each subcommand's own flags on top of it. The shared store-selection
 // (`SyncOptions`) and build (`buildOptions`) shapes live in cli-options.ts so the extracted command
 // bodies and the long-running loops can reuse them.
-interface ReportOptions extends BuildDashboardOptions {
-  out: string;
-  json: boolean;
-  open: boolean;
-}
-
 interface ServeOptions extends BuildDashboardOptions {
   port: number;
   open: boolean;
@@ -194,21 +185,6 @@ function formatBytes(value: number): string {
   return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${unit}`;
 }
 
-async function runReport(opts: ReportOptions, log: Log, consoleOnly = false): Promise<void> {
-  const dash = await buildDashboard(opts, log);
-  const format: OutputFormat = consoleOnly ? "console" : opts.json ? "json" : "html";
-  const rendered = RENDERERS[format](dash);
-  if (rendered.toStdout) {
-    process.stdout.write(rendered.content);
-    return;
-  }
-  const outPath = resolve(opts.out);
-  writeFileSync(outPath, rendered.content);
-  log(`Wrote ${outPath}`);
-  log(`Totals: ${summaryLine(dash)}`);
-  if (opts.open && format === "html") spawnSync("open", [outPath]);
-}
-
 async function runServe(opts: ServeOptions, log: Log): Promise<void> {
   await startServer(
     {
@@ -346,7 +322,7 @@ async function runStatus(log: Log): Promise<void> {
 // to that subcommand automatically and flag types flow into the run handlers.
 // ---------------------------------------------------------------------------
 
-/** Source selection — shared by report, serve, sync, run, and the `index` commands.
+/** Source selection — shared by serve, sync, run, and the `index` commands.
  *  Declared as a string (not enum) so citty's flag inference stays intact; the value set is
  *  validated by `toSource`. */
 const sourceArg = {
@@ -373,14 +349,14 @@ const agentsViewArgs = {
   },
 } as const;
 
-/** Date/project filters — shared by report, serve, and sync. */
+/** Date/project filters — shared by serve and sync. */
 const filterArgs = {
   since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
   until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
   project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
 } as const;
 
-/** Summary generation — shared by report, serve, and sync. */
+/** Summary generation — shared by serve and sync. */
 const summarizeArgs = {
   summarize: { type: "boolean", default: false, description: "Generate per-session summaries via headless 'claude -p' (cached)" },
   "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
@@ -427,20 +403,12 @@ const extractTasksArg = {
   },
 } as const;
 
-/** Inputs shared by report, serve, and sync (everything `buildDashboard` reads). */
+/** Inputs shared by serve and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
   ...agentsViewArgs,
   ...filterArgs,
   ...summarizeArgs,
-} as const;
-
-const reportArgs = {
-  ...buildArgs,
-  out: { type: "string", alias: "o", default: "argus-report.html", description: "Output path", valueHint: "file" },
-  json: { type: "boolean", default: false, description: "Write raw aggregate JSON to --out instead of HTML" },
-  console: { type: "boolean", default: false, description: "Print a compact overview to the terminal instead of writing a file" },
-  open: { type: "boolean", default: false, description: "Open the report in your browser when done (macOS)" },
 } as const;
 
 /** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
@@ -451,12 +419,6 @@ function taskExtractionOptions(
 ): TaskExtractionOptions {
   return resolveTaskExtraction(args, loadConfig(), debugLog);
 }
-
-const report = defineCommand({
-  meta: { name: "report", description: "build the local HTML (or --json) dashboard" },
-  args: reportArgs,
-  run: handler((args) => runReport({ ...buildOptions(args), out: args.out, json: args.json, open: args.open }, log, args.console)),
-});
 
 const serve = defineCommand({
   meta: { name: "serve", description: "serve the interactive dashboard at a local web address" },
@@ -624,7 +586,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { report, serve, index, sync, run: runCmd, status, login },
+  subCommands: { serve, index, sync, run: runCmd, status, login },
 });
 
 async function run() {
