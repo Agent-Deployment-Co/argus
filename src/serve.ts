@@ -3,7 +3,7 @@
 // the future argusd daemon will run; today it builds the dashboard on demand and caches it briefly
 // so rapid page reloads don't re-read every transcript.
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
@@ -11,9 +11,12 @@ import { fileURLToPath } from "node:url";
 import type { Dashboard } from "./aggregate.ts";
 import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
-import { extractSessionTasks, type ExtractSessionTasksResult } from "./session-tasks.ts";
+import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
+import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
+import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
+import type { ResolvedTaskExtraction } from "./config.ts";
 import { openStore } from "./store.ts";
-import type { TaskFact } from "./store-contract.ts";
+import type { ParserDiagnostic, TaskFact } from "./store-contract.ts";
 import type { TaskExtractionOptions } from "./task-extraction.ts";
 
 export interface ServeOptions {
@@ -22,7 +25,7 @@ export interface ServeOptions {
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
-  /** Provider settings used by the session-detail task extraction action. */
+  /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
   taskExtraction: TaskExtractionOptions;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
@@ -43,17 +46,30 @@ export interface Snapshot {
   generatedAtMs: number;
 }
 
-export interface ExtractTasksResponse {
+export interface ReindexResponse {
   tasks: TaskFact[];
+  diagnostics?: ParserDiagnostic[];
+}
+
+export interface SessionTaskMetricsResponse {
+  /** Per-task metrics for the session, keyed by task id. Tasks with no activity are absent. */
+  metrics: Record<string, TaskMetrics>;
 }
 
 /** Builds the snapshot for a request. `force` bypasses any caching the caller layered on. */
 export type SnapshotSource = (force: boolean) => Promise<Snapshot>;
-export type TaskExtractor = (sessionId: string) => Promise<ExtractSessionTasksResult>;
+export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
+/** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
+export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
+/** Gather the /debug payload (settings, env, paths, store/index status). */
+export type DebugInfoReader = () => Promise<DebugInfo>;
 
 interface AppOptions {
-  extractTasks?: TaskExtractor;
-  onTasksChanged?: () => void;
+  reindex?: SessionReindexer;
+  /** Called after a successful reindex so the caller can drop its cached snapshot. */
+  onStoreChanged?: () => void;
+  sessionTaskMetrics?: SessionTaskMetricsReader;
+  debugInfo?: DebugInfoReader;
 }
 
 /** How long a built dashboard is reused before the next request triggers a fresh read. */
@@ -100,6 +116,30 @@ dev server with <code>bun run dev:web</code> for live-reloading development.</p>
 <p>The data API is live at <a href="/api/snapshot">/api/snapshot</a>.</p></body>`;
 }
 
+/** The custom header the web app sends on mutating requests. A cross-origin page can't set it
+ *  without a CORS preflight, which this server never approves — so requiring it blocks CSRF. */
+const APP_HEADER = "x-argus-app";
+
+/** Reject cross-site requests to a mutating route. `serve` binds to loopback, but a malicious page
+ *  open in the user's browser can still POST to localhost; a bodyless POST is a CORS "simple request"
+ *  that fires without a preflight, so the side effect (here: a reindex that can spawn the configured
+ *  task-extraction provider over local transcripts) would happen even though the attacker can't read
+ *  the response. We require a custom header the browser only lets same-origin script set, and reject
+ *  on `Sec-Fetch-Site` as defense in depth. Returns a 403 Response to send, or null to proceed. */
+function rejectCrossSite(c: Context): Response | null {
+  // Modern browsers stamp Sec-Fetch-Site and JS can't forge it; same-origin/none are fine, anything
+  // else (same-site/cross-site) is rejected outright.
+  const site = c.req.header("sec-fetch-site");
+  if (site && site !== "same-origin" && site !== "none") {
+    return c.json({ error: "Cross-site requests are not allowed." }, 403);
+  }
+  // Primary defense for any client: the same-origin-only custom header.
+  if (c.req.header(APP_HEADER) !== "1") {
+    return c.json({ error: "This endpoint only accepts same-origin requests from the Argus web app." }, 403);
+  }
+  return null;
+}
+
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
@@ -110,25 +150,42 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json(snap);
   });
 
-  app.post("/api/tasks/extract", async (c) => {
-    const body = await c.req.json().catch(() => null);
-    const sessionId =
-      body && typeof body === "object" && !Array.isArray(body)
-        ? String((body as Record<string, unknown>).sessionId ?? "").trim()
-        : "";
-    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
-    if (!opts.extractTasks) return c.json({ error: "Task extraction is unavailable in this process." }, 503);
+  // Re-index a single session: re-read its transcript from disk and refresh it in the store
+  // (sessions/messages/invocations/tasks), with task processing always on. 404 if the session is
+  // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
+  // diagnostics — the session is still structurally refreshed.
+  app.post("/api/sessions/:id/reindex", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
 
-    const extracted = await opts.extractTasks(sessionId);
-    if (!extracted.ok) {
-      return c.json(
-        { error: extracted.message, diagnostics: extracted.diagnostics ?? [] },
-        extracted.status,
-      );
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);
+
+    const result = await opts.reindex(sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message, diagnostics: result.diagnostics ?? [] }, result.status);
     }
 
-    opts.onTasksChanged?.();
-    return c.json({ tasks: extracted.tasks } satisfies ExtractTasksResponse);
+    opts.onStoreChanged?.();
+    return c.json({ tasks: result.tasks, diagnostics: result.diagnostics } satisfies ReindexResponse);
+  });
+
+  // Per-task metrics for a whole session, computed on demand from the messages attributed to each
+  // task (not shipped in the big snapshot). One fetch backs both the task list and the detail drawer.
+  app.get("/api/sessions/:id/task-metrics", async (c) => {
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.sessionTaskMetrics) return c.json({ error: "Task metrics are unavailable in this process." }, 503);
+
+    const metrics = await opts.sessionTaskMetrics(sessionId);
+    return c.json({ metrics } satisfies SessionTaskMetricsResponse);
+  });
+
+  // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
+  app.get("/api/debug", async (c) => {
+    if (!opts.debugInfo) return c.json({ error: "Debug info is unavailable in this process." }, 503);
+    return c.json(await opts.debugInfo());
   });
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
@@ -184,16 +241,37 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     cachedAt = 0;
   };
 
-  const extractTasks: TaskExtractor = async (sessionId) => {
+  // Task extraction is always on for an explicit single-session Refresh (deliberately unlike the CLI
+  // `index refresh`, which defers to the config opt-in): force `enabled` on while keeping the
+  // configured provider/model. A provider explicitly set to "off" stays off.
+  const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: true };
+  const reindex: SessionReindexer = async (sessionId) => {
     const store = await openStore();
     try {
-      return await extractSessionTasks(store, { sessionId, taskExtraction: opts.taskExtraction });
+      return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction });
     } finally {
       await store.close();
     }
   };
 
-  const app = createApp(snapshot, webRoot, { extractTasks, onTasksChanged: clearCachedSnapshot });
+  const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
+    const store = await openStore();
+    try {
+      const byTask = await store.readSessionTaskMessages(sessionId);
+      const out: Record<string, TaskMetrics> = {};
+      for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+      return out;
+    } finally {
+      await store.close();
+    }
+  };
+
+  const app = createApp(snapshot, webRoot, {
+    reindex,
+    onStoreChanged: clearCachedSnapshot,
+    sessionTaskMetrics,
+    debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
+  });
 
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {

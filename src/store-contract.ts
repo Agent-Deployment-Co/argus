@@ -469,6 +469,17 @@ export interface TranscriptIndex {
   relationships: Array<{ child: string; parent: string }>;
 }
 
+/** Coarse store-wide counts for status/debug surfaces. */
+export interface StoreStats {
+  /** The store's on-disk schema version (PRAGMA user_version). */
+  schemaVersion: number;
+  sessions: number;
+  messages: number;
+  tasks: number;
+  /** Messages attributed to a task (resolved_messages.task_seq IS NOT NULL) — chapter coverage. */
+  messagesWithTask: number;
+}
+
 export interface Store {
   /** Reconstruct an auxiliary fragment from its envelope + rows (transcripts/imports are re-parsed
    *  from disk, not reconstructed, so they return undefined). */
@@ -499,8 +510,9 @@ export interface Store {
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
-  /** Replace only the task facts for one resolved session. Returns false if the session is unknown. */
-  replaceSessionTasks(sessionId: string, tasks: TaskFact[]): Promise<boolean>;
+  /** Messages attributed to each task in a session (by resolved_messages.task_seq), keyed by task id,
+   *  oldest first. Tasks with no attributed messages are absent from the map. */
+  readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */
@@ -511,6 +523,8 @@ export interface Store {
   archivedCountForOwner(owner: string): Promise<number>;
   /** Resolved session counts grouped by owning producer (present on disk vs archived). */
   resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>>;
+  /** Coarse row counts for status/debug surfaces (cheap COUNT(*)s + the store schema version). */
+  storeStats(): Promise<StoreStats>;
   /** Canonical session ids currently materialized for `owner` (present and archived). */
   resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
   /** Canonical session ids owned by some producer other than `owner`. */
