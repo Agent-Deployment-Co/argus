@@ -3,7 +3,7 @@
 // the future argusd daemon will run; today it builds the dashboard on demand and caches it briefly
 // so rapid page reloads don't re-read every transcript.
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
@@ -116,6 +116,30 @@ dev server with <code>bun run dev:web</code> for live-reloading development.</p>
 <p>The data API is live at <a href="/api/snapshot">/api/snapshot</a>.</p></body>`;
 }
 
+/** The custom header the web app sends on mutating requests. A cross-origin page can't set it
+ *  without a CORS preflight, which this server never approves — so requiring it blocks CSRF. */
+const APP_HEADER = "x-argus-app";
+
+/** Reject cross-site requests to a mutating route. `serve` binds to loopback, but a malicious page
+ *  open in the user's browser can still POST to localhost; a bodyless POST is a CORS "simple request"
+ *  that fires without a preflight, so the side effect (here: a reindex that can spawn the configured
+ *  task-extraction provider over local transcripts) would happen even though the attacker can't read
+ *  the response. We require a custom header the browser only lets same-origin script set, and reject
+ *  on `Sec-Fetch-Site` as defense in depth. Returns a 403 Response to send, or null to proceed. */
+function rejectCrossSite(c: Context): Response | null {
+  // Modern browsers stamp Sec-Fetch-Site and JS can't forge it; same-origin/none are fine, anything
+  // else (same-site/cross-site) is rejected outright.
+  const site = c.req.header("sec-fetch-site");
+  if (site && site !== "same-origin" && site !== "none") {
+    return c.json({ error: "Cross-site requests are not allowed." }, 403);
+  }
+  // Primary defense for any client: the same-origin-only custom header.
+  if (c.req.header(APP_HEADER) !== "1") {
+    return c.json({ error: "This endpoint only accepts same-origin requests from the Argus web app." }, 403);
+  }
+  return null;
+}
+
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
@@ -131,6 +155,9 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
   // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
   // diagnostics — the session is still structurally refreshed.
   app.post("/api/sessions/:id/reindex", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+
     const sessionId = c.req.param("id").trim();
     if (!sessionId) return c.json({ error: "Missing session id." }, 400);
     if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);

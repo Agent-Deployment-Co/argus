@@ -64,12 +64,14 @@ const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }
 ];
 
 export function Layout() {
-  const query = useSnapshotQuery();
+  // /debug is diagnostics: it must render even when the snapshot fails to load, so it bypasses the
+  // snapshot gate below (it fetches its own data and never calls useSnapshot). Skip the snapshot
+  // fetch entirely there — otherwise a broken/slow /api/snapshot still fires in the background and
+  // undermines the page as a diagnostic surface.
+  const isDebug = useRouterState({ select: (s) => s.location.pathname === "/debug" });
+  const query = useSnapshotQuery(!isDebug);
   const snap = query.data;
   const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
-  // /debug is diagnostics: it must render even when the snapshot fails to load, so it bypasses the
-  // snapshot gate below (it fetches its own data and never calls useSnapshot).
-  const isDebug = useRouterState({ select: (s) => s.location.pathname === "/debug" });
 
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleRail = useCallback(() => {
