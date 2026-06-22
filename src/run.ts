@@ -5,7 +5,7 @@
 // launchd, Docker) owns backgrounding, restarts, and logging.
 import { superviseLoop } from "./backoff.ts";
 import type { BuildDashboardOptions, Log } from "./dashboard-builder.ts";
-import { startServer } from "./serve.ts";
+import { startServer } from "./api/serve.ts";
 import { watchIndex, watchSync } from "./watch.ts";
 import type { SyncOptions } from "./cli-options.ts";
 import type { TaskExtractionOptions } from "./task-extraction.ts";

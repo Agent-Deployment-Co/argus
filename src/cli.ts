@@ -7,7 +7,7 @@ import { printBanner } from "./banner.ts";
 import { scanStore } from "./parse-incremental.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
-import { startServer } from "./serve.ts";
+import { startServer } from "./api/serve.ts";
 import { openStore } from "./store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";

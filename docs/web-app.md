@@ -10,7 +10,7 @@ interactive features (filtering, drill-downs, live updates) tracked under issue 
                    │  GET /assets/*    (JS / CSS)        │  (TanStack Router/Query/Table,
                    │  GET /api/snapshot (Dashboard JSON) │   Chart.js via react-chartjs-2)
                    ▼                                     │
-            Hono server  (src/serve.ts)                  │
+            Hono server  (src/api/serve.ts)                  │
                    │                                     │
    buildDashboard() ── reads the warm store (incremental)┘
    (src/dashboard-builder.ts → SessionStore.read)
@@ -27,7 +27,7 @@ demand and caches it briefly.
   `sync` command and the server share one code path. It reads the warm session store
   **incrementally** (only new/changed transcripts are parsed — see [architecture.md](./architecture.md)),
   not a cold re-parse from disk.
-- **`src/serve.ts`** — `createApp()` (pure route wiring, unit-testable) and `startServer()` (owns the
+- **`src/api/serve.ts`** — `createApp()` (pure route wiring, unit-testable) and `startServer()` (owns the
   cache + listens via `@hono/node-server`). Routes:
   - `GET /api/snapshot` → `{ dashboard, recommendations, generatedAtMs }`. Reuses `buildDashboard`
     + `computeRecommendations`. The result is cached in memory for **30s**; `?refresh=1` forces a
@@ -78,7 +78,7 @@ The visual design (CSS variables, the coffee-bean/antique-white themes, the bran
   Only `hono` + `@hono/node-server` are added to runtime `dependencies` — the end-user install
   footprint barely changes.
 - The server finds the web root relative to its own module, so it works both as the bundled CLI
-  (`dist/index.js` → `dist/web`) and from source after a `build:web` (`src/serve.ts` → `../dist/web`).
+  (`dist/index.js` → `dist/web`) and from source after a `build:web` (`src/api/serve.ts` → `../../dist/web`).
 
 ---
 

@@ -1,4 +1,4 @@
-import type { Dashboard } from "./types.ts";
+import type { Dashboard } from "../types.ts";
 
 export type RecommendationSeverity = "tip" | "warning";
 

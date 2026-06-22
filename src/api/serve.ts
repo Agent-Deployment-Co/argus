@@ -9,24 +9,24 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Dashboard } from "./aggregate.ts";
-import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
-import type { TranscriptSource } from "./parse.ts";
+import type { Dashboard } from "../aggregate.ts";
+import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "../dashboard-builder.ts";
+import type { TranscriptSource } from "../parse.ts";
 import {
   buildSessionDetail,
   buildSessionList,
   type SessionListResponse,
   type SessionSort,
 } from "./session-list.ts";
-import type { SessionRow } from "./types.ts";
+import type { SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
-import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
+import { reindexSession, type ReindexSessionResult } from "../parse-incremental.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import type { ResolvedTaskExtraction } from "./config.ts";
-import { openStore } from "./store.ts";
-import type { ParserDiagnostic, TaskFact } from "./store-contract.ts";
-import type { TaskExtractionOptions } from "./task-extraction.ts";
+import type { ResolvedTaskExtraction } from "../config.ts";
+import { openStore } from "../store.ts";
+import type { ParserDiagnostic, TaskFact } from "../store-contract.ts";
+import type { TaskExtractionOptions } from "../task-extraction.ts";
 
 export interface ServeOptions {
   port: number;
@@ -133,10 +133,13 @@ const MIME: Record<string, string> = {
 };
 
 /** Locate the compiled web app. Works whether we're running the bundled CLI (dist/index.js, assets
- *  at dist/web) or from source after `build:web` (src/serve.ts, assets at ../dist/web). */
+ *  at dist/web) or from source after `build:web` (src/api/serve.ts, assets at ../../dist/web). */
 function findWebRoot(): string | null {
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(here, "web"), join(here, "..", "dist", "web")];
+  const candidates = [
+    join(here, "web"), // bundled: dist/index.js → dist/web
+    join(here, "..", "..", "dist", "web"), // from source: src/api/serve.ts → repo-root/dist/web
+  ];
   return candidates.find((p) => existsSync(join(p, "index.html"))) ?? null;
 }
 
