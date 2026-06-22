@@ -6,7 +6,7 @@
     "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["node"],
+    "types": ["bun-types", "node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
