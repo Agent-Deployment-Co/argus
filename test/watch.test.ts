@@ -8,7 +8,6 @@ const ok = (status = 200): PushResult => ({ ok: true, status, body: "ok" });
 const syncOpts = (over: Partial<WatchSyncOptions>): WatchSyncOptions => ({
   source: "claude",
   agentsView: "off",
-  summarize: false,
   endpoint: "http://test.local",
   intervalMin: 1,
   onUnauthenticated: "dormant",

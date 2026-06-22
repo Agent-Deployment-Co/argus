@@ -197,8 +197,6 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
         since: opts.since,
         until: opts.until,
         project: opts.project,
-        summarize: opts.summarize,
-        summarizeModel: opts.summarizeModel,
         // serve is a pure reader: read the already-materialized store, never reconcile/materialize on
         // a page load. Writing on read silently destroyed extracted tasks (and firstPrompt) for any
         // session whose transcript changed since the last index. The store is maintained by
@@ -356,12 +354,6 @@ const filterArgs = {
   project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
 } as const;
 
-/** Summary generation — shared by serve and sync. */
-const summarizeArgs = {
-  summarize: { type: "boolean", default: false, description: "Generate per-session summaries via headless 'claude -p' (cached)" },
-  "summarize-model": { type: "string", description: "Model for summaries (e.g. claude-haiku-4-5-20251001)", valueHint: "id" },
-} as const;
-
 // Task extraction options for web/session-screen extraction. Flags carry no env-var defaults: an
 // unset flag resolves to `undefined` so the config resolver can honor CLI flag > env > argus.json >
 // default in one place (see resolveTaskExtraction in config.ts).
@@ -408,7 +400,6 @@ const buildArgs = {
   ...sourceArg,
   ...agentsViewArgs,
   ...filterArgs,
-  ...summarizeArgs,
 } as const;
 
 /** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
