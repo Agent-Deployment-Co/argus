@@ -24,10 +24,9 @@ const DEFAULT_PORT = Number(process.env.ARGUS_PORT) || 4242;
 // option shapes below layer each subcommand's own flags on top of it. The shared store-selection
 // (`SyncOptions`) and build (`buildOptions`) shapes live in cli-options.ts so the extracted command
 // bodies and the long-running loops can reuse them.
-interface ServeOptions extends BuildDashboardOptions {
+interface ServeOptions {
   port: number;
   open: boolean;
-  taskExtraction: TaskExtractionOptions;
 }
 
 const log: Log = (s) => process.stderr.write(s + "\n");
@@ -190,18 +189,14 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
     {
       port: opts.port,
       open: opts.open,
-      build: {
-        source: opts.source,
-        since: opts.since,
-        until: opts.until,
-        project: opts.project,
-        // serve is a pure reader: read the already-materialized store, never reconcile/materialize on
-        // a page load. Writing on read silently destroyed extracted tasks (and firstPrompt) for any
-        // session whose transcript changed since the last index. The store is maintained by
-        // `index` / `argus run` (where extraction settings live). See #98.
-        readOnly: true,
-      },
-      taskExtraction: opts.taskExtraction,
+      // serve shows the whole store; it takes no source/date filters. It's a pure reader: read the
+      // already-materialized store, never reconcile/materialize on a page load. Writing on read
+      // silently destroyed extracted tasks (and firstPrompt) for any session whose transcript changed
+      // since the last index. The store is maintained by `index` / `argus run`. See #98.
+      build: { source: "all", readOnly: true },
+      // Per-session reindex (POST /api/sessions/:id/reindex) honors the argus.json task-extraction
+      // setting (flag > env > argus.json > default), resolved here from config rather than a CLI flag.
+      taskExtraction: taskExtractionOptions({}),
     },
     log,
   );
@@ -386,18 +381,14 @@ function taskExtractionOptions(
 const serve = defineCommand({
   meta: { name: "serve", description: "serve the interactive dashboard at a local web address" },
   args: {
-    ...buildArgs,
-    ...taskArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     open: { type: "boolean", default: false, description: "Open the dashboard in your browser once it's ready (macOS)" },
   },
   run: handler((args) =>
     runServe(
       {
-        ...buildOptions(args),
         port: Number(args.port) || DEFAULT_PORT,
         open: args.open,
-        taskExtraction: taskExtractionOptions(args),
       },
       log,
     ),
