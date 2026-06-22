@@ -8,8 +8,7 @@ import type { TranscriptSource } from "./parse.ts";
 import { syncStatsSummary } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
-import { claudeAvailable, heuristicSummary, llmSummaries } from "./summarize.ts";
-import type { SessionMeta } from "./types.ts";
+import { heuristicSummary } from "./summarize.ts";
 
 export type Log = (s: string) => void;
 
@@ -22,8 +21,6 @@ export interface BuildDashboardOptions {
   since?: string;
   until?: string;
   project?: string;
-  summarize: boolean;
-  summarizeModel?: string;
   /** Read the store without reconciling first (no writes). Set by the serve/upload legs of
    *  `argus run`, where the index leg is the sole writer; left false for one-shot commands. */
   readOnly?: boolean;
@@ -33,7 +30,7 @@ export function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[]
   return source === "all" ? ["claude", "codex", "gemini", "cowork"] : [source];
 }
 
-/** One-line totals for a built dashboard, shared by the report and upload commands. */
+/** One-line totals for a built dashboard, shared by the sync upload path. */
 export function summaryLine(dash: Dashboard): string {
   return (
     `${dash.totals.sessions} sessions · ${dash.totals.messages} msgs · ` +
@@ -66,7 +63,7 @@ function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
     .slice(0, 5);
 }
 
-/** Parse transcripts, apply filters, summarize, and build the aggregate dashboard. */
+/** Parse transcripts, apply filters, summarize heuristically, and build the aggregate dashboard. */
 export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
   log("Reading transcripts…");
   const store = openSessionStore({
@@ -93,11 +90,9 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
 
   const plugins = loadPlugins();
 
-  // Build per-session last-timestamp + heuristic summaries first.
-  const lastTs = new Map<string, number>();
+  // Build a heuristic one-line summary per session from its aggregated facts.
   const factsBySession = new Map<string, { firstPrompt: string; topSkills: string[]; toolCounts: Record<string, number>; filesTouched: string[] }>();
   for (const m of parseResult.messages) {
-    lastTs.set(m.sessionId, Math.max(lastTs.get(m.sessionId) || 0, m.ts));
     const f = factsBySession.get(m.sessionId) || {
       firstPrompt: parseResult.sessions.get(m.sessionId)?.firstPrompt || "",
       topSkills: [],
@@ -113,25 +108,7 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
   }
 
   const summaries = new Map<string, string>();
-
-  if (opts.summarize) {
-    if (!claudeAvailable()) {
-      log("  ! 'claude' CLI not found on PATH — falling back to heuristic summaries.");
-    } else {
-      log(`Summarizing ${parseResult.sessions.size} sessions via claude -p (cached; incremental)…`);
-      const targets: { meta: SessionMeta; lastTs: number }[] = [];
-      for (const meta of parseResult.sessions.values()) {
-        targets.push({ meta, lastTs: lastTs.get(meta.sessionId) || 0 });
-      }
-      const llm = llmSummaries(targets, opts.summarizeModel, log);
-      for (const [sid, s] of llm) summaries.set(sid, s);
-    }
-  }
-
-  // Fill any missing summaries with the heuristic.
-  for (const [sid, f] of factsBySession) {
-    if (!summaries.has(sid)) summaries.set(sid, heuristicSummary(f));
-  }
+  for (const [sid, f] of factsBySession) summaries.set(sid, heuristicSummary(f));
 
   const dash = aggregate(parseResult, plugins, summaries);
   dash.generatedAtMs = Date.now();

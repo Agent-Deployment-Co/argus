@@ -35,7 +35,6 @@ export const INSTALLED_PLUGINS_FILE = join(CLAUDE_DIR, "plugins", "installed_plu
 export const ARGUS_DATA_DIR = defaultArgusDataDir();
 export const ARGUS_CONFIG_DIR = defaultArgusConfigDir();
 export const STORE_FILE = join(ARGUS_DATA_DIR, "argus.db");
-export const SUMMARY_CACHE_FILE = join(ARGUS_DATA_DIR, "summaries.json");
 export const ACCESS_TOKEN_FILE = join(ARGUS_CONFIG_DIR, "token.json");
 export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
 // The app-owned settings file (the config peer of argus.db). Holds general settings — not secrets
