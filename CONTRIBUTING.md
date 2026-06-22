@@ -15,7 +15,7 @@ Run the CLI directly from source:
 
 ```bash
 bun run src/cli.ts
-bun run src/cli.ts report --open
+bun run src/cli.ts serve --open
 ```
 
 Run the web app from source (build the UI once, then serve it):
@@ -54,33 +54,27 @@ suite, and verifies the web build.
 The core data flow is:
 
 ```text
-parse.ts -> aggregate.ts -> report.ts or push.ts
+parse.ts -> aggregate.ts -> serve.ts or push.ts
 ```
 
 - `src/cli.ts` is the executable entry point. It defines the subcommands with
-  [citty](https://github.com/unjs/citty) (each declares its own flags and per-subcommand `--help`),
-  applies filters, coordinates summaries, and dispatches the terminal overview, HTML report, web
-  server, login, and push commands.
+  [citty](https://github.com/unjs/citty) (each declares its own flags and per-subcommand `--help`)
+  and dispatches the web server, indexing, login, and upload commands.
 - `src/dashboard-builder.ts` builds the analyzed `Dashboard` from the session store. Shared by
-  the `report`/`push` commands and the web server.
+  the `sync` command and the web server.
 - `src/parse.ts` reads Claude, Codex, and Gemini transcripts into normalized message and
   session records.
 - `src/aggregate.ts` converts parsed records into the dashboard model and computes
   breakdowns and estimated cost.
-- `src/report.ts` renders the self-contained HTML report.
 - `src/serve.ts` runs the local web server (`argus serve`): a Hono app exposing the dashboard
   as a JSON API and serving the React web app from `dist/web`.
-- `src/console-report.ts` renders the compact terminal overview.
 - `src/push.ts` detects user and organization metadata and sends a dashboard snapshot.
 - `src/auth.ts` manages dashboard login credentials used by the CLI.
-- `src/summarize.ts` creates heuristic summaries and optionally invokes `claude -p`.
+- `src/summarize.ts` creates the per-session heuristic summary.
 - `src/inventory.ts` maps skills and MCP tools to installed plugins.
 - `src/pricing.ts` contains model-family pricing and user override support.
 - `src/tool-categories.ts` provides canonical tool categorization and MCP name parsing.
 - `src/paths.ts` defines transcript, cache, settings, and credential locations.
-
-The hosted dashboard renderer also uses `renderHtml`, so report changes must continue to
-support the optional team-view fields in `RenderOptions`.
 
 ## Parsing invariants
 
@@ -98,16 +92,6 @@ Transcript parsing is the most sensitive part of the CLI. Preserve these behavio
 
 Cost must be calculated from individual messages before aggregation. A session can use
 multiple models, so pricing combined token totals once would produce incorrect results.
-
-## Report assets
-
-The HTML report must remain self-contained and usable offline.
-
-- Chart.js is vendored in `src/vendor/`.
-- Aleo and Poppins webfonts are vendored and embedded by `src/brand.ts`.
-- Keep third-party licenses in `src/vendor/`.
-- Run the production build when changing asset loading; source execution and the bundled
-  Node.js CLI resolve assets differently.
 
 ## Web app
 
@@ -156,10 +140,10 @@ The suite uses `bun:test` with no additional test framework. Coverage includes:
 - Tool, skill, MCP, file, and tool-result attribution
 - Pricing and aggregation across model families
 - Plugin inventory and skill ownership
-- Session summaries
-- Dashboard login and push behavior
-- Console and HTML report rendering
+- Per-session heuristic summaries
+- Dashboard login and upload behavior
+- The web app's JSON API
 - The shared dashboard payload contract
 
 Add focused tests for narrow changes. Broaden coverage when modifying transcript parsing,
-shared aggregation behavior, payload types, or report rendering.
+shared aggregation behavior, or payload types.

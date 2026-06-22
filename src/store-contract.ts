@@ -5,8 +5,9 @@ import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from
 /**
  * Increment when serialized fragment semantics change incompatibly.
  * Source parser versions remain independent so one adapter can invalidate narrowly.
+ * v2: dropped external (AgentsView) import fragments — stale stores re-parse from disk.
  */
-export const PARSED_FRAGMENT_CONTRACT_VERSION = 1;
+export const PARSED_FRAGMENT_CONTRACT_VERSION = 2;
 
 /** Decimal string used for filesystem values that may exceed JavaScript's safe integer range. */
 export type SerializedInt64 = string;
@@ -314,49 +315,7 @@ export interface ParsedAuxiliaryFragment {
   diagnostics: ParserDiagnostic[];
 }
 
-export type ImportCapability = "complete" | "partial" | "missing";
-
-export interface ExternalImportCoverage {
-  source: AgentSource;
-  completeness: "complete" | "partial" | "unknown";
-  sourceFiles?: Array<{
-    file: FileIdentity;
-    fingerprint?: FileFingerprint;
-  }>;
-  sourceSessionIds?: string[];
-  throughTimestampMs?: number;
-}
-
-export interface ExternalImportProvenance {
-  importId: string;
-  adapter: {
-    name: "agentsview";
-    version: string;
-  };
-  database: StableFileSnapshot;
-  schemaFingerprint: string;
-  sqlite?: {
-    applicationId?: number;
-    userVersion?: number;
-    schemaVersion?: number;
-    dataVersion?: number;
-  };
-  capabilities: Record<string, ImportCapability>;
-  coverage: ExternalImportCoverage[];
-  importedAtMs: number;
-}
-
-/** External facts share the normalized model without pretending the database is a transcript. */
-export interface ImportedFragment {
-  kind: "external";
-  id: string;
-  contractVersion: typeof PARSED_FRAGMENT_CONTRACT_VERSION;
-  provenance: ExternalImportProvenance;
-  facts: NormalizedFacts;
-  diagnostics: ParserDiagnostic[];
-}
-
-export type StoredFragment = ParsedFileFragment | ParsedAuxiliaryFragment | ImportedFragment;
+export type StoredFragment = ParsedFileFragment | ParsedAuxiliaryFragment;
 
 export type FileParseResult =
   | {
@@ -413,7 +372,6 @@ export type InvalidationReason =
   | "parser_version"
   | "file_changed"
   | "auxiliary_input_changed"
-  | "external_import_changed"
   | "manual_rebuild";
 
 /**
@@ -424,7 +382,6 @@ export type InvalidationReason =
 export interface ReconstructedFragments {
   nativeFragments: ParsedFileFragment[];
   auxiliaryFragments: ParsedAuxiliaryFragment[];
-  importedFragments: ImportedFragment[];
 }
 
 /** Filters applied to the materialized read model at read time (SQL pushdown). */
@@ -541,37 +498,11 @@ export interface Store {
 export interface ReconciliationInput {
   nativeFragments: ParsedFileFragment[];
   auxiliaryFragments: ParsedAuxiliaryFragment[];
-  importedFragments: ImportedFragment[];
   diagnostics: ParserDiagnostic[];
 }
 
 export interface FragmentReconciler {
   reconcile(input: ReconciliationInput): ParseResult;
-}
-
-export interface CompatibleExternalImportProbe {
-  compatible: true;
-  database: StableFileSnapshot;
-  schemaFingerprint: string;
-  sqlite?: ExternalImportProvenance["sqlite"];
-}
-
-export interface IncompatibleExternalImportProbe {
-  compatible: false;
-  reason: string;
-  database?: StableFileSnapshot;
-  schemaFingerprint?: string;
-  sqlite?: ExternalImportProvenance["sqlite"];
-}
-
-export type ExternalImportProbe =
-  | CompatibleExternalImportProbe
-  | IncompatibleExternalImportProbe;
-
-export interface ExternalFragmentImporter {
-  readonly kind: "agentsview";
-  probe(): Promise<ExternalImportProbe>;
-  importFragments(probe: CompatibleExternalImportProbe): Promise<ImportedFragment[]>;
 }
 
 export interface ReconciliationOrder {

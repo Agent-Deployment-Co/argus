@@ -36,7 +36,7 @@ export type ConfigWarn = (message: string) => void;
 
 /**
  * Read and parse `argus.json`. Missing file → `{}` (defaults, no error). Malformed JSON → a clear
- * warning and `{}` (never throws) — mirrors the tolerant handling of `pricing.json` / `summaries.json`.
+ * warning and `{}` (never throws) — mirrors the tolerant handling of `pricing.json`.
  */
 export function loadConfig(path: string = CONFIG_FILE, warn: ConfigWarn = console.warn): ArgusConfig {
   let raw: string;

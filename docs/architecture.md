@@ -4,19 +4,18 @@ Argus turns scattered local agent transcripts into one queryable, trusted datase
 one-directional:
 
 ```
-  Claude / Codex / Gemini transcripts on disk        AgentsView database
-                │                                            │
-        native producers                            import producer
-                │                                            │
-                └───────────────┬────────────────────────────┘
-                                ▼
-                      the coordinator (indexing)
-            reconcile → interpret (opt-in) → materialize per session
-                                ▼
-                      the store  (argus.db)
-                                ▼
-                       consumers (read only)
-                  report · serve · sync · status
+  Claude / Codex / Gemini transcripts on disk
+                │
+        native producers
+                │
+                ▼
+      the coordinator (indexing)
+  reconcile → interpret (opt-in) → materialize per session
+                ▼
+      the store  (argus.db)
+                ▼
+       consumers (read only)
+          serve · sync · status
 ```
 
 Three ideas carry the whole design:
@@ -34,9 +33,7 @@ A producer (`src/producers/<id>/`) knows everything source-specific: where its s
 read them, and what it can observe. The registry is `src/producers/index.ts` — **adding a source is a
 new directory plus one line there.** The contract is `src/producer.ts`.
 
-There are two kinds:
-
-- **Native producers** (`claude`, `codex`, `gemini`) read local transcript files.
+Producers are **native**: (`claude`, `codex`, `gemini`, `cowork`) they read local transcript files.
   - `discoverTranscripts(ctx)` — find the source's files on disk (an authoritative list, or a
     "couldn't read" result).
   - `transcriptParser()` — read one file into a fragment of *normalized facts* (sessions, messages,
@@ -52,10 +49,6 @@ There are two kinds:
     `history.jsonl` first prompts or Gemini's project roots.
   - `capabilities` — flags the reconcile engine reads generically (e.g. `canonicalizeSubagents`,
     `dedupeByProviderMessageId`) so the engine never branches on the source name.
-
-- **Import producers** (`agentsview`) are *dependent*: they read sessions from another tool's database
-  and **only contribute sessions no native producer owns**. They expose an `importer()` with
-  `probe()` + `importFragments()` instead of file discovery.
 
 Each source also keeps a second, independent parser in `src/parse.ts` — a from-scratch reader used as
 a **test oracle** (the producer pipeline is checked against it) and as a **fallback** when the store
@@ -137,9 +130,8 @@ session is materialized (so chapter messages get their `task_seq`). Full design:
    `archived` and retained. (A partial re-read of a session whose files partly aged out can't shrink
    the stored copy — the fuller one wins.)
 
-Then each import producer fills in only the sessions no native producer owns. `session_ownership`
-makes hand-offs clean: when a native source gains a file for a session AgentsView used to provide, the
-native producer takes ownership and the AgentsView copy steps aside.
+`session_ownership` tracks which producer owns each session, so a session that moves between sources
+hands off cleanly without duplicating.
 
 Both steps happen **here**, once, at write time — never on read.
 
@@ -162,14 +154,13 @@ and then returns the reconciled `ParseResult` straight from `resolved_*` — **n
 re-parsing, no in-memory filtering.** Query filters (`--since` / `--until` / `--project` / `--source`)
 are pushed down to SQL. Archived sessions are included, so reporting survives transcript retention.
 
-- `report` / `sync` — read → `aggregate.ts` builds the dashboard → render HTML / JSON / upload snapshot.
+- `sync` — read → `aggregate.ts` builds the dashboard → upload the snapshot.
 - `serve` — the same read → `aggregate.ts` path, exposed as a JSON API and an interactive web app
   (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
-- `argus report --console` — same read path, rendered as a compact overview in the terminal.
 
-Because the read model is self-sufficient, a report can be produced even after the original transcripts
-are gone.
+Because the read model is self-sufficient, the dashboard can be produced even after the original
+transcripts are gone.
 
 ---
 
@@ -181,8 +172,7 @@ are gone.
 | `index refresh [<id>…]` | rebuilds index / one session | Bare: re-read all transcripts (keeps sessions no longer on disk). With session id(s): reindex just those from disk (see single-session reindex). |
 | `index rebuild` | rebuilds store | Rebuild from scratch; **drops sessions no longer on disk** (confirm, or `--force`). |
 | `index delete` | deletes      | Permanently remove sessions (`<id>…` or `--archived`). |
-| `report` | reads (+ indexes) | Build the dashboard from the store as a self-contained HTML file. |
-| `serve`  | reads (+ indexes) | Serve the dashboard as an interactive local web app (JSON API + SPA). |
+| `serve`  | reads only        | Serve the dashboard as an interactive local web app (JSON API + SPA). Reads the already-materialized store without reconciling (the `index`/`run` legs are the sole writers). |
 | `sync`   | reads (+ indexes) | Build a snapshot and upload it to the team Worker. `--watch` uploads on an interval. |
 | `status` | reads             | Show per-source counts, freshness, and archived totals. |
 | `run`    | writes + reads    | One long-running process: `index --watch` + `serve` + `sync --watch` against one store, under one shutdown handler, each leg supervised. |
@@ -192,11 +182,12 @@ are gone.
 ## Key rules
 
 - **Reconcile at write, read raw.** Consumers never reconcile.
-- **Per-session ownership.** Native sources win over importers; AgentsView only fills gaps.
+- **Per-session ownership.** `session_ownership` records the owning producer so a session that moves
+  between sources hands off without duplicating.
 - **The index is disposable; the read model is not.** `index refresh` rebuilds the index from disk;
   the trusted rows (including archived sessions) are preserved. `index rebuild` wipes everything.
 - **Nothing is uploaded except by `sync`** (one-shot, `sync --watch`, or the upload leg of `run`).
-  `report` and `serve` are entirely local.
+  `serve` is entirely local.
 - **Indexing is the only writer.** Under `run`, the index leg writes; `serve` and the upload leg only
   read. SQLite WAL makes one writer + concurrent readers safe.
 

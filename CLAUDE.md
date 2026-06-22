@@ -23,12 +23,11 @@ When you need example data, synthesize it. Use redacted, obviously-fake fixtures
 
 Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
 local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, …) and
-presents them three ways: a self-contained HTML dashboard (`report`), an interactive local web app
-(`serve` — the preferred UI; see `docs/web-app.md`), or a per-(org, user) snapshot uploaded to a
-private Cloudflare Worker backend (`sync`, formerly `push`). `argus run` ties the long-running pieces
-together: it keeps the local store current (`index --watch`), serves the web app, and uploads on a
-schedule (`sync --watch`) in one supervised foreground process. Nothing is uploaded during
-`report`/`serve`/`index`; all parsing is local.
+presents them two ways: an interactive local web app (`serve` — the preferred UI; see
+`docs/web-app.md`), or a per-(org, user) snapshot uploaded to a private Cloudflare Worker backend
+(`sync`, formerly `push`). `argus run` ties the long-running pieces together: it keeps the local
+store current (`index --watch`), serves the web app, and uploads on a schedule (`sync --watch`) in
+one supervised foreground process. Nothing is uploaded during `serve`/`index`; all parsing is local.
 
 The Worker + D1 dashboard backend lives in a **separate private repo**, `agentdeploymentco/argus-dash`.
 This repo is the public CLI only.
@@ -36,7 +35,6 @@ This repo is the public CLI only.
 ## Commands
 
 ```bash
-bun run src/cli.ts [report] [--open]     # build the dashboard (entry point)
 bun run src/cli.ts serve --open          # run the interactive web app (needs build:web once)
 bun run dev:web                           # Vite dev server for web/ (live reload; proxies /api → 4242)
 bun test                                  # run all tests (uses bun:test, zero extra deps)
@@ -78,10 +76,10 @@ source identifier / slug stays `cowork` (all lowercase).
 
 The pipeline is a one-way data flow; each stage is its own module:
 
-`parse.ts` → `aggregate.ts` → (`report.ts` HTML | `serve.ts` web app | `push.ts` snapshot)
+`parse.ts` → `aggregate.ts` → (`serve.ts` web app | `push.ts` snapshot)
 
 `dashboard-builder.ts` wraps `parse → aggregate` as `buildDashboard()`, the single entry point the
-`report`/`sync` commands and the web server all call.
+`sync` command and the web server both call.
 
 - **`parse.ts`** — Reads raw `.jsonl` transcripts into `MessageRecord[]` + session metadata.
   This is the most subtle file; accuracy lives here:
@@ -108,7 +106,7 @@ The pipeline is a one-way data flow; each stage is its own module:
   the per-session fold. Shared by both parse paths (`parse.ts` directly; `parse-claude.ts`
   emits `SessionFact.frictionEvents` that `parse-incremental.ts` dedupes and folds). Events
   carry stable ids (record uuid / `tool_use_id`) so resumed-session replays don't double-count.
-  Claude-only: codex/gemini/AgentsView sessions leave `SessionMeta.friction` undefined
+  Claude-only: codex/gemini sessions leave `SessionMeta.friction` undefined
   (unknown) rather than zero — the support matrix is documented in the module header.
 
 - **`tool-categories.ts`** — Canonical tool/MCP parsing: `categorizeTool` (9 categories),
@@ -123,13 +121,10 @@ The pipeline is a one-way data flow; each stage is its own module:
 - **`inventory.ts`** — Reads `~/.claude/settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`
   to map skills (`plugin:skill`) to owning plugins and to surface **enabled-but-unused** plugins.
 
-- **`summarize.ts`** — Per-session summaries. Default is a free heuristic; `--summarize` shells out to
-  headless `claude -p` and caches results in `$ARGUS_CACHE_DIR/summaries.json`, keyed by session + last-activity
-  timestamp (so re-runs are incremental).
-
-- **`report.ts`** / **`chartjs.ts`** — Render the `Dashboard` to one self-contained HTML file with Chart.js
-  inlined from `src/vendor/` (works fully offline). `report.ts` also supports a team/Worker mode (user
-  selector) — that path is exercised by `argus-dash`, not the CLI. Untouched by the web app.
+- **`summarize.ts`** — Per-session heuristic summary (`heuristicSummary`): a free one-liner built
+  from the first prompt, top skills, top tools, and edited-file count. Fills `SessionRow.summary`
+  for the web app's session-title fallback. (The old opt-in `claude -p` summarizer was removed in
+  favor of #88's task interpretation.)
 
 - **`serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer` to
   listen via `@hono/node-server`) exposing `GET /api/snapshot` (`{ dashboard, recommendations,
@@ -138,9 +133,9 @@ The pipeline is a one-way data flow; each stage is its own module:
   Router/Query/Table, Chart.js via react-chartjs-2) is **devDependencies only** — bundled into
   `dist/web` at build, never installed by end users; only `hono`+`@hono/node-server` are runtime deps.
   `web/src/types.ts` imports the CLI `Dashboard` types **type-only** from `src/`, so the API payload and
-  UI can't drift. The preferred UI; full design + rationale in **`docs/web-app.md`**. Note: `serve`
-  reads the warm store incrementally like `report` (not a cold re-parse) — the `log("Reading
-  transcripts…")` line is inherited from `report` and is a candidate to reword for the warm-store case.
+  UI can't drift. The preferred UI; full design + rationale in **`docs/web-app.md`**. `serve` takes only
+  `--port`/`-p` and `--open`; it shows the whole warm store read-only (no source/date filters) and
+  resolves per-session-reindex task extraction from `argus.json`.
 
 - **`push.ts`** — The upload mechanics behind `argus sync` (the command was renamed from `push`; the
   module keeps its name). Detects user (git email → `$USER@host`) and org (email domain), POSTs the
@@ -168,12 +163,12 @@ The pipeline is a one-way data flow; each stage is its own module:
   is an in-memory intermediate — **no message text is stored**. `session-tasks.ts` is the legacy
   on-demand web extraction path (retired by #92).
 
-- **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`report`, `serve`,
+- **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`serve`,
   `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly
   `push`; + `--watch`], `run`, `status`, `login`) with [citty](https://github.com/unjs/citty): each
   declares its own flags, `--help` scopes per subcommand, and flag types flow into the handlers. There
-  is no default command: a bare `argus` (no subcommand) prints the usage/help. The terminal overview
-  is `argus report --console`. `index refresh` takes space-separated session ids (per-session reindex,
+  is no default command: a bare `argus` (no subcommand) prints the usage/help. `serve` exposes only
+  `--port`/`-p` and `--open`. `index refresh` takes space-separated session ids (per-session reindex,
   matching `index delete`); `--extract-tasks <true|false>` on `index`/`rebuild`/`refresh` overrides the
   `argus.json` task-interpretation setting for the run. Holds the `run*` handlers that wire flags into `dashboard-builder.ts`
   and the pipeline. Note: citty runs a parent command's `run` *even after* dispatching to a

@@ -9,7 +9,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sqlite3 from "sqlite3";
 import { openStore } from "../src/store.ts";
 import { parseAll } from "../src/parse.ts";
 import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
@@ -39,14 +38,11 @@ function storePath(root: string): string {
   return join(root, "cache", "fragments.sqlite3");
 }
 
-const NO_AGENTSVIEW = { agentsView: "off" as const };
-
 function stats(overrides: Partial<SyncStats> = {}): SyncStats {
   return {
     hits: 0,
     parsed: 0,
     replaced: 0,
-    imported: 0,
     deleted: 0,
     archived: 0,
     unstable: 0,
@@ -55,81 +51,6 @@ function stats(overrides: Partial<SyncStats> = {}): SyncStats {
     fallback: false,
     ...overrides,
   };
-}
-
-function openDatabase(path: string): Promise<sqlite3.Database> {
-  return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database(path, (error) => {
-      if (error) reject(error);
-      else resolve(db);
-    });
-  });
-}
-
-function exec(db: sqlite3.Database, sql: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
-
-function close(db: sqlite3.Database): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
-
-async function createAgentsViewCodexDb(path: string): Promise<void> {
-  const db = await openDatabase(path);
-  try {
-    await exec(
-      db,
-      `
-        CREATE TABLE sessions (
-          id TEXT PRIMARY KEY,
-          agent TEXT NOT NULL,
-          first_message TEXT,
-          cwd TEXT,
-          git_branch TEXT,
-          source_session_id TEXT,
-          file_path TEXT,
-          file_size INTEGER,
-          file_mtime INTEGER,
-          file_inode INTEGER,
-          file_device INTEGER,
-          deleted_at TEXT
-        );
-        CREATE TABLE messages (
-          id INTEGER PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          ordinal INTEGER NOT NULL,
-          role TEXT NOT NULL,
-          timestamp TEXT,
-          model TEXT,
-          token_usage TEXT,
-          claude_message_id TEXT,
-          claude_request_id TEXT
-        );
-        INSERT INTO sessions VALUES (
-          'codex:codex-db', 'codex', 'from agentsview', '/tmp/agentsview/codex',
-          '', 'codex-db', '/tmp/codex-db.jsonl', 10, 20, 30, 40, NULL
-        );
-        INSERT INTO messages VALUES (
-          1, 'codex:codex-db', 0, 'assistant', '2026-06-04T10:00:00Z',
-          'gpt-5.5',
-          '{"input_tokens":999,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}',
-          '', ''
-        );
-      `,
-    );
-  } finally {
-    await close(db);
-  }
 }
 
 function comparable(result: ParseResult) {
@@ -165,28 +86,9 @@ function comparable(result: ParseResult) {
 }
 
 describe("parseAllIncrementalDetailed", () => {
-  test("describes sync modes in plain language from stats and diagnostics", () => {
+  test("describes sync modes in plain language from stats", () => {
     expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("Read transcripts —");
-    expect(
-      syncStatsSummary(stats({ imported: 1 }), [
-        {
-          code: "agentsview_import_used",
-          severity: "info",
-          phase: "import",
-          message: "Loaded codex sessions from AgentsView (no codex transcripts found on disk).",
-        },
-      ]),
-    ).toStartWith("Loaded sessions from AgentsView —");
-    expect(
-      syncStatsSummary(stats({ hits: 2, imported: 1 }), [
-        {
-          code: "agentsview_import_used",
-          severity: "info",
-          phase: "import",
-          message: "Loaded codex sessions from AgentsView (no codex transcripts found on disk).",
-        },
-      ]),
-    ).toStartWith("Read transcripts and filled gaps from AgentsView —");
+    expect(syncStatsSummary(stats({ parsed: 3 }))).toStartWith("Read transcripts —");
     // Archived sessions are working as intended, so the per-pass summary stays quiet about them
     // (the count lives in `argus status`).
     expect(syncStatsSummary(stats({ parsed: 2, archived: 3 }))).not.toContain("kept after leaving disk");
@@ -204,7 +106,6 @@ describe("parseAllIncrementalDetailed", () => {
       geminiDir: copyFixture("gemini", root),
       sources: ["claude", "codex", "gemini"] as AgentSource[],
       storePath: storePath(root),
-      ...NO_AGENTSVIEW,
     };
 
     const native = parseAll(opts);
@@ -224,7 +125,6 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath: storePath(root),
-      ...NO_AGENTSVIEW,
     };
 
     await parseAllIncrementalDetailed(opts);
@@ -254,7 +154,6 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath: storePath(root),
-      ...NO_AGENTSVIEW,
     };
 
     // The index leg materializes the store.
@@ -281,7 +180,6 @@ describe("parseAllIncrementalDetailed", () => {
       historyFile: join(copyFixture("history.jsonl", root)),
       sources: ["claude", "codex"] as AgentSource[],
       storePath: storePath(root),
-      ...NO_AGENTSVIEW,
     };
 
     const before = await parseAllIncrementalDetailed(opts);
@@ -319,7 +217,6 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath: storePath(root),
-      ...NO_AGENTSVIEW,
     };
 
     await parseAllIncrementalDetailed(opts);
@@ -348,7 +245,6 @@ describe("parseAllIncrementalDetailed", () => {
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
       storePath: path,
-      ...NO_AGENTSVIEW,
     });
 
     expect(parsed.stats.fallback).toBe(true);
@@ -356,98 +252,6 @@ describe("parseAllIncrementalDetailed", () => {
     expect(parsed.parsed.messages).toHaveLength(2);
   });
 
-  test("imports AgentsView per session: surfaces unowned sessions, never duplicates native-owned ones", async () => {
-    const root = tempRoot();
-    const dbPath = join(root, "agentsview.db");
-    await createAgentsViewCodexDb(dbPath);
-    const opts = {
-      codexSessionsDir: copyFixture("codex-sessions", root),
-      sources: ["codex"] as AgentSource[],
-      storePath: storePath(root),
-      agentsViewDatabasePath: dbPath,
-    };
-
-    const native = parseAll(opts);
-    const assisted = await parseAllIncrementalDetailed(opts);
-
-    // Per-session ownership (replaces the old per-source suppression): every native-owned session is
-    // preserved exactly — AgentsView never duplicates it — while the AgentsView-only session that no
-    // native producer owns is now surfaced.
-    expect(native.sessions.has("codex:codex-db")).toBe(false);
-    for (const [sid, meta] of native.sessions) {
-      expect(assisted.parsed.sessions.get(sid)).toEqual(meta);
-    }
-    expect(assisted.parsed.sessions.has("codex:codex-db")).toBe(true);
-    expect(assisted.parsed.messages.length).toBe(native.messages.length + 1);
-    expect(assisted.stats.imported).toBe(1);
-
-    const cache = await openStore({ path: opts.storePath });
-    try {
-      expect((await cache.list()).some((row) => row.kind === "external" && row.status === "success")).toBe(true);
-    } finally {
-      await cache.close();
-    }
-  });
-
-  test("uses AgentsView facts when native fragments are unavailable for the source", async () => {
-    const root = tempRoot();
-    const dbPath = join(root, "agentsview.db");
-    await createAgentsViewCodexDb(dbPath);
-
-    const assisted = await parseAllIncrementalDetailed({
-      codexSessionsDir: join(root, "missing-codex"),
-      sources: ["codex"] as AgentSource[],
-      storePath: storePath(root),
-      agentsViewDatabasePath: dbPath,
-    });
-
-    expect(assisted.parsed.messages).toHaveLength(1);
-    expect(assisted.parsed.messages[0]).toMatchObject({
-      source: "codex",
-      sessionId: "codex:codex-db",
-      model: "gpt-5.5",
-      usage: expect.objectContaining({ input: 999, output: 1 }),
-    });
-    expect(assisted.diagnostics.some((entry) => entry.code === "agentsview_import_used")).toBe(true);
-  });
-});
-
-describe("materialized fact rows", () => {
-  test("AgentsView-only facts are indexed (origin='external') and materialized", async () => {
-    const root = tempRoot();
-    const dbPath = join(root, "agentsview.db");
-    await createAgentsViewCodexDb(dbPath);
-    const cp = storePath(root);
-
-    const assisted = await parseAllIncrementalDetailed({
-      codexSessionsDir: join(root, "missing-codex"),
-      sources: ["codex"] as AgentSource[],
-      storePath: cp,
-      agentsViewDatabasePath: dbPath,
-    });
-    expect(assisted.parsed.messages).toHaveLength(1);
-
-    const db = await openDatabase(cp);
-    try {
-      // Heavy message content isn't stored; the structural index tags imports origin='external',
-      // and the reconciled session lands in the read model.
-      const idx = await new Promise<{ n: number }>((resolve, reject) =>
-        db.get("SELECT COUNT(*) AS n FROM index_sessions WHERE origin = 'external'", (e, r) =>
-          e ? reject(e) : resolve(r as { n: number }),
-        ),
-      );
-      expect(idx.n).toBeGreaterThan(0);
-      const resolved = await new Promise<{ n: number }>((resolve, reject) =>
-        db.get(
-          "SELECT COUNT(*) AS n FROM resolved_messages WHERE session_id = 'codex:codex-db'",
-          (e, r) => (e ? reject(e) : resolve(r as { n: number })),
-        ),
-      );
-      expect(resolved.n).toBe(1);
-    } finally {
-      await close(db);
-    }
-  });
 });
 
 describe("materialized read model", () => {
@@ -456,7 +260,6 @@ describe("materialized read model", () => {
     historyFile: join(copyFixture("history.jsonl", root)),
     sources: ["claude"] as AgentSource[],
     storePath: storePath(root),
-    ...NO_AGENTSVIEW,
   });
 
   test("--since pushes down to SQL and returns the same subset as a date filter", async () => {
@@ -495,7 +298,6 @@ describe("materialized read model", () => {
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
       storePath: storePath(root),
-      ...NO_AGENTSVIEW,
     };
     const first = (await parseAllIncrementalDetailed(opts)).parsed;
     const second = await parseAllIncrementalDetailed(opts);
@@ -506,7 +308,7 @@ describe("materialized read model", () => {
   test("deleting a transcript retains its session — the store is a superset of a fresh rebuild", async () => {
     const root = tempRoot();
     const codexSessionsDir = copyFixture("codex-sessions", root);
-    const base = { codexSessionsDir, sources: ["codex"] as AgentSource[], ...NO_AGENTSVIEW };
+    const base = { codexSessionsDir, sources: ["codex"] as AgentSource[] };
 
     const incrementalPath = storePath(root);
     const original = (await parseAllIncrementalDetailed({ ...base, storePath: incrementalPath })).parsed;

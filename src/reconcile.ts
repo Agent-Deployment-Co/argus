@@ -9,12 +9,10 @@
 //
 // `reconcileSessions` is single-producer and optionally scopeable to a set of canonical session ids
 // (session-incremental re-materialization). `mergeReconciled` combines per-producer results, applying
-// per-session ownership (a dependent producer like agentsview yields any session a native owns) and
-// the global timeline order.
+// per-session ownership and the global timeline order.
 import { basename } from "node:path";
 import {
   compareReconciliationOrder,
-  type ImportedFragment,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type SessionFact,
@@ -415,22 +413,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     toolResults,
     toolResultsBySession,
     tasksBySession,
-  };
-}
-
-/** Convert an external import fragment into transcript shape so the engine treats it uniformly. */
-export function convertImported(fragment: ImportedFragment): ParsedFileFragment | undefined {
-  const source = fragment.provenance.coverage[0]?.source;
-  if (!source) return undefined;
-  return {
-    kind: "transcript",
-    id: fragment.id,
-    contractVersion: fragment.contractVersion,
-    parser: { name: "agentsview", source, version: fragment.provenance.adapter.version },
-    snapshot: fragment.provenance.database,
-    facts: fragment.facts,
-    dependencies: [],
-    diagnostics: fragment.diagnostics,
   };
 }
 

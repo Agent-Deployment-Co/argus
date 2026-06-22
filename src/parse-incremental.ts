@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   isAuthoritativeDiscovery,
+  PARSED_FRAGMENT_CONTRACT_VERSION,
   sameFileFingerprint,
   type AuxiliaryParserAdapter,
   type FragmentMetadata,
@@ -8,7 +9,6 @@ import {
   type CompleteDiscovery,
   type DiscoveredFile,
   type DiscoveryResult,
-  type ImportedFragment,
   type MaterializeSession,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
@@ -20,12 +20,11 @@ import { openStore, rebuildStore } from "./store.ts";
 import { parseAll, type ParseOptions, type TranscriptSource } from "./parse.ts";
 import {
   canonicalSessionIds,
-  convertImported,
   reconcileSessions,
   type ReconcileResult,
 } from "./reconcile.ts";
-import type { ImportProducer, NativeProducer, ProducerContext } from "./producer.ts";
-import { IMPORT_PRODUCERS, NATIVE_PRODUCERS, nativeProducerForSource } from "./producers/index.ts";
+import type { NativeProducer, ProducerContext } from "./producer.ts";
+import { NATIVE_PRODUCERS, nativeProducerForSource } from "./producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
 import type { TaskCandidateFact, TaskFact } from "./store-contract.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
@@ -35,7 +34,6 @@ export interface SyncStats {
   hits: number;
   parsed: number;
   replaced: number;
-  imported: number;
   /** Index fragments tombstoned because their file is no longer on disk. */
   deleted: number;
   /** Sessions retained but flagged archived because their source went off disk (durable archive). */
@@ -56,8 +54,6 @@ export interface IncrementalParseOptions extends ParseOptions {
   storePath?: string;
   store?: Store;
   rebuild?: boolean;
-  agentsView?: "auto" | "off";
-  agentsViewDatabasePath?: string;
   /** SQL-pushdown filters applied when reading the materialized model. */
   query?: ResolvedQuery;
   /** Read the already-materialized store without reconciling/materializing first (no writes). Used by
@@ -75,7 +71,6 @@ const EMPTY_STATS: SyncStats = {
   hits: 0,
   parsed: 0,
   replaced: 0,
-  imported: 0,
   deleted: 0,
   archived: 0,
   unstable: 0,
@@ -119,7 +114,7 @@ function auxiliaryStoreable(
 ): fragment is ParsedAuxiliaryFragment {
   return (
     fragment?.kind === "auxiliary" &&
-    fragment.contractVersion === 1 &&
+    fragment.contractVersion === PARSED_FRAGMENT_CONTRACT_VERSION &&
     fragment.parser.name === parser.parser.name &&
     fragment.parser.source === parser.parser.source &&
     fragment.parser.version === parser.parser.version &&
@@ -157,7 +152,7 @@ function reparseReason(
       "info",
     );
   }
-  if (fragment.contractVersion !== 1) {
+  if (fragment.contractVersion !== PARSED_FRAGMENT_CONTRACT_VERSION) {
     return diagnostic(
       "reindex_contract_version_changed",
       `Re-reading ${label} (Argus changed how it stores this data).`,
@@ -273,8 +268,6 @@ function producerContext(opts: IncrementalParseOptions): ProducerContext {
     codexSessionsDir: opts.codexSessionsDir,
     geminiDir: opts.geminiDir,
     coworkSessionsDir: opts.coworkSessionsDir,
-    agentsViewDatabasePath: opts.agentsViewDatabasePath,
-    agentsView: opts.agentsView,
   };
 }
 
@@ -424,7 +417,6 @@ async function syncStore(
 ): Promise<void> {
   const ctx = producerContext(opts);
   const requested = new Set<string>(normalizeSources(opts.sources));
-  const nativeSources = new Set<string>();
   const allAuxiliary: ParsedAuxiliaryFragment[] = [];
 
   for (const producer of NATIVE_PRODUCERS) {
@@ -457,8 +449,6 @@ async function syncStore(
           `Couldn't fully read ${discovery.source} sessions (${discovery.status}); kept what's already saved: ${discovery.rootPath}`,
         ),
       );
-      const existing = await store.resolvedSessionIdsForOwner(producer.id);
-      if (existing.length) nativeSources.add(producer.source);
       continue;
     }
 
@@ -517,8 +507,6 @@ async function syncStore(
         (entry) => entry.status === "success" && !afterIds.has(entry.fragmentId),
       ).length;
     }
-    if (after.fragments.length) nativeSources.add(producer.source);
-
     const canon = canonicalizer(producer.capabilities, after.relationships);
     const currentCanonical = new Set<string>();
     for (const entry of after.fragments) {
@@ -581,108 +569,6 @@ async function syncStore(
     stats.archived += disappeared.length;
     await store.setCoverage(producer.id, filesDigest(discovery.files), currentCanonical.size);
   }
-
-  for (const producer of IMPORT_PRODUCERS) {
-    const result = await gatherImportedFragments(
-      producer,
-      ctx,
-      store,
-      stats,
-      diagnostics,
-      requested,
-      nativeSources,
-    );
-    // If we couldn't actually read the import source (disabled / locked / incompatible), we have NO
-    // information about what it currently holds — keep prior imported sessions as last-known and do
-    // NOT archive, exactly like an incomplete native discovery. Only an authoritative read archives.
-    if (!result.authoritative) continue;
-
-    // Read ownership *after* natives materialized, so handed-off sessions are excluded.
-    const prevOwned = await store.resolvedSessionIdsForOwner(producer.id);
-    const nativeOwned = await store.ownedSessionIdsExcept(producer.id);
-    const converted = result.fragments
-      .map(convertImported)
-      .filter((fragment): fragment is ParsedFileFragment => !!fragment);
-    let unowned = new Set<string>();
-    if (converted.length) {
-      // Reconcile once to learn the canonical session set, then materialize only the sessions no
-      // native producer owns (filtering the result is equivalent to re-reconciling scoped to them).
-      const full = reconcileSessions({
-        caps: producer.capabilities,
-        fragments: converted,
-        auxiliaryFragments: allAuxiliary,
-      });
-      unowned = new Set([...full.sessions.keys()].filter((id) => !nativeOwned.has(id)));
-      const sessions = toMaterializeSessions(full).filter((s) => unowned.has(s.meta.sessionId));
-      await store.materializeSessions(producer.id, sessions);
-    }
-    // Sessions we owned that vanished from the import source (e.g. AgentsView aged them out) but that
-    // no native producer has taken over: RETAIN as archived, never delete. A genuine handoff to a
-    // native owner already replaced the resolved row, so it no longer appears in prevOwned.
-    const vanished = prevOwned.filter((id) => !unowned.has(id));
-    await store.setSessionsArchived(vanished, true);
-    stats.archived += vanished.length;
-  }
-}
-
-async function gatherImportedFragments(
-  producer: ImportProducer,
-  ctx: ProducerContext,
-  store: Store,
-  stats: SyncStats,
-  diagnostics: ParserDiagnostic[],
-  requestedSources: Set<string>,
-  nativeSources: Set<string>,
-): Promise<{ fragments: ImportedFragment[]; authoritative: boolean }> {
-  const importer = producer.importer(ctx);
-  if (!importer) {
-    diagnostics.push(
-      diagnostic(`${producer.id}_disabled`, `AgentsView import is turned off.`, "info"),
-    );
-    // Disabled is not "the source has no sessions" — it's "we didn't look". Not authoritative.
-    return { fragments: [], authoritative: false };
-  }
-
-  const probe = await importer.probe();
-  if (!probe.compatible) {
-    diagnostics.push(
-      diagnostic(
-        `${producer.id}_unavailable`,
-        `Can't use AgentsView: ${probe.reason}`,
-        "info",
-      ),
-    );
-    // Couldn't read the database (locked / missing / schema mismatch) — no information, not authoritative.
-    return { fragments: [], authoritative: false };
-  }
-
-  const staleExternal = (await store.list())
-    .filter((metadata) => metadata.kind === "external" && metadata.status === "success")
-    .map((metadata) => metadata.id);
-  if (staleExternal.length) await store.invalidate(staleExternal, "external_import_changed");
-
-  const imported = (await importer.importFragments(probe)).filter((fragment) => {
-    const source = fragment.provenance.coverage[0]?.source;
-    return !!source && requestedSources.has(source);
-  });
-  for (const fragment of imported) await store.replace(fragment);
-  stats.imported += imported.length;
-
-  for (const fragment of imported) {
-    const source = fragment.provenance.coverage[0]?.source;
-    if (!source) continue;
-    diagnostics.push(
-      diagnostic(
-        nativeSources.has(source) ? "agentsview_import_merged" : "agentsview_import_used",
-        nativeSources.has(source)
-          ? `Loaded extra ${source} sessions from AgentsView; your on-disk sessions take precedence.`
-          : `Loaded ${source} sessions from AgentsView (no ${source} transcripts found on disk).`,
-        "info",
-      ),
-    );
-  }
-  // We successfully read the import source: its current contents are authoritative (even if empty).
-  return { fragments: imported, authoritative: true };
 }
 
 export async function parseAllIncrementalDetailed(
@@ -784,13 +670,13 @@ export async function reindexSession(
         message: `Couldn't re-index ${sessionId}: no transcript reader is registered for ${meta.source}.`,
       };
     }
-    // Imported sessions (e.g. AgentsView) live under a native source but have no local transcript to
-    // re-parse — say so plainly rather than the misleading "transcript no longer readable".
+    // A session with no local transcript on disk can't be re-parsed — say so plainly rather than the
+    // misleading "transcript no longer readable".
     if (!meta.filePath) {
       return {
         ok: false,
         status: 422,
-        message: `Couldn't re-index ${sessionId}: it has no local transcript on disk (imported sessions can't be refreshed this way).`,
+        message: `Couldn't re-index ${sessionId}: it has no local transcript on disk.`,
       };
     }
     // Re-parse EVERY transcript for this session, discovered fresh from disk — the main transcript
@@ -902,40 +788,17 @@ export async function scanStore(opts: IncrementalParseOptions = {}): Promise<Sou
 }
 
 /** A plain-language phrase describing where this sync's data came from. */
-export function syncModeSummary(
-  stats: SyncStats,
-  diagnostics: ParserDiagnostic[] = [],
-): string {
+export function syncModeSummary(stats: SyncStats): string {
   if (stats.fallback) return "Read transcripts directly (couldn't open the local store)";
-  const agentsViewUsed = diagnostics.some((entry) => entry.code === "agentsview_import_used");
-  const agentsViewProvenance = diagnostics.some(
-    (entry) => entry.code === "agentsview_import_merged",
-  );
-  const nativeTouched =
-    stats.hits > 0 ||
-    stats.parsed > 0 ||
-    stats.replaced > 0 ||
-    stats.deleted > 0 ||
-    stats.archived > 0 ||
-    stats.unstable > 0 ||
-    stats.failed > 0 ||
-    stats.incompleteDiscoveries > 0;
-  if (agentsViewUsed && nativeTouched) return "Read transcripts and filled gaps from AgentsView";
-  if (agentsViewUsed || (stats.imported > 0 && !nativeTouched)) return "Loaded sessions from AgentsView";
-  if (agentsViewProvenance || stats.imported > 0) return "Read transcripts (AgentsView also available)";
   return "Read transcripts";
 }
 
 /** One-line, plain-language summary of what a sync did, for the user. */
-export function syncStatsSummary(
-  stats: SyncStats,
-  diagnostics: ParserDiagnostic[] = [],
-): string {
-  const mode = syncModeSummary(stats, diagnostics);
+export function syncStatsSummary(stats: SyncStats): string {
+  const mode = syncModeSummary(stats);
   if (stats.fallback) return mode;
   const parts = [`${stats.parsed} new or changed`];
   if (stats.hits) parts.push(`${stats.hits} unchanged`);
-  if (stats.imported) parts.push(`${stats.imported} from AgentsView`);
   // Sessions retained after their transcripts aged off disk are working as intended; mentioning the
   // count on every pass just invites concern. `argus status` is where that total belongs.
   const unreadable = stats.unstable + stats.failed;
