@@ -23,14 +23,13 @@ on:
   workflow_dispatch:
 
 permissions:
+  id-token: write # required for OIDC
   contents: write # create the GitHub Release and upload assets
 
 jobs:
   npm:
     name: npm — per-OS prebuilt binaries
     runs-on: macos-latest # bun cross-compiles every target from one host
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
@@ -40,25 +39,20 @@ jobs:
       - name: Build all platform packages
         run: bun run build:npm
       - name: Publish to npm
-        if: ${{ env.NPM_TOKEN != '' }}
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          # Platform packages first, then the launcher package that lists them as optional deps.
-          for dir in dist/npm/argus-*/; do (cd "$dir" && npm publish --access public); done
-          (cd dist/npm/argus && npm publish --access public)
-      - name: Skipped publish (no NPM_TOKEN)
-        if: ${{ env.NPM_TOKEN == '' }}
-        run: echo "NPM_TOKEN not set — built packages in dist/npm but did not publish."
+        run: npm publish
 
-  desktop:
-    name: Desktop — ${{ matrix.label }}
+  build-macos:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, label: macOS, rust-targets: aarch64-apple-darwin }
-          - { os: windows-latest, label: Windows, rust-targets: x86_64-pc-windows-msvc }
-    runs-on: ${{ matrix.os }}
+          # for Universal macOS builds (arm64 and x86_64)
+          - platform: "macos-latest"
+            args: "--target universal-apple-darwin"
+    runs-on: macos-latest
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
@@ -66,7 +60,8 @@ jobs:
           bun-version: latest
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-targets }}
+          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
@@ -74,6 +69,30 @@ jobs:
       # Compile the CLI for this runner's platform and stage it (+ the web app) for Tauri.
       - name: Stage sidecar + web
         run: bash scripts/stage-desktop-sidecar.sh --build
+
+      - name: import Apple Developer Certificate
+        # Prevents keychain from locking automatically for 3600 seconds.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning build.keychain
+
+      - name: verify certificate
+        run: |
+          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application")
+          CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+          echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
+          echo "Certificate imported."
+
       - name: Build (and sign, if secrets present) the desktop app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -84,20 +103,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows Authenticode — no-ops until these are set.
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          # Updater signing (Phase 7) — needs the updater plugin/config to emit latest.json.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          projectPath: desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: Argus ${{ github.ref_name }}
+          tagName: argus-v__VERSION__
+          releaseName: Argus v__VERSION__
           releaseDraft: true
           prerelease: false
-# Follow-ups (intentionally not yet wired):
-#   - macOS universal / Intel: stage both arm64 + x86_64 sidecars and build
-#     --target universal-apple-darwin (currently builds the runner's native arch).
-#   - Auto-update: add the updater plugin + public key to tauri.conf.json (Phase 7); the signing
-#     env vars above are already in place.
+          args: ${{ matrix.args }}
