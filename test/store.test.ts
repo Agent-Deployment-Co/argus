@@ -413,6 +413,14 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP TABLE IF EXISTS resolved_tasks");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_task");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN task_seq");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_date_model");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN input_tokens");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN output_tokens");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN cache_read");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN cache_write_5m");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN cache_write_1h");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN model");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN attribution_skill");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
       await rawExec(db, "PRAGMA user_version = 4");
     });
@@ -774,6 +782,124 @@ describe("SQLite store", () => {
     } finally {
       await store.close();
     }
+  });
+
+  test("materializeSessions mirrors usage/model/skill into promoted columns", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const sid = "codex:usage-cols";
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+          messages: [
+            {
+              source: "codex",
+              sessionId: sid,
+              project: "p",
+              cwd: "/tmp/p",
+              gitBranch: "",
+              ts: 1000,
+              date: "2026-06-01",
+              model: "gpt-5",
+              usage: { input: 10, output: 20, cacheRead: 3, cacheWrite5m: 4, cacheWrite1h: 5 },
+              attributionSkill: "plug:skill",
+              toolUses: [],
+            },
+          ],
+          toolResults: [],
+        },
+      ]);
+      const row = await withRawDatabase(path, (db) =>
+        rawGet<{
+          input_tokens: number;
+          output_tokens: number;
+          cache_read: number;
+          cache_write_5m: number;
+          cache_write_1h: number;
+          model: string;
+          attribution_skill: string;
+        }>(
+          db,
+          `SELECT input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h, model, attribution_skill
+           FROM resolved_messages WHERE session_id = '${sid}' AND seq = 0`,
+        ),
+      );
+      expect(row).toEqual({
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_read: 3,
+        cache_write_5m: 4,
+        cache_write_1h: 5,
+        model: "gpt-5",
+        attribution_skill: "plug:skill",
+      });
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("migrates a v8 store to v9, backfilling usage columns from record_json", async () => {
+    const path = storePath();
+    const sid = "codex:backfill";
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: { source: "codex", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          {
+            source: "codex",
+            sessionId: sid,
+            project: "p",
+            cwd: "/tmp/p",
+            gitBranch: "",
+            ts: 1000,
+            date: "2026-06-01",
+            model: "gpt-5",
+            usage: { input: 7, output: 11, cacheRead: 1, cacheWrite5m: 2, cacheWrite1h: 3 },
+            attributionSkill: "plug:skill",
+            toolUses: [],
+          },
+        ],
+        toolResults: [],
+      },
+    ]);
+    await initial.close();
+
+    // Degrade to v8: drop the promoted columns/index and stamp the older version. record_json is
+    // untouched, so the 8 -> 9 migration must reconstruct the columns from it.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_date_model");
+      for (const col of ["input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h", "model", "attribution_skill"]) {
+        await rawExec(db, `ALTER TABLE resolved_messages DROP COLUMN ${col}`);
+      }
+      await rawExec(db, "PRAGMA user_version = 8");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      const row = await withRawDatabase(path, (db) =>
+        rawGet<{ input_tokens: number; output_tokens: number; cache_read: number; model: string; attribution_skill: string }>(
+          db,
+          `SELECT input_tokens, output_tokens, cache_read, model, attribution_skill
+           FROM resolved_messages WHERE session_id = '${sid}' AND seq = 0`,
+        ),
+      );
+      expect(row).toEqual({
+        input_tokens: 7,
+        output_tokens: 11,
+        cache_read: 1,
+        model: "gpt-5",
+        attribution_skill: "plug:skill",
+      });
+    } finally {
+      await migrated.close();
+    }
+
+    const version = await withRawDatabase(path, (db) =>
+      rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 
   test("clearIndex drops the structural index but preserves the resolved read model", async () => {
