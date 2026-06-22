@@ -40,7 +40,6 @@ interface BenchStats {
   hits: number;
   parsed: number;
   stored: number;
-  imported: number;
   deleted: number;
   unstable: number;
   failed: number;
@@ -204,7 +203,6 @@ function copyFixtureWorkspace(fixtureRoot: string): Workspace {
       geminiDir: join(fixtures, "gemini"),
       sources: SOURCES,
       storePath,
-      agentsView: "off",
     },
   };
 }
@@ -269,7 +267,6 @@ function statsFrom(raw: SyncStats): BenchStats {
     hits: raw.hits,
     parsed: raw.parsed,
     stored: raw.replaced,
-    imported: raw.imported,
     deleted: raw.deleted,
     unstable: raw.unstable,
     failed: raw.failed,
@@ -450,7 +447,6 @@ function renderTable(results: ScenarioResult[], summaries: RunSummary[]): string
     "hits",
     "parsed",
     "stored",
-    "imported",
     "deleted",
     "files_opened",
     "bytes_parsed",
@@ -467,7 +463,6 @@ function renderTable(results: ScenarioResult[], summaries: RunSummary[]): string
     String(result.stats.hits),
     String(result.stats.parsed),
     String(result.stats.stored),
-    String(result.stats.imported),
     String(result.stats.deleted),
     String(result.estimatedWork.filesOpened),
     String(result.estimatedWork.bytesParsed),

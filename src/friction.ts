@@ -7,8 +7,8 @@
 // - codex:  none yet. Rollout transcripts don't expose interruptions, permission prompts,
 //           compaction, or turn timing in a shape Argus currently consumes.
 // - gemini: none yet. Chat snapshots carry no friction markers.
-// Sessions from non-Claude sources (and AgentsView imports) leave `SessionMeta.friction`
-// undefined rather than reporting a misleading zero.
+// Sessions from non-Claude sources leave `SessionMeta.friction` undefined rather than reporting a
+// misleading zero.
 import { emptySessionFriction, type SessionFriction } from "./types.ts";
 
 export type FrictionEventKind =

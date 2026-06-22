@@ -764,28 +764,6 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
 }
 
 function fragmentStorage(fragment: StoredFragment): FragmentStorage {
-  if (fragment.kind === "external") {
-    const snapshot = fragment.provenance.database;
-    return {
-      source: null,
-      fileId: snapshot.file.id,
-      rootId: snapshot.file.rootId,
-      role: snapshot.file.role,
-      relativePath: snapshot.file.relativePath,
-      observedPath: snapshot.file.path,
-      sizeBytes: snapshot.fingerprint.sizeBytes,
-      mtimeNs: snapshot.fingerprint.mtimeNs,
-      ctimeNs: snapshot.fingerprint.ctimeNs ?? null,
-      physicalIdScheme: snapshot.fingerprint.physicalId?.scheme ?? null,
-      physicalIdValue: snapshot.fingerprint.physicalId?.value ?? null,
-      parserName: fragment.provenance.adapter.name,
-      parserVersion: fragment.provenance.adapter.version,
-      diagnosticsJson: JSON.stringify(fragment.diagnostics),
-      importProvenanceJson: JSON.stringify(fragment.provenance),
-      envelopeJson: envelopeJson(fragment),
-    };
-  }
-
   const snapshot = fragment.snapshot;
   return {
     source: fragment.parser.source,
@@ -817,10 +795,6 @@ function envelopeJson(fragment: StoredFragment): string | null {
   return JSON.stringify({ ...fragment, facts: [] });
 }
 
-function factOrigin(fragment: StoredFragment): "native" | "external" {
-  return fragment.kind === "external" ? "external" : "native";
-}
-
 /**
  * Explode a fragment's facts into the queryable `fact_*` rows (replacing any prior rows for this
  * fragment). Runs inside the same transaction as the fragment upsert. `seq` preserves array order
@@ -830,7 +804,9 @@ async function materializeFactRows(db: Database, fragment: StoredFragment): Prom
   for (const table of INDEX_TABLES) {
     await run(db, `DELETE FROM ${table} WHERE file_id = ?`, [fragment.id]);
   }
-  const origin = factOrigin(fragment);
+  // All fragments are native now; 'external' is a retired origin kept in the column CHECK for
+  // backward compatibility with stores written before AgentsView import was removed.
+  const origin = "native";
 
   if (fragment.kind === "auxiliary") {
     await insertRows(
@@ -968,9 +944,8 @@ export class SqliteStore implements Store {
 
   load(id: string): Promise<StoredFragment | undefined> {
     return this.schedule(async () => {
-      const { nativeFragments, auxiliaryFragments, importedFragments } =
-        await this.reconstructCore([id]);
-      return nativeFragments[0] ?? importedFragments[0] ?? auxiliaryFragments[0];
+      const { nativeFragments, auxiliaryFragments } = await this.reconstructCore([id]);
+      return nativeFragments[0] ?? auxiliaryFragments[0];
     });
   }
 
@@ -1187,7 +1162,6 @@ export class SqliteStore implements Store {
     const result: ReconstructedFragments = {
       nativeFragments: [],
       auxiliaryFragments: [],
-      importedFragments: [],
     };
     for (const id of new Set(ids)) {
       const row = await get<{ kind: StoredFragment["kind"]; envelope_json: string | null }>(

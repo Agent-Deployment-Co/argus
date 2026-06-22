@@ -29,10 +29,6 @@ export interface SessionStoreOptions {
   sources?: TranscriptSource[];
   /** Override the store path. */
   storePath?: string;
-  /** AgentsView import behavior. */
-  agentsView?: "auto" | "off";
-  /** Read a specific AgentsView sessions.db. */
-  agentsViewDatabasePath?: string;
   /** Read the already-materialized store without reconciling first (no writes). For callers that must
    *  not write — e.g. the serve/upload legs of `argus run`, where the index leg is the only writer. */
   readOnly?: boolean;
@@ -63,8 +59,6 @@ class StoreBackedSessionStore implements SessionStore {
     const details = await parseAllIncrementalDetailed({
       sources: this.opts.sources,
       storePath: this.opts.storePath,
-      agentsView: this.opts.agentsView,
-      agentsViewDatabasePath: this.opts.agentsViewDatabasePath,
       skipSync: this.opts.readOnly,
       taskExtraction: this.opts.taskExtraction,
       log: this.opts.log,

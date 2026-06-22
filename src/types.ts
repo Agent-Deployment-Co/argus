@@ -166,7 +166,7 @@ export interface ToolResultStat {
 
 /**
  * Session-level friction counters (#37), parsed from native Claude Code transcripts.
- * Undefined means "not observable for this session" (codex/gemini/AgentsView-imported),
+ * Undefined means "not observable for this session" (codex/gemini),
  * which is distinct from a Claude session that simply had zero friction.
  */
 export interface SessionFriction {

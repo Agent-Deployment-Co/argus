@@ -9,8 +9,6 @@ export type Source = "all" | TranscriptSource;
 /** The store-selection slice shared by `index`, its subcommands, and `index delete --archived`. */
 export interface SyncOptions {
   source: Source;
-  agentsView: "auto" | "off";
-  agentsViewDatabasePath?: string;
 }
 
 export interface DeleteOptions {
@@ -36,15 +34,13 @@ export function toSource(value: string): Source {
 }
 
 /** The source-selection citty args shared by every store-reading command. */
-export type SyncArgs = { source: string; agentsview: boolean; "agentsview-db"?: string };
-/** The full dashboard-building citty args (source + date/project filters + summarize). */
-export type BuildArgs = SyncArgs & { since?: string; until?: string; project?: string; summarize: boolean; "summarize-model"?: string };
+export type SyncArgs = { source: string };
+/** The full dashboard-building citty args (source + date/project filters). */
+export type BuildArgs = SyncArgs & { since?: string; until?: string; project?: string };
 
 export function syncOptions(args: SyncArgs): SyncOptions {
   return {
     source: toSource(args.source),
-    agentsView: args.agentsview ? "auto" : "off",
-    agentsViewDatabasePath: args["agentsview-db"],
   };
 }
 
@@ -54,7 +50,5 @@ export function buildOptions(args: BuildArgs): BuildDashboardOptions {
     since: args.since,
     until: args.until,
     project: args.project,
-    summarize: args.summarize,
-    summarizeModel: args["summarize-model"],
   };
 }

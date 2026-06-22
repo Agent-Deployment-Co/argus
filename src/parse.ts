@@ -572,7 +572,7 @@ export function parseAll(opts: ParseOptions = {}): ParseResult {
 
           const cwd: string = o.cwd || "";
           const existing = ensureSession(sid, "claude", cwd, filePath, prompts.get(sid));
-          // Prefer the main transcript over subagents/* files (used by the summarizer).
+          // Prefer the main transcript over subagents/* files as the session's canonical file path.
           if (filePath.endsWith(`${sid}.jsonl`)) existing.filePath = filePath;
 
           for (const event of claudeFrictionEvents(o)) {
