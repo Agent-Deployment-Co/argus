@@ -10,8 +10,15 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dashboard } from "./aggregate.ts";
-import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
+import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
 import type { TranscriptSource } from "./parse.ts";
+import {
+  buildSessionDetail,
+  buildSessionList,
+  type SessionListResponse,
+  type SessionSort,
+} from "./session-list.ts";
+import type { SessionRow } from "./types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
@@ -58,6 +65,24 @@ export interface SessionTaskMetricsResponse {
   metrics: Record<string, TaskMetrics>;
 }
 
+/** Parsed query for the paginated session list. Date/source narrow the store read; project/q/
+ *  includeGenerated refine the human-facing list; sort/limit/offset paginate. */
+export interface SessionListQuery {
+  since?: string;
+  until?: string;
+  source?: "all" | TranscriptSource;
+  project?: string;
+  q?: string;
+  includeGenerated: boolean;
+  sort: SessionSort;
+  limit: number;
+  offset: number;
+}
+
+export interface SessionDetailResponse {
+  session: SessionRow;
+}
+
 /** Server-side filters parsed from the /api/snapshot query string. Each narrows the dashboard at
  *  store-read time (pushed into buildDashboard's since/until/project/source); omitted fields fall
  *  back to the serve process's base options. */
@@ -74,6 +99,10 @@ export type SnapshotSource = (filters: SnapshotFilters, force: boolean) => Promi
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
+/** A filtered/sorted/paginated page of session list rows, backed by the store's session aggregates. */
+export type SessionListReader = (query: SessionListQuery) => Promise<SessionListResponse>;
+/** Full detail for one session (built on demand), or null if it has no messages / doesn't exist. */
+export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | null>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
@@ -82,6 +111,8 @@ interface AppOptions {
   /** Called after a successful reindex so the caller can drop its cached snapshot. */
   onStoreChanged?: () => void;
   sessionTaskMetrics?: SessionTaskMetricsReader;
+  sessionList?: SessionListReader;
+  sessionDetail?: SessionDetailReader;
   debugInfo?: DebugInfoReader;
 }
 
@@ -171,6 +202,35 @@ function parseSnapshotFilters(c: Context): SnapshotFilters | string {
   return filters;
 }
 
+const SESSION_SORTS = new Set<string>(["recent", "tokens", "cost"]);
+const DEFAULT_SESSION_LIMIT = 50;
+const MAX_SESSION_LIMIT = 200;
+
+function parseIntOr(value: string | undefined, fallback: number): number {
+  const n = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Parse /api/sessions query params, or return an error message string for a 400. */
+function parseSessionListQuery(c: Context): SessionListQuery | string {
+  const sort = c.req.query("sort") ?? "recent";
+  if (!SESSION_SORTS.has(sort)) return `Unknown sort "${sort}".`;
+  const source = c.req.query("source");
+  if (source && !SNAPSHOT_SOURCES.has(source)) return `Unknown source "${source}".`;
+  const includeGenerated = c.req.query("includeGenerated") === "true" || c.req.query("includeGenerated") === "1";
+  return {
+    since: c.req.query("since") || undefined,
+    until: c.req.query("until") || undefined,
+    source: source ? (source as "all" | TranscriptSource) : undefined,
+    project: c.req.query("project") || undefined,
+    q: c.req.query("q") || undefined,
+    includeGenerated,
+    sort: sort as SessionSort,
+    limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
+    offset: Math.max(0, parseIntOr(c.req.query("offset"), 0)),
+  };
+}
+
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
@@ -181,6 +241,27 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     if (typeof filters === "string") return c.json({ error: filters }, 400);
     const snap = await getSnapshot(filters, c.req.query("refresh") != null);
     return c.json(snap);
+  });
+
+  // Paginated, filtered, sorted session list — backed by SQL session aggregates, not the bulk
+  // snapshot (the full per-session array no longer ships in /api/snapshot).
+  app.get("/api/sessions", async (c) => {
+    if (!opts.sessionList) return c.json({ error: "Session listing is unavailable in this process." }, 503);
+    const query = parseSessionListQuery(c);
+    if (typeof query === "string") return c.json({ error: query }, 400);
+    return c.json(await opts.sessionList(query));
+  });
+
+  // Full detail for one session, built on demand so heavy per-session content (tool/skill breakdowns,
+  // files, health, tasks) never rides the bulk payload. Singular `/api/session/:id` — distinct from
+  // the `/api/sessions/:id/...` action routes below.
+  app.get("/api/session/:id", async (c) => {
+    if (!opts.sessionDetail) return c.json({ error: "Session detail is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const session = await opts.sessionDetail(sessionId);
+    if (!session) return c.json({ error: "Session not found." }, 404);
+    return c.json({ session } satisfies SessionDetailResponse);
   });
 
   // Re-index a single session: re-read its transcript from disk and refresh it in the store
@@ -304,9 +385,44 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     }
   };
 
+  const sessionList: SessionListReader = async (query) => {
+    const store = await openStore();
+    try {
+      const aggregates = await store.readSessionAggregates({
+        sources: sourcesFor(query.source ?? opts.build.source),
+        since: query.since ?? opts.build.since,
+        until: query.until ?? opts.build.until,
+      });
+      return buildSessionList(aggregates, {
+        sort: query.sort,
+        limit: query.limit,
+        offset: query.offset,
+        project: query.project,
+        q: query.q,
+        includeGenerated: query.includeGenerated,
+      });
+    } finally {
+      await store.close();
+    }
+  };
+
+  const sessionDetail: SessionDetailReader = async (sessionId) => {
+    const store = await openStore();
+    try {
+      const messages = await store.readSessionMessages(sessionId);
+      if (!messages.length) return null;
+      const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
+      return buildSessionDetail(sessionId, messages, meta, tasks);
+    } finally {
+      await store.close();
+    }
+  };
+
   const app = createApp(snapshot, webRoot, {
     reindex,
     sessionTaskMetrics,
+    sessionList,
+    sessionDetail,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
   });
 

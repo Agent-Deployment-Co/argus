@@ -14,12 +14,14 @@ import {
   type PluginRow,
   type SessionFriction,
   type SessionHealth,
+  type SessionMeta,
   type SessionRow,
   type ToolCategoryStat,
   type ToolStat,
   totalTokens,
   type Usage,
 } from "./types.ts";
+import type { TaskFact } from "./store-contract.ts";
 
 // Re-export the dashboard types (now defined in types.ts) for existing importers.
 export type {
@@ -93,10 +95,67 @@ function sessionHealth(msgs: MessageRecord[], friction: SessionFriction | undefi
   };
 }
 
+/** Build one session's full row from its (timestamp-ordered) messages, metadata, heuristic summary,
+ *  and extracted tasks. Shared by the dashboard aggregation loop and the on-demand /api/session/:id
+ *  detail path, so both produce an identical SessionRow. `msgs` must be non-empty. */
+export function buildSessionRow(
+  sid: string,
+  msgs: MessageRecord[],
+  meta: SessionMeta | undefined,
+  summary: string,
+  tasks: TaskFact[],
+): SessionRow {
+  const u = emptyUsage();
+  let c = 0;
+  const models = new Set<string>();
+  const skillCounts = new Map<string, number>();
+  const toolCounts: Record<string, number> = {};
+  const files = new Set<string>();
+  for (const m of msgs) {
+    addUsage(u, m.usage);
+    c += usageCost(m.usage, m.model);
+    models.add(m.model);
+    if (m.attributionSkill) skillCounts.set(m.attributionSkill, (skillCounts.get(m.attributionSkill) || 0) + 1);
+    for (const tu of m.toolUses) {
+      toolCounts[tu.name] = (toolCounts[tu.name] || 0) + 1;
+      if (tu.filePath) files.add(tu.filePath);
+    }
+  }
+  const start = msgs[0]!.ts;
+  const end = msgs[msgs.length - 1]!.ts;
+  const topSkills = [...skillCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+  return {
+    source: meta?.source || msgs[0]!.source,
+    sessionId: sid,
+    project: meta?.project || msgs[0]!.project,
+    start,
+    end,
+    durationMs: end - start,
+    messages: msgs.length,
+    userMessages: meta?.userMessages ?? null,
+    agentMessages: meta?.agentMessages ?? null,
+    rawTurns: meta?.rawTurns ?? null,
+    models: [...models],
+    topSkills,
+    toolCounts,
+    filesTouched: [...files],
+    total: totalTokens(u),
+    cost: c,
+    firstPrompt: meta?.firstPrompt || "",
+    summary,
+    health: {
+      ...sessionHealth(msgs, meta?.friction),
+      turns: meta?.rawTurns ?? meta?.friction?.turns ?? null,
+    },
+    tasks,
+  };
+}
+
 export function aggregate(
   parsed: ParseResult,
   plugins: Map<string, PluginInfo>,
   summaries: Map<string, string>,
+  opts: { includeSessions?: boolean } = {},
 ): Dashboard {
   const { messages, sessions, toolResults } = parsed;
 
@@ -373,51 +432,9 @@ export function aggregate(
   }
   const sessionRows: SessionRow[] = [];
   for (const [sid, msgs] of bySession) {
-    const meta = sessions.get(sid);
-    const u = emptyUsage();
-    let c = 0;
-    const models = new Set<string>();
-    const skillCounts = new Map<string, number>();
-    const toolCounts: Record<string, number> = {};
-    const files = new Set<string>();
-    for (const m of msgs) {
-      addUsage(u, m.usage);
-      c += usageCost(m.usage, m.model);
-      models.add(m.model);
-      if (m.attributionSkill) skillCounts.set(m.attributionSkill, (skillCounts.get(m.attributionSkill) || 0) + 1);
-      for (const tu of m.toolUses) {
-        toolCounts[tu.name] = (toolCounts[tu.name] || 0) + 1;
-        if (tu.filePath) files.add(tu.filePath);
-      }
-    }
-    const start = msgs[0]!.ts;
-    const end = msgs[msgs.length - 1]!.ts;
-    const topSkills = [...skillCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
-    sessionRows.push({
-      source: meta?.source || msgs[0]!.source,
-      sessionId: sid,
-      project: meta?.project || msgs[0]!.project,
-      start,
-      end,
-      durationMs: end - start,
-      messages: msgs.length,
-      userMessages: meta?.userMessages ?? null,
-      agentMessages: meta?.agentMessages ?? null,
-      rawTurns: meta?.rawTurns ?? null,
-      models: [...models],
-      topSkills,
-      toolCounts,
-      filesTouched: [...files],
-      total: totalTokens(u),
-      cost: c,
-      firstPrompt: meta?.firstPrompt || "",
-      summary: summaries.get(sid) || "",
-      health: {
-        ...sessionHealth(msgs, meta?.friction),
-        turns: meta?.rawTurns ?? meta?.friction?.turns ?? null,
-      },
-      tasks: parsed.tasksBySession?.get(sid) ?? [],
-    });
+    sessionRows.push(
+      buildSessionRow(sid, msgs, sessions.get(sid), summaries.get(sid) || "", parsed.tasksBySession?.get(sid) ?? []),
+    );
   }
   sessionRows.sort((a, b) => b.start - a.start);
 
@@ -448,6 +465,11 @@ export function aggregate(
     const friction = projectFriction.get(project.name);
     if (friction) project.meta = { ...project.meta, friction };
   }
+  // Token-growth recommendation input, as a scalar so it survives when sessions are omitted from the
+  // serve payload (the rec layer can't re-derive it from an empty sessions array otherwise).
+  const highTokenGrowthSessions = sessionRows.filter(
+    (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= 5,
+  ).length;
 
   return {
     generatedAtMs: 0,
@@ -473,7 +495,10 @@ export function aggregate(
     heaviestToolResults,
     byPlugin,
     byProject,
-    sessions: sessionRows,
+    // Session rows are always built (the friction rollups above fold over them), but the serve path
+    // omits them from the payload — the web app reads them from the paginated /api/sessions instead.
+    sessions: opts.includeSessions === false ? [] : sessionRows,
     frictionTotals,
+    highTokenGrowthSessions,
   };
 }

@@ -75,6 +75,56 @@ describe("serve API", () => {
     expect(res.status).toBe(400);
   });
 
+  test("GET /api/sessions parses pagination/sort/filters and returns the reader's page", async () => {
+    let seen: unknown;
+    const page = { rows: [], total: 0, offset: 5, limit: 25 };
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      sessionList: async (query) => { seen = query; return page; },
+    });
+
+    const res = await app.request("/api/sessions?sort=tokens&limit=25&offset=5&source=codex&project=web&q=fix&includeGenerated=1");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(page);
+    expect(seen).toEqual({
+      sort: "tokens", limit: 25, offset: 5, source: "codex",
+      project: "web", q: "fix", includeGenerated: true, since: undefined, until: undefined,
+    });
+  });
+
+  test("GET /api/sessions clamps limit and rejects an unknown sort", async () => {
+    let seen: { limit?: number } = {};
+    const app = createApp(async () => fixtureSnapshot(), null, {
+      sessionList: async (query) => { seen = query; return { rows: [], total: 0, offset: 0, limit: query.limit }; },
+    });
+    await app.request("/api/sessions?limit=9999");
+    expect(seen.limit).toBe(200); // clamped to MAX_SESSION_LIMIT
+
+    const bad = await app.request("/api/sessions?sort=bogus");
+    expect(bad.status).toBe(400);
+  });
+
+  test("GET /api/sessions is 503 when the reader is not wired", async () => {
+    const app = createApp(async () => fixtureSnapshot(), null);
+    expect((await app.request("/api/sessions")).status).toBe(503);
+  });
+
+  test("GET /api/session/:id returns detail, 404 for unknown, 503 when unwired", async () => {
+    const snap = fixtureSnapshot();
+    const known = snap.dashboard.sessions[0]!;
+    const app = createApp(async () => snap, null, {
+      sessionDetail: async (id) => (id === known.sessionId ? known : null),
+    });
+
+    const ok = await app.request(`/api/session/${encodeURIComponent(known.sessionId)}`);
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).session.sessionId).toBe(known.sessionId);
+
+    expect((await app.request("/api/session/nope")).status).toBe(404);
+
+    const unwired = createApp(async () => snap, null);
+    expect((await unwired.request("/api/session/x")).status).toBe(503);
+  });
+
   test("POST /api/sessions/:id/reindex returns tasks and reports that the store changed", async () => {
     const task: TaskFact = {
       id: "task:fixture",

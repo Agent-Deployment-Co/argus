@@ -392,6 +392,19 @@ export interface ResolvedQuery {
   projectSubstring?: string;
 }
 
+/** A cheap per-session rollup for the paginated session list: session columns + per-model token
+ *  sums (SQL `GROUP BY`, no per-message JS walk). Cost is priced from `byModel` by the caller, since
+ *  the price table lives in JS. Local-only (not on the sync wire). */
+export interface SessionAggregate {
+  meta: SessionMeta;
+  /** Token sums per model, over the messages matching the query (date-filtered when filters apply). */
+  byModel: { model: string; usage: Usage }[];
+  /** First/last message timestamps (epoch ms) for this session from resolved_sessions. */
+  firstTs: number | null;
+  lastTs: number | null;
+  messageCount: number;
+}
+
 /** One reconciled session ready to materialize: its meta, messages, and tool-result stats. */
 export interface MaterializeSession {
   meta: SessionMeta;
@@ -470,6 +483,13 @@ export interface Store {
   /** Messages attributed to each task in a session (by resolved_messages.task_seq), keyed by task id,
    *  oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
+  /** All messages for one session, oldest first. Backs the on-demand /api/session/:id detail. */
+  readSessionMessages(sessionId: string): Promise<MessageRecord[]>;
+  /** Per-session token rollups for the paginated session list: one entry per matching session with
+   *  its meta + per-model token sums (SQL `GROUP BY`, no per-message JS walk). Filters match
+   *  readResolved (sources/since/until/project); date filters keep only sessions with an in-range
+   *  message and sum only in-range messages. */
+  readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */
