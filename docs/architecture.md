@@ -172,8 +172,7 @@ transcripts are gone.
 | `index refresh [<id>…]` | rebuilds index / one session | Bare: re-read all transcripts (keeps sessions no longer on disk). With session id(s): reindex just those from disk (see single-session reindex). |
 | `index rebuild` | rebuilds store | Rebuild from scratch; **drops sessions no longer on disk** (confirm, or `--force`). |
 | `index delete` | deletes      | Permanently remove sessions (`<id>…` or `--archived`). |
-| `report` | reads (+ indexes) | Build the dashboard from the store as a self-contained HTML file. |
-| `serve`  | reads (+ indexes) | Serve the dashboard as an interactive local web app (JSON API + SPA). |
+| `serve`  | reads only        | Serve the dashboard as an interactive local web app (JSON API + SPA). Reads the already-materialized store without reconciling (the `index`/`run` legs are the sole writers). |
 | `sync`   | reads (+ indexes) | Build a snapshot and upload it to the team Worker. `--watch` uploads on an interval. |
 | `status` | reads             | Show per-source counts, freshness, and archived totals. |
 | `run`    | writes + reads    | One long-running process: `index --watch` + `serve` + `sync --watch` against one store, under one shutdown handler, each leg supervised. |
