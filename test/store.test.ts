@@ -839,6 +839,60 @@ describe("SQLite store", () => {
     }
   });
 
+  test("readSessionAggregates rolls up per-model token sums and respects date filters", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const msg = (sid: string, date: string, model: string, input: number) => ({
+        source: "codex" as const,
+        sessionId: sid,
+        project: "p",
+        cwd: "/tmp/proj-a",
+        gitBranch: "",
+        ts: Date.parse(`${date}T00:00:00Z`),
+        date,
+        model,
+        usage: { input, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: "codex:a", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/r.jsonl" },
+          // two models, two dates
+          messages: [msg("codex:a", "2026-06-01", "gpt-5", 10), msg("codex:a", "2026-06-01", "gpt-5", 5), msg("codex:a", "2026-06-03", "gpt-4", 7)],
+          toolResults: [],
+        },
+        {
+          meta: { source: "codex", sessionId: "codex:b", project: "p", cwd: "/tmp/proj-b", filePath: "/tmp/proj-b/r.jsonl" },
+          messages: [msg("codex:b", "2026-06-02", "gpt-5", 3)],
+          toolResults: [],
+        },
+      ]);
+
+      const all = await store.readSessionAggregates();
+      const a = all.find((s) => s.meta.sessionId === "codex:a")!;
+      expect(a.messageCount).toBe(3);
+      const aByModel = Object.fromEntries(a.byModel.map((m) => [m.model, m.usage.input]));
+      expect(aByModel).toEqual({ "gpt-5": 15, "gpt-4": 7 });
+      expect(all.map((s) => s.meta.sessionId).sort()).toEqual(["codex:a", "codex:b"]);
+
+      // Date filter: only codex:a has a message on/before 2026-06-01, and its sum covers only that day.
+      const early = await store.readSessionAggregates({ until: "2026-06-01" });
+      expect(early.map((s) => s.meta.sessionId)).toEqual(["codex:a"]);
+      expect(early[0]!.byModel).toEqual([{ model: "gpt-5", usage: { input: 15, output: 2, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 } }]);
+
+      // Project filter matches cwd substring.
+      const projB = await store.readSessionAggregates({ projectSubstring: "proj-b" });
+      expect(projB.map((s) => s.meta.sessionId)).toEqual(["codex:b"]);
+
+      const messages = await store.readSessionMessages("codex:a");
+      expect(messages.map((m) => m.date)).toEqual(["2026-06-01", "2026-06-01", "2026-06-03"]);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("migrates a v8 store to v9, backfilling usage columns from record_json", async () => {
     const path = storePath();
     const sid = "codex:backfill";

@@ -101,6 +101,9 @@ export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   byTool: ToolStat[];
   byToolCategory: ToolCategoryStat[];
   frictionTotals: FrictionTotals;
+  /** Count of sessions whose context grew ≥ 5× start-to-finish — the token-growth recommendation's
+   *  input, kept as a scalar so it survives even when the per-session array is omitted from the payload. */
+  highTokenGrowthSessions: number;
   /** Per-model token totals per day — parallel to `daily`, for the stacked model-over-time chart. */
   byModelDaily: { date: string; byModel: Record<string, number> }[];
   /** Per-skill token totals per day — parallel to `daily`, for the skill-usage-over-time chart. */

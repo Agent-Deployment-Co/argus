@@ -25,11 +25,12 @@ import type {
   PhysicalFileIdentity,
   ReconstructedFragments,
   ResolvedQuery,
+  SessionAggregate,
   SourceCoverageRow,
   StoreStats,
   TranscriptIndex,
 } from "./store-contract.ts";
-import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
 export const STORE_SCHEMA_VERSION = 9;
@@ -1267,6 +1268,105 @@ export class SqliteStore implements Store {
         list.push(JSON.parse(row.record_json) as MessageRecord);
       }
       return byTask;
+    });
+  }
+
+  readSessionMessages(sessionId: string): Promise<MessageRecord[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ record_json: string }>(
+        this.db,
+        "SELECT record_json FROM resolved_messages WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      return rows.map((row) => JSON.parse(row.record_json) as MessageRecord);
+    });
+  }
+
+  readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]> {
+    return this.schedule(async () => {
+      // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
+      // model) token sums from the promoted columns. Date filters apply to messages, so a session is
+      // included only if it has a message in range (EXISTS), and its sums cover only in-range messages.
+      const sessionConds: string[] = ["s.archived = 0"];
+      const sessionParams: unknown[] = [];
+      if (query?.sources?.length) {
+        sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
+        sessionParams.push(...query.sources);
+      }
+      if (query?.projectSubstring) {
+        sessionConds.push("instr(s.cwd, ?) > 0");
+        sessionParams.push(query.projectSubstring);
+      }
+      const dateConds: string[] = [];
+      const dateParams: unknown[] = [];
+      if (query?.since) {
+        dateConds.push("m.date >= ?");
+        dateParams.push(query.since);
+      }
+      if (query?.until) {
+        dateConds.push("m.date <= ?");
+        dateParams.push(query.until);
+      }
+      if (dateConds.length) {
+        sessionConds.push(
+          `EXISTS (SELECT 1 FROM resolved_messages m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
+        );
+        sessionParams.push(...dateParams);
+      }
+      const sessionRows = await all<{
+        session_id: string;
+        first_ts: number | null;
+        last_ts: number | null;
+        message_count: number;
+        meta_json: string;
+      }>(
+        this.db,
+        `SELECT session_id, first_ts, last_ts, message_count, meta_json
+         FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
+        sessionParams,
+      );
+
+      // Per-(session, model) token sums, scoped by the same source/date/project message filters.
+      const msgFilters = buildResolvedFilters(query);
+      const usageRows = await all<{
+        session_id: string;
+        model: string | null;
+        input: number;
+        output: number;
+        cache_read: number;
+        cache_write_5m: number;
+        cache_write_1h: number;
+      }>(
+        this.db,
+        `SELECT session_id, model,
+            SUM(input_tokens) AS input, SUM(output_tokens) AS output, SUM(cache_read) AS cache_read,
+            SUM(cache_write_5m) AS cache_write_5m, SUM(cache_write_1h) AS cache_write_1h
+         FROM resolved_messages ${msgFilters.messageWhere}
+         GROUP BY session_id, model`,
+        msgFilters.messageParams,
+      );
+      const byModelBySession = new Map<string, { model: string; usage: Usage }[]>();
+      for (const row of usageRows) {
+        const list = byModelBySession.get(row.session_id) ?? byModelBySession.set(row.session_id, []).get(row.session_id)!;
+        list.push({
+          model: row.model ?? "",
+          usage: {
+            input: row.input ?? 0,
+            output: row.output ?? 0,
+            cacheRead: row.cache_read ?? 0,
+            cacheWrite5m: row.cache_write_5m ?? 0,
+            cacheWrite1h: row.cache_write_1h ?? 0,
+          },
+        });
+      }
+
+      return sessionRows.map((row) => ({
+        meta: JSON.parse(row.meta_json) as SessionMeta,
+        byModel: byModelBySession.get(row.session_id) ?? [],
+        firstTs: row.first_ts,
+        lastTs: row.last_ts,
+        messageCount: row.message_count,
+      }));
     });
   }
 

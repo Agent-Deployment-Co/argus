@@ -22,6 +22,9 @@ export interface BuildDashboardOptions {
   /** Read the store without reconciling first (no writes). Set by the serve/upload legs of
    *  `argus run`, where the index leg is the sole writer; left false for one-shot commands. */
   readOnly?: boolean;
+  /** Include the full per-session row array in the dashboard. Default true (sync needs it on the
+   *  wire); the web server sets false and serves sessions from the paginated /api/sessions instead. */
+  includeSessions?: boolean;
 }
 
 export function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
@@ -106,7 +109,7 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
   const summaries = new Map<string, string>();
   for (const [sid, f] of factsBySession) summaries.set(sid, heuristicSummary(f));
 
-  const dash = aggregate(parseResult, plugins, summaries);
+  const dash = aggregate(parseResult, plugins, summaries, { includeSessions: opts.includeSessions });
   dash.generatedAtMs = Date.now();
   return dash;
 }
