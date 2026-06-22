@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { PushPayloadSchema, SCHEMA_VERSION } from "@agentdeploymentco/argus-schema";
 import { aggregate } from "../src/aggregate.ts";
 import { parseAll } from "../src/parse.ts";
-import { computeRecommendations } from "../src/recommendations.ts";
-import { createApp, type Snapshot } from "../src/serve.ts";
+import { computeRecommendations } from "../src/api/recommendations.ts";
+import { createApp, type Snapshot } from "../src/api/serve.ts";
 import type { TaskFact } from "../src/store-contract.ts";
 import type { PluginInfo } from "../src/types.ts";
 

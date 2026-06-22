@@ -13,11 +13,11 @@ import type {
   ToolStat,
   Usage,
 } from "../../src/types";
-import type { Recommendation } from "../../src/recommendations";
-import type { TaskMetrics } from "../../src/task-metrics";
-import type { DebugInfo } from "../../src/debug-info";
-import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/session-list";
-import type { SessionDetailResponse } from "../../src/serve";
+import type { Recommendation } from "../../src/api/recommendations";
+import type { TaskMetrics } from "../../src/api/task-metrics";
+import type { DebugInfo } from "../../src/api/debug-info";
+import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
+import type { SessionDetailResponse } from "../../src/api/serve";
 
 export type {
   Dashboard,

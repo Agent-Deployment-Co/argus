@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeRecommendations } from "../src/recommendations.ts";
+import { computeRecommendations } from "../src/api/recommendations.ts";
 import type { Dashboard, FrictionTotals, PluginRow } from "../src/types.ts";
 
 function ft(over: Partial<FrictionTotals> = {}): FrictionTotals {

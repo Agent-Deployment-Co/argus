@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeTaskMetrics } from "../src/task-metrics.ts";
+import { computeTaskMetrics } from "../src/api/task-metrics.ts";
 import type { MessageRecord, ToolUse } from "../src/types.ts";
 
 function tool(name: string): ToolUse {

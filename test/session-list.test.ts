@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildSessionDetail, buildSessionList } from "../src/session-list.ts";
+import { buildSessionDetail, buildSessionList } from "../src/api/session-list.ts";
 import type { SessionAggregate } from "../src/store-contract.ts";
 import type { MessageRecord, SessionMeta, Usage } from "../src/types.ts";
 
