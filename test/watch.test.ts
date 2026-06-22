@@ -7,7 +7,6 @@ const ok = (status = 200): PushResult => ({ ok: true, status, body: "ok" });
 
 const syncOpts = (over: Partial<WatchSyncOptions>): WatchSyncOptions => ({
   source: "claude",
-  agentsView: "off",
   endpoint: "http://test.local",
   intervalMin: 1,
   onUnauthenticated: "dormant",
@@ -18,7 +17,7 @@ describe("watchIndex", () => {
   test("indexes once immediately, then exits promptly on abort", async () => {
     const ac = new AbortController();
     let calls = 0;
-    const p = watchIndex({ source: "claude", agentsView: "off", intervalMin: 1 }, () => {}, ac.signal, {
+    const p = watchIndex({ source: "claude", intervalMin: 1 }, () => {}, ac.signal, {
       index: async () => {
         calls++;
       },
@@ -32,7 +31,7 @@ describe("watchIndex", () => {
   test("a failing index pass restarts instead of hanging, and still exits on abort", async () => {
     const ac = new AbortController();
     let calls = 0;
-    const p = watchIndex({ source: "claude", agentsView: "off", intervalMin: 1 }, () => {}, ac.signal, {
+    const p = watchIndex({ source: "claude", intervalMin: 1 }, () => {}, ac.signal, {
       index: async () => {
         calls++;
         throw new Error("disk error");

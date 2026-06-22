@@ -1,6 +1,6 @@
 // Builds the analyzed Dashboard from local transcripts. Extracted from the CLI entry point so
-// both `argus report`/`push` (src/index.ts) and the local web server (src/serve.ts) — and, later,
-// the argusd daemon — share one code path for reading + aggregating sessions.
+// both `argus sync` and the local web server (src/serve.ts) — and, later, the argusd daemon —
+// share one code path for reading + aggregating sessions.
 import { aggregate } from "./aggregate.ts";
 import type { Dashboard } from "./aggregate.ts";
 import { loadPlugins } from "./inventory.ts";
@@ -16,8 +16,6 @@ export type Log = (s: string) => void;
  *  don't have to construct the whole Flags object. */
 export interface BuildDashboardOptions {
   source: "all" | TranscriptSource;
-  agentsView: "auto" | "off";
-  agentsViewDatabasePath?: string;
   since?: string;
   until?: string;
   project?: string;
@@ -56,7 +54,7 @@ function uniqueDiagnostics(entries: ParserDiagnostic[]): ParserDiagnostic[] {
 
 /** Diagnostics worth interrupting a report for: something that makes the result wrong or incomplete.
  *  A missing source root just means the user doesn't use that tool — not a problem to report.
- *  Routine notes (re-read files, AgentsView provenance) are left for `argus sync`. */
+ *  Routine notes (re-read files) are left for `argus sync`. */
 function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
   return uniqueDiagnostics(diagnostics)
     .filter((entry) => entry.severity === "error" && entry.code !== "missing_root")
@@ -68,8 +66,6 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
   log("Reading transcripts…");
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
-    agentsView: opts.agentsView,
-    agentsViewDatabasePath: opts.agentsViewDatabasePath,
     readOnly: opts.readOnly,
   });
   let parseResult;
@@ -83,7 +79,7 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
     await store.close();
   }
   // Keep reports quiet: only call out problems that affect the result (and explain a degraded read).
-  if (store.stats?.fallback) log(`  ${syncStatsSummary(store.stats, store.diagnostics)}`);
+  if (store.stats?.fallback) log(`  ${syncStatsSummary(store.stats)}`);
   for (const entry of reportProblems(store.diagnostics)) log(`  ! ${entry.message}`);
 
   log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);

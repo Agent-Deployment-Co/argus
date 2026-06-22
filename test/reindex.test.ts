@@ -50,7 +50,6 @@ async function indexCodex(root: string): Promise<string> {
     codexSessionsDir,
     sources: ["codex"] as AgentSource[],
     storePath,
-    agentsView: "off",
   });
   return storePath;
 }
@@ -125,8 +124,7 @@ describe("reindexSession", () => {
       projectsDir,
       sources: ["claude"] as AgentSource[],
       storePath,
-      agentsView: "off",
-    });
+      });
     const store = await openStore({ path: storePath });
     try {
       const countFor = (rs: { messages: { sessionId: string }[] }, id: string) =>
@@ -190,8 +188,7 @@ describe("index-time extraction hook", () => {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath,
-      agentsView: "off",
-      taskExtraction: commandExtraction(root),
+        taskExtraction: commandExtraction(root),
     });
     const store = await openStore({ path: storePath });
     try {
@@ -213,8 +210,7 @@ describe("index-time extraction hook", () => {
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath,
-      agentsView: "off",
-      taskExtraction: commandExtraction(root),
+        taskExtraction: commandExtraction(root),
       log: (s) => logs.push(s),
     });
     expect(logs.some((l) => l.includes("Extracting tasks from 1 session"))).toBe(true);
@@ -223,7 +219,7 @@ describe("index-time extraction hook", () => {
 });
 
 describe("runIndexRefresh (targeted, #93)", () => {
-  const base = { source: "codex" as const, agentsView: "off" as const };
+  const base = { source: "codex" as const };
 
   test("refreshes a named session and reports it; --extract-tasks false forces no extraction", async () => {
     const root = tempRoot();
@@ -276,8 +272,7 @@ describe("runIndexRefresh (targeted, #93)", () => {
       historyFile,
       sources: ["claude"] as AgentSource[],
       storePath,
-      agentsView: "off",
-    });
+      });
     const store = await openStore({ path: storePath });
     try {
       const resolved = await store.readResolved();

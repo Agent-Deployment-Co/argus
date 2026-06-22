@@ -192,8 +192,6 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
       open: opts.open,
       build: {
         source: opts.source,
-        agentsView: opts.agentsView,
-        agentsViewDatabasePath: opts.agentsViewDatabasePath,
         since: opts.since,
         until: opts.until,
         project: opts.project,
@@ -274,7 +272,6 @@ async function runStatus(log: Log): Promise<void> {
     // best-effort; the scan above already reported store availability
   }
   const byOwner = new Map(counts.map((c) => [c.owner, c]));
-  const nativeIds = new Set(scans.map((scan) => scan.source));
 
   const lines: string[] = [];
   let total = 0;
@@ -292,15 +289,6 @@ async function runStatus(log: Log): Promise<void> {
     const state = scan.upToDate ? "up to date" : "pending changes";
     const archived = c.archived ? ` (+${c.archived} archived)` : "";
     lines.push(`  ${scan.source}: ${c.present} sessions${archived} · last synced ${when} · ${state}`);
-  }
-  // Imported sources (e.g. AgentsView) — sessions read from another tool, not from transcripts on disk.
-  for (const c of counts) {
-    if (nativeIds.has(c.owner) || c.present + c.archived === 0) continue;
-    total += c.present + c.archived;
-    totalArchived += c.archived;
-    const label = c.owner === "agentsview" ? "AgentsView" : c.owner;
-    const archived = c.archived ? ` (+${c.archived} archived)` : "";
-    lines.push(`  ${label}: ${c.present} sessions imported${archived}`);
   }
 
   if (!lines.length) {
@@ -329,21 +317,6 @@ const sourceArg = {
     default: "all",
     description: "Transcript source: claude, codex, gemini, cowork, or all",
     valueHint: "claude|codex|gemini|cowork|all",
-  },
-} as const;
-
-/** AgentsView discovery — shared by the source-reading commands. */
-const agentsViewArgs = {
-  agentsview: {
-    type: "boolean",
-    default: true,
-    description: "Auto-detect and import AgentsView sessions",
-    negativeDescription: "Disable AgentsView discovery/import",
-  },
-  "agentsview-db": {
-    type: "string",
-    description: "Read a specific AgentsView sessions.db",
-    valueHint: "path",
   },
 } as const;
 
@@ -398,7 +371,6 @@ const extractTasksArg = {
 /** Inputs shared by serve and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
-  ...agentsViewArgs,
   ...filterArgs,
 } as const;
 
@@ -438,7 +410,6 @@ const indexRebuild = defineCommand({
   meta: { name: "rebuild", description: "rebuild the store from your transcripts (drops sessions no longer on disk)" },
   args: {
     ...sourceArg,
-    ...agentsViewArgs,
     ...extractTasksArg,
     force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
@@ -456,7 +427,6 @@ const indexRefresh = defineCommand({
   args: {
     id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
     ...sourceArg,
-    ...agentsViewArgs,
     ...extractTasksArg,
   },
   run: handler((args) =>
@@ -481,7 +451,6 @@ const index = defineCommand({
   meta: { name: "index", description: "read new and changed sessions into the local store" },
   args: {
     ...sourceArg,
-    ...agentsViewArgs,
     ...extractTasksArg,
     watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
@@ -542,7 +511,6 @@ const runCmd = defineCommand({
   meta: { name: "run", description: "keep the dashboard live: index, serve, and upload in one process" },
   args: {
     ...sourceArg,
-    ...agentsViewArgs,
     ...taskArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
