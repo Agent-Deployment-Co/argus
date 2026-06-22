@@ -28,6 +28,19 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
   // params so those defaults reapply. The button is always shown but disabled while at defaults.
   const isDefault = since === daysAgo(30) && until === daysAgo(0) && !source;
 
+  // Keep the range sane: no future dates, and `to` never before `from`. The native min/max guide the
+  // picker; the handlers also clamp so a typed/invalid value can't slip an out-of-range date through.
+  // (Dates are YYYY-MM-DD, so lexical comparison is chronological.)
+  const today = daysAgo(0);
+  const setSince = (v: string) => {
+    if (!v) return set({ since: undefined });
+    set({ since: v > today ? today : until && v > until ? until : v });
+  };
+  const setUntil = (v: string) => {
+    if (!v) return set({ until: undefined });
+    set({ until: v > today ? today : since && v < since ? since : v });
+  };
+
   return (
     <div className="filter-bar" role="group" aria-label="Dashboard filters">
       <span className="filter-dates">
@@ -36,8 +49,8 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
           className="filter-input"
           aria-label="From date"
           value={since ?? ""}
-          max={until || undefined}
-          onChange={(e) => set({ since: e.target.value || undefined })}
+          max={until && until < today ? until : today}
+          onChange={(e) => setSince(e.target.value)}
         />
         <span className="filter-dash" aria-hidden>–</span>
         <input
@@ -46,7 +59,8 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
           aria-label="To date"
           value={until ?? ""}
           min={since || undefined}
-          onChange={(e) => set({ until: e.target.value || undefined })}
+          max={today}
+          onChange={(e) => setUntil(e.target.value)}
         />
       </span>
       <span className="select-wrap">
