@@ -16,11 +16,21 @@ export interface RootSearch {
   source?: string;
 }
 
+/** Local YYYY-MM-DD `n` days before today — the store compares message dates as local YYYY-MM-DD. */
+export function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const rootRoute = createRootRoute({
   component: Layout,
+  // Default the view to the last 30 days (from = today−30, to = today) when no date is in the URL.
+  // Both bounds are local YYYY-MM-DD, compared whole-day in the store (date >= from AND date <= to),
+  // so the range is inclusive of every message on both the start and end day. Widen by editing the bar.
   validateSearch: (search: Record<string, unknown>): RootSearch => ({
-    since: typeof search.since === "string" && search.since ? search.since : undefined,
-    until: typeof search.until === "string" && search.until ? search.until : undefined,
+    since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
+    until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
     source: typeof search.source === "string" && search.source ? search.source : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until", "source"])] },

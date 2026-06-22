@@ -1,7 +1,7 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { Loader2, X } from "lucide-react";
+import { FilterX, Loader2 } from "lucide-react";
 import { KNOWN_SOURCES } from "../lib/snapshot";
-import type { RootSearch } from "../router";
+import { daysAgo, type RootSearch } from "../router";
 
 const SOURCE_LABELS: Record<string, string> = {
   claude: "Claude",
@@ -24,31 +24,38 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
   const set = (patch: Partial<RootSearch>) =>
     navigate({ to: ".", search: (prev: RootSearch) => ({ ...prev, ...patch }) });
 
-  const active = Boolean(since || until || source);
+  // Default = last 30 days, all sources (see the root route's validateSearch). Resetting clears the
+  // params so those defaults reapply. The button is always shown but disabled while at defaults.
+  const isDefault = since === daysAgo(30) && until === daysAgo(0) && !source;
 
   return (
     <div className="filter-bar" role="group" aria-label="Dashboard filters">
-      <label className="filter-field">
-        <span>From</span>
+      <span className="filter-dates">
         <input
           type="date"
+          className="filter-input"
+          aria-label="From date"
           value={since ?? ""}
           max={until || undefined}
           onChange={(e) => set({ since: e.target.value || undefined })}
         />
-      </label>
-      <label className="filter-field">
-        <span>To</span>
+        <span className="filter-dash" aria-hidden>–</span>
         <input
           type="date"
+          className="filter-input"
+          aria-label="To date"
           value={until ?? ""}
           min={since || undefined}
           onChange={(e) => set({ until: e.target.value || undefined })}
         />
-      </label>
-      <label className="filter-field">
-        <span>Source</span>
-        <select value={source ?? ""} onChange={(e) => set({ source: e.target.value || undefined })}>
+      </span>
+      <span className="select-wrap">
+        <select
+          className="filter-input"
+          aria-label="Source"
+          value={source ?? ""}
+          onChange={(e) => set({ source: e.target.value || undefined })}
+        >
           <option value="">All sources</option>
           {KNOWN_SOURCES.map((s) => (
             <option key={s} value={s}>
@@ -56,18 +63,21 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
             </option>
           ))}
         </select>
-      </label>
-      {active && (
-        <button
-          type="button"
-          className="filter-clear"
-          onClick={() => set({ since: undefined, until: undefined, source: undefined })}
-          title="Clear filters"
-        >
-          <X size={14} strokeWidth={2} aria-hidden /> Clear
-        </button>
-      )}
-      {refreshing && <Loader2 className="filter-spinner" size={15} strokeWidth={2} aria-label="Updating" />}
+      </span>
+      <button
+        type="button"
+        className="filter-reset"
+        disabled={isDefault}
+        onClick={() => set({ since: undefined, until: undefined, source: undefined })}
+        title="Reset filters to the last 30 days, all sources"
+        aria-label="Reset filters"
+      >
+        {refreshing ? (
+          <Loader2 className="filter-spinner" size={16} strokeWidth={2} aria-label="Updating" />
+        ) : (
+          <FilterX size={16} strokeWidth={1.75} aria-hidden />
+        )}
+      </button>
     </div>
   );
 }

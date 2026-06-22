@@ -130,16 +130,18 @@ function SessionList() {
           <span className="session-count">{rows.length === total ? total : `${rows.length} / ${total}`}</span>
         </div>
         <div className="session-filters">
-          <select
-            className="session-sort"
-            value={sort}
-            onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
-            aria-label="Sort sessions"
-          >
-            {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
-              <option key={s} value={s}>{SORT_LABELS[s]}</option>
-            ))}
-          </select>
+          <span className="select-wrap">
+            <select
+              className="session-sort"
+              value={sort}
+              onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
+              aria-label="Sort sessions"
+            >
+              {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
+                <option key={s} value={s}>{SORT_LABELS[s]}</option>
+              ))}
+            </select>
+          </span>
           {activeFilters.map(([key, value]) => (
             <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
               {key}: {value}
