@@ -16,6 +16,8 @@ import type {
 import type { Recommendation } from "../../src/recommendations";
 import type { TaskMetrics } from "../../src/task-metrics";
 import type { DebugInfo } from "../../src/debug-info";
+import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/session-list";
+import type { SessionDetailResponse } from "../../src/serve";
 
 export type {
   Dashboard,
@@ -26,6 +28,10 @@ export type {
   PluginRow,
   Recommendation,
   SessionRow,
+  SessionListItem,
+  SessionListResponse,
+  SessionDetailResponse,
+  SessionSort,
   TaskMetrics,
   ToolCategoryStat,
   ToolStat,

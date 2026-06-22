@@ -470,6 +470,8 @@ export function aggregate(
   const highTokenGrowthSessions = sessionRows.filter(
     (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= 5,
   ).length;
+  const outcomeCounts = { clean: 0, interrupted: 0, unknown: 0 };
+  for (const row of sessionRows) outcomeCounts[row.health.outcome ?? "unknown"]++;
 
   return {
     generatedAtMs: 0,
@@ -500,5 +502,6 @@ export function aggregate(
     sessions: opts.includeSessions === false ? [] : sessionRows,
     frictionTotals,
     highTokenGrowthSessions,
+    outcomeCounts,
   };
 }

@@ -26,14 +26,22 @@ const rootRoute = createRootRoute({
   search: { middlewares: [retainSearchParams(["since", "until", "source"])] },
 });
 
+const SESSION_SORTS = ["recent", "tokens", "cost"] as const;
+
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
   component: Sessions,
-  validateSearch: (search: Record<string, unknown>): { project?: string; source?: string; showGenerated?: boolean } => ({
+  // `source` and the date range are global (root); these are the Sessions-local refinements.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { project?: string; showGenerated?: boolean; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
     project: typeof search.project === "string" && search.project ? search.project : undefined,
-    source: typeof search.source === "string" && search.source ? search.source : undefined,
     showGenerated: search.showGenerated === true || search.showGenerated === "true" ? true : undefined,
+    sort: SESSION_SORTS.includes(search.sort as (typeof SESSION_SORTS)[number])
+      ? (search.sort as (typeof SESSION_SORTS)[number])
+      : undefined,
+    q: typeof search.q === "string" && search.q ? search.q : undefined,
   }),
 });
 

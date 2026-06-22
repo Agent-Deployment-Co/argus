@@ -118,6 +118,11 @@ main:has(.sessions-split) { padding: 0; }
 .filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
 .filter-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; user-select: none; }
 .filter-toggle:hover { border-color: var(--accent); }
+.session-sort { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.session-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.session-load-more:hover { border-color: var(--accent); color: var(--heading); }
+.session-load-more:disabled { opacity: .6; cursor: default; }
 .filter-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
 .filter-toggle-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
