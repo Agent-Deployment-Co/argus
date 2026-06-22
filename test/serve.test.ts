@@ -47,11 +47,32 @@ describe("serve API", () => {
   test("?refresh forces a fresh build", async () => {
     let calls = 0;
     const snap = fixtureSnapshot();
-    const app = createApp(async (force) => { if (force) calls++; return snap; }, null);
+    const app = createApp(async (_filters, force) => { if (force) calls++; return snap; }, null);
 
     await app.request("/api/snapshot");
     await app.request("/api/snapshot?refresh=1");
     expect(calls).toBe(1);
+  });
+
+  test("GET /api/snapshot passes since/until/project/source filters through", async () => {
+    let seen: unknown;
+    const snap = fixtureSnapshot();
+    const app = createApp(async (filters) => { seen = filters; return snap; }, null);
+
+    await app.request("/api/snapshot?since=2026-01-01&until=2026-02-01&project=web&source=codex");
+    expect(seen).toEqual({ since: "2026-01-01", until: "2026-02-01", project: "web", source: "codex" });
+  });
+
+  test("GET /api/snapshot omits absent filters and rejects an unknown source", async () => {
+    let seen: unknown;
+    const snap = fixtureSnapshot();
+    const app = createApp(async (filters) => { seen = filters; return snap; }, null);
+
+    await app.request("/api/snapshot");
+    expect(seen).toEqual({});
+
+    const res = await app.request("/api/snapshot?source=bogus");
+    expect(res.status).toBe(400);
   });
 
   test("POST /api/sessions/:id/reindex returns tasks and reports that the store changed", async () => {

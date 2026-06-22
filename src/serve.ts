@@ -1,7 +1,8 @@
 // Local web server for the interactive dashboard (`argus serve`). Hono exposes the analyzed
 // Dashboard as a JSON API and serves the compiled React app from dist/web. This is the foundation
-// the future argusd daemon will run; today it builds the dashboard on demand and caches it briefly
-// so rapid page reloads don't re-read every transcript.
+// the future argusd daemon will run; today it builds the dashboard on demand, narrowed by the
+// /api/snapshot filter query params (since/until/project/source), collapsing concurrent identical
+// builds and leaning on the client's staleTime instead of a server-side cache.
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { spawnSync } from "node:child_process";
@@ -10,6 +11,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dashboard } from "./aggregate.ts";
 import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
+import type { TranscriptSource } from "./parse.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
@@ -56,8 +58,19 @@ export interface SessionTaskMetricsResponse {
   metrics: Record<string, TaskMetrics>;
 }
 
-/** Builds the snapshot for a request. `force` bypasses any caching the caller layered on. */
-export type SnapshotSource = (force: boolean) => Promise<Snapshot>;
+/** Server-side filters parsed from the /api/snapshot query string. Each narrows the dashboard at
+ *  store-read time (pushed into buildDashboard's since/until/project/source); omitted fields fall
+ *  back to the serve process's base options. */
+export interface SnapshotFilters {
+  since?: string;
+  until?: string;
+  project?: string;
+  source?: "all" | TranscriptSource;
+}
+
+/** Builds the snapshot for a request, narrowed by `filters`. `force` requests a fresh build
+ *  (the `?refresh` seam) rather than joining an in-flight build for the same filters. */
+export type SnapshotSource = (filters: SnapshotFilters, force: boolean) => Promise<Snapshot>;
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
@@ -71,9 +84,6 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   debugInfo?: DebugInfoReader;
 }
-
-/** How long a built dashboard is reused before the next request triggers a fresh read. */
-const CACHE_TTL_MS = 30_000;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -140,13 +150,36 @@ function rejectCrossSite(c: Context): Response | null {
   return null;
 }
 
+const SNAPSHOT_SOURCES = new Set<string>(["all", "claude", "codex", "gemini", "cowork"]);
+
+/** Parse the /api/snapshot filter query params, or return an error message string for a 400.
+ *  Dates are passed through as YYYY-MM-DD strings (the store compares them lexically); only
+ *  `source` is validated against the known set so a typo doesn't silently widen the result. */
+function parseSnapshotFilters(c: Context): SnapshotFilters | string {
+  const filters: SnapshotFilters = {};
+  const since = c.req.query("since");
+  const until = c.req.query("until");
+  const project = c.req.query("project");
+  const source = c.req.query("source");
+  if (since) filters.since = since;
+  if (until) filters.until = until;
+  if (project) filters.project = project;
+  if (source) {
+    if (!SNAPSHOT_SOURCES.has(source)) return `Unknown source "${source}".`;
+    filters.source = source as "all" | TranscriptSource;
+  }
+  return filters;
+}
+
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
 
   app.get("/api/snapshot", async (c) => {
-    const snap = await getSnapshot(c.req.query("refresh") != null);
+    const filters = parseSnapshotFilters(c);
+    if (typeof filters === "string") return c.json({ error: filters }, 400);
+    const snap = await getSnapshot(filters, c.req.query("refresh") != null);
     return c.json(snap);
   });
 
@@ -208,38 +241,43 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
 export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
   const webRoot = findWebRoot();
 
-  // Snapshot cache: a built dashboard is reused for CACHE_TTL_MS so reloading the page (or several
-  // API calls from one page) doesn't re-read every transcript. `?refresh` forces a fresh read —
-  // the seam a warm argusd store will later replace. A single in-flight build is shared.
-  let cached: Snapshot | null = null;
-  let cachedAt = 0;
-  let inFlight: Promise<Snapshot> | null = null;
+  // No server-side snapshot cache: each request builds its filtered slice fresh. The heavy work is
+  // a store read + aggregation; the client (TanStack Query) holds a short staleTime so rapid page
+  // reloads don't refetch, and the in-flight map below collapses concurrent identical requests into
+  // one build. `?refresh` (force) starts a fresh build rather than joining an in-flight one. This is
+  // the seam a warm argusd store will later replace.
+  const inFlight = new Map<string, Promise<Snapshot>>();
 
-  async function snapshot(force: boolean): Promise<Snapshot> {
-    if (cached && !force && Date.now() - cachedAt < CACHE_TTL_MS) return cached;
-    if (inFlight) return inFlight;
-    inFlight = (async () => {
-      const dashboard = await buildDashboard(opts.build, log);
-      const snap: Snapshot = {
+  const buildOptionsFor = (filters: SnapshotFilters): BuildDashboardOptions => ({
+    ...opts.build,
+    source: filters.source ?? opts.build.source,
+    since: filters.since ?? opts.build.since,
+    until: filters.until ?? opts.build.until,
+    project: filters.project ?? opts.build.project,
+  });
+
+  async function snapshot(filters: SnapshotFilters, force: boolean): Promise<Snapshot> {
+    const buildOpts = buildOptionsFor(filters);
+    const key = JSON.stringify(buildOpts);
+    if (!force) {
+      const existing = inFlight.get(key);
+      if (existing) return existing;
+    }
+    const pending = (async () => {
+      const dashboard = await buildDashboard(buildOpts, log);
+      return {
         dashboard,
         recommendations: computeRecommendations(dashboard),
         generatedAtMs: dashboard.generatedAtMs,
-      };
-      cached = snap;
-      cachedAt = Date.now();
-      return snap;
+      } satisfies Snapshot;
     })();
+    inFlight.set(key, pending);
     try {
-      return await inFlight;
+      return await pending;
     } finally {
-      inFlight = null;
+      if (inFlight.get(key) === pending) inFlight.delete(key);
     }
   }
-
-  const clearCachedSnapshot = () => {
-    cached = null;
-    cachedAt = 0;
-  };
 
   // Task extraction is always on for an explicit single-session Refresh (deliberately unlike the CLI
   // `index refresh`, which defers to the config opt-in): force `enabled` on while keeping the
@@ -268,7 +306,6 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
 
   const app = createApp(snapshot, webRoot, {
     reindex,
-    onStoreChanged: clearCachedSnapshot,
     sessionTaskMetrics,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
   });
@@ -299,8 +336,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     if (!webRoot) {
       log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
     }
-    // Warm the cache so the first page load is fast; failures surface on the first request anyway.
-    void snapshot(false).catch(() => {});
+    // Warm the unfiltered build so the first page load is fast; failures surface on the first request.
+    void snapshot({}, false).catch(() => {});
     if (opts.open) spawnSync("open", [url]);
     resolveListening();
   });
