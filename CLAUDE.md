@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ This is a public repository
+
+**Argus is public open source.** Never commit or push private, sensitive, or personal data —
+not in code, tests, fixtures, comments, docs, or commit messages. This includes:
+
+- **Secrets**: API keys, tokens, certificates, credentials, `.env` values.
+- **Data stores**: `argus.db`, `argus.json`, the contents of `$ARGUS_CONFIG_DIR`/`$ARGUS_CACHE_DIR`,
+  or any indexed/cached output produced by running Argus locally.
+- **Agent session data**: real Claude/Codex/Gemini transcripts, prompts, or any captured
+  conversation content from `~/.claude`, `~/.codex`, etc.
+- **Local file information**: real home/user paths, machine names, directory listings, or anything
+  that identifies a specific user or machine.
+- **PII**: names, emails, org/customer identifiers, or any personal information.
+
+When you need example data, synthesize it. Use redacted, obviously-fake fixtures (e.g. `/Users/you`,
+`user@example.com`). When in doubt, leave it out and ask.
+
 ## What this is
 
 Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
