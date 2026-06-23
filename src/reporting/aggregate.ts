@@ -38,6 +38,63 @@ function usageCost(u: Usage, model: string): number {
   return cost(u, model);
 }
 
+/** Fold per-skill + per-MCP-server usage into per-plugin rows, seeding all known plugins so
+ *  enabled-but-unused ones still surface. Shared by the JS aggregate and the SQL snapshot builder so
+ *  byPlugin is identical on both paths. */
+export function foldPlugins(
+  bySkill: NamedUsage[],
+  byMcpServer: Array<{ server: string; calls: number }>,
+  plugins: Map<string, PluginInfo>,
+): PluginRow[] {
+  const pluginAgg = new Map<string, PluginRow>();
+  const ensurePlugin = (name: string): PluginRow => {
+    let row = pluginAgg.get(name);
+    if (!row) {
+      const info = plugins.get(name);
+      row = {
+        name,
+        marketplace: info?.marketplace || "",
+        enabled: info?.enabled ?? false,
+        used: false,
+        version: info?.version,
+        installedAt: info?.installedAt,
+        skills: [],
+        skillMessages: 0,
+        skillTokens: 0,
+        skillCost: 0,
+        mcpCalls: 0,
+      };
+      pluginAgg.set(name, row);
+    }
+    return row;
+  };
+  // seed all known plugins so unused-but-enabled ones show up
+  for (const name of plugins.keys()) ensurePlugin(name);
+
+  for (const s of bySkill) {
+    const pname = (s.meta?.plugin as string | null) ?? null;
+    if (!pname) continue;
+    const row = ensurePlugin(pname);
+    row.used = true;
+    if (!row.skills.includes(s.name)) row.skills.push(s.name);
+    row.skillMessages += s.messages;
+    row.skillTokens += s.total;
+    row.skillCost += s.cost;
+  }
+  // attribute MCP servers to plugins by name match (best-effort).
+  for (const s of byMcpServer) {
+    if (pluginAgg.has(s.server)) {
+      const row = ensurePlugin(s.server);
+      row.used = true;
+      row.mcpCalls += s.calls;
+    }
+  }
+  return [...pluginAgg.values()].sort((a, b) => {
+    if (a.used !== b.used) return a.used ? -1 : 1;
+    return b.skillTokens - a.skillTokens;
+  });
+}
+
 // ---- session health (#38) ----
 
 function median(values: number[]): number | null {
@@ -377,53 +434,7 @@ export function aggregate(
     .slice(0, 15);
 
   // ---- plugins (fold skills + mcp usage; include enabled-but-unused) ----
-  const pluginAgg = new Map<string, PluginRow>();
-  const ensurePlugin = (name: string): PluginRow => {
-    let row = pluginAgg.get(name);
-    if (!row) {
-      const info = plugins.get(name);
-      row = {
-        name,
-        marketplace: info?.marketplace || "",
-        enabled: info?.enabled ?? false,
-        used: false,
-        version: info?.version,
-        installedAt: info?.installedAt,
-        skills: [],
-        skillMessages: 0,
-        skillTokens: 0,
-        skillCost: 0,
-        mcpCalls: 0,
-      };
-      pluginAgg.set(name, row);
-    }
-    return row;
-  };
-  // seed all known plugins so unused-but-enabled ones show up
-  for (const name of plugins.keys()) ensurePlugin(name);
-
-  for (const s of bySkill) {
-    const pname = (s.meta?.plugin as string | null) ?? null;
-    if (!pname) continue;
-    const row = ensurePlugin(pname);
-    row.used = true;
-    if (!row.skills.includes(s.name)) row.skills.push(s.name);
-    row.skillMessages += s.messages;
-    row.skillTokens += s.total;
-    row.skillCost += s.cost;
-  }
-  // attribute MCP servers to plugins by name match (best-effort).
-  for (const s of byMcpServer) {
-    if (pluginAgg.has(s.server)) {
-      const row = ensurePlugin(s.server);
-      row.used = true;
-      row.mcpCalls += s.calls;
-    }
-  }
-  const byPlugin = [...pluginAgg.values()].sort((a, b) => {
-    if (a.used !== b.used) return a.used ? -1 : 1;
-    return b.skillTokens - a.skillTokens;
-  });
+  const byPlugin = foldPlugins(bySkill, byMcpServer, plugins);
 
   // ---- sessions ----
   const bySession = new Map<string, MessageRecord[]>();
