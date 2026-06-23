@@ -27,6 +27,7 @@ struct AppState {
     child: Mutex<Option<CommandChild>>,
     stopping: AtomicBool,
     status_item: MenuItem<Wry>,
+    open_item: MenuItem<Wry>,
     start_item: MenuItem<Wry>,
     stop_item: MenuItem<Wry>,
 }
@@ -63,6 +64,7 @@ fn refresh_status(app: &AppHandle) {
     let _ = state
         .status_item
         .set_text(if running { "Argus is running" } else { "Argus is stopped" });
+    let _ = state.open_item.set_enabled(running);
     let _ = state.start_item.set_enabled(!running);
     let _ = state.stop_item.set_enabled(running);
 }
@@ -255,6 +257,7 @@ pub fn run() {
                 child: Mutex::new(None),
                 stopping: AtomicBool::new(false),
                 status_item: status,
+                open_item: open,
                 start_item,
                 stop_item,
             });
