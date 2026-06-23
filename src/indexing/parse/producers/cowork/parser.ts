@@ -4,6 +4,7 @@ import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   buildPromptFact,
   createFactId,
+  isAgentInitiated,
   createFileIdentity,
   sameFileFingerprint,
   stableId,
@@ -537,19 +538,23 @@ function parseCoworkTranscript(
         typeof record.value.session_id === "string" ? record.value.session_id : "";
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       // Cowork's audit.jsonl is a flattened log that doesn't currently carry subagent (sidechain)
-      // turns — but Cowork does run subagents, so guard defensively: a sidechain turn is agent-
-      // authored, so it's an agent-initiated prompt and never a (human) task candidate (#118).
-      const sidechain = record.value.isSidechain === true;
-      // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns); initiator
-      // is agent for a sidechain turn, else the session kind; dedupKey = record uuid so replayed turns
-      // collapse in reconcile.
-      if (taskText && !generatedTitle) {
+      // turns — but Cowork does run subagents, so guard defensively. A sidechain turn is agent-authored
+      // *loop content*: it is neither a human task candidate (#118) nor an interaction opening. Because
+      // Cowork emits a single (kind `main`) session, we can't route it to a distinct subagent session
+      // id the way Claude/Gemini do, so reconcile's fold-filter wouldn't catch it — emitting an
+      // agent-initiated prompt here would just split the human interaction in two. So we skip the
+      // prompt marker entirely; its tokens/tools still count as the surrounding interaction's loop.
+      // (Full Cowork subagent attribution is #128.)
+      const agentInitiated = isAgentInitiated(sessionFact?.kind) || record.value.isSidechain === true;
+      // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns;
+      // dedupKey = record uuid so replayed turns collapse in reconcile.
+      if (taskText && !generatedTitle && !agentInitiated) {
         facts.prompts!.push(
           buildPromptFact({
             source: "cowork",
             sourceSessionId,
             position: record.position,
-            kind: sidechain ? "subagent" : sessionFact?.kind,
+            kind: sessionFact?.kind,
             timestampMs: timestampMs(record.value.timestamp ?? record.value._audit_timestamp),
             dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
           }),
@@ -560,7 +565,7 @@ function parseCoworkTranscript(
       }
       if (
         taskText &&
-        !sidechain &&
+        !agentInitiated &&
         !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
       ) {
         const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);

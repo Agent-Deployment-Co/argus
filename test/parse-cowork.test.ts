@@ -7,6 +7,8 @@ import {
   parseCoworkTranscriptFile,
   parseCoworkTranscriptPath,
 } from "../src/indexing/parse/producers/cowork/parser.ts";
+import { coworkProducer } from "../src/indexing/parse/producers/cowork/index.ts";
+import { reconcileSessions } from "../src/indexing/reconcile.ts";
 
 const FIX = join(import.meta.dir, "fixtures", "cowork-sessions");
 
@@ -36,8 +38,18 @@ describe("cowork sidechain guard (#118)", () => {
     const facts = parsed.fragment.facts;
     // Only the human prompt is a task candidate; the sidechain worker prompt is excluded.
     expect(facts.taskCandidates.map((task) => task.text)).toEqual(["build the feature"]);
-    // The sidechain prompt is still recorded, as agent-initiated.
-    expect(facts.prompts?.map((prompt) => prompt.initiator)).toEqual(["human", "agent"]);
+    // The sidechain turn is loop content: it opens no interaction, so only the human prompt marker
+    // is emitted (a single session id means we can't route it elsewhere — see #128).
+    expect(facts.prompts?.map((prompt) => prompt.initiator)).toEqual(["human"]);
+
+    // And reconcile must NOT split the human interaction in two at the sidechain timestamp.
+    const { interactions } = reconcileSessions({
+      caps: coworkProducer.capabilities,
+      fragments: [parsed.fragment],
+      auxiliaryFragments: [],
+    });
+    expect(interactions.length).toBe(1);
+    expect(interactions[0]?.initiator).toBe("human");
   });
 });
 

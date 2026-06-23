@@ -691,10 +691,19 @@ export function createFactId(
 }
 
 /**
+ * The single rule for "is a prompt agent-authored rather than human intent?": a subagent session's
+ * prompts. Both the prompt-fact initiator and each producer's task-candidate guard call this so the
+ * rule lives in one place (a new SessionKind or detection only changes here, not in N producers).
+ */
+export function isAgentInitiated(kind?: SessionKind): boolean {
+  return kind === "subagent";
+}
+
+/**
  * Build an interaction-opening PromptFact uniformly across producers (#117). Centralizing this keeps
  * the guards consistent (timestamp set only when finite; dedupKey only when present) and derives
- * `initiator` from the owning session's kind — a `subagent` session's prompts are agent-initiated —
- * rather than each producer re-deriving "is this agent-initiated?" and drifting.
+ * `initiator` from the owning session's kind (via {@link isAgentInitiated}) rather than each producer
+ * re-deriving "is this agent-initiated?" and drifting.
  */
 export function buildPromptFact(args: {
   source: AgentSource;
@@ -710,7 +719,7 @@ export function buildPromptFact(args: {
     id: createFactId("prompt", args.source, args.sourceSessionId, args.position, "user_message"),
     source: args.source,
     sourceSessionId: args.sourceSessionId,
-    initiator: args.kind === "subagent" ? "agent" : "human",
+    initiator: isAgentInitiated(args.kind) ? "agent" : "human",
     position: args.position,
   };
   if (args.timestampMs != null && Number.isFinite(args.timestampMs)) prompt.timestampMs = args.timestampMs;
