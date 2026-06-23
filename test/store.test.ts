@@ -432,6 +432,11 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN model");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN attribution_skill");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
+      // Recreate the v4-era base indexes under the old name so the 9 -> 10 rename migration's
+      // `DROP INDEX IF EXISTS resolved_messages_*` actually drops populated indexes (fidelity).
+      await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
+      await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
+      await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
       await rawExec(db, "PRAGMA user_version = 4");
     });
 
@@ -949,6 +954,12 @@ describe("SQLite store", () => {
       for (const col of ["input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h", "model", "attribution_skill"]) {
         await rawExec(db, `ALTER TABLE resolved_messages DROP COLUMN ${col}`);
       }
+      // Recreate the v8-era indexes under the old name (v8 had date/ts/source + the v7 task index) so
+      // the 9 -> 10 rename migration drops populated indexes, not no-ops.
+      await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
+      await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
+      await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
+      await rawExec(db, "CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq)");
       await rawExec(db, "PRAGMA user_version = 8");
     });
 
@@ -1004,9 +1015,23 @@ describe("SQLite store", () => {
           },
         ],
         toolResults: [],
+        // Passed out of seq order on purpose: the row's seq must come from interaction.seq, not the
+        // array index — so seq 1 (agent) must land at seq 1 even though it's first in the array.
         interactions: [
           {
             id: "i1",
+            source: "claude",
+            sourceSessionId: sid,
+            seq: 1,
+            initiator: "agent",
+            disposition: "incomplete",
+            compactionCount: 0,
+            timestampMs: 2000,
+            promptPosition: { originKey: "f", recordIndex: 2, itemIndex: 0 },
+            position: { originKey: "f", recordIndex: 2, itemIndex: 0 },
+          },
+          {
+            id: "i0",
             source: "claude",
             sourceSessionId: sid,
             seq: 0,
@@ -1032,7 +1057,10 @@ describe("SQLite store", () => {
         `SELECT tool, category, mcp_server FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
       ),
     }));
-    expect(rows.interactions).toEqual([{ seq: 0, initiator: "human", disposition: "completed" }]);
+    expect(rows.interactions).toEqual([
+      { seq: 0, initiator: "human", disposition: "completed" },
+      { seq: 1, initiator: "agent", disposition: "incomplete" },
+    ]);
     expect(rows.invocations).toEqual([
       { tool: "Bash", category: "shell", mcp_server: null },
       { tool: "mcp__srv__do", category: "mcp", mcp_server: "srv" },

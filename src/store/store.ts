@@ -119,6 +119,37 @@ interface FragmentStorage {
 //      This is NOT re-derivable once a source ages off disk, so it is preserved across schema
 //      changes via real migrations (MIGRATIONS below), never silently dropped.
 //   3. source_coverage + session_ownership — freshness attestation and per-session ownership.
+
+// Shared so a fresh schema (CREATE_SCHEMA_SQL) and the v10 -> v11 migration can't drift. Secondary
+// indexes are intentionally NOT created here — no query reads these tables until #121 (the GROUP BY
+// flip), which adds indexes tuned to its actual query shapes; until then they'd be pure write cost.
+const RESOLVED_INTERACTIONS_DDL = `
+  CREATE TABLE resolved_interactions (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    ts INTEGER,
+    initiator TEXT NOT NULL,
+    disposition TEXT NOT NULL,
+    compaction_count INTEGER NOT NULL DEFAULT 0,
+    interaction_json TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  );`;
+const RESOLVED_INVOCATIONS_DDL = `
+  CREATE TABLE resolved_invocations (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    interaction_seq INTEGER,
+    tool TEXT NOT NULL,
+    category TEXT NOT NULL,
+    mcp_server TEXT,
+    mcp_tool TEXT,
+    skill TEXT,
+    file_path TEXT,
+    PRIMARY KEY (session_id, seq)
+  );`;
+
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
     id TEXT PRIMARY KEY,
@@ -256,39 +287,11 @@ const CREATE_SCHEMA_SQL = `
   -- The interaction spine (#117): one row per interaction (prompt -> loop -> response). Promoted
   -- initiator/disposition columns back the friction/outcome GROUP BY (#121); interaction_json keeps
   -- the full fact (incl. prompt/response slot positions) for detail reads.
-  CREATE TABLE resolved_interactions (
-    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    source TEXT NOT NULL,
-    ts INTEGER,
-    initiator TEXT NOT NULL,
-    disposition TEXT NOT NULL,
-    compaction_count INTEGER NOT NULL DEFAULT 0,
-    interaction_json TEXT NOT NULL,
-    PRIMARY KEY (session_id, seq)
-  );
-  CREATE INDEX resolved_interactions_source ON resolved_interactions(source);
-  CREATE INDEX resolved_interactions_disposition ON resolved_interactions(disposition);
+  ${RESOLVED_INTERACTIONS_DDL}
 
   -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
   -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
-  CREATE TABLE resolved_invocations (
-    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
-    seq INTEGER NOT NULL,
-    source TEXT NOT NULL,
-    interaction_seq INTEGER,
-    tool TEXT NOT NULL,
-    category TEXT NOT NULL,
-    mcp_server TEXT,
-    mcp_tool TEXT,
-    skill TEXT,
-    file_path TEXT,
-    PRIMARY KEY (session_id, seq)
-  );
-  CREATE INDEX resolved_invocations_tool ON resolved_invocations(tool);
-  CREATE INDEX resolved_invocations_category ON resolved_invocations(category);
-  CREATE INDEX resolved_invocations_mcp ON resolved_invocations(mcp_server);
-  CREATE INDEX resolved_invocations_skill ON resolved_invocations(skill);
+  ${RESOLVED_INVOCATIONS_DDL}
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -797,38 +800,8 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
     to: 11,
     sql: `
       ALTER TABLE resolved_usage ADD COLUMN interaction_seq INTEGER;
-
-      CREATE TABLE resolved_interactions (
-        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
-        seq INTEGER NOT NULL,
-        source TEXT NOT NULL,
-        ts INTEGER,
-        initiator TEXT NOT NULL,
-        disposition TEXT NOT NULL,
-        compaction_count INTEGER NOT NULL DEFAULT 0,
-        interaction_json TEXT NOT NULL,
-        PRIMARY KEY (session_id, seq)
-      );
-      CREATE INDEX resolved_interactions_source ON resolved_interactions(source);
-      CREATE INDEX resolved_interactions_disposition ON resolved_interactions(disposition);
-
-      CREATE TABLE resolved_invocations (
-        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
-        seq INTEGER NOT NULL,
-        source TEXT NOT NULL,
-        interaction_seq INTEGER,
-        tool TEXT NOT NULL,
-        category TEXT NOT NULL,
-        mcp_server TEXT,
-        mcp_tool TEXT,
-        skill TEXT,
-        file_path TEXT,
-        PRIMARY KEY (session_id, seq)
-      );
-      CREATE INDEX resolved_invocations_tool ON resolved_invocations(tool);
-      CREATE INDEX resolved_invocations_category ON resolved_invocations(category);
-      CREATE INDEX resolved_invocations_mcp ON resolved_invocations(mcp_server);
-      CREATE INDEX resolved_invocations_skill ON resolved_invocations(skill);
+      ${RESOLVED_INTERACTIONS_DDL}
+      ${RESOLVED_INVOCATIONS_DDL}
 
       INSERT INTO resolved_invocations
         (session_id, seq, source, tool, category, mcp_server, mcp_tool, skill, file_path)
@@ -1680,14 +1653,16 @@ export class SqliteStore implements Store {
             ["session_id", "name", "count", "approx_tokens"],
             session.toolResults.map((tr) => [sid, tr.name, tr.count, tr.approxTokens]),
           );
-          // The interaction spine (#117/#119): one row per reconcile-derived interaction.
+          // The interaction spine (#117/#119): one row per reconcile-derived interaction. seq is the
+          // interaction's own ordinal (not the array index) so the PK and interaction_json agree and
+          // #122 can reference one source of truth for the usage<->interaction link.
           await insertRows(
             this.db,
             "resolved_interactions",
             ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "interaction_json"],
-            (session.interactions ?? []).map((interaction, seq) => [
+            (session.interactions ?? []).map((interaction) => [
               sid,
-              seq,
+              interaction.seq,
               interaction.source,
               interaction.timestampMs ?? null,
               interaction.initiator,
@@ -1698,29 +1673,25 @@ export class SqliteStore implements Store {
           );
           // Per-tool-use rows (#113 Part B) from the reconciled messages' toolUses, so byTool/byMcp/
           // bySkill become GROUP BY queries (#121). Result-size stats stay in resolved_tool_results.
-          const invocationRows: Array<Array<string | number | null>> = [];
-          let invocationSeq = 0;
-          for (const message of session.messages) {
-            for (const toolUse of message.toolUses) {
-              invocationRows.push([
+          // Flattened in one pass; seq is the array index (matches the migration's ROW_NUMBER backfill).
+          await insertRows(
+            this.db,
+            "resolved_invocations",
+            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path"],
+            session.messages
+              .flatMap((message) => message.toolUses.map((toolUse) => ({ message, toolUse })))
+              .map(({ message, toolUse }, seq) => [
                 sid,
-                invocationSeq++,
+                seq,
                 message.source,
-                null, // interaction_seq — usage<->interaction linking not yet populated
+                null, // interaction_seq — usage<->interaction linking not yet populated (#122)
                 toolUse.name,
                 toolUse.category,
                 toolUse.mcpServer ?? null,
                 toolUse.mcpTool ?? null,
                 toolUse.skill ?? null,
                 toolUse.filePath ?? null,
-              ]);
-            }
-          }
-          await insertRows(
-            this.db,
-            "resolved_invocations",
-            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path"],
-            invocationRows,
+              ]),
           );
           await run(
             this.db,

@@ -295,26 +295,22 @@ function auxiliaryFragmentsForProducer(
   return fragments;
 }
 
+function groupBy<T>(items: Iterable<T>, keyOf: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const list = groups.get(key);
+    if (list) list.push(item);
+    else groups.set(key, [item]);
+  }
+  return groups;
+}
+
 /** Group a reconcile result into per-session payloads ready to materialize. */
 function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
-  const messagesBySession = new Map<string, MessageRecord[]>();
-  for (const message of output.messages) {
-    let list = messagesBySession.get(message.sessionId);
-    if (!list) {
-      list = [];
-      messagesBySession.set(message.sessionId, list);
-    }
-    list.push(message);
-  }
-  const interactionsBySession = new Map<string, InteractionFact[]>();
-  for (const interaction of output.interactions) {
-    let list = interactionsBySession.get(interaction.sourceSessionId);
-    if (!list) {
-      list = [];
-      interactionsBySession.set(interaction.sourceSessionId, list);
-    }
-    list.push(interaction);
-  }
+  const messagesBySession = groupBy(output.messages, (m) => m.sessionId);
+  // Interactions key on sourceSessionId (already the canonical id from reconcile), not sessionId.
+  const interactionsBySession = groupBy(output.interactions, (i) => i.sourceSessionId);
   const sessions: MaterializeSession[] = [];
   for (const [sid, meta] of output.sessions) {
     const perSession = output.toolResultsBySession.get(sid);
