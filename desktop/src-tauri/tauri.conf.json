@@ -26,7 +26,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "AC07AFEF1318B64B2C926FABF795657E17C37B15"
+      "signingIdentity": "AC07AFEF1318B64B2C926FABF795657E17C37B15",
+      "entitlements": "./entitlements.plist"
     }
   }
 }
