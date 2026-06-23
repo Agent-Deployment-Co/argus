@@ -33,4 +33,4 @@ endif
 ifndef APPLE_PASSWORD
 	$(error APPLE_PASSWORD is not set)
 endif
-	bun run desktop:dmg
+	ARGUS_BUILD_ID=$(shell git rev-parse --short HEAD)-$(shell date +%Y%m%d) bun run desktop:dmg

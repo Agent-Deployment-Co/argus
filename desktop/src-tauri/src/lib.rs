@@ -236,6 +236,13 @@ pub fn run() {
                 None::<&str>,
             )?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
+            let build_id = MenuItem::with_id(
+                app,
+                "build",
+                &format!("Build {}", env!("ARGUS_BUILD_ID")),
+                false,
+                None::<&str>,
+            )?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -248,6 +255,7 @@ pub fn run() {
                     &signin,
                     &autostart,
                     &PredefinedMenuItem::separator(app)?,
+                    &build_id,
                     &quit,
                 ],
             )?;
