@@ -544,7 +544,7 @@ export async function judgeTaskOutcome(
 /**
  * Assign each task a chapter span over the reconciled message timeline by timestamp (bookmark
  * semantics): a message belongs to the latest task that started at or before it. `messageTimestamps`
- * is indexed by message seq (resolved_messages.seq) and is assumed ascending, as the reconciler
+ * is indexed by message seq (resolved_usage.seq) and is assumed ascending, as the reconciler
  * orders messages. Tasks without a timestamp get no chapter (their messages stay unattributed).
  */
 export function assignChapters(tasks: TaskFact[], messageTimestamps: number[]): void {

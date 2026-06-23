@@ -411,9 +411,16 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_source");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_ts");
       await rawExec(db, "DROP TABLE IF EXISTS resolved_tasks");
-      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_task");
+      // v10 renamed resolved_messages -> resolved_usage and re-created its indexes; restore the
+      // pre-rename name (dropping the new-named indexes so the v9 -> v10 migration re-creates them
+      // without conflict) and strip everything added after v4.
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_ts");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_source");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_task");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date_model");
+      await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN task_seq");
-      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_date_model");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN input_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN output_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN cache_read");
@@ -722,7 +729,7 @@ describe("SQLite store", () => {
     }
   });
 
-  test("materializeSessions stamps resolved_messages.task_seq from task chapter spans", async () => {
+  test("materializeSessions stamps resolved_usage.task_seq from task chapter spans", async () => {
     const path = storePath();
     const store = await openStore({ path });
     try {
@@ -764,7 +771,7 @@ describe("SQLite store", () => {
       const rows = await withRawDatabase(path, (db) =>
         rawAll<{ seq: number; task_seq: number | null }>(
           db,
-          `SELECT seq, task_seq FROM resolved_messages WHERE session_id = '${sid}' ORDER BY seq`,
+          `SELECT seq, task_seq FROM resolved_usage WHERE session_id = '${sid}' ORDER BY seq`,
         ),
       );
       expect(rows.map((r) => r.task_seq)).toEqual([0, 0, 1, 1]);
@@ -822,7 +829,7 @@ describe("SQLite store", () => {
         }>(
           db,
           `SELECT input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h, model, attribution_skill
-           FROM resolved_messages WHERE session_id = '${sid}' AND seq = 0`,
+           FROM resolved_usage WHERE session_id = '${sid}' AND seq = 0`,
         ),
       );
       expect(row).toEqual({
@@ -925,7 +932,14 @@ describe("SQLite store", () => {
     // Degrade to v8: drop the promoted columns/index and stamp the older version. record_json is
     // untouched, so the 8 -> 9 migration must reconstruct the columns from it.
     await withRawDatabase(path, async (db) => {
-      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_date_model");
+      // v10 renamed resolved_messages -> resolved_usage; restore the pre-rename name (dropping the
+      // new-named indexes so the v9 -> v10 migration re-creates them) before stripping the v9 columns.
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_ts");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_source");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_task");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date_model");
+      await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
       for (const col of ["input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h", "model", "attribution_skill"]) {
         await rawExec(db, `ALTER TABLE resolved_messages DROP COLUMN ${col}`);
       }
@@ -938,7 +952,7 @@ describe("SQLite store", () => {
         rawGet<{ input_tokens: number; output_tokens: number; cache_read: number; model: string; attribution_skill: string }>(
           db,
           `SELECT input_tokens, output_tokens, cache_read, model, attribution_skill
-           FROM resolved_messages WHERE session_id = '${sid}' AND seq = 0`,
+           FROM resolved_usage WHERE session_id = '${sid}' AND seq = 0`,
         ),
       );
       expect(row).toEqual({
