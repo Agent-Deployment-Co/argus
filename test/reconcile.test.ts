@@ -52,10 +52,11 @@ function assertValidInteractions(caps: ProducerCapabilities, fragments: ParsedFi
 }
 
 const PROJECTS = join(import.meta.dir, "fixtures", "projects");
+const FRICTION_PROJECTS = join(import.meta.dir, "fixtures", "friction-projects");
 const HISTORY = join(import.meta.dir, "fixtures", "history.jsonl");
 
-function claudeFragments(): ParsedFileFragment[] {
-  const discovery = discoverClaudeTranscripts(PROJECTS);
+function claudeFragments(projectsDir = PROJECTS): ParsedFileFragment[] {
+  const discovery = discoverClaudeTranscripts(projectsDir);
   expect(discovery.status).toBe("complete");
   const fragments: ParsedFileFragment[] = [];
   for (const file of discovery.files) {
@@ -96,6 +97,26 @@ describe("reconcile derives interactions (#117)", () => {
     const completed = result.interactions.filter((i) => i.disposition === "completed");
     expect(completed.length).toBeGreaterThan(0);
     for (const interaction of completed) expect(interaction.responsePosition).toBeDefined();
+  });
+});
+
+describe("interaction disposition + compaction (#117)", () => {
+  // The friction fixture's frict1 session has exactly one compaction (a compact_boundary + a
+  // compact_summary marker) and human interruptions.
+  const { interactions } = reconcileSessions({
+    caps: claudeProducer.capabilities,
+    fragments: claudeFragments(FRICTION_PROJECTS),
+    auxiliaryFragments: [],
+  });
+
+  test("a single compaction counts once, not boundary+summary twice", () => {
+    // Before the fix, the span holding both markers reported compactionCount: 2.
+    expect(interactions.every((i) => i.compactionCount <= 1)).toBe(true);
+    expect(interactions.reduce((n, i) => n + i.compactionCount, 0)).toBeGreaterThanOrEqual(1);
+  });
+
+  test("an interrupted loop is recorded as interrupted", () => {
+    expect(interactions.some((i) => i.disposition === "interrupted")).toBe(true);
   });
 });
 

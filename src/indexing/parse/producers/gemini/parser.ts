@@ -19,8 +19,8 @@ import {
   type DiscoveryResult,
   type FileFingerprint,
   type FileIdentity,
+  buildPromptFact,
   type FileParseResult,
-  type InteractionInitiator,
   type InvocationFact,
   type UsageFact,
   type NormalizedFacts,
@@ -998,26 +998,28 @@ function factsFromConversation(
     .find(Boolean);
   const taskCandidates: TaskCandidateFact[] = [];
   const prompts: PromptFact[] = [];
-  // A subagent session (parent inferred from path) is agent-initiated; gemini doesn't fold subagents,
-  // so its agent prompts still open that session's own interactions (#117).
-  const promptInitiator: InteractionInitiator = parentSessionId ? "agent" : "human";
+  // gemini doesn't fold subagents, so a subagent session (parent inferred from path) keeps its own
+  // agent-initiated openings — derived centrally from the session kind by buildPromptFact (#117).
+  const sessionFactKind = sessionKind(conversation, parentSessionId);
   for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex++) {
     const positioned = conversation.messages[messageIndex]!;
     const message = positioned.value;
     if (message.type !== "user") continue;
     const taskText = textFromGeminiContent(message.content, TASK_TEXT_LIMIT);
     if (!taskText) continue;
-    const promptTimestamp = parseTimestamp(message.timestamp);
-    const prompt: PromptFact = {
-      id: createFactId("prompt", "gemini", sourceSessionId, positioned.position, "user_message"),
-      source: "gemini",
-      sourceSessionId,
-      initiator: promptInitiator,
-      position: positioned.position,
-    };
-    if (!Number.isNaN(promptTimestamp)) prompt.timestampMs = promptTimestamp;
-    if (typeof message.id === "string" && message.id) prompt.dedupKey = message.id;
-    prompts.push(prompt);
+    // Skip Argus's own prompts (not human turns) so they don't open phantom interactions.
+    if (!argusGeneratedPromptTitle(taskText)) {
+      prompts.push(
+        buildPromptFact({
+          source: "gemini",
+          sourceSessionId,
+          position: positioned.position,
+          kind: sessionFactKind,
+          timestampMs: parseTimestamp(message.timestamp),
+          dedupKey: typeof message.id === "string" ? message.id : undefined,
+        }),
+      );
+    }
     const next = conversation.messages[messageIndex + 1];
     const nextText =
       next?.value.type === "user"
