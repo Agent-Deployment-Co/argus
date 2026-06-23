@@ -20,7 +20,7 @@ import {
   type FileIdentity,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParserDescriptor,
   type ParserDiagnostic,
@@ -49,7 +49,7 @@ export const CLAUDE_CONFIG_ROOT_ID = "claude-config";
 export const CLAUDE_TRANSCRIPT_ROOT_ID = CLAUDE_PROJECTS_ROOT_ID;
 export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
-// v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
+// v2: emits SessionFact.frictionEvents and UsageFact.stopReason (#37).
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
 // v5: emits filtered user task candidates for explicit per-session task extraction.
 // v6: excludes Argus task-extraction prompts from task candidates.
@@ -82,7 +82,7 @@ interface PositionedRecord {
 interface OpenAssistantMessage {
   providerMessageId: string;
   sourceSessionId: string;
-  message?: MessageFact;
+  message?: UsageFact;
   pending: PositionedRecord[];
 }
 
@@ -628,7 +628,7 @@ function invocationMapKey(sourceSessionId: string, invocationId: string): string
 
 function addInvocations(
   record: PositionedRecord,
-  message: MessageFact,
+  message: UsageFact,
   facts: NormalizedFacts,
   invocationFacts: Map<string, InvocationFact>,
 ): void {
@@ -672,11 +672,11 @@ function addInvocations(
   }
 }
 
-function createMessageFact(
+function createUsageFact(
   record: PositionedRecord,
   sourceSessionId: string,
   diagnostics: ParserDiagnostic[],
-): MessageFact | undefined {
+): UsageFact | undefined {
   if (record.value.message?.model === "<synthetic>") return undefined;
   const timestamp = timestampMs(record.value.timestamp);
   if (!Number.isFinite(timestamp)) {
@@ -974,7 +974,7 @@ function parseTranscript(
       continue;
     }
 
-    const message = createMessageFact(record, sourceSessionId, diagnostics);
+    const message = createUsageFact(record, sourceSessionId, diagnostics);
     if (!message) continue;
     facts.messages.push(message);
 

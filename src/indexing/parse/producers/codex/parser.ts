@@ -12,7 +12,7 @@ import {
   type FileFingerprint,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParsedFileFragment,
   type ParserDescriptor,
@@ -525,7 +525,7 @@ export function parseCodexTranscript(
   let pendingInvocations: PendingInvocation[] = [];
   const invocationByScopedId = new Map<string, PendingInvocation>();
   const pendingResults: PendingToolResult[] = [];
-  const messages: MessageFact[] = [];
+  const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
   const taskCandidates: TaskCandidateFact[] = [];
   const rawTurnIds = new Set<string>();

@@ -12,7 +12,7 @@ import {
   type FileIdentity,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParserDescriptor,
   type ParserDiagnostic,
@@ -66,7 +66,7 @@ interface PositionedRecord {
 interface OpenAssistantMessage {
   providerMessageId: string;
   sourceSessionId: string;
-  message?: MessageFact;
+  message?: UsageFact;
   pending: PositionedRecord[];
 }
 
@@ -406,7 +406,7 @@ function coworkResultFrictionEvents(
 
 function addInvocations(
   record: PositionedRecord,
-  message: MessageFact,
+  message: UsageFact,
   facts: NormalizedFacts,
   invocationFacts: Map<string, InvocationFact>,
 ): void {
@@ -656,7 +656,7 @@ function parseCoworkTranscript(
         ? record.value.requestId
         : undefined;
 
-    const message: MessageFact = {
+    const message: UsageFact = {
       id: createFactId(
         "message",
         "cowork",
