@@ -431,6 +431,10 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN model");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN attribution_skill");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
+      // v12 promoted friction columns onto resolved_sessions; strip them so the 11 -> 12 ADDs don't collide.
+      for (const col of ["friction_interruptions", "friction_rejections", "friction_compactions", "friction_turns", "last_interruption_ms"]) {
+        await rawExec(db, `ALTER TABLE resolved_sessions DROP COLUMN ${col}`);
+      }
       // Recreate the v4-era base indexes under the old name so the 9 -> 10 rename migration's
       // `DROP INDEX IF EXISTS resolved_messages_*` actually drops populated indexes (fidelity).
       await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
@@ -947,6 +951,10 @@ describe("SQLite store", () => {
       for (const col of ["input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h", "model", "attribution_skill"]) {
         await rawExec(db, `ALTER TABLE resolved_messages DROP COLUMN ${col}`);
       }
+      // v12 promoted friction columns onto resolved_sessions; strip them so the 11 -> 12 ADDs don't collide.
+      for (const col of ["friction_interruptions", "friction_rejections", "friction_compactions", "friction_turns", "last_interruption_ms"]) {
+        await rawExec(db, `ALTER TABLE resolved_sessions DROP COLUMN ${col}`);
+      }
       // Recreate the v8-era indexes under the old name (v8 had date/ts/source + the v7 task index) so
       // the 9 -> 10 rename migration drops populated indexes, not no-ops.
       await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
@@ -1100,6 +1108,10 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
       await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
       await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN interaction_seq");
+      // v12 promoted friction columns onto resolved_sessions; strip them so the 11 -> 12 ADDs don't collide.
+      for (const col of ["friction_interruptions", "friction_rejections", "friction_compactions", "friction_turns", "last_interruption_ms"]) {
+        await rawExec(db, `ALTER TABLE resolved_sessions DROP COLUMN ${col}`);
+      }
       // resolved_tool_results existed at v10; recreate it so the 11 -> 12 migration's DROP runs.
       await rawExec(
         db,
@@ -1153,11 +1165,17 @@ describe("SQLite store", () => {
     ]);
     await initial.close();
 
-    // Degrade to v11: strip the v12 columns and re-create resolved_tool_results with per-name totals.
+    // Degrade to v11: strip the v12 columns/indexes and re-create resolved_tool_results with per-name totals.
     await withRawDatabase(path, async (db) => {
+      for (const idx of ["resolved_invocations_tool", "resolved_invocations_date", "resolved_invocations_mcp_server", "resolved_invocations_skill"]) {
+        await rawExec(db, `DROP INDEX IF EXISTS ${idx}`);
+      }
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN date");
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN args");
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN approx_result_tokens");
+      for (const col of ["friction_interruptions", "friction_rejections", "friction_compactions", "friction_turns", "last_interruption_ms"]) {
+        await rawExec(db, `ALTER TABLE resolved_sessions DROP COLUMN ${col}`);
+      }
       await rawExec(
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",

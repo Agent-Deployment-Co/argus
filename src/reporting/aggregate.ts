@@ -1,4 +1,10 @@
 import { skillPlugin } from "./inventory.ts";
+import {
+  classifyOutcome,
+  emptyFrictionTotals,
+  foldFriction,
+  HIGH_TOKEN_GROWTH_RATIO,
+} from "../health.ts";
 import { cost, unpricedModels } from "../pricing.ts";
 import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory } from "../tool-categories.ts";
 import {
@@ -122,19 +128,16 @@ function sessionOutcome(
   msgs: MessageRecord[],
   friction: SessionFriction | undefined,
 ): SessionHealth["outcome"] {
-  // The user interrupted after the assistant's last message and never re-prompted.
-  const lastMessageTs = msgs[msgs.length - 1]!.ts;
-  if (friction?.lastInterruptionMs != null && friction.lastInterruptionMs >= lastMessageTs) {
-    return "interrupted";
-  }
+  // Last non-null stop reason (a trailing tool_use means the transcript ends mid-work -> "unknown").
+  let lastStopReason: string | undefined;
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const stopReason = msgs[i]!.stopReason;
-    if (!stopReason) continue;
-    // A trailing tool_use means the transcript ends mid-work — possibly a live session —
-    // so it stays "unknown" rather than guessing "abandoned".
-    return stopReason === "end_turn" || stopReason === "stop_sequence" ? "clean" : "unknown";
+    if (msgs[i]!.stopReason) {
+      lastStopReason = msgs[i]!.stopReason;
+      break;
+    }
   }
-  return "unknown";
+  // Shared with the SQL snapshot path (store.readHealthRollups) so both classify identically (#7).
+  return classifyOutcome(msgs[msgs.length - 1]!.ts, friction?.lastInterruptionMs, lastStopReason);
 }
 
 /** msgs must be in timestamp order (parse guarantees it). */
@@ -450,13 +453,7 @@ export function aggregate(
   sessionRows.sort((a, b) => b.start - a.start);
 
   // ---- friction rollups (#38): totals + per-project, over friction-observable sessions ----
-  const emptyFrictionTotals = (): FrictionTotals => ({
-    observableSessions: 0,
-    interruptions: 0,
-    rejections: 0,
-    compactions: 0,
-    turns: 0,
-  });
+  // The fold + zero-builder are shared with the SQL snapshot path via src/health.ts (#9).
   const frictionTotals = emptyFrictionTotals();
   const projectFriction = new Map<string, FrictionTotals>();
   for (const row of sessionRows) {
@@ -464,13 +461,13 @@ export function aggregate(
     if (h.interruptions == null) continue; // friction not observable for this source
     const pf = projectFriction.get(row.project) ?? emptyFrictionTotals();
     if (!projectFriction.has(row.project)) projectFriction.set(row.project, pf);
-    for (const bucket of [frictionTotals, pf]) {
-      bucket.observableSessions++;
-      bucket.interruptions += h.interruptions;
-      bucket.rejections += h.rejections ?? 0;
-      bucket.compactions += h.compactions ?? 0;
-      bucket.turns += h.turns ?? 0;
-    }
+    const contribution = {
+      interruptions: h.interruptions,
+      rejections: h.rejections ?? 0,
+      compactions: h.compactions ?? 0,
+      turns: h.turns ?? 0,
+    };
+    for (const bucket of [frictionTotals, pf]) foldFriction(bucket, contribution);
   }
   for (const project of byProject) {
     const friction = projectFriction.get(project.name);
@@ -479,7 +476,7 @@ export function aggregate(
   // Token-growth recommendation input, as a scalar so it survives when sessions are omitted from the
   // serve payload (the rec layer can't re-derive it from an empty sessions array otherwise).
   const highTokenGrowthSessions = sessionRows.filter(
-    (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= 5,
+    (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= HIGH_TOKEN_GROWTH_RATIO,
   ).length;
   const outcomeCounts = { clean: 0, interrupted: 0, unknown: 0 };
   for (const row of sessionRows) outcomeCounts[row.health.outcome ?? "unknown"]++;
