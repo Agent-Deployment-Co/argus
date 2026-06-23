@@ -235,13 +235,13 @@ describe("parseAllIncrementalDetailed", () => {
     }
   });
 
-  test("falls back to direct parsing when the cache cannot be opened", async () => {
+  test("a read degrades to a temp store when the real store cannot be opened", async () => {
     const root = tempRoot();
     mkdirSync(join(root, "cache"), { recursive: true });
     const path = storePath(root);
     writeFileSync(path, "not sqlite");
 
-    const parsed = await parseAllIncrementalDetailed({
+    const parsed = await readStore({
       codexSessionsDir: copyFixture("codex-sessions", root),
       sources: ["codex"] as AgentSource[],
       storePath: path,
@@ -250,6 +250,21 @@ describe("parseAllIncrementalDetailed", () => {
     expect(parsed.stats.fallback).toBe(true);
     expect(parsed.diagnostics[0]?.code).toBe("store_fallback");
     expect(parsed.parsed.messages).toHaveLength(2);
+  });
+
+  test("an index fails loud when the real store cannot be opened (no silent temp write)", async () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "cache"), { recursive: true });
+    const path = storePath(root);
+    writeFileSync(path, "not sqlite");
+
+    await expect(
+      parseAllIncrementalDetailed({
+        codexSessionsDir: copyFixture("codex-sessions", root),
+        sources: ["codex"] as AgentSource[],
+        storePath: path,
+      }),
+    ).rejects.toThrow();
   });
 
 });
