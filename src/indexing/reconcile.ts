@@ -73,8 +73,9 @@ function pushInto<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   else map.set(key, [value]);
 }
 
-/** A timeline entry used to derive interactions: an opening prompt or an assistant turn. */
-type TimelineEntry = {
+/** A timeline entry used to derive interactions: an opening prompt or an assistant turn.
+ *  Exported for tests of the timeline ordering. */
+export type TimelineEntry = {
   sid: string;
   kind: "prompt" | "turn";
   ts: number;
@@ -87,19 +88,40 @@ type TimelineEntry = {
 };
 
 /**
- * Timeline order. Within one transcript file (same originKey) record order is authoritative, so we
- * order by position and ignore timestamps — this is what keeps a timestamp-less prompt (ts → 0) from
- * sorting ahead of the file's real-timestamped turns. Across files (resumed/subagent transcripts)
- * record indices aren't comparable, so order by timestamp.
+ * Timeline order: a genuine total order by `(ts, originKey, recordIndex, itemIndex)`. It relies on
+ * `seedMissingTimestamps` having run first so every entry has a `ts` consistent with its record order
+ * within its file — that's what both keeps a timestamp-less prompt from sorting ahead of real turns
+ * and keeps the comparator transitive (mixing position-within-file with ts-across-files is not).
  */
-function compareTimeline(a: TimelineEntry, b: TimelineEntry): number {
-  if (a.position.originKey === b.position.originKey) {
-    return a.position.recordIndex - b.position.recordIndex || a.position.itemIndex - b.position.itemIndex;
-  }
+export function compareTimeline(a: TimelineEntry, b: TimelineEntry): number {
   return (
     a.ts - b.ts ||
-    (a.position.originKey < b.position.originKey ? -1 : 1)
+    (a.position.originKey < b.position.originKey ? -1 : a.position.originKey > b.position.originKey ? 1 : 0) ||
+    a.position.recordIndex - b.position.recordIndex ||
+    a.position.itemIndex - b.position.itemIndex
   );
+}
+
+/**
+ * Make `ts` monotonic with record order *within each file*: a timestamp-less entry (a prompt whose
+ * producer left `ts` at 0) inherits the timestamp of the preceding entry in record order. Without
+ * this a ts→0 prompt would sort to the front of the timeline, and a comparator that special-cased
+ * within-file ordering to fix that would be intransitive (→ undefined V8 sort). After seeding, a
+ * single `(ts, position)` comparator is a correct total order. Mutates the entries in place.
+ */
+export function seedMissingTimestamps(entries: TimelineEntry[]): void {
+  const byFile = new Map<string, TimelineEntry[]>();
+  for (const entry of entries) pushInto(byFile, entry.position.originKey, entry);
+  for (const group of byFile.values()) {
+    group.sort(
+      (a, b) => a.position.recordIndex - b.position.recordIndex || a.position.itemIndex - b.position.itemIndex,
+    );
+    let lastTs = 0;
+    for (const entry of group) {
+      if (entry.ts) lastTs = entry.ts;
+      else entry.ts = lastTs;
+    }
+  }
 }
 
 /** Per-session friction timestamps used to set interaction disposition/compactionCount. Compaction
@@ -133,7 +155,9 @@ function deriveInteractions(
   const out: InteractionFact[] = [];
   for (const [sid, prompts] of promptsBySession) {
     const turns = turnsBySession.get(sid) ?? [];
-    const events = [...prompts, ...turns].sort(compareTimeline);
+    const events = [...prompts, ...turns];
+    seedMissingTimestamps(events);
+    events.sort(compareTimeline);
     const signals = signalsBySession.get(sid) ?? { interruptionMs: [], compactBoundaryMs: [], compactSummaryMs: [] };
     let open: TimelineEntry | null = null;
     let responsePosition: SourcePosition | undefined;

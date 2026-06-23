@@ -21,7 +21,13 @@ import {
   discoverCoworkTranscripts,
   parseCoworkTranscriptPath,
 } from "../src/indexing/parse/producers/cowork/parser.ts";
-import { reconcileSessions, type ProducerCapabilities } from "../src/indexing/reconcile.ts";
+import {
+  compareTimeline,
+  reconcileSessions,
+  seedMissingTimestamps,
+  type ProducerCapabilities,
+  type TimelineEntry,
+} from "../src/indexing/reconcile.ts";
 import type { DiscoveryResult, FileParseResult, ParsedFileFragment } from "../src/store/store-contract.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
@@ -97,6 +103,46 @@ describe("reconcile derives interactions (#117)", () => {
     const completed = result.interactions.filter((i) => i.disposition === "completed");
     expect(completed.length).toBeGreaterThan(0);
     for (const interaction of completed) expect(interaction.responsePosition).toBeDefined();
+  });
+});
+
+describe("timeline ordering is a total order (#117)", () => {
+  const entry = (originKey: string, recordIndex: number, ts: number): TimelineEntry => ({
+    sid: "s",
+    kind: ts === 0 ? "prompt" : "turn",
+    ts,
+    position: { originKey, recordIndex, itemIndex: 0 },
+  });
+
+  test("seeds a timestamp-less prompt from its preceding in-file entry, giving a stable order", () => {
+    // The intransitive-comparator scenario from review: T (file F1, real ts), P (file F1, ts→0, later
+    // record), C (file F2, ts between T and P's neighbours). Pre-seeding makes ts monotonic in F1.
+    const T = entry("F1", 0, 500);
+    const P = entry("F1", 1, 0); // timestamp-less prompt, later in the same file than T
+    const C = entry("F2", 0, 250); // folded cross-file turn with a ts between
+    const entries = [P, C, T];
+    seedMissingTimestamps(entries);
+    expect(P.ts).toBe(500); // inherited from the preceding in-file entry (T)
+    entries.sort(compareTimeline);
+    // Within F1, record order is preserved (T before P); C sorts by ts (250 < 500) ahead of both.
+    expect(entries.map((e) => `${e.position.originKey}:${e.position.recordIndex}`)).toEqual([
+      "F2:0",
+      "F1:0",
+      "F1:1",
+    ]);
+  });
+
+  test("comparator is transitive across the seeded set (no cycle)", () => {
+    const items = [entry("F1", 0, 500), entry("F1", 1, 0), entry("F2", 0, 250)];
+    seedMissingTimestamps(items);
+    // Verify a < b < c ⇒ a < c for every triple (would fail for the old intransitive comparator).
+    const sorted = [...items].sort(compareTimeline);
+    for (let i = 0; i < sorted.length; i++) {
+      for (let j = i + 1; j < sorted.length; j++) {
+        expect(compareTimeline(sorted[i]!, sorted[j]!)).toBeLessThanOrEqual(0);
+        expect(compareTimeline(sorted[j]!, sorted[i]!)).toBeGreaterThanOrEqual(0);
+      }
+    }
   });
 });
 
