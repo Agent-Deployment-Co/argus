@@ -20,6 +20,7 @@ import {
   type FileFingerprint,
   type FileIdentity,
   buildPromptFact,
+  isAgentInitiated,
   type FileParseResult,
   type InvocationFact,
   type UsageFact,
@@ -1021,8 +1022,8 @@ function factsFromConversation(
       );
     }
     // Only human-initiated prompts become task candidates (#118): a subagent session's prompts are
-    // agent-authored, not human intent. (Same initiator-from-kind rule #117 uses for openings.)
-    if (sessionFactKind === "subagent") continue;
+    // agent-authored, not human intent. (Same agent-initiated rule the prompt-fact initiator uses.)
+    if (isAgentInitiated(sessionFactKind)) continue;
     const next = conversation.messages[messageIndex + 1];
     const nextText =
       next?.value.type === "user"
@@ -1056,7 +1057,7 @@ function factsFromConversation(
     ),
     source: "gemini",
     sourceSessionId,
-    kind: sessionKind(conversation, parentSessionId),
+    kind: sessionFactKind,
     transcriptPath: file.path,
     ...(cwd ? { cwd } : {}),
     rawProjectId: conversation.projectHash,
