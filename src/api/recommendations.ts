@@ -1,4 +1,4 @@
-import type { Dashboard } from "./types.ts";
+import type { Dashboard } from "../types.ts";
 
 export type RecommendationSeverity = "tip" | "warning";
 
@@ -35,16 +35,14 @@ function ruleUnusedPlugins(d: Dashboard): Recommendation | null {
 }
 
 function ruleTokenGrowth(d: Dashboard): Recommendation | null {
-  const high = d.sessions.filter(
-    (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= 5,
-  );
-  if (high.length === 0) return null;
-  const obs = d.frictionTotals.observableSessions || high.length;
-  const pct = Math.round((100 * high.length) / obs);
+  const highCount = d.highTokenGrowthSessions;
+  if (highCount === 0) return null;
+  const obs = d.frictionTotals.observableSessions || highCount;
+  const pct = Math.round((100 * highCount) / obs);
   return {
     id: "token-growth",
-    severity: high.length >= 3 ? "warning" : "tip",
-    title: `${high.length} session${high.length > 1 ? "s" : ""} had rapidly growing context (≥ 5×)`,
+    severity: highCount >= 3 ? "warning" : "tip",
+    title: `${highCount} session${highCount > 1 ? "s" : ""} had rapidly growing context (≥ 5×)`,
     detail: `${pct}% of sessions saw token usage grow 5× or more from start to finish. Try using \`/compact\` earlier or breaking work into smaller sessions before context bloats.`,
   };
 }

@@ -1,23 +1,32 @@
 // Local web server for the interactive dashboard (`argus serve`). Hono exposes the analyzed
 // Dashboard as a JSON API and serves the compiled React app from dist/web. This is the foundation
-// the future argusd daemon will run; today it builds the dashboard on demand and caches it briefly
-// so rapid page reloads don't re-read every transcript.
+// the future argusd daemon will run; today it builds the dashboard on demand, narrowed by the
+// /api/snapshot filter query params (since/until/project/source), collapsing concurrent identical
+// builds and leaning on the client's staleTime instead of a server-side cache.
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Dashboard } from "./aggregate.ts";
-import { buildDashboard, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
+import type { Dashboard } from "../aggregate.ts";
+import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "../dashboard-builder.ts";
+import type { TranscriptSource } from "../parse.ts";
+import {
+  buildSessionDetail,
+  buildSessionList,
+  type SessionListResponse,
+  type SessionSort,
+} from "./session-list.ts";
+import type { SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
-import { reindexSession, type ReindexSessionResult } from "./parse-incremental.ts";
+import { reindexSession, type ReindexSessionResult } from "../parse-incremental.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import type { ResolvedTaskExtraction } from "./config.ts";
-import { openStore } from "./store.ts";
-import type { ParserDiagnostic, TaskFact } from "./store-contract.ts";
-import type { TaskExtractionOptions } from "./task-extraction.ts";
+import type { ResolvedTaskExtraction } from "../config.ts";
+import { openStore } from "../store.ts";
+import type { ParserDiagnostic, TaskFact } from "../store-contract.ts";
+import type { TaskExtractionOptions } from "../task-extraction.ts";
 
 export interface ServeOptions {
   port: number;
@@ -56,11 +65,44 @@ export interface SessionTaskMetricsResponse {
   metrics: Record<string, TaskMetrics>;
 }
 
-/** Builds the snapshot for a request. `force` bypasses any caching the caller layered on. */
-export type SnapshotSource = (force: boolean) => Promise<Snapshot>;
+/** Parsed query for the paginated session list. Date/source narrow the store read; project/q/
+ *  includeGenerated refine the human-facing list; sort/limit/offset paginate. */
+export interface SessionListQuery {
+  since?: string;
+  until?: string;
+  source?: "all" | TranscriptSource;
+  project?: string;
+  q?: string;
+  includeGenerated: boolean;
+  sort: SessionSort;
+  limit: number;
+  offset: number;
+}
+
+export interface SessionDetailResponse {
+  session: SessionRow;
+}
+
+/** Server-side filters parsed from the /api/snapshot query string. Each narrows the dashboard at
+ *  store-read time (pushed into buildDashboard's since/until/project/source); omitted fields fall
+ *  back to the serve process's base options. */
+export interface SnapshotFilters {
+  since?: string;
+  until?: string;
+  project?: string;
+  source?: "all" | TranscriptSource;
+}
+
+/** Builds the snapshot for a request, narrowed by `filters`. `force` requests a fresh build
+ *  (the `?refresh` seam) rather than joining an in-flight build for the same filters. */
+export type SnapshotSource = (filters: SnapshotFilters, force: boolean) => Promise<Snapshot>;
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
+/** A filtered/sorted/paginated page of session list rows, backed by the store's session aggregates. */
+export type SessionListReader = (query: SessionListQuery) => Promise<SessionListResponse>;
+/** Full detail for one session (built on demand), or null if it has no messages / doesn't exist. */
+export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | null>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
@@ -69,11 +111,10 @@ interface AppOptions {
   /** Called after a successful reindex so the caller can drop its cached snapshot. */
   onStoreChanged?: () => void;
   sessionTaskMetrics?: SessionTaskMetricsReader;
+  sessionList?: SessionListReader;
+  sessionDetail?: SessionDetailReader;
   debugInfo?: DebugInfoReader;
 }
-
-/** How long a built dashboard is reused before the next request triggers a fresh read. */
-const CACHE_TTL_MS = 30_000;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -92,10 +133,13 @@ const MIME: Record<string, string> = {
 };
 
 /** Locate the compiled web app. Works whether we're running the bundled CLI (dist/index.js, assets
- *  at dist/web) or from source after `build:web` (src/serve.ts, assets at ../dist/web). */
+ *  at dist/web) or from source after `build:web` (src/api/serve.ts, assets at ../../dist/web). */
 function findWebRoot(): string | null {
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(here, "web"), join(here, "..", "dist", "web")];
+  const candidates = [
+    join(here, "web"), // bundled: dist/index.js → dist/web
+    join(here, "..", "..", "dist", "web"), // from source: src/api/serve.ts → repo-root/dist/web
+  ];
   return candidates.find((p) => existsSync(join(p, "index.html"))) ?? null;
 }
 
@@ -140,14 +184,87 @@ function rejectCrossSite(c: Context): Response | null {
   return null;
 }
 
+const SNAPSHOT_SOURCES = new Set<string>(["all", "claude", "codex", "gemini", "cowork"]);
+
+/** Parse the /api/snapshot filter query params, or return an error message string for a 400.
+ *  Dates are passed through as YYYY-MM-DD strings (the store compares them lexically); only
+ *  `source` is validated against the known set so a typo doesn't silently widen the result. */
+function parseSnapshotFilters(c: Context): SnapshotFilters | string {
+  const filters: SnapshotFilters = {};
+  const since = c.req.query("since");
+  const until = c.req.query("until");
+  const project = c.req.query("project");
+  const source = c.req.query("source");
+  if (since) filters.since = since;
+  if (until) filters.until = until;
+  if (project) filters.project = project;
+  if (source) {
+    if (!SNAPSHOT_SOURCES.has(source)) return `Unknown source "${source}".`;
+    filters.source = source as "all" | TranscriptSource;
+  }
+  return filters;
+}
+
+const SESSION_SORTS = new Set<string>(["recent", "tokens", "cost"]);
+const DEFAULT_SESSION_LIMIT = 50;
+const MAX_SESSION_LIMIT = 200;
+
+function parseIntOr(value: string | undefined, fallback: number): number {
+  const n = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Parse /api/sessions query params, or return an error message string for a 400. */
+function parseSessionListQuery(c: Context): SessionListQuery | string {
+  const sort = c.req.query("sort") ?? "recent";
+  if (!SESSION_SORTS.has(sort)) return `Unknown sort "${sort}".`;
+  const source = c.req.query("source");
+  if (source && !SNAPSHOT_SOURCES.has(source)) return `Unknown source "${source}".`;
+  const includeGenerated = c.req.query("includeGenerated") === "true" || c.req.query("includeGenerated") === "1";
+  return {
+    since: c.req.query("since") || undefined,
+    until: c.req.query("until") || undefined,
+    source: source ? (source as "all" | TranscriptSource) : undefined,
+    project: c.req.query("project") || undefined,
+    q: c.req.query("q") || undefined,
+    includeGenerated,
+    sort: sort as SessionSort,
+    limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
+    offset: Math.max(0, parseIntOr(c.req.query("offset"), 0)),
+  };
+}
+
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
 
   app.get("/api/snapshot", async (c) => {
-    const snap = await getSnapshot(c.req.query("refresh") != null);
+    const filters = parseSnapshotFilters(c);
+    if (typeof filters === "string") return c.json({ error: filters }, 400);
+    const snap = await getSnapshot(filters, c.req.query("refresh") != null);
     return c.json(snap);
+  });
+
+  // Paginated, filtered, sorted session list — backed by SQL session aggregates, not the bulk
+  // snapshot (the full per-session array no longer ships in /api/snapshot).
+  app.get("/api/sessions", async (c) => {
+    if (!opts.sessionList) return c.json({ error: "Session listing is unavailable in this process." }, 503);
+    const query = parseSessionListQuery(c);
+    if (typeof query === "string") return c.json({ error: query }, 400);
+    return c.json(await opts.sessionList(query));
+  });
+
+  // Full detail for one session, built on demand so heavy per-session content (tool/skill breakdowns,
+  // files, health, tasks) never rides the bulk payload. Singular `/api/session/:id` — distinct from
+  // the `/api/sessions/:id/...` action routes below.
+  app.get("/api/session/:id", async (c) => {
+    if (!opts.sessionDetail) return c.json({ error: "Session detail is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const session = await opts.sessionDetail(sessionId);
+    if (!session) return c.json({ error: "Session not found." }, 404);
+    return c.json({ session } satisfies SessionDetailResponse);
   });
 
   // Re-index a single session: re-read its transcript from disk and refresh it in the store
@@ -208,38 +325,43 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
 export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
   const webRoot = findWebRoot();
 
-  // Snapshot cache: a built dashboard is reused for CACHE_TTL_MS so reloading the page (or several
-  // API calls from one page) doesn't re-read every transcript. `?refresh` forces a fresh read —
-  // the seam a warm argusd store will later replace. A single in-flight build is shared.
-  let cached: Snapshot | null = null;
-  let cachedAt = 0;
-  let inFlight: Promise<Snapshot> | null = null;
+  // No server-side snapshot cache: each request builds its filtered slice fresh. The heavy work is
+  // a store read + aggregation; the client (TanStack Query) holds a short staleTime so rapid page
+  // reloads don't refetch, and the in-flight map below collapses concurrent identical requests into
+  // one build. `?refresh` (force) starts a fresh build rather than joining an in-flight one. This is
+  // the seam a warm argusd store will later replace.
+  const inFlight = new Map<string, Promise<Snapshot>>();
 
-  async function snapshot(force: boolean): Promise<Snapshot> {
-    if (cached && !force && Date.now() - cachedAt < CACHE_TTL_MS) return cached;
-    if (inFlight) return inFlight;
-    inFlight = (async () => {
-      const dashboard = await buildDashboard(opts.build, log);
-      const snap: Snapshot = {
+  const buildOptionsFor = (filters: SnapshotFilters): BuildDashboardOptions => ({
+    ...opts.build,
+    source: filters.source ?? opts.build.source,
+    since: filters.since ?? opts.build.since,
+    until: filters.until ?? opts.build.until,
+    project: filters.project ?? opts.build.project,
+  });
+
+  async function snapshot(filters: SnapshotFilters, force: boolean): Promise<Snapshot> {
+    const buildOpts = buildOptionsFor(filters);
+    const key = JSON.stringify(buildOpts);
+    if (!force) {
+      const existing = inFlight.get(key);
+      if (existing) return existing;
+    }
+    const pending = (async () => {
+      const dashboard = await buildDashboard(buildOpts, log);
+      return {
         dashboard,
         recommendations: computeRecommendations(dashboard),
         generatedAtMs: dashboard.generatedAtMs,
-      };
-      cached = snap;
-      cachedAt = Date.now();
-      return snap;
+      } satisfies Snapshot;
     })();
+    inFlight.set(key, pending);
     try {
-      return await inFlight;
+      return await pending;
     } finally {
-      inFlight = null;
+      if (inFlight.get(key) === pending) inFlight.delete(key);
     }
   }
-
-  const clearCachedSnapshot = () => {
-    cached = null;
-    cachedAt = 0;
-  };
 
   // Task extraction is always on for an explicit single-session Refresh (deliberately unlike the CLI
   // `index refresh`, which defers to the config opt-in): force `enabled` on while keeping the
@@ -266,10 +388,44 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     }
   };
 
+  const sessionList: SessionListReader = async (query) => {
+    const store = await openStore();
+    try {
+      const aggregates = await store.readSessionAggregates({
+        sources: sourcesFor(query.source ?? opts.build.source),
+        since: query.since ?? opts.build.since,
+        until: query.until ?? opts.build.until,
+      });
+      return buildSessionList(aggregates, {
+        sort: query.sort,
+        limit: query.limit,
+        offset: query.offset,
+        project: query.project,
+        q: query.q,
+        includeGenerated: query.includeGenerated,
+      });
+    } finally {
+      await store.close();
+    }
+  };
+
+  const sessionDetail: SessionDetailReader = async (sessionId) => {
+    const store = await openStore();
+    try {
+      const messages = await store.readSessionMessages(sessionId);
+      if (!messages.length) return null;
+      const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
+      return buildSessionDetail(sessionId, messages, meta, tasks);
+    } finally {
+      await store.close();
+    }
+  };
+
   const app = createApp(snapshot, webRoot, {
     reindex,
-    onStoreChanged: clearCachedSnapshot,
     sessionTaskMetrics,
+    sessionList,
+    sessionDetail,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
   });
 
@@ -299,8 +455,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     if (!webRoot) {
       log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
     }
-    // Warm the cache so the first page load is fast; failures surface on the first request anyway.
-    void snapshot(false).catch(() => {});
+    // Warm the unfiltered build so the first page load is fast; failures surface on the first request.
+    void snapshot({}, false).catch(() => {});
     if (opts.open) spawnSync("open", [url]);
     resolveListening();
   });

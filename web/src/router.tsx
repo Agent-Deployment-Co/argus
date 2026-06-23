@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, retainSearchParams } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
 import { Activity } from "./routes/Activity";
 import { Debug } from "./routes/Debug";
@@ -8,16 +8,50 @@ import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
 import { Tools } from "./routes/Tools";
 
-const rootRoute = createRootRoute({ component: Layout });
+/** Global dashboard filters live on the root so every view reflects them, and `retainSearchParams`
+ *  keeps them in the URL across navigations (so e.g. a date range survives switching tabs). */
+export interface RootSearch {
+  since?: string;
+  until?: string;
+  source?: string;
+}
+
+/** Local YYYY-MM-DD `n` days before today — the store compares message dates as local YYYY-MM-DD. */
+export function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const rootRoute = createRootRoute({
+  component: Layout,
+  // Default the view to the last 30 days (from = today−30, to = today) when no date is in the URL.
+  // Both bounds are local YYYY-MM-DD, compared whole-day in the store (date >= from AND date <= to),
+  // so the range is inclusive of every message on both the start and end day. Widen by editing the bar.
+  validateSearch: (search: Record<string, unknown>): RootSearch => ({
+    since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
+    until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
+    source: typeof search.source === "string" && search.source ? search.source : undefined,
+  }),
+  search: { middlewares: [retainSearchParams(["since", "until", "source"])] },
+});
+
+const SESSION_SORTS = ["recent", "tokens", "cost"] as const;
 
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
   component: Sessions,
-  validateSearch: (search: Record<string, unknown>): { project?: string; source?: string; showGenerated?: boolean } => ({
+  // `source` and the date range are global (root); these are the Sessions-local refinements.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { project?: string; showGenerated?: boolean; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
     project: typeof search.project === "string" && search.project ? search.project : undefined,
-    source: typeof search.source === "string" && search.source ? search.source : undefined,
     showGenerated: search.showGenerated === true || search.showGenerated === "true" ? true : undefined,
+    sort: SESSION_SORTS.includes(search.sort as (typeof SESSION_SORTS)[number])
+      ? (search.sort as (typeof SESSION_SORTS)[number])
+      : undefined,
+    q: typeof search.q === "string" && search.q ? search.q : undefined,
   }),
 });
 

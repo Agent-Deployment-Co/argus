@@ -57,7 +57,31 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
    strip (width driven by --rail-w) so wide views like the sessions split-pane get more canvas. */
 .app-shell { --rail-w: 184px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
 .app-shell.rail-collapsed { --rail-w: 60px; }
-.content { min-width: 0; }
+.content { min-width: 0; --filter-bar-h: 53px; }
+
+/* Global filter bar pinned above every view. Fixed height so the full-height Sessions split can
+   subtract it (see .sessions-split) without overflowing the viewport. */
+.filter-bar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: var(--filter-bar-h); display: flex; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 32px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.filter-dates { display: inline-flex; align-items: center; gap: 8px; }
+.filter-dash { color: var(--muted); }
+/* Fixed height (padding-free vertically) so date inputs and the source select are identical — date
+   inputs otherwise render taller than a select from UA styling. box-sizing:border-box is global. */
+.filter-input { box-sizing: border-box; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+/* Fixed width so the from/to date inputs are identical regardless of value vs. placeholder text. */
+.filter-input[type="date"] { width: 150px; }
+
+/* Custom select caret: the native arrow can't be inset from the right edge, so we drop it and draw
+   our own chevron in a relative wrapper, positioned to match the date inputs' calendar-icon inset. */
+.select-wrap { position: relative; display: inline-flex; align-items: center; }
+.select-wrap > select { appearance: none; -webkit-appearance: none; padding-right: 28px; }
+.select-wrap::after { content: ""; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+.filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filter-reset { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.filter-reset:hover:not(:disabled) { color: var(--heading); border-color: var(--accent); }
+.filter-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filter-reset:disabled { opacity: .4; cursor: default; }
+.filter-spinner { color: var(--muted); animation: filter-spin 1s linear infinite; }
+@keyframes filter-spin { to { transform: rotate(360deg); } }
 
 .rail { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
 .rail-brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 14px; }
@@ -94,7 +118,7 @@ main { padding: 30px 32px 64px; }
 /* Sessions: a full-height two-pane (selector list + detail). Drop main's padding for this route
    only so the list sits flush against the rail instead of floating inside the page gutters. */
 main:has(.sessions-split) { padding: 0; }
-.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: 100vh; }
+.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: calc(100vh - var(--filter-bar-h)); }
 .session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .session-search-row { display: flex; align-items: center; gap: 8px; }
@@ -106,6 +130,11 @@ main:has(.sessions-split) { padding: 0; }
 .filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
 .filter-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; user-select: none; }
 .filter-toggle:hover { border-color: var(--accent); }
+.session-sort { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 26px 3px 10px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.session-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.session-load-more:hover { border-color: var(--accent); color: var(--heading); }
+.session-load-more:disabled { opacity: .6; cursor: default; }
 .filter-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
 .filter-toggle-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -275,4 +304,5 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .rail-brand, .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
   .rail-footer { flex-direction: column-reverse; }
   main { padding-left: 18px; padding-right: 18px; }
+  .filter-bar { padding-left: 18px; padding-right: 18px; gap: 12px; }
 }

@@ -2,8 +2,8 @@
 // paths, and store/index status that explain why Argus is behaving the way it is. Read-only and
 // best-effort — every section degrades gracefully so the page still renders when something is off.
 import { existsSync, statSync } from "node:fs";
-import { loadConfig, resolveTaskExtraction, type ArgusConfig } from "./config.ts";
-import { scanStore, type SourceScan } from "./parse-incremental.ts";
+import { loadConfig, resolveTaskExtraction, type ArgusConfig } from "../config.ts";
+import { scanStore, type SourceScan } from "../parse-incremental.ts";
 import {
   ARGUS_CONFIG_DIR,
   ARGUS_DATA_DIR,
@@ -17,9 +17,9 @@ import {
   PROJECTS_DIR,
   SETTINGS_FILE,
   STORE_FILE,
-} from "./paths.ts";
-import { openStore, STORE_SCHEMA_VERSION } from "./store.ts";
-import pkg from "../package.json" with { type: "json" };
+} from "../paths.ts";
+import { openStore, STORE_SCHEMA_VERSION } from "../store.ts";
+import pkg from "../../package.json" with { type: "json" };
 
 export interface PathEntry {
   name: string;

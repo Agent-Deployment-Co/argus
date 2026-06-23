@@ -7,7 +7,7 @@ import { printBanner } from "./banner.ts";
 import { scanStore } from "./parse-incremental.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { type Log, type BuildDashboardOptions } from "./dashboard-builder.ts";
-import { startServer } from "./serve.ts";
+import { startServer } from "./api/serve.ts";
 import { openStore } from "./store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
@@ -193,7 +193,9 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
       // already-materialized store, never reconcile/materialize on a page load. Writing on read
       // silently destroyed extracted tasks (and firstPrompt) for any session whose transcript changed
       // since the last index. The store is maintained by `index` / `argus run`. See #98.
-      build: { source: "all", readOnly: true },
+      // includeSessions:false — the web app reads the per-session array from the paginated
+      // /api/sessions resource, so it's omitted from the bulk /api/snapshot payload.
+      build: { source: "all", readOnly: true, includeSessions: false },
       // Per-session reindex (POST /api/sessions/:id/reindex) honors the argus.json task-extraction
       // setting (flag > env > argus.json > default), resolved here from config rather than a CLI flag.
       taskExtraction: taskExtractionOptions({}),
