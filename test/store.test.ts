@@ -877,10 +877,12 @@ describe("SQLite store", () => {
       expect(aByModel).toEqual({ "gpt-5": 15, "gpt-4": 7 });
       expect(all.map((s) => s.meta.sessionId).sort()).toEqual(["codex:a", "codex:b"]);
 
-      // Date filter: only codex:a has a message on/before 2026-06-01, and its sum covers only that day.
+      // Date filter SELECTS sessions (codex:a has a message on/before 2026-06-01; codex:b doesn't),
+      // but the token sums are WHOLE-session, not windowed — codex:a still reports both its models.
       const early = await store.readSessionAggregates({ until: "2026-06-01" });
       expect(early.map((s) => s.meta.sessionId)).toEqual(["codex:a"]);
-      expect(early[0]!.byModel).toEqual([{ model: "gpt-5", usage: { input: 15, output: 2, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 } }]);
+      expect(Object.fromEntries(early[0]!.byModel.map((m) => [m.model, m.usage.input]))).toEqual({ "gpt-5": 15, "gpt-4": 7 });
+      expect(early[0]!.messageCount).toBe(3);
 
       // Project filter matches cwd substring.
       const projB = await store.readSessionAggregates({ projectSubstring: "proj-b" });

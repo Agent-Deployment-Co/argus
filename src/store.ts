@@ -1285,8 +1285,8 @@ export class SqliteStore implements Store {
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]> {
     return this.schedule(async () => {
       // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
-      // model) token sums from the promoted columns. Date filters apply to messages, so a session is
-      // included only if it has a message in range (EXISTS), and its sums cover only in-range messages.
+      // model) token sums from the promoted columns. A date filter only selects sessions (included if
+      // they have a message in range, via EXISTS); the token sums below are whole-session, not windowed.
       const sessionConds: string[] = ["s.archived = 0"];
       const sessionParams: unknown[] = [];
       if (query?.sources?.length) {
@@ -1326,8 +1326,12 @@ export class SqliteStore implements Store {
         sessionParams,
       );
 
-      // Per-(session, model) token sums, scoped by the same source/date/project message filters.
-      const msgFilters = buildResolvedFilters(query);
+      // Whole-session token sums per (session, model): scoped by source ONLY, deliberately NOT by the
+      // date window. A session is selected by the EXISTS check above (has a message in range), but its
+      // totals reflect the full session — so the row is internally consistent with its whole-session
+      // first_ts / last_ts / message_count / meta counts, and the recent/tokens/cost sorts agree.
+      // (A session is single-source, so the source filter never splits a session's sum.)
+      const msgFilters = buildResolvedFilters(query?.sources?.length ? { sources: query.sources } : undefined);
       const usageRows = await all<{
         session_id: string;
         model: string | null;

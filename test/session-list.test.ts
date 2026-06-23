@@ -104,6 +104,8 @@ describe("buildSessionDetail", () => {
     expect(row.toolCounts).toEqual({ Edit: 1 });
     expect(row.filesTouched).toEqual(["a.ts"]);
     expect(row.firstPrompt).toBe("do the thing");
-    expect(typeof row.summary).toBe("string");
+    // Summary comes from the shared summaryFactsFromMessages derivation (matches the dashboard path).
+    expect(row.summary).toContain("do the thing");
+    expect(row.summary).toContain("Edit");
   });
 });
