@@ -13,9 +13,14 @@
 import { basename } from "node:path";
 import {
   compareReconciliationOrder,
+  createFactId,
+  type InteractionDisposition,
+  type InteractionFact,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
+  type PromptFact,
   type SessionFact,
+  type SourcePosition,
   type TaskFact,
 } from "../store/store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
@@ -56,6 +61,89 @@ export interface ReconcileInput {
 export interface ReconcileResult extends ParseResult {
   toolResultsBySession: Map<string, Map<string, ToolResultStat>>;
   tasksBySession: Map<string, TaskFact[]>;
+  /** Interactions (#117), derived here by grouping the deduped/ordered timeline. */
+  interactions: InteractionFact[];
+}
+
+/** A timeline entry used to derive interactions: a human prompt (opens one) or an assistant turn. */
+type TimelineEntry = {
+  sid: string;
+  kind: "prompt" | "turn";
+  ts: number;
+  position: SourcePosition;
+};
+
+function compareTimeline(a: TimelineEntry, b: TimelineEntry): number {
+  return (
+    a.ts - b.ts ||
+    (a.position.originKey < b.position.originKey ? -1 : a.position.originKey > b.position.originKey ? 1 : 0) ||
+    a.position.recordIndex - b.position.recordIndex ||
+    a.position.itemIndex - b.position.itemIndex
+  );
+}
+
+/**
+ * Group a session's human prompts + assistant turns into interactions: each human prompt opens one,
+ * the assistant turns until the next human prompt are its loop, and the last of those is the response
+ * slot. Disposition reuses the folded friction signals (interruption timestamps in the span → the
+ * loop was interrupted); compactionCount counts compaction events in the span. Agent-initiated
+ * prompts (folded subagent sessions) are not openings — they're loop content — which is what keeps
+ * subagent prompts from spawning phantom interactions (#118).
+ */
+function deriveInteractions(
+  source: AgentSource,
+  promptsBySession: Map<string, TimelineEntry[]>,
+  turnsBySession: Map<string, TimelineEntry[]>,
+  interruptionMsBySession: Map<string, number[]>,
+  compactionMsBySession: Map<string, number[]>,
+): InteractionFact[] {
+  const out: InteractionFact[] = [];
+  for (const [sid, prompts] of promptsBySession) {
+    const turns = turnsBySession.get(sid) ?? [];
+    const events = [...prompts, ...turns].sort(compareTimeline);
+    const interruptions = interruptionMsBySession.get(sid) ?? [];
+    const compactions = compactionMsBySession.get(sid) ?? [];
+    let open: TimelineEntry | null = null;
+    let responsePosition: SourcePosition | undefined;
+    let seq = 0;
+    const flush = (endTs: number) => {
+      if (!open) return;
+      const startTs = open.ts;
+      const inSpan = (ms: number) => ms >= startTs && ms < endTs;
+      const interrupted = interruptions.some(inSpan);
+      const disposition: InteractionDisposition = interrupted
+        ? "interrupted"
+        : responsePosition
+          ? "completed"
+          : "incomplete";
+      out.push({
+        id: createFactId("interaction", source, sid, open.position),
+        source,
+        sourceSessionId: sid,
+        seq: seq++,
+        initiator: "human",
+        disposition,
+        compactionCount: compactions.filter(inSpan).length,
+        timestampMs: open.ts,
+        promptPosition: open.position,
+        ...(responsePosition ? { responsePosition } : {}),
+        position: open.position,
+      });
+      open = null;
+      responsePosition = undefined;
+    };
+    for (const event of events) {
+      if (event.kind === "prompt") {
+        flush(event.ts);
+        open = event;
+        responsePosition = undefined;
+      } else if (open) {
+        responsePosition = event.position;
+      }
+    }
+    flush(Number.POSITIVE_INFINITY);
+  }
+  return out;
 }
 
 /**
@@ -160,6 +248,29 @@ function orderedMessages(fragments: ParsedFileFragment[]) {
         },
         {
           timestampMs: b.timestampMs,
+          source: b.source,
+          sourceSessionId: b.sourceSessionId,
+          position: b.position,
+          stableId: b.id,
+        },
+      ),
+    );
+}
+
+function orderedPrompts(fragments: ParsedFileFragment[]): PromptFact[] {
+  return fragments
+    .flatMap((fragment) => fragment.facts.prompts ?? [])
+    .sort((a, b) =>
+      compareReconciliationOrder(
+        {
+          timestampMs: a.timestampMs ?? 0,
+          source: a.source,
+          sourceSessionId: a.sourceSessionId,
+          position: a.position,
+          stableId: a.id,
+        },
+        {
+          timestampMs: b.timestampMs ?? 0,
           source: b.source,
           sourceSessionId: b.sourceSessionId,
           position: b.position,
@@ -301,6 +412,10 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
 
   // Friction (#37): folded only for producers that observe it; absence then means zero, not unknown.
   // Events carry stable ids so resumed-session replays dedupe here instead of double-counting.
+  // Interruption/compaction timestamps are also bucketed per session so interaction derivation can
+  // set disposition=interrupted / compactionCount per span (#117).
+  const interruptionMsBySession = new Map<string, number[]>();
+  const compactionMsBySession = new Map<string, number[]>();
   if (caps.observesFriction) {
     const frictionEventsBySession = new Map<string, FrictionEvent[]>();
     const seenFrictionEventIds = new Set<string>();
@@ -315,6 +430,12 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
           if (seenFrictionEventIds.has(key)) continue;
           seenFrictionEventIds.add(key);
           events.push(event);
+          if (event.timestampMs == null) continue;
+          if (event.kind === "interruption") {
+            (interruptionMsBySession.get(sid) ?? interruptionMsBySession.set(sid, []).get(sid)!).push(event.timestampMs);
+          } else if (event.kind === "compact_boundary" || event.kind === "compact_summary") {
+            (compactionMsBySession.get(sid) ?? compactionMsBySession.set(sid, []).get(sid)!).push(event.timestampMs);
+          }
         }
       }
     }
@@ -334,6 +455,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
   }
 
   const messages: MessageRecord[] = [];
+  const turnsBySession = new Map<string, TimelineEntry[]>();
   const seenProviderMessages = new Set<string>();
   for (const fact of orderedMessages(fragments)) {
     if (caps.dedupeByProviderMessageId && fact.providerMessageId) {
@@ -342,6 +464,13 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     }
     const sessionId = canonicalSessionId(fact.sourceSessionId);
     if (!wanted(sessionId)) continue;
+    // Surviving (deduped) assistant turn on the timeline — an input to interaction derivation (#117).
+    (turnsBySession.get(sessionId) ?? turnsBySession.set(sessionId, []).get(sessionId)!).push({
+      sid: sessionId,
+      kind: "turn",
+      ts: fact.timestampMs,
+      position: fact.position,
+    });
     const session = sessions.get(sessionId);
     if (fact.stopReason && session?.friction) {
       session.friction.stopReasons[fact.stopReason] =
@@ -407,12 +536,39 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     perSession.set(name, sessionStat);
   }
 
+  // Interaction openings (#117): human prompts only — agent/harness markers are loop content, not
+  // openings. Dedupe across resumed-session replays by (canonical session, replay-stable key).
+  const promptsBySession = new Map<string, TimelineEntry[]>();
+  const seenPrompts = new Set<string>();
+  for (const prompt of orderedPrompts(fragments)) {
+    if (prompt.initiator !== "human") continue;
+    const sid = canonicalSessionId(prompt.sourceSessionId);
+    if (!wanted(sid)) continue;
+    const key = `${sid}\0${prompt.dedupKey ?? `${prompt.position.originKey}:${prompt.position.recordIndex}:${prompt.position.itemIndex}`}`;
+    if (seenPrompts.has(key)) continue;
+    seenPrompts.add(key);
+    (promptsBySession.get(sid) ?? promptsBySession.set(sid, []).get(sid)!).push({
+      sid,
+      kind: "prompt",
+      ts: prompt.timestampMs ?? 0,
+      position: prompt.position,
+    });
+  }
+  const interactions = deriveInteractions(
+    fragments[0]?.parser.source ?? ("claude" as AgentSource),
+    promptsBySession,
+    turnsBySession,
+    interruptionMsBySession,
+    compactionMsBySession,
+  );
+
   return {
     messages,
     sessions,
     toolResults,
     toolResultsBySession,
     tasksBySession,
+    interactions,
   };
 }
 
