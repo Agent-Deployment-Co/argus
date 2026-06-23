@@ -522,9 +522,23 @@ function resolvedQuery(opts: IncrementalParseOptions): ResolvedQuery {
  * opened falls back to indexing transcripts into a throwaway temp store (always synced, then
  * discarded), so a read still returns data when the real store is missing/corrupt.
  */
+/**
+ * The pipeline core (CQS). `sync` brings the store current (reconcile + materialize — a write)
+ * before reading; without it this is a pure read of the materialized store.
+ *
+ * `degradeOnError` decides what happens when the real store can't be opened/used (missing, corrupt,
+ * incompatible schema):
+ *   - `read` (degrade): index the on-disk transcripts into a throwaway temp store and read that, so
+ *     a read still returns best-effort data. The real store is never touched. Surfaced via a
+ *     `store_fallback` diagnostic and `fallback: true`. (Note: a degraded read sees only what's on
+ *     disk, so retained/archived sessions are absent.)
+ *   - `index` (fail loud): the error propagates. An index that silently wrote to a discarded temp
+ *     store would report success having persisted nothing, and degrading would mask a corrupt store
+ *     the user should be told to `reindex --force`.
+ */
 async function runPipeline(
   opts: IncrementalParseOptions,
-  sync: boolean,
+  { sync, degradeOnError }: { sync: boolean; degradeOnError: boolean },
 ): Promise<IncrementalParseDetails> {
   const stats = cloneStats();
   const diagnostics: ParserDiagnostic[] = [];
@@ -540,6 +554,7 @@ async function runPipeline(
     if (sync) await syncStore(opts, store, stats, diagnostics);
     return { parsed: await store.readResolved(resolvedQuery(opts)), stats, diagnostics };
   } catch (error) {
+    if (!degradeOnError) throw error; // index: fail loud rather than write to a discarded temp store.
     diagnostics.push(
       diagnostic(
         "store_fallback",
@@ -549,8 +564,8 @@ async function runPipeline(
         "error",
       ),
     );
-    // Fallback for a missing/corrupt store (e.g. one-shot `report` with no usable store): run the
-    // real pipeline against a throwaway temp store so we still index from disk, then discard it.
+    // Degraded read for a missing/corrupt store (e.g. one-shot `report`): run the real pipeline
+    // against a throwaway temp store so we still index from disk, then discard it.
     const fallbackDir = mkdtempSync(join(tmpdir(), "argus-fallback-"));
     const fallbackStore = await openStore({ path: join(fallbackDir, "argus.db") });
     try {
@@ -570,19 +585,20 @@ async function runPipeline(
 }
 
 /** Index operation: bring the store current (producers reconcile + materialize — writes the store),
- *  then read. The only writer to the read model. */
+ *  then read. The only writer to the read model. Fails loud if the store can't be opened/used. */
 export async function parseAllIncrementalDetailed(
   opts: IncrementalParseOptions = {},
 ): Promise<IncrementalParseDetails> {
-  return runPipeline(opts, true);
+  return runPipeline(opts, { sync: true, degradeOnError: false });
 }
 
 /** Pure read of the materialized store — no sync, no writes (CQS). For read-only callers (the
- *  serve/upload legs of `argus run`, where the index leg is the sole writer). */
+ *  serve/upload legs of `argus run`, where the index leg is the sole writer). Degrades to a temp
+ *  store (best effort) when the real store can't be opened. */
 export async function readStore(
   opts: IncrementalParseOptions = {},
 ): Promise<IncrementalParseDetails> {
-  return runPipeline(opts, false);
+  return runPipeline(opts, { sync: false, degradeOnError: true });
 }
 
 export async function parseAllIncremental(

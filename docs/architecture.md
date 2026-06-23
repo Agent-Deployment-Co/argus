@@ -154,9 +154,14 @@ read (**CQS**): `index(query?)` brings the store current (reconcile + materializ
 and `read(query?)` is a **pure** SQL read of `resolved_*` that never writes. Reads return the reconciled
 `ParseResult` straight from the read model — **no reconciling, no re-parsing, no in-memory filtering.**
 Query filters (`--since` / `--until` / `--project` / `--source`) are pushed down to SQL. Archived
-sessions are included, so reporting survives transcript retention. (A read with a missing/corrupt store
-falls back to indexing into a throwaway temp store, so it still returns data without touching the real
-store.)
+sessions are included, so reporting survives transcript retention.
+
+When the real store can't be opened (missing, corrupt, incompatible schema) the two operations differ:
+a **`read()` degrades** — it indexes the on-disk transcripts into a throwaway temp store and reads
+that (best effort; surfaced via a `store_fallback` diagnostic, and it sees only on-disk sessions, so
+archived ones are absent), while an **`index()` fails loud** — the error propagates rather than
+silently writing to a temp store it then discards (which would report success having persisted
+nothing, and would mask a corrupt store the user should `reindex --force`).
 
 - `sync` — `index()` to bring the store current → `aggregate.ts` builds the dashboard → upload the snapshot.
 - `serve` — a pure `read()` → `aggregate.ts` path, exposed as a JSON API and an interactive web app

@@ -41,7 +41,8 @@ export interface SessionStore {
   read(query?: SessionQuery): Promise<ParseResult>;
   /** Bring the store current (producers reconcile + materialize), then read. The only writer. */
   index(query?: SessionQuery): Promise<ParseResult>;
-  /** Sync stats from the most recent index(). Undefined after a read() (no sync happened). */
+  /** Sync stats from the most recent index(), or from a read() that had to fall back to a temporary
+   *  store (`fallback: true`). Undefined after a normal read() — a pure read does no sync. */
   readonly stats?: SyncStats;
   /** Collection diagnostics from the most recent read()/index(). */
   readonly diagnostics: ParserDiagnostic[];
@@ -62,8 +63,11 @@ class StoreBackedSessionStore implements SessionStore {
       log: this.opts.log,
       query,
     });
-    this.stats = details.stats;
     this.diagnostics = details.diagnostics;
+    // A pure read does no sync, so it has no meaningful sync stats — except a degraded read, which
+    // indexes into a temp store and is worth surfacing (fallback). Leave stats undefined otherwise
+    // so a caller can't mistake a read for an index that found nothing to do.
+    this.stats = details.stats.fallback ? details.stats : undefined;
     return details.parsed;
   }
 
