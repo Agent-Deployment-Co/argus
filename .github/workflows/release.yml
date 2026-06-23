@@ -1,0 +1,103 @@
+name: Release
+
+# Builds and (when the signing secrets are configured) signs the distributable artifacts:
+#   - npm: per-OS prebuilt binaries published under @agentdeploymentco/argus*
+#   - macOS: a signed + notarized Argus.app / .dmg
+#   - Windows: an Authenticode-signed .msi / .exe
+# All signing is gated on secrets being present, so this workflow runs end-to-end (producing
+# UNSIGNED artifacts) before any certificate exists, and starts signing the moment the secrets are
+# added. No secret value ever lives in this file — only references to `secrets.*`.
+#
+# Required secrets to activate signing (set in repo/org settings; never commit their values):
+#   NPM_TOKEN                              npm automation token (npm publish)
+#   APPLE_CERTIFICATE                      base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD             its export password
+#   APPLE_SIGNING_IDENTITY                 e.g. "Developer ID Application: … (TEAMID)"
+#   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
+#   WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD   Authenticode signing cert (base64 + pwd)
+#   TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD updater signing key (Phase 7; separate from OS certs)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
+jobs:
+  npm:
+    name: npm — per-OS prebuilt binaries
+    runs-on: macos-latest # bun cross-compiles every target from one host
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Build all platform packages
+        run: bun run build:npm
+      - name: Publish to npm
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          # Platform packages first, then the launcher package that lists them as optional deps.
+          for dir in dist/npm/argus-*/; do (cd "$dir" && npm publish --access public); done
+          (cd dist/npm/argus && npm publish --access public)
+      - name: Skipped publish (no NPM_TOKEN)
+        if: ${{ env.NPM_TOKEN == '' }}
+        run: echo "NPM_TOKEN not set — built packages in dist/npm but did not publish."
+
+  desktop:
+    name: Desktop — ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, label: macOS, rust-targets: aarch64-apple-darwin }
+          - { os: windows-latest, label: Windows, rust-targets: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: bun install --frozen-lockfile
+      # Compile the CLI for this runner's platform and stage it (+ the web app) for Tauri.
+      - name: Stage sidecar + web
+        run: bash scripts/stage-desktop-sidecar.sh --build
+      - name: Build (and sign, if secrets present) the desktop app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # macOS signing + notarization — no-ops until these are set.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode — no-ops until these are set.
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Updater signing (Phase 7) — needs the updater plugin/config to emit latest.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: Argus ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+# Follow-ups (intentionally not yet wired):
+#   - macOS universal / Intel: stage both arm64 + x86_64 sidecars and build
+#     --target universal-apple-darwin (currently builds the runner's native arch).
+#   - Auto-update: add the updater plugin + public key to tauri.conf.json (Phase 7); the signing
+#     env vars above are already in place.
