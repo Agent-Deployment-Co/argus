@@ -26,8 +26,8 @@ describe("cowork sidechain guard (#118)", () => {
     const transcript = join(root, "audit.jsonl");
     const records = [
       { type: "system", subtype: "init", session_id: "sc-test", cwd: "/Users/fixture/proj" },
-      { type: "user", isReplay: true, timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "build the feature" }] } },
-      { type: "user", isReplay: true, isSidechain: true, timestamp: "2026-06-01T00:00:02.000Z", message: { content: [{ type: "text", text: "run the finder over these files" }] } },
+      { type: "user", uuid: "u-human", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "build the feature" }] } },
+      { type: "user", uuid: "u-sidechain", isSidechain: true, timestamp: "2026-06-01T00:00:02.000Z", message: { content: [{ type: "text", text: "run the finder over these files" }] } },
       { type: "assistant", timestamp: "2026-06-01T00:00:03.000Z", message: { id: "m1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "done" }] } },
     ];
     writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n"));
@@ -116,6 +116,48 @@ describe("cowork live-prompt indexing (#131)", () => {
     expect(session.userMessages).toBe(1);
     expect(session.agentMessages).toBe(1);
     expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Set up the project"]);
+  });
+
+  test("replays never count a turn even without a uuid (defensive)", () => {
+    // Real Cowork records carry a uuid, but the turn dedup must not depend on it: a replayed copy
+    // is dropped from turn counting because it is a replay, uuid present or not.
+    const facts = parseRecords([
+      { type: "system", subtype: "init", session_id: "s131e", cwd: "/Users/you/proj" },
+      { type: "user", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "Ship it" }] } },
+      { type: "user", isReplay: true, timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "Ship it" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:02.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "ok" }] } },
+    ]);
+    const session = facts.sessions[0]!;
+    expect(session.userMessages).toBe(1);
+    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Ship it"]);
+  });
+
+  test("a tool_result carried only by the replayed copy is still extracted", () => {
+    // The live turn may not materialize the tool_result block; the replay does. Extraction scans
+    // both, deduped by tool_use_id, so the result is captured exactly once.
+    const facts = parseRecords([
+      { type: "system", subtype: "init", session_id: "s131f", cwd: "/Users/you/proj" },
+      { type: "user", uuid: "u1", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "list files" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:02.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] } },
+      // Live tool-result turn with no materialized result, then the replay that carries it.
+      { type: "user", uuid: "u2", timestamp: "2026-06-01T00:00:03.000Z", message: { content: [] } },
+      { type: "user", uuid: "u2", isReplay: true, timestamp: "2026-06-01T00:00:03.000Z", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "a.txt\nb.txt" }] } },
+    ]);
+    expect(facts.toolResults.map((r) => r.invocationId)).toEqual(["t1"]);
+  });
+
+  test("an assistant message with an invalid timestamp does not inflate agentMessages", () => {
+    const facts = parseRecords([
+      { type: "system", subtype: "init", session_id: "s131g", cwd: "/Users/you/proj" },
+      { type: "user", uuid: "u1", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "go" }] } },
+      // Valid assistant turn.
+      { type: "assistant", timestamp: "2026-06-01T00:00:02.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "ok" }] } },
+      // Assistant with usage + id but an unparseable timestamp — skipped, so it must not be counted.
+      { type: "assistant", timestamp: "not-a-date", _audit_timestamp: "not-a-date", message: { id: "a2", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "dropped" }] } },
+    ]);
+    const session = facts.sessions[0]!;
+    expect(facts.messages.map((m) => m.providerMessageId)).toEqual(["a1"]);
+    expect(session.agentMessages).toBe(1);
   });
 
   test("a truly bare queued event (no isReplay, no timestamp) is still skipped", () => {

@@ -477,10 +477,12 @@ function parseCoworkTranscript(
   let sessionFact: SessionFact | undefined;
   const invocationNames = new Map<string, string>();
   const invocationFacts = new Map<string, InvocationFact>();
-  // A turn's live event and its replayed copies share a `uuid`; collapse them so resumed sessions
-  // don't double-count prompts/tasks/turns (#131). Assistant turns dedupe by provider message id.
+  // Turn-level facts come from live user events only (replays are verbatim re-appends), so a live
+  // turn logged twice is collapsed by `uuid`; assistant turns dedupe by provider message id; tool
+  // results dedupe by tool_use_id since a turn's live and replayed copies can both carry them (#131).
   const seenUserUuids = new Set<string>();
   const seenAssistantIds = new Set<string>();
+  const seenToolResultIds = new Set<string>();
   let open: OpenAssistantMessage | undefined;
 
   const cwd = metadata?.userSelectedFolders?.[0] ?? undefined;
@@ -495,16 +497,44 @@ function parseCoworkTranscript(
   };
 
   // User records carry the real prompts. The Cowork desktop-app audit format emits them as live
-  // events (isReplay:false) that DO carry a timestamp; only truly bare queued placeholders — no
-  // isReplay AND no timestamp/_audit_timestamp — are skipped (#131). A turn's live copy and any
-  // replayed copies collapse by `uuid` so neither prompts, tasks, nor turn counts double-count.
+  // events (isReplay:false) that DO carry a timestamp, plus verbatim replayed copies after a resume.
   const handleUserRecord = (record: PositionedRecord, recordIndex: number): void => {
     open = undefined;
     if (!sessionFact) return;
     const sourceSessionId = sessionFact.sourceSessionId;
-    const hasTimestamp = record.value.timestamp != null || record.value._audit_timestamp != null;
-    if (record.value.isReplay !== true && !hasTimestamp) return;
+    const content = Array.isArray(record.value.message?.content) ? record.value.message.content : [];
+    const ts = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
 
+    // Tool results may be carried by a turn's live copy, its replayed copy, or both — extract from
+    // any user record but dedupe by tool_use_id so the same result isn't counted twice. Kept
+    // independent of turn dedup below: a replay can carry a tool_result its live twin lacks.
+    for (const [itemIndex, part] of content.entries()) {
+      if (!part || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
+      if (seenToolResultIds.has(part.tool_use_id)) continue;
+      seenToolResultIds.add(part.tool_use_id);
+      const position = { ...record.position, itemIndex };
+      const key = invocationMapKey(sourceSessionId, part.tool_use_id);
+      const invocation = invocationFacts.get(key);
+      const observedToolName = invocation?.name ?? invocationNames.get(key);
+      facts.toolResults.push({
+        id: createFactId("tool_result", "cowork", sourceSessionId, position, part.tool_use_id),
+        source: "cowork",
+        sourceSessionId,
+        invocationId: part.tool_use_id,
+        ...(invocation ? { resolvedInvocationFactId: invocation.id } : {}),
+        ...(observedToolName ? { observedToolName } : {}),
+        approxTokens: estimateClaudeResultTokens(part.content),
+        position,
+      });
+    }
+
+    // Turn-level facts (counts, prompt marker, task candidate, firstPrompt) come from LIVE events
+    // only. reconstructCoworkDialogue (used for task interpretation) drops every replay, so taking
+    // turns from live events keeps the indexed turns and the judged dialogue in agreement, and a
+    // replayed copy can never double-count a turn regardless of whether it carries a uuid (#131).
+    // A truly bare placeholder (no isReplay, no timestamp/_audit_timestamp) isn't a real turn.
+    if (record.value.isReplay === true || !Number.isFinite(ts)) return;
+    // Belt-and-suspenders against a live event logged twice; real Cowork records carry a uuid.
     const uuid =
       typeof record.value.uuid === "string" && record.value.uuid ? record.value.uuid : undefined;
     if (uuid) {
@@ -512,7 +542,6 @@ function parseCoworkTranscript(
       seenUserUuids.add(uuid);
     }
 
-    const content = Array.isArray(record.value.message?.content) ? record.value.message.content : [];
     const taskText = coworkUserMessageText(record);
     const nativeSessionId =
       typeof record.value.session_id === "string" ? record.value.session_id : "";
@@ -533,8 +562,7 @@ function parseCoworkTranscript(
       sessionFact.userMessages = (sessionFact.userMessages ?? 0) + 1;
       if (taskText && !sessionFact.firstPrompt) sessionFact.firstPrompt = taskText;
     }
-    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns;
-    // dedupKey = record uuid so replayed turns collapse in reconcile.
+    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns.
     if (taskText && !generatedTitle && !agentInitiated) {
       facts.prompts!.push(
         buildPromptFact({
@@ -542,7 +570,7 @@ function parseCoworkTranscript(
           sourceSessionId,
           position: record.position,
           kind: sessionFact.kind,
-          timestampMs: timestampMs(record.value.timestamp ?? record.value._audit_timestamp),
+          timestampMs: ts,
           dedupKey: uuid,
         }),
       );
@@ -555,34 +583,15 @@ function parseCoworkTranscript(
       !agentInitiated &&
       !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
     ) {
-      const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
       const task: TaskCandidateFact = {
         id: createFactId("task_candidate", "cowork", sourceSessionId, record.position, "user_message"),
         source: "cowork",
         sourceSessionId,
         text: taskText,
         position: record.position,
+        timestampMs: ts,
       };
-      if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
       facts.taskCandidates.push(task);
-    }
-    for (const [itemIndex, part] of content.entries()) {
-      if (!part || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
-      const position = { ...record.position, itemIndex };
-      const key = invocationMapKey(sourceSessionId, part.tool_use_id);
-      const invocation = invocationFacts.get(key);
-      const observedToolName = invocation?.name ?? invocationNames.get(key);
-      const result: ToolResultFact = {
-        id: createFactId("tool_result", "cowork", sourceSessionId, position, part.tool_use_id),
-        source: "cowork",
-        sourceSessionId,
-        invocationId: part.tool_use_id,
-        ...(invocation ? { resolvedInvocationFactId: invocation.id } : {}),
-        ...(observedToolName ? { observedToolName } : {}),
-        approxTokens: estimateClaudeResultTokens(part.content),
-        position,
-      };
-      facts.toolResults.push(result);
     }
   };
 
@@ -666,19 +675,6 @@ function parseCoworkTranscript(
         ? record.value.message.id
         : undefined;
 
-    // Count agent turns (#131), deduped by provider message id since one assistant message is
-    // split across streaming records. Skip synthetic messages, as the usage path does.
-    if (record.value.message?.model !== "<synthetic>") {
-      if (providerMessageId) {
-        if (!seenAssistantIds.has(providerMessageId)) {
-          seenAssistantIds.add(providerMessageId);
-          sessionFact.agentMessages = (sessionFact.agentMessages ?? 0) + 1;
-        }
-      } else {
-        sessionFact.agentMessages = (sessionFact.agentMessages ?? 0) + 1;
-      }
-    }
-
     const isContinuation =
       providerMessageId != null &&
       open?.providerMessageId === providerMessageId &&
@@ -720,6 +716,19 @@ function parseCoworkTranscript(
       );
       open = undefined;
       continue;
+    }
+
+    // Count agent turns (#131) at the point a new message is actually created — past the synthetic
+    // and invalid-timestamp guards — so agentMessages stays in sync with the messages indexed.
+    // Deduped by provider message id since one assistant message is split across streaming records
+    // (and a resumed session re-appends earlier ones verbatim).
+    if (providerMessageId) {
+      if (!seenAssistantIds.has(providerMessageId)) {
+        seenAssistantIds.add(providerMessageId);
+        sessionFact.agentMessages = (sessionFact.agentMessages ?? 0) + 1;
+      }
+    } else {
+      sessionFact.agentMessages = (sessionFact.agentMessages ?? 0) + 1;
     }
 
     const requestId =
@@ -765,7 +774,8 @@ function parseCoworkTranscript(
     addInvocations(record, message, facts, invocationFacts);
   }
 
-  // Raw conversational turns: each human turn opens one (#131), matching how the web app reads it.
+  // Raw conversational turns. Cowork has no independent turn signal, so fall back to the human
+  // turn count — the same fallback the Codex producer uses (`rawTurns ... || userMessages`) (#131).
   if (sessionFact?.userMessages) sessionFact.rawTurns = sessionFact.userMessages;
 
   return { facts, diagnostics };
