@@ -499,6 +499,8 @@ export interface MaterializeSession {
   messages: MessageRecord[];
   toolResults: Array<{ name: string; count: number; approxTokens: number }>;
   tasks?: TaskFact[];
+  /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions. */
+  interactions?: InteractionFact[];
 }
 
 /** Per-source freshness attestation. */
