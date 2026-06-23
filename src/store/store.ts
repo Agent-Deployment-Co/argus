@@ -15,6 +15,7 @@ import type {
   InvalidationReason,
   FragmentMetadata,
   CompleteDiscovery,
+  DashboardAggregates,
   Store,
   TaskFact,
   FileFingerprint,
@@ -30,7 +31,17 @@ import type {
   StoreStats,
   TranscriptIndex,
 } from "./store-contract.ts";
-import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "../types.ts";
+import type {
+  AgentSource,
+  FrictionTotals,
+  MessageRecord,
+  ParseResult,
+  SessionFriction,
+  SessionMeta,
+  ToolResultStat,
+  Usage,
+} from "../types.ts";
+import type { ToolCategory } from "../tool-categories.ts";
 import { STORE_FILE } from "../paths.ts";
 
 export const STORE_SCHEMA_VERSION = 12;
@@ -147,6 +158,10 @@ const RESOLVED_INVOCATIONS_DDL = `
     mcp_tool TEXT,
     skill TEXT,
     file_path TEXT,
+    -- The owning message's local date (YYYY-MM-DD), denormalized so per-tool breakdowns window by the
+    -- since/until date filter exactly like the usage breakdowns (there is no usage<->invocation link
+    -- to join on). NULL only for archived sessions migrated before the date backfill could run.
+    date TEXT,
     -- For Skill/activate_skill calls: the (truncated) args sample, so skillInvocations.sampleArgs is a
     -- SQL read (it's tool-call metadata already on the ToolUse, not conversation text).
     args TEXT,
@@ -827,8 +842,12 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   11: {
     to: 12,
     sql: `
+      ALTER TABLE resolved_invocations ADD COLUMN date TEXT;
       ALTER TABLE resolved_invocations ADD COLUMN args TEXT;
       ALTER TABLE resolved_invocations ADD COLUMN approx_result_tokens INTEGER NOT NULL DEFAULT 0;
+      -- Backfill each (session, tool) result-token total onto that tool's first invocation row, so a
+      -- GROUP BY tool SUM reproduces the old per-name totals exactly. A tool whose results never matched
+      -- a call row is dropped (accepted orphan drift). args is left NULL (cosmetic; re-index repopulates).
       UPDATE resolved_invocations
       SET approx_result_tokens = COALESCE((
         SELECT tr.approx_tokens FROM resolved_tool_results tr
@@ -839,6 +858,19 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         WHERE i2.session_id = resolved_invocations.session_id AND i2.tool = resolved_invocations.tool
       );
       DROP TABLE resolved_tool_results;
+      -- Backfill the denormalized date by re-deriving each invocation's owning message, using the SAME
+      -- (session, msg_seq, toolUse item) ordering the v10 -> v11 backfill assigned invocation seqs with,
+      -- so the row mapping is exact (and matches app-materialized rows, which flatMap in the same order).
+      UPDATE resolved_invocations
+      SET date = (
+        SELECT flat.date FROM (
+          SELECT m.session_id AS sid,
+                 ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.seq, je.key) - 1 AS inv_seq,
+                 m.date AS date
+          FROM resolved_usage m, json_each(m.record_json, '$.toolUses') je
+        ) flat
+        WHERE flat.sid = resolved_invocations.session_id AND flat.inv_seq = resolved_invocations.seq
+      );
     `,
   },
 };
@@ -1488,6 +1520,340 @@ export class SqliteStore implements Store {
     });
   }
 
+  readDashboardAggregates(query?: ResolvedQuery): Promise<DashboardAggregates> {
+    return this.schedule(() => this.readDashboardAggregatesCore(query));
+  }
+
+  private async readDashboardAggregatesCore(query?: ResolvedQuery): Promise<DashboardAggregates> {
+    // Usage breakdowns over resolved_usage, windowed by the message filter (date/source/project) — the
+    // same WHERE readResolved/aggregate apply, so the SQL path windows identically to the JS walk.
+    const usage = buildResolvedFilters(query);
+    const SUMS =
+      "SUM(input_tokens) AS input, SUM(output_tokens) AS output, SUM(cache_read) AS cache_read, " +
+      "SUM(cache_write_5m) AS cw5, SUM(cache_write_1h) AS cw1, COUNT(*) AS messages";
+    interface SumRow {
+      input: number | null;
+      output: number | null;
+      cache_read: number | null;
+      cw5: number | null;
+      cw1: number | null;
+      messages: number;
+    }
+    const toUsage = (r: SumRow): Usage => ({
+      input: r.input ?? 0,
+      output: r.output ?? 0,
+      cacheRead: r.cache_read ?? 0,
+      cacheWrite5m: r.cw5 ?? 0,
+      cacheWrite1h: r.cw1 ?? 0,
+    });
+
+    const usageByDateModel = (
+      await all<SumRow & { date: string; model: string | null }>(
+        this.db,
+        `SELECT date, model, ${SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY date, model`,
+        usage.messageParams,
+      )
+    ).map((r) => ({ date: r.date, model: r.model ?? "", usage: toUsage(r), messages: r.messages }));
+    const usageBySourceModel = (
+      await all<SumRow & { source: string; model: string | null }>(
+        this.db,
+        `SELECT source, model, ${SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY source, model`,
+        usage.messageParams,
+      )
+    ).map((r) => ({ source: r.source, model: r.model ?? "", usage: toUsage(r), messages: r.messages }));
+    const usageByProjectModel = (
+      await all<SumRow & { project: string; model: string | null }>(
+        this.db,
+        `SELECT project, model, ${SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY project, model`,
+        usage.messageParams,
+      )
+    ).map((r) => ({ project: r.project, model: r.model ?? "", usage: toUsage(r), messages: r.messages }));
+    const usageBySkillModel = (
+      await all<SumRow & { attribution_skill: string | null; model: string | null }>(
+        this.db,
+        `SELECT attribution_skill, model, ${SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY attribution_skill, model`,
+        usage.messageParams,
+      )
+    ).map((r) => ({ skill: r.attribution_skill ?? "", model: r.model ?? "", usage: toUsage(r), messages: r.messages }));
+
+    const TOTAL = "(input_tokens + output_tokens + cache_read + cache_write_5m + cache_write_1h)";
+    const skillDateWhere = usage.messageWhere
+      ? `${usage.messageWhere} AND attribution_skill IS NOT NULL`
+      : "WHERE attribution_skill IS NOT NULL";
+    const skillTokensByDate = (
+      await all<{ date: string; skill: string; total: number }>(
+        this.db,
+        `SELECT date, attribution_skill AS skill, SUM(${TOTAL}) AS total
+         FROM resolved_usage ${skillDateWhere} GROUP BY date, attribution_skill`,
+        usage.messageParams,
+      )
+    ).map((r) => ({ date: r.date, skill: r.skill, total: r.total ?? 0 }));
+
+    const sessionsBySource = await all<{ source: string; sessions: number }>(
+      this.db,
+      `SELECT source, COUNT(DISTINCT session_id) AS sessions FROM resolved_usage ${usage.messageWhere} GROUP BY source`,
+      usage.messageParams,
+    );
+    const sessionsByProject = await all<{ project: string; sessions: number }>(
+      this.db,
+      `SELECT project, COUNT(DISTINCT session_id) AS sessions FROM resolved_usage ${usage.messageWhere} GROUP BY project`,
+      usage.messageParams,
+    );
+    const totalSessions =
+      (
+        await get<{ n: number }>(
+          this.db,
+          `SELECT COUNT(DISTINCT session_id) AS n FROM resolved_usage ${usage.messageWhere}`,
+          usage.messageParams,
+        )
+      )?.n ?? 0;
+
+    // Tool breakdowns over resolved_invocations. Call counts are fully filtered (source/date on the
+    // invocation row, project via its session's cwd); result-size totals are scoped by SOURCE ONLY,
+    // exactly mirroring the legacy ParseResult.toolResults map (sourceJoin, no date/project window).
+    const invWhere: string[] = [];
+    const invParams: unknown[] = [];
+    if (query?.sources?.length) {
+      invWhere.push(`i.source IN (${query.sources.map(() => "?").join(", ")})`);
+      invParams.push(...query.sources);
+    }
+    if (query?.since) {
+      invWhere.push("i.date >= ?");
+      invParams.push(query.since);
+    }
+    if (query?.until) {
+      invWhere.push("i.date <= ?");
+      invParams.push(query.until);
+    }
+    if (query?.projectSubstring) {
+      invWhere.push(
+        "i.session_id IN (SELECT session_id FROM resolved_sessions WHERE instr(cwd, ?) > 0)",
+      );
+      invParams.push(query.projectSubstring);
+    }
+    const invFilter = invWhere.length ? `WHERE ${invWhere.join(" AND ")}` : "";
+
+    const sourceJoin = buildResolvedFilters(query, "s.source");
+    const toolResultStats = (
+      await all<{ tool: string; count: number; approx: number | null }>(
+        this.db,
+        `SELECT i.tool AS tool, COUNT(*) AS count, SUM(i.approx_result_tokens) AS approx
+         FROM resolved_invocations i
+         JOIN resolved_sessions s ON s.session_id = i.session_id
+         ${sourceJoin.sourceWhere}
+         GROUP BY i.tool`,
+        sourceJoin.sourceParams,
+      )
+    ).map((r) => ({ tool: r.tool, count: r.count, approxTokens: r.approx ?? 0 }));
+
+    const byTool = (
+      await all<{ tool: string; category: string; calls: number; sessions: number }>(
+        this.db,
+        `SELECT tool, category, COUNT(*) AS calls, COUNT(DISTINCT session_id) AS sessions
+         FROM resolved_invocations i ${invFilter} GROUP BY tool, category`,
+        invParams,
+      )
+    ).map((r) => ({ tool: r.tool, category: r.category as ToolCategory, calls: r.calls, sessions: r.sessions }));
+
+    const byToolCategory = (
+      await all<{ category: string; calls: number; tools: number; sessions: number }>(
+        this.db,
+        `SELECT category, COUNT(*) AS calls, COUNT(DISTINCT tool) AS tools, COUNT(DISTINCT session_id) AS sessions
+         FROM resolved_invocations i ${invFilter} GROUP BY category`,
+        invParams,
+      )
+    ).map((r) => ({ category: r.category as ToolCategory, calls: r.calls, tools: r.tools, sessions: r.sessions }));
+
+    const mcpFilter = invFilter ? `${invFilter} AND i.mcp_server IS NOT NULL` : "WHERE i.mcp_server IS NOT NULL";
+    const mcpServers = await all<{ server: string; calls: number }>(
+      this.db,
+      `SELECT mcp_server AS server, COUNT(*) AS calls FROM resolved_invocations i ${mcpFilter} GROUP BY mcp_server`,
+      invParams,
+    );
+    const mcpServerTools = await all<{ server: string; tool: string; count: number }>(
+      this.db,
+      `SELECT mcp_server AS server, tool, COUNT(*) AS count FROM resolved_invocations i ${mcpFilter} GROUP BY mcp_server, tool`,
+      invParams,
+    );
+
+    const skillFilter = invFilter
+      ? `${invFilter} AND i.tool IN ('Skill', 'activate_skill') AND i.skill IS NOT NULL`
+      : "WHERE i.tool IN ('Skill', 'activate_skill') AND i.skill IS NOT NULL";
+    const skillCounts = await all<{ skill: string; count: number }>(
+      this.db,
+      `SELECT skill, COUNT(*) AS count FROM resolved_invocations i ${skillFilter} GROUP BY skill`,
+      invParams,
+    );
+    // One representative args sample per skill: the lowest (session_id, seq) row whose args is set
+    // (a cosmetic sample — exact pick need not match the JS walk's global-timeline first).
+    const skillArgsRows = await all<{ skill: string; args: string | null }>(
+      this.db,
+      `SELECT skill, args FROM (
+         SELECT skill, args, ROW_NUMBER() OVER (
+           PARTITION BY skill ORDER BY (args IS NULL), session_id, seq
+         ) AS rn
+         FROM resolved_invocations i ${skillFilter}
+       ) WHERE rn = 1`,
+      invParams,
+    );
+    const sampleArgsBySkill = new Map(skillArgsRows.map((r) => [r.skill, r.args ?? ""]));
+    const skillInvocations = skillCounts.map((r) => ({
+      skill: r.skill,
+      count: r.count,
+      sampleArgs: sampleArgsBySkill.get(r.skill) ?? "",
+    }));
+
+    // Friction/outcome/growth — from session metadata + light scans, no full message materialization.
+    // Sessions in scope = those with a message in the window (matches aggregate's per-session rollups).
+    const { friction, growth, outcome } = await this.readHealthRollups(query, usage);
+
+    return {
+      usageByDateModel,
+      usageBySourceModel,
+      usageByProjectModel,
+      usageBySkillModel,
+      skillTokensByDate,
+      sessionsBySource,
+      sessionsByProject,
+      totalSessions,
+      toolResultStats,
+      byTool,
+      byToolCategory,
+      mcpServers,
+      mcpServerTools,
+      skillInvocations,
+      frictionTotals: friction.totals,
+      projectFriction: friction.byProject,
+      outcomeCounts: outcome,
+      highTokenGrowthSessions: growth,
+    };
+  }
+
+  /** Session-level health rollups (friction totals + per-project, outcome tally, high-growth count)
+   *  without loading every message: friction comes from each in-scope session's meta_json; the outcome
+   *  proxy needs only each session's last_ts, last non-null stop reason, and last interruption; the
+   *  token-growth ratio is a SQL window over the usage rows (first vs last decile, matching the JS k). */
+  private async readHealthRollups(
+    query: ResolvedQuery | undefined,
+    usage: ReturnType<typeof buildResolvedFilters>,
+  ): Promise<{
+    friction: { totals: FrictionTotals; byProject: Array<{ project: string; friction: FrictionTotals }> };
+    growth: number;
+    outcome: { clean: number; interrupted: number; unknown: number };
+  }> {
+    // In-scope sessions: those with at least one message in the window (source/project + date EXISTS).
+    const sessConds: string[] = [];
+    const sessParams: unknown[] = [];
+    if (query?.sources?.length) {
+      sessConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
+      sessParams.push(...query.sources);
+    }
+    if (query?.projectSubstring) {
+      sessConds.push("instr(s.cwd, ?) > 0");
+      sessParams.push(query.projectSubstring);
+    }
+    const dateConds: string[] = [];
+    const dateParams: unknown[] = [];
+    if (query?.since) {
+      dateConds.push("m.date >= ?");
+      dateParams.push(query.since);
+    }
+    if (query?.until) {
+      dateConds.push("m.date <= ?");
+      dateParams.push(query.until);
+    }
+    if (dateConds.length) {
+      sessConds.push(
+        `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
+      );
+      sessParams.push(...dateParams);
+    }
+    const sessWhere = sessConds.length ? `WHERE ${sessConds.join(" AND ")}` : "";
+    const sessions = await all<{ session_id: string; project: string; last_ts: number | null; meta_json: string }>(
+      this.db,
+      `SELECT session_id, project, last_ts, meta_json FROM resolved_sessions s ${sessWhere}`,
+      sessParams,
+    );
+
+    // Last non-null stop reason per in-scope session (for the outcome proxy), filtered like the usage walk.
+    const stopRows = await all<{ session_id: string; stop_reason: string | null }>(
+      this.db,
+      `SELECT session_id, stop_reason FROM (
+         SELECT session_id, json_extract(record_json, '$.stopReason') AS stop_reason,
+                ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS rn
+         FROM resolved_usage ${usage.messageWhere ? `${usage.messageWhere} AND` : "WHERE"} json_extract(record_json, '$.stopReason') IS NOT NULL
+       ) WHERE rn = 1`,
+      usage.messageParams,
+    );
+    const lastStopReason = new Map(stopRows.map((r) => [r.session_id, r.stop_reason]));
+
+    // Token-growth ratio per session: mean total tokens of the last decile over the first decile, with
+    // k = floor(n/10) and n >= 10 — the same slice the JS tokenGrowth uses.
+    const growthRows = await all<{ first_mean: number | null; last_mean: number | null }>(
+      this.db,
+      `SELECT AVG(CASE WHEN rn <= n / 10 THEN total END) AS first_mean,
+              AVG(CASE WHEN rn > n - n / 10 THEN total END) AS last_mean
+       FROM (
+         SELECT session_id,
+                (input_tokens + output_tokens + cache_read + cache_write_5m + cache_write_1h) AS total,
+                ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq) AS rn,
+                COUNT(*) OVER (PARTITION BY session_id) AS n
+         FROM resolved_usage ${usage.messageWhere}
+       )
+       WHERE n >= 10
+       GROUP BY session_id`,
+      usage.messageParams,
+    );
+    let highTokenGrowthSessions = 0;
+    for (const r of growthRows) {
+      const first = r.first_mean ?? 0;
+      const last = r.last_mean ?? 0;
+      if (first > 0 && last / first >= 5) highTokenGrowthSessions += 1;
+    }
+
+    const emptyTotals = (): FrictionTotals => ({
+      observableSessions: 0,
+      interruptions: 0,
+      rejections: 0,
+      compactions: 0,
+      turns: 0,
+    });
+    const totals = emptyTotals();
+    const byProjectMap = new Map<string, FrictionTotals>();
+    const outcome = { clean: 0, interrupted: 0, unknown: 0 };
+    for (const row of sessions) {
+      const meta = JSON.parse(row.meta_json) as SessionMeta;
+      const f = meta.friction;
+      // Outcome proxy (#38): interrupted if the last interruption came at/after the last message; else
+      // clean/unknown from the last non-null stop reason; else unknown.
+      const stop = lastStopReason.get(row.session_id) ?? null;
+      let sessionOutcome: "clean" | "interrupted" | "unknown";
+      if (f?.lastInterruptionMs != null && row.last_ts != null && f.lastInterruptionMs >= row.last_ts) {
+        sessionOutcome = "interrupted";
+      } else if (stop) {
+        sessionOutcome = stop === "end_turn" || stop === "stop_sequence" ? "clean" : "unknown";
+      } else {
+        sessionOutcome = "unknown";
+      }
+      outcome[sessionOutcome] += 1;
+      // Friction rollup over sessions where friction is observable (interruptions known).
+      if (f) {
+        const turns = meta.rawTurns ?? f.turns ?? 0;
+        const pf = byProjectMap.get(row.project) ?? emptyTotals();
+        if (!byProjectMap.has(row.project)) byProjectMap.set(row.project, pf);
+        for (const bucket of [totals, pf]) {
+          bucket.observableSessions += 1;
+          bucket.interruptions += f.interruptions;
+          bucket.rejections += f.rejections ?? 0;
+          bucket.compactions += f.compactions ?? 0;
+          bucket.turns += turns;
+        }
+      }
+    }
+    const byProject = [...byProjectMap.entries()].map(([project, friction]) => ({ project, friction }));
+    return { friction: { totals, byProject }, growth: highTokenGrowthSessions, outcome };
+  }
+
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(
@@ -1696,7 +2062,7 @@ export class SqliteStore implements Store {
           await insertRows(
             this.db,
             "resolved_invocations",
-            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path", "args", "approx_result_tokens"],
+            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path", "date", "args", "approx_result_tokens"],
             session.messages
               .flatMap((message) => message.toolUses.map((toolUse) => ({ message, toolUse })))
               .map(({ message, toolUse }, seq) => [
@@ -1710,6 +2076,7 @@ export class SqliteStore implements Store {
                 toolUse.mcpTool ?? null,
                 toolUse.skill ?? null,
                 toolUse.filePath ?? null,
+                message.date,
                 toolUse.args ?? null,
                 toolUse.approxResultTokens ?? 0,
               ]),

@@ -1155,6 +1155,7 @@ describe("SQLite store", () => {
 
     // Degrade to v11: strip the v12 columns and re-create resolved_tool_results with per-name totals.
     await withRawDatabase(path, async (db) => {
+      await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN date");
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN args");
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN approx_result_tokens");
       await rawExec(

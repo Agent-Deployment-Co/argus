@@ -3,9 +3,10 @@
 // share one code path for reading + aggregating sessions.
 import { aggregate } from "./aggregate.ts";
 import type { Dashboard } from "./aggregate.ts";
+import { assembleDashboard } from "./snapshot.ts";
 import { loadPlugins } from "./inventory.ts";
 import type { TranscriptSource } from "../types.ts";
-import { syncStatsSummary } from "../indexing/pipeline.ts";
+import { readSnapshotAggregates, syncStatsSummary } from "../indexing/pipeline.ts";
 import { openSessionStore } from "../store/session-store.ts";
 import type { ParserDiagnostic } from "../store/store-contract.ts";
 import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
@@ -100,6 +101,27 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
   }
 
   const dash = aggregate(parseResult, plugins, summaries, { includeSessions: opts.includeSessions });
+  dash.generatedAtMs = Date.now();
+  return dash;
+}
+
+/**
+ * Build the serve snapshot from SQL `GROUP BY` rollups (#121) — the dashboard without materializing
+ * every per-turn usage row. Always a pure read (no sync; serve's index leg is the sole writer) and
+ * always omits per-session rows (the web app reads them from /api/sessions), so it needs no plugin
+ * summaries. The numbers match the JS `aggregate()` for the breakdowns the serve UI consumes; cost is
+ * priced per-model in JS exactly as before. The `sync` upload path still uses `buildDashboard`.
+ */
+export async function buildSnapshot(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
+  log("Reading transcripts…");
+  const { aggregates, stats, diagnostics } = await readSnapshotAggregates({
+    sources: sourcesFor(opts.source),
+    query: { since: opts.since, until: opts.until, projectSubstring: opts.project },
+  });
+  if (stats.fallback) log(`  ${syncStatsSummary(stats)}`);
+  for (const entry of reportProblems(diagnostics)) log(`  ! ${entry.message}`);
+
+  const dash = assembleDashboard(aggregates, loadPlugins());
   dash.generatedAtMs = Date.now();
   return dash;
 }
