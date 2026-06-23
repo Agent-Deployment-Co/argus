@@ -1,9 +1,10 @@
 // The SessionStore is the stable seam between data collection and everything downstream
-// (analysis + reporting). It ensures the trusted store is materialized (producers reconcile at index
-// time), then serves the reconciled sessions/messages via read(), pushing query filters down to SQL.
-// Consumers never reconcile or post-filter in memory.
+// (analysis + reporting). It separates the write from the read (CQS): `index()` brings the trusted
+// store current (producers reconcile + materialize), and `read()` is a pure SQL read of that store —
+// reading never writes. Consumers never reconcile or post-filter in memory.
 import {
   parseAllIncrementalDetailed,
+  readStore,
   type SyncStats,
 } from "../indexing/pipeline.ts";
 import type { TranscriptSource } from "../types.ts";
@@ -29,26 +30,25 @@ export interface SessionStoreOptions {
   sources?: TranscriptSource[];
   /** Override the store path. */
   storePath?: string;
-  /** Read the already-materialized store without reconciling first (no writes). For callers that must
-   *  not write — e.g. the serve/upload legs of `argus run`, where the index leg is the only writer. */
-  readOnly?: boolean;
-  /** Opt-in index-time task extraction (#91). Passed through to the sync; off/unset → no extraction. */
+  /** Opt-in index-time task extraction (#91). Used by index(); off/unset → no extraction. */
   taskExtraction?: ResolvedTaskExtraction;
   /** Optional progress sink for long-running work (task extraction), wired to the command's logger. */
   log?: (message: string) => void;
 }
 
 export interface SessionStore {
-  /** Read the reconciled sessions/messages, optionally filtered (SQL pushdown). */
+  /** Pure read of the materialized store, optionally filtered (SQL pushdown). Never writes. */
   read(query?: SessionQuery): Promise<ParseResult>;
-  /** Sync stats from the most recent read. */
+  /** Bring the store current (producers reconcile + materialize), then read. The only writer. */
+  index(query?: SessionQuery): Promise<ParseResult>;
+  /** Sync stats from the most recent index(). Undefined after a read() (no sync happened). */
   readonly stats?: SyncStats;
-  /** Collection diagnostics from the most recent read. */
+  /** Collection diagnostics from the most recent read()/index(). */
   readonly diagnostics: ParserDiagnostic[];
   close(): Promise<void>;
 }
 
-/** Ensures the store is materialized, then reads the reconciled read model (no reconcile on read). */
+/** CQS over the pipeline: read() is a pure SQL read; index() reconciles + materializes first. */
 class StoreBackedSessionStore implements SessionStore {
   stats?: SyncStats;
   diagnostics: ParserDiagnostic[] = [];
@@ -56,10 +56,21 @@ class StoreBackedSessionStore implements SessionStore {
   constructor(private readonly opts: SessionStoreOptions) {}
 
   async read(query?: SessionQuery): Promise<ParseResult> {
+    const details = await readStore({
+      sources: this.opts.sources,
+      storePath: this.opts.storePath,
+      log: this.opts.log,
+      query,
+    });
+    this.stats = details.stats;
+    this.diagnostics = details.diagnostics;
+    return details.parsed;
+  }
+
+  async index(query?: SessionQuery): Promise<ParseResult> {
     const details = await parseAllIncrementalDetailed({
       sources: this.opts.sources,
       storePath: this.opts.storePath,
-      skipSync: this.opts.readOnly,
       taskExtraction: this.opts.taskExtraction,
       log: this.opts.log,
       query,
@@ -70,7 +81,7 @@ class StoreBackedSessionStore implements SessionStore {
   }
 
   async close(): Promise<void> {
-    // parseAllIncrementalDetailed owns and closes its own store handle for now.
+    // The pipeline owns and closes its own store handle per call for now.
   }
 }
 

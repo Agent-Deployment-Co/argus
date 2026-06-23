@@ -74,20 +74,27 @@ source identifier / slug stays `cowork` (all lowercase).
 
 ## Architecture
 
-The pipeline is a one-way data flow; each stage is its own module:
+The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/architecture.md`):
+**`src/indexing/`** (the pipeline: `pipeline.ts` coordinator, `discover.ts`, `producer.ts`,
+`reconcile.ts`, `friction.ts`, `parse/producers/*`, `interpret/*`), **`src/store/`** (`store.ts`,
+`store-contract.ts`, `session-store.ts`), **`src/reporting/`** (`aggregate.ts`,
+`dashboard-builder.ts`, `inventory.ts`), and **`src/api/`**. Cross-cutting modules (`types.ts`,
+`config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`) and the CLI/runtime layer (`cli.ts`,
+`run.ts`, `watch.ts`, `index-ops.ts`, …) stay at `src/` root.
 
-`parse.ts` → `aggregate.ts` → (`api/serve.ts` web app | `push.ts` snapshot)
+The data flow:
 
-`dashboard-builder.ts` wraps `parse → aggregate` as `buildDashboard()`, the single entry point the
-`sync` command and the web server both call.
+`indexing/` (Discover → Parse → Reconcile → Interpret → Materialize) → `store/` → `reporting/aggregate.ts` → (`api/serve.ts` web app | `push.ts` snapshot)
+
+`reporting/dashboard-builder.ts` wraps read + `aggregate` as `buildDashboard()`, the single entry
+point the `sync` command and the web server both call.
 
 The HTTP API layer lives under **`src/api/`**: `serve.ts` (the Hono server + routes) plus the
 serve-only modules that build its responses — `session-list.ts`, `recommendations.ts`,
-`task-metrics.ts`, `debug-info.ts`. Nothing under `src/api/` is used by the `sync`/CLI pipeline;
-`dashboard-builder.ts` stays in `src/` because both serve and sync call it.
+`task-metrics.ts`, `debug-info.ts`. Nothing under `src/api/` is used by the `sync`/CLI pipeline.
 
-- **`parse.ts`** — Reads raw `.jsonl` transcripts into `MessageRecord[]` + session metadata.
-  This is the most subtle file; accuracy lives here:
+- **`indexing/parse/producers/*`** — Per-source readers (claude/codex/gemini/cowork) that turn raw
+  `.jsonl` transcripts into normalized facts. This is the most subtle layer; accuracy lives here:
   - Walks directories **recursively** so subagent transcripts (`<session>/subagents/*.jsonl`) are included.
   - **Dedupes** assistant messages by API `message.id` (first occurrence wins) because resumed/compacted
     sessions re-append earlier messages verbatim — same approach as `ccusage`.
@@ -99,34 +106,34 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   - Tool *results* (output dumped back into context) are attributed to the producing tool via the
     `tool_use_id`/`call_id` → tool-name maps, for the "heaviest tool results" view.
 
-- **`aggregate.ts`** — Pure transform from `ParseResult` → `Dashboard`. Builds all the breakdowns
+- **`reporting/aggregate.ts`** — Pure transform from `ParseResult` → `Dashboard`. Builds all the breakdowns
   (daily, by model/source/skill/project, MCP servers, plugins, sessions). **Cost is computed by
   re-walking individual messages** (not by summing usage then pricing once) so sessions that mix
   models are priced correctly. Also derives per-session health (#38): friction counts, median/max
   turn duration, stop-reason mix, token-growth trend, and an ended-clean/interrupted/unknown
   outcome proxy — plus `frictionTotals` and per-project friction rollups (CLI-only fields).
 
-- **`friction.ts`** — Session-level friction signals (#37): detection of interruptions,
+- **`indexing/friction.ts`** — Session-level friction signals (#37): detection of interruptions,
   permission rejections, compactions, and turn durations from raw Claude JSONL records, plus
-  the per-session fold. Shared by both parse paths (`parse.ts` directly; `parse-claude.ts`
-  emits `SessionFact.frictionEvents` that `parse-incremental.ts` dedupes and folds). Events
+  the per-session fold. The claude producer emits `SessionFact.frictionEvents` that the pipeline
+  (`indexing/reconcile.ts`) dedupes and folds. Events
   carry stable ids (record uuid / `tool_use_id`) so resumed-session replays don't double-count.
   Claude-only: codex/gemini sessions leave `SessionMeta.friction` undefined
   (unknown) rather than zero — the support matrix is documented in the module header.
 
 - **`tool-categories.ts`** — Canonical tool/MCP parsing: `categorizeTool` (9 categories),
   `isMcpTool`, `parseMcpTool` (the `mcp__server__tool` split — requires ≥3 `__` segments,
-  tool keeps any further `__`), and `toolDisplayName`. Both `parse.ts` and `aggregate.ts`
+  tool keeps any further `__`), and `toolDisplayName`. Both the producers and `reporting/aggregate.ts`
   use it so categorization and MCP server/tool naming remain consistent. `aggregate.ts`
   emits `byTool` (per-tool ranking) and `byToolCategory` (category rollup) from it.
 
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
   Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `$ARGUS_CONFIG_DIR/pricing.json`.
 
-- **`inventory.ts`** — Reads `~/.claude/settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`
+- **`reporting/inventory.ts`** — Reads `~/.claude/settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`
   to map skills (`plugin:skill`) to owning plugins and to surface **enabled-but-unused** plugins.
 
-- **`summarize.ts`** — Per-session heuristic summary (`heuristicSummary`): a free one-liner built
+- **`indexing/interpret/summarize.ts`** — Per-session heuristic summary (`heuristicSummary`): a free one-liner built
   from the first prompt, top skills, top tools, and edited-file count. Fills `SessionRow.summary`
   for the web app's session-title fallback. (The old opt-in `claude -p` summarizer was removed in
   favor of #88's task interpretation.)
@@ -168,16 +175,17 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   default` (empty values count as absent). `resolveTaskExtraction` produces the effective
   `TaskExtractionOptions` + `enabled` toggle. Settings only — `token.json`/`pricing.json` stay separate.
 
-- **`task-extraction.ts` / `task-candidates.ts` / `session-tasks.ts` / `dialogue.ts`** — The task
-  *interpretation* layer (#88/#91; full design in `docs/task-interpretation.md`). `task-candidates.ts`
+- **`indexing/interpret/` (`index.ts`, `task-extraction.ts`, `task-candidates.ts`, `dialogue.ts`, `summarize.ts`)** —
+  The Interpret stage: the one model-driven, opt-in step (#88/#91; full design in
+  `docs/task-interpretation.md`). `interpret/index.ts` is the stage entry (`extractTasksForSessions`,
+  `taskExtractionActive`) the pipeline calls. `task-candidates.ts`
   filters user-authored text into `TaskCandidateFact`s and recognizes Argus's own `claude -p` prompts
   so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments
   tasks/chapters, pass 2 judges per-task outcome/frustration from the reconstructed dialogue — via the
   `off`/`claude`/`command` providers (the claude provider runs `claude -p --no-session-persistence
   --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
   per-source reconstruction lives in each producer's parser (`NativeProducer.reconstructDialogue`) and
-  is an in-memory intermediate — **no message text is stored**. `session-tasks.ts` is the legacy
-  on-demand web extraction path (retired by #92).
+  is an in-memory intermediate — **no message text is stored**.
 
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`serve`,
   `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly
@@ -186,16 +194,16 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   is no default command: a bare `argus` (no subcommand) prints the usage/help. `serve` exposes only
   `--port`/`-p` and `--open`. `index refresh` takes space-separated session ids (per-session reindex,
   matching `index delete`); `--extract-tasks <true|false>` on `index`/`rebuild`/`refresh` overrides the
-  `argus.json` task-interpretation setting for the run. Holds the `run*` handlers that wire flags into `dashboard-builder.ts`
-  and the pipeline. Note: citty runs a parent command's `run` *even after* dispatching to a
-  subcommand, so `index`'s parent `run` bails via `dispatchedSubcommand(ctx)` when a subcommand
-  handled the call. The store-maintenance bodies live in `index-ops.ts`; the long-running `--watch`
-  loops and the orchestrator are in `watch.ts` / `run.ts` (see below).
+  `argus.json` task-interpretation setting for the run. Holds the `run*` handlers that wire flags into
+  `reporting/dashboard-builder.ts` and the pipeline. Note: citty runs a parent command's `run` *even
+  after* dispatching to a subcommand, so `index`'s parent `run` bails via `dispatchedSubcommand(ctx)`
+  when a subcommand handled the call. The store-maintenance bodies live in `index-ops.ts`; the
+  long-running `--watch` loops and the orchestrator are in `watch.ts` / `run.ts` (see below).
 
 - **`index-ops.ts`** — The `argus index` command bodies (`runIndex`, `runIndexRebuild` with its
   confirmation prompt, `runIndexRefresh`, `runIndexDelete`), extracted so both `cli.ts` and the watch
   loop share them. The only writers to the store. `runIndexRefresh` takes optional session ids: bare =
-  full re-read; with ids = per-session reindex via `reindexSession` (in `parse-incremental.ts`). All
+  full re-read; with ids = per-session reindex via `reindexSession` (in `indexing/pipeline.ts`). All
   three resolve task interpretation through `config.ts`, with an optional `--extract-tasks` override.
 
 - **`backoff.ts`** — Shared loop primitives for the long-running commands: cancellable `sleep`, a
@@ -222,7 +230,7 @@ Stable types come from the external package `@agentdeploymentco/argus-schema` (p
 changing the `Dashboard` shape, update the schema package and bump its pinned version here in lockstep.
 
 Not everything is on the wire: `TaskFact` and the task-interpretation fields (chapter span, outcome,
-frustration) live in `store-contract.ts` and are **local-only** — they are not pushed by `sync`, so
-adding/changing them needs no schema-package bump. `store-contract.ts` (the parse→store fact contract,
-including `PARSED_FRAGMENT_CONTRACT_VERSION`) is separate from the `@agentdeploymentco/argus-schema`
-wire contract.
+frustration) live in `store/store-contract.ts` and are **local-only** — they are not pushed by `sync`,
+so adding/changing them needs no schema-package bump. `store/store-contract.ts` (the parse→store fact
+contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`) is separate from the
+`@agentdeploymentco/argus-schema` wire contract.
