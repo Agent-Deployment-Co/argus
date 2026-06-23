@@ -33,7 +33,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "../types.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 11;
+export const STORE_SCHEMA_VERSION = 12;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -147,6 +147,13 @@ const RESOLVED_INVOCATIONS_DDL = `
     mcp_tool TEXT,
     skill TEXT,
     file_path TEXT,
+    -- For Skill/activate_skill calls: the (truncated) args sample, so skillInvocations.sampleArgs is a
+    -- SQL read (it's tool-call metadata already on the ToolUse, not conversation text).
+    args TEXT,
+    -- The result half of the call+result unit (#130): approx token weight of this call's paired tool
+    -- result(s), summed. resolved_tool_results (the old per-name aggregate) is retired; per-tool
+    -- result-size GROUP BYs (byTool/heaviestToolResults) read this column. 0 when no result resolved.
+    approx_result_tokens INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, seq)
   );`;
 
@@ -304,15 +311,6 @@ const CREATE_SCHEMA_SQL = `
   CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
   CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
 
-  -- Tool-result stats per session (global dashboard total = SUM across all sessions).
-  CREATE TABLE resolved_tool_results (
-    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    count INTEGER NOT NULL,
-    approx_tokens INTEGER NOT NULL,
-    PRIMARY KEY (session_id, name)
-  );
-
   -- Per-source freshness attestation: lets a consumer know whether the store is current.
   CREATE TABLE source_coverage (
     source TEXT PRIMARY KEY,
@@ -427,7 +425,6 @@ function chunk<T>(items: T[], size: number): T[][] {
 interface ResolvedSessionSnapshot {
   metaJson: string;
   messageJsons: string[];
-  toolResults: Array<{ name: string; count: number; approxTokens: number }>;
   tasks: TaskFact[];
 }
 
@@ -446,11 +443,6 @@ async function readResolvedSessionSnapshot(
     "SELECT record_json FROM resolved_usage WHERE session_id = ? ORDER BY seq",
     [sessionId],
   );
-  const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
-    db,
-    "SELECT name, count, approx_tokens FROM resolved_tool_results WHERE session_id = ? ORDER BY name",
-    [sessionId],
-  );
   const taskRows = await all<{ task_json: string }>(
     db,
     "SELECT task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
@@ -459,30 +451,20 @@ async function readResolvedSessionSnapshot(
   return {
     metaJson: row.meta_json,
     messageJsons: messageRows.map((message) => message.record_json),
-    toolResults: toolRows.map((tool) => ({
-      name: tool.name,
-      count: tool.count,
-      approxTokens: tool.approx_tokens,
-    })),
     tasks: taskRows.map((task) => JSON.parse(task.task_json) as TaskFact),
   };
-}
-
-function sortedToolResults(
-  toolResults: MaterializeSession["toolResults"],
-): MaterializeSession["toolResults"] {
-  return [...toolResults].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 function materializedSessionMatchesSnapshot(
   session: MaterializeSession,
   snapshot: ResolvedSessionSnapshot,
 ): boolean {
+  // Tool-result sizes live inside each message's toolUses now (#130), so the message comparison
+  // already covers them — no separate tool-results check.
   return (
     snapshot.metaJson === JSON.stringify(session.meta) &&
     snapshot.messageJsons.length === session.messages.length &&
-    snapshot.messageJsons.every((json, index) => json === JSON.stringify(session.messages[index])) &&
-    JSON.stringify(sortedToolResults(snapshot.toolResults)) === JSON.stringify(sortedToolResults(session.toolResults))
+    snapshot.messageJsons.every((json, index) => json === JSON.stringify(session.messages[index]))
   );
 }
 
@@ -798,10 +780,26 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   // without a re-index; interactions backfill on the next index (they're reconcile-derived).
   10: {
     to: 11,
+    // The resolved_invocations DDL is inlined at the v11 shape (NOT the shared constant) so this
+    // migration keeps producing the v11 table even as the shared constant evolves; v11 -> v12 below
+    // adds the columns #130 introduced. resolved_interactions is unchanged since v11, so it still
+    // shares the constant.
     sql: `
       ALTER TABLE resolved_usage ADD COLUMN interaction_seq INTEGER;
       ${RESOLVED_INTERACTIONS_DDL}
-      ${RESOLVED_INVOCATIONS_DDL}
+      CREATE TABLE resolved_invocations (
+        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        interaction_seq INTEGER,
+        tool TEXT NOT NULL,
+        category TEXT NOT NULL,
+        mcp_server TEXT,
+        mcp_tool TEXT,
+        skill TEXT,
+        file_path TEXT,
+        PRIMARY KEY (session_id, seq)
+      );
 
       INSERT INTO resolved_invocations
         (session_id, seq, source, tool, category, mcp_server, mcp_tool, skill, file_path)
@@ -818,6 +816,29 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
                json_extract(je.value, '$.filePath') AS file_path
         FROM resolved_usage m, json_each(m.record_json, '$.toolUses') je
       );
+    `,
+  },
+  // 11 -> 12: the tool invocation becomes the call+result unit (#130). resolved_invocations gains
+  // approx_result_tokens (the result half) and an args sample; resolved_tool_results (the old per-name
+  // result aggregate) is retired. Backfill each (session, tool) result-token total onto that tool's
+  // first invocation row, so per-tool SUMs are preserved exactly; a tool name whose results never
+  // matched a call row is dropped (the accepted orphan drift). args backfills on the next re-index
+  // (it's a cosmetic sample); archived sessions keep NULL args.
+  11: {
+    to: 12,
+    sql: `
+      ALTER TABLE resolved_invocations ADD COLUMN args TEXT;
+      ALTER TABLE resolved_invocations ADD COLUMN approx_result_tokens INTEGER NOT NULL DEFAULT 0;
+      UPDATE resolved_invocations
+      SET approx_result_tokens = COALESCE((
+        SELECT tr.approx_tokens FROM resolved_tool_results tr
+        WHERE tr.session_id = resolved_invocations.session_id AND tr.name = resolved_invocations.tool
+      ), 0)
+      WHERE seq = (
+        SELECT MIN(i2.seq) FROM resolved_invocations i2
+        WHERE i2.session_id = resolved_invocations.session_id AND i2.tool = resolved_invocations.tool
+      );
+      DROP TABLE resolved_tool_results;
     `,
   },
 };
@@ -1511,18 +1532,21 @@ export class SqliteStore implements Store {
       tasksBySession.set(row.session_id, tasks);
     }
 
-    // Tool-result totals are unfiltered by date/project but scoped to the requested sources.
+    // Per-tool result-size totals, derived from the unified invocation rows (#130) — one row per tool
+    // *call*, so `count` is the call count and `approxTokens` sums each call's paired result size
+    // (resolved_tool_results, the old per-name aggregate, is retired). Unfiltered by date/project but
+    // scoped to the requested sources, matching the prior behavior.
     const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
       this.db,
-      `SELECT tr.name AS name, SUM(tr.count) AS count, SUM(tr.approx_tokens) AS approx_tokens
-       FROM resolved_tool_results tr
-       JOIN resolved_sessions s ON s.session_id = tr.session_id
+      `SELECT i.tool AS name, COUNT(*) AS count, SUM(i.approx_result_tokens) AS approx_tokens
+       FROM resolved_invocations i
+       JOIN resolved_sessions s ON s.session_id = i.session_id
        ${sourceJoin.sourceWhere}
-       GROUP BY tr.name`,
+       GROUP BY i.tool`,
       sourceJoin.sourceParams,
     );
     const toolResults = new Map<string, ToolResultStat>();
-    for (const row of toolRows) toolResults.set(row.name, { count: row.count, approxTokens: row.approx_tokens });
+    for (const row of toolRows) toolResults.set(row.name, { count: row.count, approxTokens: row.approx_tokens ?? 0 });
 
     return { messages, sessions, toolResults, tasksBySession };
   }
@@ -1647,12 +1671,6 @@ export class SqliteStore implements Store {
               JSON.stringify(task),
             ]),
           );
-          await insertRows(
-            this.db,
-            "resolved_tool_results",
-            ["session_id", "name", "count", "approx_tokens"],
-            session.toolResults.map((tr) => [sid, tr.name, tr.count, tr.approxTokens]),
-          );
           // The interaction spine (#117/#119): one row per reconcile-derived interaction. seq is the
           // interaction's own ordinal (not the array index) so the PK and interaction_json agree and
           // #122 can reference one source of truth for the usage<->interaction link.
@@ -1671,13 +1689,14 @@ export class SqliteStore implements Store {
               JSON.stringify(interaction),
             ]),
           );
-          // Per-tool-use rows (#113 Part B) from the reconciled messages' toolUses, so byTool/byMcp/
-          // bySkill become GROUP BY queries (#121). Result-size stats stay in resolved_tool_results.
+          // Per-tool-use rows (#113 Part B / #130) from the reconciled messages' toolUses, so byTool/
+          // byMcp/bySkill/heaviestToolResults become GROUP BY queries (#121). Each row is the call+result
+          // unit: approx_result_tokens carries the paired result size folded on in reconcile.
           // Flattened in one pass; seq is the array index (matches the migration's ROW_NUMBER backfill).
           await insertRows(
             this.db,
             "resolved_invocations",
-            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path"],
+            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path", "args", "approx_result_tokens"],
             session.messages
               .flatMap((message) => message.toolUses.map((toolUse) => ({ message, toolUse })))
               .map(({ message, toolUse }, seq) => [
@@ -1691,6 +1710,8 @@ export class SqliteStore implements Store {
                 toolUse.mcpTool ?? null,
                 toolUse.skill ?? null,
                 toolUse.filePath ?? null,
+                toolUse.args ?? null,
+                toolUse.approxResultTokens ?? 0,
               ]),
           );
           await run(

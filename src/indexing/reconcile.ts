@@ -58,12 +58,18 @@ export interface ReconcileInput {
   canonicalIds?: Set<string>;
 }
 
-/** reconcileSessions output: a ParseResult plus tool-result stats attributed per session. */
+/** reconcileSessions output: a ParseResult plus per-session tasks/interactions. Tool-result sizes
+ *  are folded onto each call (MessageRecord.toolUses[].approxResultTokens, #130), not aggregated into
+ *  a separate per-session map — resolved_tool_results is retired. */
 export interface ReconcileResult extends ParseResult {
-  toolResultsBySession: Map<string, Map<string, ToolResultStat>>;
   tasksBySession: Map<string, TaskFact[]>;
   /** Interactions (#117), derived here by grouping the deduped/ordered timeline. */
   interactions: InteractionFact[];
+  /** Result facts (#130) that didn't correlate to any parsed call — their tokens are dropped from
+   *  the per-tool result-size totals (the call deduped away on a resumed session, lives in an
+   *  unparsed sibling, etc.). Surfaced for a one-line log; usually 0. */
+  orphanResultCount: number;
+  orphanResultTokens: number;
 }
 
 /** Append `value` to the array at `key`, creating it on first use. */
@@ -285,6 +291,9 @@ export function selectAlternateRepresentations(
 
 export function toolUseFromInvocation(
   invocation: ParsedFileFragment["facts"]["invocations"][number],
+  /** Per-invocation-fact result-token sums (#130): the call+result unit's result size, folded onto
+   *  the call here so it rides inside the message record and lands on resolved_invocations. */
+  resultTokensByInvocationFactId?: Map<string, number>,
 ): ToolUse {
   const toolUse: ToolUse = {
     name: invocation.name,
@@ -296,6 +305,8 @@ export function toolUseFromInvocation(
   if (invocation.mcpServer || mcp) toolUse.mcpServer = invocation.mcpServer ?? mcp?.server;
   if (invocation.mcpTool || mcp) toolUse.mcpTool = invocation.mcpTool ?? mcp?.tool;
   if (invocation.filePath) toolUse.filePath = invocation.filePath;
+  const resultTokens = resultTokensByInvocationFactId?.get(invocation.id);
+  if (resultTokens) toolUse.approxResultTokens = resultTokens;
   return toolUse;
 }
 
@@ -477,11 +488,43 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
 
   const invocationByMessage = new Map<string, ParsedFileFragment["facts"]["invocations"]>();
   const invocationByFactId = new Map<string, ParsedFileFragment["facts"]["invocations"][number]>();
+  // tool_use_id (scoped to its source session) -> invocation fact, for correlating a result back to
+  // its call when the producer didn't already resolve it (resolvedInvocationFactId absent).
+  const invocationByScopedId = new Map<string, ParsedFileFragment["facts"]["invocations"][number]>();
   for (const invocation of fragments.flatMap((fragment) => fragment.facts.invocations)) {
     const list = invocationByMessage.get(invocation.messageId) ?? [];
     list.push(invocation);
     invocationByMessage.set(invocation.messageId, list);
     invocationByFactId.set(invocation.id, invocation);
+    if (invocation.invocationId) {
+      invocationByScopedId.set(`${invocation.sourceSessionId}\0${invocation.invocationId}`, invocation);
+    }
+  }
+
+  // The result half of each call+result unit (#130): fold every tool result's approx token weight
+  // onto the call it correlates to (prefer the producer-resolved fact id, else match by tool_use_id).
+  // Stored on the invocation row via the message's toolUses, so per-tool result-size GROUP BYs read
+  // one table. A result that resolves to no parsed call is an orphan — its tokens are dropped (the
+  // call deduped away on a resumed session, lives in an unparsed sibling, etc.); we count them so the
+  // pipeline can log the (usually zero) drift. resolved_tool_results, the old per-name aggregate, is gone.
+  const resultTokensByInvocationFactId = new Map<string, number>();
+  let orphanResultCount = 0;
+  let orphanResultTokens = 0;
+  for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
+    const sid = canonicalSessionId(result.sourceSessionId);
+    if (canonicalIds && !canonicalIds.has(sid)) continue;
+    const invocation =
+      (result.resolvedInvocationFactId ? invocationByFactId.get(result.resolvedInvocationFactId) : undefined) ??
+      (result.invocationId ? invocationByScopedId.get(`${result.sourceSessionId}\0${result.invocationId}`) : undefined);
+    if (!invocation) {
+      orphanResultCount += 1;
+      orphanResultTokens += result.approxTokens;
+      continue;
+    }
+    resultTokensByInvocationFactId.set(
+      invocation.id,
+      (resultTokensByInvocationFactId.get(invocation.id) ?? 0) + result.approxTokens,
+    );
   }
 
   const messages: MessageRecord[] = [];
@@ -517,7 +560,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
           a.position.itemIndex - b.position.itemIndex ||
           a.id.localeCompare(b.id),
       )
-      .map(toolUseFromInvocation);
+      .map((invocation) => toolUseFromInvocation(invocation, resultTokensByInvocationFactId));
     messages.push({
       source: fact.source,
       sessionId,
@@ -541,32 +584,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     const tasks = tasksBySession.get(sessionId) ?? [];
     tasks.push(fact);
     tasksBySession.set(sessionId, tasks);
-  }
-
-  const toolResults = new Map<string, ToolResultStat>();
-  const toolResultsBySession = new Map<string, Map<string, ToolResultStat>>();
-  for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
-    const sid = canonicalSessionId(result.sourceSessionId);
-    if (canonicalIds && !canonicalIds.has(sid)) continue;
-    const name =
-      result.observedToolName ??
-      (result.resolvedInvocationFactId
-        ? invocationByFactId.get(result.resolvedInvocationFactId)?.name
-        : undefined);
-    if (!name) continue;
-    const stat = toolResults.get(name) ?? { count: 0, approxTokens: 0 };
-    stat.count += 1;
-    stat.approxTokens += result.approxTokens;
-    toolResults.set(name, stat);
-    let perSession = toolResultsBySession.get(sid);
-    if (!perSession) {
-      perSession = new Map<string, ToolResultStat>();
-      toolResultsBySession.set(sid, perSession);
-    }
-    const sessionStat = perSession.get(name) ?? { count: 0, approxTokens: 0 };
-    sessionStat.count += 1;
-    sessionStat.approxTokens += result.approxTokens;
-    perSession.set(name, sessionStat);
   }
 
   // Interaction openings (#117): a prompt opens an interaction in its *own* session. A prompt whose
@@ -601,10 +618,14 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
   return {
     messages,
     sessions,
-    toolResults,
-    toolResultsBySession,
+    // Per-tool result-size totals are not built here anymore (#130): result tokens ride on each
+    // call (toolUses[].approxResultTokens) and land on resolved_invocations; readResolved derives
+    // the per-tool map from that table. Left empty so the in-memory result stays a valid ParseResult.
+    toolResults: new Map<string, ToolResultStat>(),
     tasksBySession,
     interactions,
+    orphanResultCount,
+    orphanResultTokens,
   };
 }
 

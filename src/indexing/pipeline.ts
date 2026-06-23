@@ -313,23 +313,22 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   const interactionsBySession = groupBy(output.interactions, (i) => i.sourceSessionId);
   const sessions: MaterializeSession[] = [];
   for (const [sid, meta] of output.sessions) {
-    const perSession = output.toolResultsBySession.get(sid);
-    const toolResults = perSession
-      ? [...perSession].map(([name, stat]) => ({
-          name,
-          count: stat.count,
-          approxTokens: stat.approxTokens,
-        }))
-      : [];
     sessions.push({
       meta,
       messages: messagesBySession.get(sid) ?? [],
-      toolResults,
       tasks: output.tasksBySession.get(sid) ?? [],
       interactions: interactionsBySession.get(sid) ?? [],
     });
   }
   return sessions;
+}
+
+/** Note tool results that didn't correlate to a parsed call (#130) — their sizes are dropped from the
+ *  per-tool result-size totals. Usually zero; logged only when it happens so the drift isn't silent. */
+function logOrphanResults(output: ReconcileResult, log?: (message: string) => void): void {
+  if (!log || output.orphanResultCount <= 0) return;
+  const n = output.orphanResultCount;
+  log(`  Left ${n} tool result${n === 1 ? "" : "s"} out of size totals (couldn't match them to a tool call).`);
 }
 
 /** Map a source session id to its canonical id (subagent child -> parent) for a producer. */
@@ -482,6 +481,7 @@ async function syncStore(
         canonicalIds: touched,
       });
       const materialize = toMaterializeSessions(output);
+      logOrphanResults(output, opts.log);
       // Opt-in (#91): re-extract tasks only for sessions whose files actually changed — the widened
       // touched set (deletions / aux changes) re-materializes without new tasks, so the materializer
       // preserves their stored tasks rather than paying for an LLM call per unchanged session.
