@@ -1020,6 +1020,9 @@ function factsFromConversation(
         }),
       );
     }
+    // Only human-initiated prompts become task candidates (#118): a subagent session's prompts are
+    // agent-authored, not human intent. (Same initiator-from-kind rule #117 uses for openings.)
+    if (sessionFactKind === "subagent") continue;
     const next = conversation.messages[messageIndex + 1];
     const nextText =
       next?.value.type === "user"
