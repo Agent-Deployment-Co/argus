@@ -1,4 +1,4 @@
-.PHONY: build test typecheck publish clean
+.PHONY: build test typecheck publish clean dmg
 
 build:
 	bun run build
@@ -14,3 +14,12 @@ publish: build
 
 clean:
 	rm -rf dist/
+
+dmg:
+ifndef APPLE_ID
+	$(error APPLE_ID is not set)
+endif
+ifndef APPLE_PASSWORD
+	$(error APPLE_PASSWORD is not set)
+endif
+	bun run desktop:dmg
