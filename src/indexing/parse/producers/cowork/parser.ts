@@ -536,16 +536,20 @@ function parseCoworkTranscript(
       const nativeSessionId =
         typeof record.value.session_id === "string" ? record.value.session_id : "";
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      // Cowork's audit.jsonl is a flattened log that doesn't currently carry subagent (sidechain)
+      // turns — but Cowork does run subagents, so guard defensively: a sidechain turn is agent-
+      // authored, so it's an agent-initiated prompt and never a (human) task candidate (#118).
+      const sidechain = record.value.isSidechain === true;
       // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns); initiator
-      // is derived from the session kind (cowork has no subagents); dedupKey = record uuid so replayed
-      // turns collapse in reconcile.
+      // is agent for a sidechain turn, else the session kind; dedupKey = record uuid so replayed turns
+      // collapse in reconcile.
       if (taskText && !generatedTitle) {
         facts.prompts!.push(
           buildPromptFact({
             source: "cowork",
             sourceSessionId,
             position: record.position,
-            kind: sessionFact?.kind,
+            kind: sidechain ? "subagent" : sessionFact?.kind,
             timestampMs: timestampMs(record.value.timestamp ?? record.value._audit_timestamp),
             dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
           }),
@@ -556,6 +560,7 @@ function parseCoworkTranscript(
       }
       if (
         taskText &&
+        !sidechain &&
         !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
       ) {
         const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
