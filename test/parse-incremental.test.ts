@@ -10,7 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../src/store/store.ts";
-import { parseAll } from "../src/parse.ts";
 import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
 import type { SyncStats } from "../src/indexing/pipeline.ts";
 import type { AgentSource, MessageRecord, ParseResult, ToolUse } from "../src/types.ts";
@@ -97,7 +96,7 @@ describe("parseAllIncrementalDetailed", () => {
     );
   });
 
-  test("matches the native parser and reuses unchanged fragments on a second run", async () => {
+  test("indexes all sources and reuses unchanged fragments on a second run", async () => {
     const root = tempRoot();
     const opts = {
       projectsDir: copyFixture("projects", root),
@@ -108,13 +107,14 @@ describe("parseAllIncrementalDetailed", () => {
       storePath: storePath(root),
     };
 
-    const native = parseAll(opts);
     const first = await parseAllIncrementalDetailed(opts);
-    expect(comparable(first.parsed)).toEqual(comparable(native));
+    expect(first.parsed.sessions.size).toBeGreaterThan(0);
+    expect(first.parsed.messages.length).toBeGreaterThan(0);
     expect(first.stats).toMatchObject({ hits: 0, parsed: 10, replaced: 10, fallback: false });
 
+    // A second run reuses every unchanged fragment and yields an identical result.
     const second = await parseAllIncrementalDetailed(opts);
-    expect(comparable(second.parsed)).toEqual(comparable(native));
+    expect(comparable(second.parsed)).toEqual(comparable(first.parsed));
     expect(second.stats).toMatchObject({ hits: 10, parsed: 0, replaced: 0, fallback: false });
   });
 

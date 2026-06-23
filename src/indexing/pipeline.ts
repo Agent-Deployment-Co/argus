@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   isAuthoritativeDiscovery,
   PARSED_FRAGMENT_CONTRACT_VERSION,
@@ -17,7 +20,8 @@ import {
   type Store,
 } from "../store/store-contract.ts";
 import { openStore, rebuildStore } from "../store/store.ts";
-import { parseAll, type ParseOptions, type TranscriptSource } from "../parse.ts";
+import { type ParseOptions } from "./discover.ts";
+import type { TranscriptSource } from "../types.ts";
 import {
   canonicalSessionIds,
   reconcileSessions,
@@ -586,8 +590,8 @@ export async function parseAllIncrementalDetailed(
       ownsStore = true;
     }
     // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with
-    // optional SQL pushdown). `parseAll` (direct disk parse) is the test oracle. `skipSync` reads the
-    // store as-is without materializing — for the read-only legs of `argus run` (the index leg writes).
+    // optional SQL pushdown). `skipSync` reads the store as-is without materializing — for the
+    // read-only legs of `argus run` (the index leg writes).
     if (!opts.skipSync) await syncStore(opts, store, stats, diagnostics);
     return {
       parsed: await store.readResolved({
@@ -603,17 +607,32 @@ export async function parseAllIncrementalDetailed(
     diagnostics.push(
       diagnostic(
         "store_fallback",
-        `Couldn't open the local store; read transcripts directly instead: ${
+        `Couldn't use the local store; indexed transcripts into a temporary store instead: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "error",
       ),
     );
-    return {
-      parsed: parseAll(opts),
-      stats: { ...stats, fallback: true },
-      diagnostics,
-    };
+    // Fallback for a missing/corrupt store (e.g. one-shot `report` with no usable store): run the
+    // real pipeline against a throwaway temp store so we still index from disk, then discard it.
+    const fallbackDir = mkdtempSync(join(tmpdir(), "argus-fallback-"));
+    const fallbackStore = await openStore({ path: join(fallbackDir, "argus.db") });
+    try {
+      if (!opts.skipSync) await syncStore(opts, fallbackStore, stats, diagnostics);
+      return {
+        parsed: await fallbackStore.readResolved({
+          sources: normalizeSources(opts.sources) as AgentSource[],
+          since: opts.query?.since,
+          until: opts.query?.until,
+          projectSubstring: opts.query?.projectSubstring,
+        }),
+        stats: { ...stats, fallback: true },
+        diagnostics,
+      };
+    } finally {
+      await fallbackStore.close();
+      rmSync(fallbackDir, { recursive: true, force: true });
+    }
   } finally {
     if (ownsStore && store) await store.close();
   }

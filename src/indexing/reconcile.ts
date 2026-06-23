@@ -19,7 +19,7 @@ import {
   type TaskFact,
 } from "../store/store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
-import { projectLabel } from "../parse.ts";
+import { projectLabel } from "./discover.ts";
 import { categorizeTool, parseMcpTool } from "../tool-categories.ts";
 import type {
   AgentSource,
