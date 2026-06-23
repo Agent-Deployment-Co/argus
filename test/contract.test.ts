@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { PushPayloadSchema, SCHEMA_VERSION } from "@agentdeploymentco/argus-schema";
-import { aggregate } from "../src/aggregate.ts";
+import { aggregate } from "../src/reporting/aggregate.ts";
 import { parseAll } from "../src/parse.ts";
 import type { PluginInfo } from "../src/types.ts";
 

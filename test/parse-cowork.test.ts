@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   discoverCoworkTranscripts,
   parseCoworkTranscriptFile,
-} from "../src/producers/cowork/parser.ts";
+} from "../src/indexing/parse/producers/cowork/parser.ts";
 
 const FIX = join(import.meta.dir, "fixtures", "cowork-sessions");
 

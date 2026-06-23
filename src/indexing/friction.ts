@@ -9,7 +9,7 @@
 // - gemini: none yet. Chat snapshots carry no friction markers.
 // Sessions from non-Claude sources leave `SessionMeta.friction` undefined rather than reporting a
 // misleading zero.
-import { emptySessionFriction, type SessionFriction } from "./types.ts";
+import { emptySessionFriction, type SessionFriction } from "../types.ts";
 
 export type FrictionEventKind =
   | "interruption"

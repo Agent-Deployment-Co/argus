@@ -2,7 +2,7 @@
 // command bodies (index-ops.ts), the long-running loops (watch.ts), and the orchestrator (run.ts)
 // can reuse them without importing cli.ts (which would create a cycle).
 import type { TranscriptSource } from "./parse.ts";
-import type { BuildDashboardOptions } from "./dashboard-builder.ts";
+import type { BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
 
 export type Source = "all" | TranscriptSource;
 

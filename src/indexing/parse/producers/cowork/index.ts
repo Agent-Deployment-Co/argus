@@ -5,7 +5,7 @@ import {
   parseCoworkTranscriptPath,
   reconstructCoworkDialogue,
 } from "./parser.ts";
-import type { NativeProducer, ProducerContext } from "../../producer.ts";
+import type { NativeProducer, ProducerContext } from "../../../producer.ts";
 
 export const coworkProducer: NativeProducer = {
   id: "cowork",

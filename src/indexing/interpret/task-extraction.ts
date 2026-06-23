@@ -8,7 +8,7 @@ import {
   type TaskFact,
   type TaskFrustration,
   type TaskOutcome,
-} from "./store-contract.ts";
+} from "../../store/store-contract.ts";
 import { sliceDialogueByTime, type DialogueTurn } from "./dialogue.ts";
 
 const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;

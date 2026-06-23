@@ -18,14 +18,14 @@ import {
   StoreError,
   openStore,
   rebuildStore,
-} from "../src/store.ts";
+} from "../src/store/store.ts";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   type StoredFragment,
   type CompleteDiscovery,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
-} from "../src/store-contract.ts";
+} from "../src/store/store-contract.ts";
 import type { AgentSource } from "../src/types.ts";
 
 const tempDirs: string[] = [];

@@ -1,6 +1,6 @@
 import { skillPlugin } from "./inventory.ts";
-import { cost, unpricedModels } from "./pricing.ts";
-import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory } from "./tool-categories.ts";
+import { cost, unpricedModels } from "../pricing.ts";
+import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory } from "../tool-categories.ts";
 import {
   addUsage,
   type Dashboard,
@@ -20,8 +20,8 @@ import {
   type ToolStat,
   totalTokens,
   type Usage,
-} from "./types.ts";
-import type { TaskFact } from "./store-contract.ts";
+} from "../types.ts";
+import type { TaskFact } from "../store/store-contract.ts";
 
 // Re-export the dashboard types (now defined in types.ts) for existing importers.
 export type {
@@ -32,7 +32,7 @@ export type {
   SessionRow,
   ToolCategoryStat,
   ToolStat,
-} from "./types.ts";
+} from "../types.ts";
 
 function usageCost(u: Usage, model: string): number {
   return cost(u, model);

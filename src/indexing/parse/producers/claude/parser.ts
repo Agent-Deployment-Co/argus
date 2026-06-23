@@ -30,19 +30,19 @@ import {
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
-} from "../../store-contract.ts";
-import { claudeFrictionEvents } from "../../friction.ts";
-import { HISTORY_FILE, PROJECTS_DIR } from "../../paths.ts";
+} from "../../../../store/store-contract.ts";
+import { claudeFrictionEvents } from "../../../friction.ts";
+import { HISTORY_FILE, PROJECTS_DIR } from "../../../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   argusGeneratedPromptTitle,
   isCountableClaudeUserMessage,
   shouldSkipTaskCandidateText,
   textFromUserContent,
-} from "../../task-candidates.ts";
-import { parseMcpTool } from "../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../dialogue.ts";
-import { emptyUsage, type Usage } from "../../types.ts";
+} from "../../../interpret/task-candidates.ts";
+import { parseMcpTool } from "../../../../tool-categories.ts";
+import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
+import { emptyUsage, type Usage } from "../../../../types.ts";
 
 export const CLAUDE_PROJECTS_ROOT_ID = "claude-projects";
 export const CLAUDE_CONFIG_ROOT_ID = "claude-config";

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { INSTALLED_PLUGINS_FILE, SETTINGS_FILE } from "./paths.ts";
-import type { PluginInfo } from "./types.ts";
+import { INSTALLED_PLUGINS_FILE, SETTINGS_FILE } from "../paths.ts";
+import type { PluginInfo } from "../types.ts";
 
 function readJson(path: string): any {
   try {

@@ -9,8 +9,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Dashboard } from "../aggregate.ts";
-import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "../dashboard-builder.ts";
+import type { Dashboard } from "../reporting/aggregate.ts";
+import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
 import type { TranscriptSource } from "../parse.ts";
 import {
   buildSessionDetail,
@@ -20,13 +20,13 @@ import {
 } from "./session-list.ts";
 import type { SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
-import { reindexSession, type ReindexSessionResult } from "../parse-incremental.ts";
+import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";
-import { openStore } from "../store.ts";
-import type { ParserDiagnostic, TaskFact } from "../store-contract.ts";
-import type { TaskExtractionOptions } from "../task-extraction.ts";
+import { openStore } from "../store/store.ts";
+import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
+import type { TaskExtractionOptions } from "../indexing/interpret/task-extraction.ts";
 
 export interface ServeOptions {
   port: number;

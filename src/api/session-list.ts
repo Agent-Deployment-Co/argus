@@ -3,10 +3,10 @@
 // lives in JS), apply the list-level refinements that don't belong in SQL (project label match,
 // free-text, Argus-generated toggle), sort, and slice a page. Detail builds a full SessionRow on
 // demand from one session's messages. These response shapes are local-only (not on the sync wire).
-import { buildSessionRow } from "../aggregate.ts";
+import { buildSessionRow } from "../reporting/aggregate.ts";
 import { cost } from "../pricing.ts";
-import type { SessionAggregate, TaskFact } from "../store-contract.ts";
-import { heuristicSummary, summaryFactsFromMessages } from "../summarize.ts";
+import type { SessionAggregate, TaskFact } from "../store/store-contract.ts";
+import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
 export type SessionSort = "recent" | "tokens" | "cost";

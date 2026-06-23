@@ -2,15 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "../src/friction.ts";
+import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "../src/indexing/friction.ts";
 import {
   claudeHistoryFileIdentity,
   discoverClaudeTranscripts,
   parseClaudeTranscriptFile,
-} from "../src/producers/claude/parser.ts";
-import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
+} from "../src/indexing/parse/producers/claude/parser.ts";
+import { parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
 import { parseAll } from "../src/parse.ts";
-import { aggregate } from "../src/aggregate.ts";
+import { aggregate } from "../src/reporting/aggregate.ts";
 import {
   emptySessionFriction,
   type MessageRecord,

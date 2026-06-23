@@ -1,4 +1,4 @@
-import type { MessageRecord } from "./types.ts";
+import type { MessageRecord } from "../../types.ts";
 
 function truncate(s: string, n: number): string {
   s = s.replace(/\s+/g, " ").trim();

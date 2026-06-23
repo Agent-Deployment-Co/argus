@@ -8,7 +8,7 @@ import type {
   SessionRow as SchemaSessionRow,
   Usage,
 } from "@agentdeploymentco/argus-schema";
-import type { TaskFact } from "./store-contract.ts";
+import type { TaskFact } from "./store/store-contract.ts";
 import type { ToolCategory } from "./tool-categories.ts";
 export type {
   DayBucket,

@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseAllIncrementalDetailed, reindexSession } from "../src/parse-incremental.ts";
+import { parseAllIncrementalDetailed, reindexSession } from "../src/indexing/pipeline.ts";
 import { runIndexRefresh } from "../src/index-ops.ts";
-import { openStore } from "../src/store.ts";
+import { openStore } from "../src/store/store.ts";
 import type { ResolvedTaskExtraction } from "../src/config.ts";
 import type { AgentSource } from "../src/types.ts";
 

@@ -5,11 +5,11 @@
 import {
   parseAllIncrementalDetailed,
   type SyncStats,
-} from "./parse-incremental.ts";
-import type { TranscriptSource } from "./parse.ts";
+} from "../indexing/pipeline.ts";
+import type { TranscriptSource } from "../parse.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
-import type { AgentSource, ParseResult } from "./types.ts";
-import type { ResolvedTaskExtraction } from "./config.ts";
+import type { AgentSource, ParseResult } from "../types.ts";
+import type { ResolvedTaskExtraction } from "../config.ts";
 
 /** Filters applied to the materialized read model at read time (SQL pushdown). */
 export interface SessionQuery {

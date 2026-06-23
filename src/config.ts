@@ -17,7 +17,7 @@ import {
   DEFAULT_TASK_EXTRACTION_PROVIDER,
   type TaskExtractionOptions,
   type TaskExtractionProvider,
-} from "./task-extraction.ts";
+} from "./indexing/interpret/task-extraction.ts";
 
 /** The typed shape of `argus.json`. Designed to grow; task extraction is the first consumer. */
 export interface ArgusConfig {

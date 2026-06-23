@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { FrictionEvent } from "./friction.ts";
-import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from "./types.ts";
+import type { FrictionEvent } from "../indexing/friction.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from "../types.ts";
 
 /**
  * Increment when serialized fragment semantics change incompatibly.

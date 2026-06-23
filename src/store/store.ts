@@ -30,8 +30,8 @@ import type {
   StoreStats,
   TranscriptIndex,
 } from "./store-contract.ts";
-import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "./types.ts";
-import { STORE_FILE } from "./paths.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "../types.ts";
+import { STORE_FILE } from "../paths.ts";
 
 export const STORE_SCHEMA_VERSION = 9;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
