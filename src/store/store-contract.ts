@@ -139,7 +139,14 @@ export interface SessionFact {
   position: SourcePosition;
 }
 
-export interface MessageFact {
+/**
+ * Token usage as metered by the provider at the assistant-turn grain (Claude `message.usage`, Codex
+ * `token_count` events). Named for what it is — the model retires "message" as a unit of meaning; a
+ * raw record is an *event* and this is the usage it carries. Not a structural unit: it is a metered
+ * detail inside an interaction's loop. A row exists at this grain because cost is priced per-model
+ * (SUM-then-price is exact only within one model). (#117 will attribute it to its owning interaction.)
+ */
+export interface UsageFact {
   id: string;
   source: AgentSource;
   sourceSessionId: string;
@@ -244,7 +251,7 @@ export interface SessionRelationshipFact {
 
 export interface NormalizedFacts {
   sessions: SessionFact[];
-  messages: MessageFact[];
+  messages: UsageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
   taskCandidates: TaskCandidateFact[];

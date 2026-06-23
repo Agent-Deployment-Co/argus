@@ -21,7 +21,7 @@ import {
   type FileIdentity,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
@@ -1042,7 +1042,7 @@ function factsFromConversation(
     position: conversation.position,
   };
 
-  const messages: MessageFact[] = [];
+  const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
   const toolResults: ToolResultFact[] = [];
   for (const positioned of conversation.messages) {

@@ -178,7 +178,7 @@ describe("session friction (pipeline)", () => {
 });
 
 describe("Claude fragment friction (incremental path)", () => {
-  test("emits friction events on SessionFact and stopReason on MessageFact", () => {
+  test("emits friction events on SessionFact and stopReason on UsageFact", () => {
     const discovery = discoverClaudeTranscripts(FRICTION_PROJECTS);
     expect(discovery.status).toBe("complete");
     const file = discovery.files.find((f) => f.file.relativePath.endsWith("/frict1.jsonl"))!;
