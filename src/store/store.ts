@@ -42,6 +42,7 @@ import type {
   Usage,
 } from "../types.ts";
 import type { ToolCategory } from "../tool-categories.ts";
+import { classifyOutcome, emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
 export const STORE_SCHEMA_VERSION = 12;
@@ -171,6 +172,14 @@ const RESOLVED_INVOCATIONS_DDL = `
     approx_result_tokens INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, seq)
   );`;
+// Secondary indexes for the snapshot's whole-store GROUP BY/JOIN scans (#121): grouping by tool and
+// filtering by date are the hot paths; mcp_server/skill are partial since most rows have neither.
+// (session_id scans ride the PK.) Shared by CREATE_SCHEMA_SQL and the v11 -> v12 migration.
+const RESOLVED_INVOCATIONS_INDEXES = `
+  CREATE INDEX resolved_invocations_tool ON resolved_invocations(tool);
+  CREATE INDEX resolved_invocations_date ON resolved_invocations(date);
+  CREATE INDEX resolved_invocations_mcp_server ON resolved_invocations(mcp_server) WHERE mcp_server IS NOT NULL;
+  CREATE INDEX resolved_invocations_skill ON resolved_invocations(skill) WHERE skill IS NOT NULL;`;
 
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
@@ -264,6 +273,15 @@ const CREATE_SCHEMA_SQL = `
     message_count INTEGER NOT NULL,
     first_prompt TEXT,
     archived INTEGER NOT NULL DEFAULT 0,
+    -- Friction signals (#38) promoted out of meta_json so the snapshot's friction/outcome rollups are
+    -- SQL SUM/GROUP BY instead of parsing every session's metadata per request (#121). NULL means
+    -- friction is not observable for the source (codex/gemini) — the rollups only count non-NULL rows.
+    -- friction_turns is rawTurns when known, else the friction turn count. meta_json stays authoritative.
+    friction_interruptions INTEGER,
+    friction_rejections INTEGER,
+    friction_compactions INTEGER,
+    friction_turns INTEGER,
+    last_interruption_ms INTEGER,
     meta_json TEXT NOT NULL
   );
   CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
@@ -314,6 +332,7 @@ const CREATE_SCHEMA_SQL = `
   -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
   -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
   ${RESOLVED_INVOCATIONS_DDL}
+  ${RESOLVED_INVOCATIONS_INDEXES}
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -871,6 +890,22 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         ) flat
         WHERE flat.sid = resolved_invocations.session_id AND flat.inv_seq = resolved_invocations.seq
       );
+      ${RESOLVED_INVOCATIONS_INDEXES}
+
+      -- Promote friction signals out of meta_json so the snapshot's friction/outcome rollups are SQL,
+      -- not a per-request parse of every session's metadata (#121). NULL when friction isn't observable.
+      ALTER TABLE resolved_sessions ADD COLUMN friction_interruptions INTEGER;
+      ALTER TABLE resolved_sessions ADD COLUMN friction_rejections INTEGER;
+      ALTER TABLE resolved_sessions ADD COLUMN friction_compactions INTEGER;
+      ALTER TABLE resolved_sessions ADD COLUMN friction_turns INTEGER;
+      ALTER TABLE resolved_sessions ADD COLUMN last_interruption_ms INTEGER;
+      UPDATE resolved_sessions SET
+        friction_interruptions = json_extract(meta_json, '$.friction.interruptions'),
+        friction_rejections = json_extract(meta_json, '$.friction.rejections'),
+        friction_compactions = json_extract(meta_json, '$.friction.compactions'),
+        friction_turns = CASE WHEN json_extract(meta_json, '$.friction') IS NOT NULL
+          THEN COALESCE(json_extract(meta_json, '$.rawTurns'), json_extract(meta_json, '$.friction.turns')) END,
+        last_interruption_ms = json_extract(meta_json, '$.friction.lastInterruptionMs');
     `,
   },
 };
@@ -1065,13 +1100,32 @@ function invalidatedStatus(reason: InvalidationReason): FragmentMetadata["status
  * content filters whose presence (`active`) makes the reader drop sessions with no surviving message.
  * `--project` matches cwd via `instr` (not LIKE) to avoid wildcard injection.
  */
-function buildResolvedFilters(query?: ResolvedQuery, sourceColumn = "source"): {
+/** Column names the resolved filters target, so the same source/date/project predicates serve tables
+ *  with different schemas/aliases (resolved_usage, aliased joins, resolved_invocations). `cwdColumn:
+ *  null` skips the project predicate entirely — for tables with no cwd column (resolved_invocations),
+ *  whose caller applies project as a session-id subquery instead. */
+interface ResolvedFilterColumns {
+  sourceColumn?: string;
+  dateColumn?: string;
+  /** Column for the `instr(cwd, ?)` project filter, or null to skip it (caller handles project). */
+  cwdColumn?: string | null;
+}
+
+/** Centralizes the source-IN / date>= / date<= / project-substring predicates shared by every resolved
+ *  read, parameterized by column so each table/alias reuses one definition (no per-call divergence). */
+function buildResolvedFilters(
+  query?: ResolvedQuery,
+  columns: ResolvedFilterColumns = {},
+): {
   messageWhere: string;
   messageParams: unknown[];
   sourceWhere: string;
   sourceParams: unknown[];
   active: boolean;
 } {
+  const sourceColumn = columns.sourceColumn ?? "source";
+  const dateColumn = columns.dateColumn ?? "date";
+  const cwdColumn = columns.cwdColumn === undefined ? "cwd" : columns.cwdColumn;
   const sourceConditions: string[] = [];
   const sourceParams: unknown[] = [];
   if (query?.sources?.length) {
@@ -1081,15 +1135,15 @@ function buildResolvedFilters(query?: ResolvedQuery, sourceColumn = "source"): {
   const contentConditions: string[] = [];
   const contentParams: unknown[] = [];
   if (query?.since) {
-    contentConditions.push("date >= ?");
+    contentConditions.push(`${dateColumn} >= ?`);
     contentParams.push(query.since);
   }
   if (query?.until) {
-    contentConditions.push("date <= ?");
+    contentConditions.push(`${dateColumn} <= ?`);
     contentParams.push(query.until);
   }
-  if (query?.projectSubstring) {
-    contentConditions.push("instr(cwd, ?) > 0");
+  if (query?.projectSubstring && cwdColumn) {
+    contentConditions.push(`instr(${cwdColumn}, ?) > 0`);
     contentParams.push(query.projectSubstring);
   }
   const all = [...sourceConditions, ...contentConditions];
@@ -1608,32 +1662,24 @@ export class SqliteStore implements Store {
         )
       )?.n ?? 0;
 
-    // Tool breakdowns over resolved_invocations. Call counts are fully filtered (source/date on the
-    // invocation row, project via its session's cwd); result-size totals are scoped by SOURCE ONLY,
-    // exactly mirroring the legacy ParseResult.toolResults map (sourceJoin, no date/project window).
-    const invWhere: string[] = [];
-    const invParams: unknown[] = [];
-    if (query?.sources?.length) {
-      invWhere.push(`i.source IN (${query.sources.map(() => "?").join(", ")})`);
-      invParams.push(...query.sources);
-    }
-    if (query?.since) {
-      invWhere.push("i.date >= ?");
-      invParams.push(query.since);
-    }
-    if (query?.until) {
-      invWhere.push("i.date <= ?");
-      invParams.push(query.until);
-    }
+    // Tool breakdowns over resolved_invocations. Call counts are fully filtered: source/date reuse the
+    // shared predicate builder against the invocation's own columns; project (no cwd column here) is a
+    // session-id subquery. Result-size totals below are scoped by SOURCE ONLY, exactly mirroring the
+    // legacy ParseResult.toolResults map (sourceJoin, no date/project window).
+    const invSourceDate = buildResolvedFilters(query, {
+      sourceColumn: "i.source",
+      dateColumn: "i.date",
+      cwdColumn: null, // resolved_invocations has no cwd; project handled as a subquery below
+    });
+    const invConds = invSourceDate.messageWhere ? [invSourceDate.messageWhere.replace(/^WHERE /, "")] : [];
+    const invParams = [...invSourceDate.messageParams];
     if (query?.projectSubstring) {
-      invWhere.push(
-        "i.session_id IN (SELECT session_id FROM resolved_sessions WHERE instr(cwd, ?) > 0)",
-      );
+      invConds.push("i.session_id IN (SELECT session_id FROM resolved_sessions WHERE instr(cwd, ?) > 0)");
       invParams.push(query.projectSubstring);
     }
-    const invFilter = invWhere.length ? `WHERE ${invWhere.join(" AND ")}` : "";
+    const invFilter = invConds.length ? `WHERE ${invConds.join(" AND ")}` : "";
 
-    const sourceJoin = buildResolvedFilters(query, "s.source");
+    const sourceJoin = buildResolvedFilters(query, { sourceColumn: "s.source" });
     const toolResultStats = (
       await all<{ tool: string; count: number; approx: number | null }>(
         this.db,
@@ -1730,9 +1776,11 @@ export class SqliteStore implements Store {
   }
 
   /** Session-level health rollups (friction totals + per-project, outcome tally, high-growth count)
-   *  without loading every message: friction comes from each in-scope session's meta_json; the outcome
-   *  proxy needs only each session's last_ts, last non-null stop reason, and last interruption; the
-   *  token-growth ratio is a SQL window over the usage rows (first vs last decile, matching the JS k). */
+   *  without materializing messages or parsing metadata JSON: friction signals are promoted columns
+   *  on resolved_sessions; the outcome proxy needs each session's DATE-WINDOWED last-message ts (so a
+   *  narrowing filter classifies on the last in-window message, matching the JS walk — not the whole-
+   *  session end), its last non-null stop reason, and its last interruption; token-growth is a SQL
+   *  window over the usage rows (first vs last decile, matching the JS k). */
   private async readHealthRollups(
     query: ResolvedQuery | undefined,
     usage: ReturnType<typeof buildResolvedFilters>,
@@ -1741,38 +1789,27 @@ export class SqliteStore implements Store {
     growth: number;
     outcome: { clean: number; interrupted: number; unknown: number };
   }> {
-    // In-scope sessions: those with at least one message in the window (source/project + date EXISTS).
-    const sessConds: string[] = [];
-    const sessParams: unknown[] = [];
-    if (query?.sources?.length) {
-      sessConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
-      sessParams.push(...query.sources);
-    }
-    if (query?.projectSubstring) {
-      sessConds.push("instr(s.cwd, ?) > 0");
-      sessParams.push(query.projectSubstring);
-    }
-    const dateConds: string[] = [];
-    const dateParams: unknown[] = [];
-    if (query?.since) {
-      dateConds.push("m.date >= ?");
-      dateParams.push(query.since);
-    }
-    if (query?.until) {
-      dateConds.push("m.date <= ?");
-      dateParams.push(query.until);
-    }
-    if (dateConds.length) {
-      sessConds.push(
-        `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
-      );
-      sessParams.push(...dateParams);
-    }
-    const sessWhere = sessConds.length ? `WHERE ${sessConds.join(" AND ")}` : "";
-    const sessions = await all<{ session_id: string; project: string; last_ts: number | null; meta_json: string }>(
+    // In-scope sessions (those with a message in the window) joined to their promoted friction columns,
+    // with the DATE-WINDOWED last-message ts. Reuses the shared filter against the usage row's columns.
+    const joinFilter = buildResolvedFilters(query, { sourceColumn: "m.source", dateColumn: "m.date", cwdColumn: "m.cwd" });
+    const sessions = await all<{
+      session_id: string;
+      project: string;
+      last_ts: number | null;
+      fi: number | null;
+      fr: number | null;
+      fc: number | null;
+      ft: number | null;
+      lim: number | null;
+    }>(
       this.db,
-      `SELECT session_id, project, last_ts, meta_json FROM resolved_sessions s ${sessWhere}`,
-      sessParams,
+      `SELECT m.session_id AS session_id, MAX(m.ts) AS last_ts, s.project AS project,
+              s.friction_interruptions AS fi, s.friction_rejections AS fr, s.friction_compactions AS fc,
+              s.friction_turns AS ft, s.last_interruption_ms AS lim
+       FROM resolved_usage m JOIN resolved_sessions s ON s.session_id = m.session_id
+       ${joinFilter.messageWhere}
+       GROUP BY m.session_id`,
+      joinFilter.messageParams,
     );
 
     // Last non-null stop reason per in-scope session (for the outcome proxy), filtered like the usage walk.
@@ -1808,46 +1845,21 @@ export class SqliteStore implements Store {
     for (const r of growthRows) {
       const first = r.first_mean ?? 0;
       const last = r.last_mean ?? 0;
-      if (first > 0 && last / first >= 5) highTokenGrowthSessions += 1;
+      if (first > 0 && last / first >= HIGH_TOKEN_GROWTH_RATIO) highTokenGrowthSessions += 1;
     }
 
-    const emptyTotals = (): FrictionTotals => ({
-      observableSessions: 0,
-      interruptions: 0,
-      rejections: 0,
-      compactions: 0,
-      turns: 0,
-    });
-    const totals = emptyTotals();
+    const totals = emptyFrictionTotals();
     const byProjectMap = new Map<string, FrictionTotals>();
     const outcome = { clean: 0, interrupted: 0, unknown: 0 };
     for (const row of sessions) {
-      const meta = JSON.parse(row.meta_json) as SessionMeta;
-      const f = meta.friction;
-      // Outcome proxy (#38): interrupted if the last interruption came at/after the last message; else
-      // clean/unknown from the last non-null stop reason; else unknown.
-      const stop = lastStopReason.get(row.session_id) ?? null;
-      let sessionOutcome: "clean" | "interrupted" | "unknown";
-      if (f?.lastInterruptionMs != null && row.last_ts != null && f.lastInterruptionMs >= row.last_ts) {
-        sessionOutcome = "interrupted";
-      } else if (stop) {
-        sessionOutcome = stop === "end_turn" || stop === "stop_sequence" ? "clean" : "unknown";
-      } else {
-        sessionOutcome = "unknown";
-      }
-      outcome[sessionOutcome] += 1;
-      // Friction rollup over sessions where friction is observable (interruptions known).
-      if (f) {
-        const turns = meta.rawTurns ?? f.turns ?? 0;
-        const pf = byProjectMap.get(row.project) ?? emptyTotals();
+      // Shared outcome classifier (#7): same rule as the JS aggregate's sessionOutcome.
+      outcome[classifyOutcome(row.last_ts, row.lim, lastStopReason.get(row.session_id) ?? null)] += 1;
+      // Friction rollup over sessions where friction is observable (interruptions promoted, non-NULL).
+      if (row.fi != null) {
+        const pf = byProjectMap.get(row.project) ?? emptyFrictionTotals();
         if (!byProjectMap.has(row.project)) byProjectMap.set(row.project, pf);
-        for (const bucket of [totals, pf]) {
-          bucket.observableSessions += 1;
-          bucket.interruptions += f.interruptions;
-          bucket.rejections += f.rejections ?? 0;
-          bucket.compactions += f.compactions ?? 0;
-          bucket.turns += turns;
-        }
+        const contribution = { interruptions: row.fi, rejections: row.fr ?? 0, compactions: row.fc ?? 0, turns: row.ft ?? 0 };
+        for (const bucket of [totals, pf]) foldFriction(bucket, contribution);
       }
     }
     const byProject = [...byProjectMap.entries()].map(([project, friction]) => ({ project, friction }));
@@ -1880,7 +1892,7 @@ export class SqliteStore implements Store {
       for (const row of sessionRows) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
     }
 
-    const sourceJoin = buildResolvedFilters(query, "s.source");
+    const sourceJoin = buildResolvedFilters(query, { sourceColumn: "s.source" });
     const taskRows = await all<{ session_id: string; task_json: string }>(
       this.db,
       `SELECT t.session_id, t.task_json
@@ -1902,6 +1914,10 @@ export class SqliteStore implements Store {
     // *call*, so `count` is the call count and `approxTokens` sums each call's paired result size
     // (resolved_tool_results, the old per-name aggregate, is retired). Unfiltered by date/project but
     // scoped to the requested sources, matching the prior behavior.
+    // NOTE: this `count` flows to heaviestToolResults[].count (on the sync wire). It is deliberately
+    // redefined from the retired "#results per tool" to "#calls per tool" — calls and results aren't
+    // 1:1 (a result-less call, or an orphan result dropped per #130) — and the wire shape is unchanged.
+    // heaviestToolResults is ranked by approxTokens, so the count drift doesn't reorder the view.
     const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
       this.db,
       `SELECT i.tool AS name, COUNT(*) AS count, SUM(i.approx_result_tokens) AS approx_tokens
@@ -1954,11 +1970,15 @@ export class SqliteStore implements Store {
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
           const lastTs = timestamps.length ? Math.max(...timestamps) : null;
+          // Promote friction signals to columns (#121). NULL when friction isn't observable for the
+          // source; friction_turns prefers the raw turn count. meta_json stays the source of truth.
+          const friction = session.meta.friction;
           await run(
             this.db,
             `INSERT INTO resolved_sessions(
-               session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+               session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived,
+               friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
             [
               sid,
               owner,
@@ -1969,6 +1989,11 @@ export class SqliteStore implements Store {
               lastTs,
               session.messages.length,
               session.meta.firstPrompt ?? null,
+              friction ? friction.interruptions : null,
+              friction ? friction.rejections : null,
+              friction ? friction.compactions : null,
+              friction ? (session.meta.rawTurns ?? friction.turns) : null,
+              friction?.lastInterruptionMs ?? null,
               JSON.stringify(session.meta),
             ],
           );

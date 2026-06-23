@@ -65,11 +65,10 @@ export interface ReconcileResult extends ParseResult {
   tasksBySession: Map<string, TaskFact[]>;
   /** Interactions (#117), derived here by grouping the deduped/ordered timeline. */
   interactions: InteractionFact[];
-  /** Result facts (#130) that didn't correlate to any parsed call — their tokens are dropped from
-   *  the per-tool result-size totals (the call deduped away on a resumed session, lives in an
+  /** Count of result facts (#130) that didn't correlate to any parsed call — their tokens are dropped
+   *  from the per-tool result-size totals (the call deduped away on a resumed session, lives in an
    *  unparsed sibling, etc.). Surfaced for a one-line log; usually 0. */
   orphanResultCount: number;
-  orphanResultTokens: number;
 }
 
 /** Append `value` to the array at `key`, creating it on first use. */
@@ -509,7 +508,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
   // pipeline can log the (usually zero) drift. resolved_tool_results, the old per-name aggregate, is gone.
   const resultTokensByInvocationFactId = new Map<string, number>();
   let orphanResultCount = 0;
-  let orphanResultTokens = 0;
   for (const result of fragments.flatMap((fragment) => fragment.facts.toolResults)) {
     const sid = canonicalSessionId(result.sourceSessionId);
     if (canonicalIds && !canonicalIds.has(sid)) continue;
@@ -518,7 +516,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       (result.invocationId ? invocationByScopedId.get(`${result.sourceSessionId}\0${result.invocationId}`) : undefined);
     if (!invocation) {
       orphanResultCount += 1;
-      orphanResultTokens += result.approxTokens;
       continue;
     }
     resultTokensByInvocationFactId.set(
@@ -625,7 +622,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     tasksBySession,
     interactions,
     orphanResultCount,
-    orphanResultTokens,
   };
 }
 

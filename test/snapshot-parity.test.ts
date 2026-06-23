@@ -123,19 +123,7 @@ describe("snapshot SQL parity with the JS aggregate", () => {
     expect(new Map(sql.byTool.map((t) => [t.name, t]))).toEqual(new Map(js.byTool.map((t) => [t.name, t])));
   });
 
-  test("a date filter narrows both paths identically", async () => {
-    // Whole fixture window: selects everything, but exercises the date-filtered SQL paths (incl. the
-    // invocation date column added in #130) against the message-date-windowed JS walk.
-    const { js, sql } = await buildBoth({ since: js0Range().start, until: js0Range().end });
-    expect(sql.totals.total).toBe(js.totals.total);
-    expect(sql.totals.messages).toBe(js.totals.messages);
-    expect(new Map(sql.byTool.map((t) => [t.name, t]))).toEqual(new Map(js.byTool.map((t) => [t.name, t])));
-  });
+  // A genuinely NARROWING date filter (one that slices a session's messages, and the date-windowed
+  // outcome divergence it can cause) is covered against a multi-date store in
+  // snapshot-parity-synthetic.test.ts — the single-session fixture here can't slice meaningfully.
 });
-
-// The fixture's date range, used to drive the date-filter parity case.
-let cachedRange: { start: string; end: string } | undefined;
-function js0Range(): { start: string; end: string } {
-  if (!cachedRange) cachedRange = { start: "2000-01-01", end: "2100-01-01" };
-  return cachedRange;
-}
