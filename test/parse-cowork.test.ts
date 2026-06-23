@@ -1,11 +1,57 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   discoverCoworkTranscripts,
   parseCoworkTranscriptFile,
+  parseCoworkTranscriptPath,
 } from "../src/indexing/parse/producers/cowork/parser.ts";
+import { coworkProducer } from "../src/indexing/parse/producers/cowork/index.ts";
+import { reconcileSessions } from "../src/indexing/reconcile.ts";
 
 const FIX = join(import.meta.dir, "fixtures", "cowork-sessions");
+
+describe("cowork sidechain guard (#118)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  });
+
+  test("a sidechain (subagent) turn is agent-initiated and not a task candidate", () => {
+    // Cowork's audit.jsonl doesn't carry sidechain turns today, but Cowork does run subagents — guard
+    // defensively so a sidechain turn never becomes a (human) task candidate.
+    const root = mkdtempSync(join(tmpdir(), "argus-cowork-"));
+    dirs.push(root);
+    const transcript = join(root, "audit.jsonl");
+    const records = [
+      { type: "system", subtype: "init", session_id: "sc-test", cwd: "/Users/fixture/proj" },
+      { type: "user", isReplay: true, timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "build the feature" }] } },
+      { type: "user", isReplay: true, isSidechain: true, timestamp: "2026-06-01T00:00:02.000Z", message: { content: [{ type: "text", text: "run the finder over these files" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:03.000Z", message: { id: "m1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "done" }] } },
+    ];
+    writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n"));
+
+    const parsed = parseCoworkTranscriptPath(transcript);
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Cowork transcript");
+    const facts = parsed.fragment.facts;
+    // Only the human prompt is a task candidate; the sidechain worker prompt is excluded.
+    expect(facts.taskCandidates.map((task) => task.text)).toEqual(["build the feature"]);
+    // The sidechain turn is loop content: it opens no interaction, so only the human prompt marker
+    // is emitted (a single session id means we can't route it elsewhere — see #128).
+    expect(facts.prompts?.map((prompt) => prompt.initiator)).toEqual(["human"]);
+
+    // And reconcile must NOT split the human interaction in two at the sidechain timestamp.
+    const { interactions } = reconcileSessions({
+      caps: coworkProducer.capabilities,
+      fragments: [parsed.fragment],
+      auxiliaryFragments: [],
+    });
+    expect(interactions.length).toBe(1);
+    expect(interactions[0]?.initiator).toBe("human");
+  });
+});
 
 describe("discoverCoworkTranscripts", () => {
   test("finds only audit.jsonl files across the 3-level hierarchy", () => {

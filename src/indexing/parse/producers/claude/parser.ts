@@ -10,6 +10,7 @@ import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   buildPromptFact,
   createFactId,
+  isAgentInitiated,
   createFileIdentity,
   sameFileFingerprint,
   stableId,
@@ -907,8 +908,13 @@ function parseTranscript(
       if (generatedTitle && !session.fact.firstPrompt) {
         session.fact.firstPrompt = generatedTitle;
       }
+      // Only human-initiated prompts become task candidates (#118). A subagent session's prompts are
+      // agent-authored (the worker instruction), not human intent — and Claude folds subagents onto
+      // the parent, so emitting them would let them resurface as phantom tasks (#100). Same
+      // agent-initiated rule the prompt-fact initiator uses (isAgentInitiated).
       if (
         taskText &&
+        !isAgentInitiated(session.fact.kind) &&
         !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
       ) {
         const taskTimestamp = timestampMs(record.value.timestamp);
