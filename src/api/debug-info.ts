@@ -3,7 +3,7 @@
 // best-effort — every section degrades gracefully so the page still renders when something is off.
 import { existsSync, statSync } from "node:fs";
 import { loadConfig, resolveTaskExtraction, type ArgusConfig } from "../config.ts";
-import { scanStore, type SourceScan } from "../parse-incremental.ts";
+import { scanStore, type SourceScan } from "../indexing/pipeline.ts";
 import {
   ARGUS_CONFIG_DIR,
   ARGUS_DATA_DIR,
@@ -18,7 +18,7 @@ import {
   SETTINGS_FILE,
   STORE_FILE,
 } from "../paths.ts";
-import { openStore, STORE_SCHEMA_VERSION } from "../store.ts";
+import { openStore, STORE_SCHEMA_VERSION } from "../store/store.ts";
 import pkg from "../../package.json" with { type: "json" };
 
 export interface PathEntry {

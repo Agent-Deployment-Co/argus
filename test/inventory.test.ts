@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { skillPlugin } from "../src/inventory.ts";
+import { skillPlugin } from "../src/reporting/inventory.ts";
 import type { PluginInfo } from "../src/types.ts";
 
 const plugins = new Map<string, PluginInfo>([

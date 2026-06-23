@@ -12,7 +12,7 @@ import {
   parseClaudeHistoryFile,
   parseClaudeTranscriptPath,
   parseClaudeTranscriptFile,
-} from "../src/producers/claude/parser.ts";
+} from "../src/indexing/parse/producers/claude/parser.ts";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const PROJECTS = join(FIXTURES, "projects");

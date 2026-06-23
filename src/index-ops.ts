@@ -1,10 +1,10 @@
 // The `argus index` command bodies, extracted from cli.ts so both the CLI command table and the
 // long-running watch loop (watch.ts) can call them. These are the only writers to the local store.
 import { createInterface } from "node:readline";
-import { sourcesFor, type Log } from "./dashboard-builder.ts";
-import { syncStatsSummary, reindexSession } from "./parse-incremental.ts";
-import { openSessionStore } from "./session-store.ts";
-import { openStore, rebuildStore } from "./store.ts";
+import { sourcesFor, type Log } from "./reporting/dashboard-builder.ts";
+import { syncStatsSummary, reindexSession } from "./indexing/pipeline.ts";
+import { openSessionStore } from "./store/session-store.ts";
+import { openStore, rebuildStore } from "./store/store.ts";
 import { loadConfig, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
 import type { DeleteOptions, RefreshOptions, SyncOptions } from "./cli-options.ts";
 
@@ -30,7 +30,7 @@ export async function runIndex(opts: SyncOptions, log: Log, extractTasks?: boole
   });
   try {
     log("Reading new and changed sessions…");
-    const parsed = await store.read({});
+    const parsed = await store.index({});
     if (store.stats) log(syncStatsSummary(store.stats));
     log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
   } finally {

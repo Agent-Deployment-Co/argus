@@ -29,9 +29,10 @@ Three ideas carry the whole design:
 
 ## Producers
 
-A producer (`src/producers/<id>/`) knows everything source-specific: where its sessions live, how to
-read them, and what it can observe. The registry is `src/producers/index.ts` — **adding a source is a
-new directory plus one line there.** The contract is `src/producer.ts`.
+A producer (`src/indexing/parse/producers/<id>/`) knows everything source-specific: where its sessions
+live, how to read them, and what it can observe. The registry is
+`src/indexing/parse/producers/index.ts` — **adding a source is a new directory plus one line there.**
+The contract is `src/indexing/producer.ts`.
 
 Producers are **native**: (`claude`, `codex`, `gemini`, `cowork`) they read local transcript files.
   - `discoverTranscripts(ctx)` — find the source's files on disk (an authoritative list, or a
@@ -50,15 +51,13 @@ Producers are **native**: (`claude`, `codex`, `gemini`, `cowork`) they read loca
   - `capabilities` — flags the reconcile engine reads generically (e.g. `canonicalizeSubagents`,
     `dedupeByProviderMessageId`) so the engine never branches on the source name.
 
-Each source also keeps a second, independent parser in `src/parse.ts` — a from-scratch reader used as
-a **test oracle** (the producer pipeline is checked against it) and as a **fallback** when the store
-can't be opened. See the header comment in `parse.ts`.
-
 ---
 
 ## The store
 
-One SQLite file, `argus.db` (`src/store.ts`). Three layers:
+One SQLite file, `argus.db` (`src/store/store.ts`). Its interface (`src/store/store-contract.ts`) is
+split into two tiers — `StructuralIndexStore` (the `index_*` map) and `ReadModelStore` (the
+`resolved_*` rows) — so a method's name telegraphs which tier it touches. Three layers:
 
 1. **Structural index** — `index_files` + `index_sessions` / `index_relationships` /
    `index_auxiliary` / `index_dependencies`. A thin map of *which files exist, their fingerprints
@@ -84,7 +83,7 @@ archived (kept after leaving disk).
 
 ## The coordinator: how producers feed the store
 
-`syncStore()` in `src/parse-incremental.ts` is the only writer. Its job is to take what producers
+`syncStore()` in `src/indexing/pipeline.ts` is the only writer. Its job is to take what producers
 parse and turn it into finished rows, using two steps — **reconcile**, then **materialize**.
 
 ### What "reconcile" means
@@ -101,21 +100,22 @@ earlier transcript, and subagents write their own files. Reconciling (`src/recon
 The result is one clean, deduplicated, fully-attributed view per session: the "figure out what
 actually happened" step. It is driven by the producer's declared **capabilities** (canonicalize
 subagents? dedupe by message id?), never by checking the source name — so the engine never changes when
-you add a source.
+you add a source. (`src/indexing/reconcile.ts`.)
 
 ### What "materialize" means
 
 *Materialize* writes a reconciled session into the read-model tables (`resolved_sessions` /
 `resolved_messages` / `resolved_tool_results`) as finished rows — replacing any earlier rows for that
-session and recording which producer owns it (`materializeSessions` in `src/store.ts`). "Materialized"
+session and recording which producer owns it (`materializeSessions` in `src/store/store.ts`). "Materialized"
 means **stored as real rows a consumer can `SELECT` as-is**, not a view recomputed on every read. It is
 the "save the answer" step that makes reads cheap and reconcile-free.
 
 ### What "interpret" means (opt-in)
 
-Reconcile and materialize produce **facts** — deterministic, one-right-answer output. *Interpret* is a
-separate, opt-in step between them that derives **interpretations** the transcript doesn't state: it
-runs an AI model over a session to extract its tasks ("chapters") and judge each task's outcome. It's
+Reconcile and materialize produce **facts** — deterministic, one-right-answer output. *Interpret*
+(`src/indexing/interpret/`) is a separate, opt-in step between them that derives **interpretations**
+the transcript doesn't state: it runs an AI model over a session to extract its tasks ("chapters") and
+judge each task's outcome. It's
 non-deterministic and costs a model call per session, so it's off by default and gated by `argus.json`.
 When enabled, indexing a *changed* session also runs interpretation and attaches the tasks before the
 session is materialized (so chapter messages get their `task_seq`). Full design:
@@ -137,7 +137,7 @@ Both steps happen **here**, once, at write time — never on read.
 
 ### Single-session reindex
 
-`reindexSession(id)` (`src/parse-incremental.ts`) re-indexes **one** session in isolation instead of a
+`reindexSession(id)` (`src/indexing/pipeline.ts`) re-indexes **one** session in isolation instead of a
 full discovery: it rediscovers that session's transcripts from disk (the producer's
 `discoverSessionTranscripts` — main file plus subagents), re-parses them, reconciles just that session
 **with** its auxiliary inputs (so Claude's `firstPrompt` and Gemini's project/cwd aren't lost), and
@@ -149,13 +149,22 @@ CLI's `index refresh <id>` and the web Refresh.
 
 ## Consumers: how they read
 
-Consumers go through `SessionStore.read()` (`src/session-store.ts`), which ensures the store is current
-and then returns the reconciled `ParseResult` straight from `resolved_*` — **no reconciling, no
-re-parsing, no in-memory filtering.** Query filters (`--since` / `--until` / `--project` / `--source`)
-are pushed down to SQL. Archived sessions are included, so reporting survives transcript retention.
+Consumers go through `SessionStore` (`src/store/session-store.ts`), which separates the write from the
+read (**CQS**): `index(query?)` brings the store current (reconcile + materialize — the only writer),
+and `read(query?)` is a **pure** SQL read of `resolved_*` that never writes. Reads return the reconciled
+`ParseResult` straight from the read model — **no reconciling, no re-parsing, no in-memory filtering.**
+Query filters (`--since` / `--until` / `--project` / `--source`) are pushed down to SQL. Archived
+sessions are included, so reporting survives transcript retention.
 
-- `sync` — read → `aggregate.ts` builds the dashboard → upload the snapshot.
-- `serve` — the same read → `aggregate.ts` path, exposed as a JSON API and an interactive web app
+When the real store can't be opened (missing, corrupt, incompatible schema) the two operations differ:
+a **`read()` degrades** — it indexes the on-disk transcripts into a throwaway temp store and reads
+that (best effort; surfaced via a `store_fallback` diagnostic, and it sees only on-disk sessions, so
+archived ones are absent), while an **`index()` fails loud** — the error propagates rather than
+silently writing to a temp store it then discards (which would report success having persisted
+nothing, and would mask a corrupt store the user should `reindex --force`).
+
+- `sync` — `index()` to bring the store current → `aggregate.ts` builds the dashboard → upload the snapshot.
+- `serve` — a pure `read()` → `aggregate.ts` path, exposed as a JSON API and an interactive web app
   (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
 
@@ -199,8 +208,8 @@ opt-in and provider settings. See [configuration.md](./configuration.md).
 
 ## Adding a source
 
-1. Create `src/producers/<id>/` with `index.ts` (the descriptor + capabilities) and `parser.ts`
-   (discovery + parsing into normalized facts).
-2. Register it in `src/producers/index.ts`.
+1. Create `src/indexing/parse/producers/<id>/` with `index.ts` (the descriptor + capabilities) and
+   `parser.ts` (discovery + parsing into normalized facts).
+2. Register it in `src/indexing/parse/producers/index.ts`.
 
 The coordinator, store, and consumers need no changes.

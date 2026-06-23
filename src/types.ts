@@ -8,7 +8,7 @@ import type {
   SessionRow as SchemaSessionRow,
   Usage,
 } from "@agentdeploymentco/argus-schema";
-import type { TaskFact } from "./store-contract.ts";
+import type { TaskFact } from "./store/store-contract.ts";
 import type { ToolCategory } from "./tool-categories.ts";
 export type {
   DayBucket,
@@ -19,6 +19,10 @@ export type {
 export type { ToolCategory } from "./tool-categories.ts";
 
 export type AgentSource = "claude" | "codex" | "gemini" | "cowork";
+
+/** The set of agent sources Argus can index. Alias of AgentSource, used where a value names a
+ *  transcript source to collect (CLI flags, discovery options). */
+export type TranscriptSource = AgentSource;
 
 export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;

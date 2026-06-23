@@ -2,15 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "../src/friction.ts";
+import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "../src/indexing/friction.ts";
 import {
   claudeHistoryFileIdentity,
   discoverClaudeTranscripts,
   parseClaudeTranscriptFile,
-} from "../src/producers/claude/parser.ts";
-import { parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
-import { parseAll } from "../src/parse.ts";
-import { aggregate } from "../src/aggregate.ts";
+} from "../src/indexing/parse/producers/claude/parser.ts";
+import { parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
+import { parseFixtures } from "./helpers/parse-fixtures.ts";
+import { aggregate } from "../src/reporting/aggregate.ts";
 import {
   emptySessionFriction,
   type MessageRecord,
@@ -21,6 +21,8 @@ import {
 const FIX = join(import.meta.dir, "fixtures");
 const FRICTION_PROJECTS = join(FIX, "friction-projects");
 const HISTORY = join(FIX, "history.jsonl");
+// Parse the friction fixture once via the real pipeline (temp store); the describe blocks below read it.
+const frictionParsed = await parseFixtures({ projectsDir: FRICTION_PROJECTS, historyFile: HISTORY });
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -137,9 +139,8 @@ describe("foldFrictionEvents", () => {
   });
 });
 
-describe("parseAll friction (legacy path)", () => {
-  const parsed = parseAll({ projectsDir: FRICTION_PROJECTS, historyFile: HISTORY });
-  const friction = parsed.sessions.get("frict1")?.friction;
+describe("session friction (pipeline)", () => {
+  const friction = frictionParsed.sessions.get("frict1")?.friction;
 
   test("folds per-session counters from the transcript", () => {
     expect(friction).toBeDefined();
@@ -154,7 +155,7 @@ describe("parseAll friction (legacy path)", () => {
     expect(friction!.interruptions).toBe(3);
     expect(friction!.turns).toBe(3);
     expect([...friction!.turnDurationsMs].sort((a, b) => a - b)).toEqual([5000, 13000, 47000]);
-    expect(parsed.messages.filter((m) => m.sessionId === "frict1").length).toBe(2);
+    expect(frictionParsed.messages.filter((m) => m.sessionId === "frict1").length).toBe(2);
   });
 
   test("counts a streamed message's stop_reason once, from its final line", () => {
@@ -162,15 +163,15 @@ describe("parseAll friction (legacy path)", () => {
     expect(friction!.stopReasons.end_turn).toBe(1);
   });
 
-  test("leaves friction undefined for non-Claude sources", () => {
-    const codex = parseAll({ codexSessionsDir: join(FIX, "codex-sessions"), sources: ["codex"] });
+  test("leaves friction undefined for non-Claude sources", async () => {
+    const codex = await parseFixtures({ codexSessionsDir: join(FIX, "codex-sessions"), sources: ["codex"] });
     for (const meta of codex.sessions.values()) expect(meta.friction).toBeUndefined();
-    const gemini = parseAll({ geminiDir: join(FIX, "gemini"), sources: ["gemini"] });
+    const gemini = await parseFixtures({ geminiDir: join(FIX, "gemini"), sources: ["gemini"] });
     for (const meta of gemini.sessions.values()) expect(meta.friction).toBeUndefined();
   });
 
-  test("claude sessions with zero friction get explicit zeros, not undefined", () => {
-    const calm = parseAll({ projectsDir: join(FIX, "projects"), historyFile: HISTORY });
+  test("claude sessions with zero friction get explicit zeros, not undefined", async () => {
+    const calm = await parseFixtures({ projectsDir: join(FIX, "projects"), historyFile: HISTORY });
     const meta = calm.sessions.get("sess1")!;
     expect(meta.friction).toMatchObject({ interruptions: 0, rejections: 0, compactions: 0, turns: 0 });
   });
@@ -206,7 +207,7 @@ describe("Claude fragment friction (incremental path)", () => {
     ]);
   });
 
-  test("reconciles to the same friction as the legacy path, including across cache hits", async () => {
+  test("reconciles friction consistently, including across cache hits", async () => {
     const root = tempRoot();
     const projectsDir = join(root, "friction-projects");
     cpSync(FRICTION_PROJECTS, projectsDir, { recursive: true });
@@ -215,19 +216,24 @@ describe("Claude fragment friction (incremental path)", () => {
       projectsDir,
       historyFile: join(root, "history.jsonl"),
       storePath: join(root, "cache", "fragments.sqlite3"),
-      agentsView: "off" as const,
     };
 
-    const native = parseAll(opts).sessions.get("frict1")!.friction!;
     const first = await parseAllIncrementalDetailed(opts);
     const second = await parseAllIncrementalDetailed(opts);
     for (const run of [first, second]) {
       expect(run.stats.fallback).toBe(false);
       const friction = run.parsed.sessions.get("frict1")?.friction;
       expect(friction).toBeDefined();
-      expect({ ...friction!, turnDurationsMs: [...friction!.turnDurationsMs].sort((a, b) => a - b) }).toEqual({
-        ...native,
-        turnDurationsMs: [...native.turnDurationsMs].sort((a, b) => a - b),
+      expect({
+        ...friction!,
+        turnDurationsMs: [...friction!.turnDurationsMs].sort((a, b) => a - b),
+      }).toMatchObject({
+        interruptions: 3,
+        rejections: 1,
+        compactions: 1,
+        turns: 3,
+        turnDurationsMs: [5000, 13000, 47000],
+        stopReasons: { tool_use: 1, end_turn: 1 },
       });
     }
     expect(second.stats.hits).toBeGreaterThan(0);
@@ -278,7 +284,7 @@ function aggregated(parsed: ParseResult) {
 }
 
 describe("session health (#38)", () => {
-  const dash = aggregated(parseAll({ projectsDir: FRICTION_PROJECTS, historyFile: HISTORY }));
+  const dash = aggregated(frictionParsed);
   const row = dash.sessions.find((s) => s.sessionId === "frict1")!;
 
   test("folds friction onto SessionRow.health", () => {
