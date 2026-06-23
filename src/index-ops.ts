@@ -30,7 +30,7 @@ export async function runIndex(opts: SyncOptions, log: Log, extractTasks?: boole
   });
   try {
     log("Reading new and changed sessions…");
-    const parsed = await store.read({});
+    const parsed = await store.index({});
     if (store.stats) log(syncStatsSummary(store.stats));
     log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
   } finally {

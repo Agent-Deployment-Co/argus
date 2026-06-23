@@ -451,7 +451,12 @@ export interface StoreStats {
   messagesWithTask: number;
 }
 
-export interface Store {
+/**
+ * Tier 1 — the structural index: per-file fingerprints + the file→session map producers write while
+ * indexing. Fully re-derivable from disk (rebuilt freely by clearIndex/reindex). Maintaining this
+ * tier is the indexing pipeline's job; readers never touch it.
+ */
+export interface StructuralIndexStore {
   /** Reconstruct an auxiliary fragment from its envelope + rows (transcripts/imports are re-parsed
    *  from disk, not reconstructed, so they return undefined). */
   load(id: string): Promise<StoredFragment | undefined>;
@@ -462,8 +467,20 @@ export interface Store {
   /** The structural index for a source: which sessions each transcript file maps to (+ fingerprints
    *  for change detection). Heavy content is re-parsed from disk, not reconstructed. */
   transcriptIndex(source: AgentSource): Promise<TranscriptIndex>;
+  /** Drop the whole structural index + coverage (re-derivable from disk). Leaves the trusted
+   *  read model (resolved_*) and ownership intact — used by non-destructive `reindex`. */
+  clearIndex(): Promise<void>;
+  getCoverage(source: string): Promise<SourceCoverageRow | undefined>;
+  setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void>;
+  close(): Promise<void>;
+}
 
-  // --- Trusted read model (reconciled rows; the reader SELECTs these without reconciling) ---
+/**
+ * Tier 2 — the trusted read model: the reconciled rows readers SELECT (no reconcile on read). NOT
+ * re-derivable once a source ages off disk, so it is preserved across schema changes via real
+ * migrations, never silently dropped.
+ */
+export interface ReadModelStore {
   /** Read the reconciled sessions/messages/tool-results, with optional SQL-pushdown filters.
    *  Includes archived (off-disk, retained) sessions — the store is a durable archive, not a
    *  mirror of disk. */
@@ -507,14 +524,12 @@ export interface Store {
   resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
   /** Canonical session ids owned by some producer other than `owner`. */
   ownedSessionIdsExcept(owner: string): Promise<Set<string>>;
-  /** Drop the whole structural index + coverage (re-derivable from disk). Leaves the trusted
-   *  read model (resolved_*) and ownership intact — used by non-destructive `reindex`. */
-  clearIndex(): Promise<void>;
-  getCoverage(source: string): Promise<SourceCoverageRow | undefined>;
-  setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void>;
-
   close(): Promise<void>;
 }
+
+/** The full store: both tiers. The SQLite implementation provides both; callers that only read or
+ *  only index can depend on the narrower tier above. */
+export interface Store extends StructuralIndexStore, ReadModelStore {}
 
 export interface ReconciliationInput {
   nativeFragments: ParsedFileFragment[];

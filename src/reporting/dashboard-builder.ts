@@ -70,15 +70,13 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
   log("Reading transcripts…");
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
-    readOnly: opts.readOnly,
   });
+  // CQS: read-only legs (serve/upload of `argus run`, where the index leg writes) do a pure read;
+  // otherwise (e.g. one-shot `argus sync`) bring the store current first, then read.
+  const query = { since: opts.since, until: opts.until, projectSubstring: opts.project };
   let parseResult;
   try {
-    parseResult = await store.read({
-      since: opts.since,
-      until: opts.until,
-      projectSubstring: opts.project,
-    });
+    parseResult = opts.readOnly ? await store.read(query) : await store.index(query);
   } finally {
     await store.close();
   }

@@ -30,8 +30,8 @@ import {
 import type { NativeProducer, ProducerContext } from "./producer.ts";
 import { NATIVE_PRODUCERS, nativeProducerForSource } from "./parse/producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "../types.ts";
-import type { TaskCandidateFact, TaskFact } from "../store/store-contract.ts";
-import { extractTasksWithOutcome } from "./interpret/task-extraction.ts";
+import type { TaskFact } from "../store/store-contract.ts";
+import { extractTasksForSessions, taskExtractionActive } from "./interpret/index.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";
 
 export interface SyncStats {
@@ -60,9 +60,6 @@ export interface IncrementalParseOptions extends ParseOptions {
   rebuild?: boolean;
   /** SQL-pushdown filters applied when reading the materialized model. */
   query?: ResolvedQuery;
-  /** Read the already-materialized store without reconciling/materializing first (no writes). Used by
-   *  the read-only legs of `argus run`, where the index leg is the sole writer. */
-  skipSync?: boolean;
   /** Opt-in index-time task extraction (#91). When enabled, indexing a changed session also runs the
    *  two-pass extraction and materializes its tasks. Off/unset → indexing behaves exactly as today. */
   taskExtraction?: ResolvedTaskExtraction;
@@ -328,72 +325,6 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   return sessions;
 }
 
-/** True when index-time task extraction should run for this call. */
-function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined): boolean {
-  return !!taskExtraction?.enabled && taskExtraction.provider !== "off";
-}
-
-/**
- * Run the two-pass task extraction (#91) for the given materialized sessions, attaching the result
- * to each session before it's stored (so the chapters' messages get task_seq at materialize). Only
- * sessions in `targets` (the ones whose transcripts actually changed) are re-extracted; others keep
- * their stored tasks via the materializer's preserve-on-unchanged guard. The reconstructed dialogue
- * is an in-memory intermediate — nothing with message text is persisted.
- */
-/** A short, human-facing label for progress output: the project plus a short session id. */
-function sessionProgressLabel(session: MaterializeSession): string {
-  const shortId = session.meta.sessionId.replace(/^[^:]+:/, "").slice(0, 8);
-  return `${session.meta.project} (${shortId})`;
-}
-
-async function extractTasksForSessions(
-  producer: NativeProducer,
-  sessions: MaterializeSession[],
-  fragments: ParsedFileFragment[],
-  toCanonical: (sourceSessionId: string) => string,
-  targets: Set<string>,
-  taskExtraction: ResolvedTaskExtraction,
-  diagnostics: ParserDiagnostic[],
-  log?: (message: string) => void,
-): Promise<void> {
-  const candidatesBySession = new Map<string, TaskCandidateFact[]>();
-  for (const fragment of fragments) {
-    for (const candidate of fragment.facts.taskCandidates) {
-      const id = toCanonical(candidate.sourceSessionId);
-      const list = candidatesBySession.get(id) ?? [];
-      list.push(candidate);
-      candidatesBySession.set(id, list);
-    }
-  }
-  const toExtract = sessions.filter(
-    (session) =>
-      targets.has(session.meta.sessionId) &&
-      (candidatesBySession.get(session.meta.sessionId)?.length ?? 0) > 0,
-  );
-  if (!toExtract.length) return;
-  // Task extraction runs an AI model per session, so it can take a while — emit a heartbeat as each
-  // session starts so the command doesn't look stuck.
-  log?.(
-    `Extracting tasks from ${toExtract.length} session${toExtract.length === 1 ? "" : "s"} — this runs an AI model on each and can take a while…`,
-  );
-  let done = 0;
-  for (const session of toExtract) {
-    const sid = session.meta.sessionId;
-    log?.(`  [${++done}/${toExtract.length}] ${sessionProgressLabel(session)}…`);
-    const messageTimestamps = session.messages.map((message) => message.ts);
-    const dialogue = producer.reconstructDialogue(session.meta.filePath);
-    const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
-      sid,
-      candidatesBySession.get(sid)!,
-      messageTimestamps,
-      dialogue,
-      taskExtraction,
-    );
-    diagnostics.push(...extractionDiagnostics);
-    session.tasks = tasks;
-  }
-}
-
 /** Map a source session id to its canonical id (subagent child -> parent) for a producer. */
 function canonicalizer(
   caps: { canonicalizeSubagents: boolean },
@@ -575,8 +506,25 @@ async function syncStore(
   }
 }
 
-export async function parseAllIncrementalDetailed(
-  opts: IncrementalParseOptions = {},
+function resolvedQuery(opts: IncrementalParseOptions): ResolvedQuery {
+  return {
+    sources: normalizeSources(opts.sources) as AgentSource[],
+    since: opts.query?.since,
+    until: opts.query?.until,
+    projectSubstring: opts.query?.projectSubstring,
+  };
+}
+
+/**
+ * The pipeline core (CQS): `sync = true` brings the store current (producers reconcile + materialize
+ * — a write) before reading; `sync = false` is a pure read of the materialized store. Exposed via the
+ * two wrappers below so callers pick an operation by name rather than a flag. A store that can't be
+ * opened falls back to indexing transcripts into a throwaway temp store (always synced, then
+ * discarded), so a read still returns data when the real store is missing/corrupt.
+ */
+async function runPipeline(
+  opts: IncrementalParseOptions,
+  sync: boolean,
 ): Promise<IncrementalParseDetails> {
   const stats = cloneStats();
   const diagnostics: ParserDiagnostic[] = [];
@@ -589,20 +537,8 @@ export async function parseAllIncrementalDetailed(
         : await openStore({ path: opts.storePath });
       ownsStore = true;
     }
-    // Producers reconcile + materialize the trusted read model; the reader just SELECTs it (with
-    // optional SQL pushdown). `skipSync` reads the store as-is without materializing — for the
-    // read-only legs of `argus run` (the index leg writes).
-    if (!opts.skipSync) await syncStore(opts, store, stats, diagnostics);
-    return {
-      parsed: await store.readResolved({
-        sources: normalizeSources(opts.sources) as AgentSource[],
-        since: opts.query?.since,
-        until: opts.query?.until,
-        projectSubstring: opts.query?.projectSubstring,
-      }),
-      stats,
-      diagnostics,
-    };
+    if (sync) await syncStore(opts, store, stats, diagnostics);
+    return { parsed: await store.readResolved(resolvedQuery(opts)), stats, diagnostics };
   } catch (error) {
     diagnostics.push(
       diagnostic(
@@ -618,14 +554,9 @@ export async function parseAllIncrementalDetailed(
     const fallbackDir = mkdtempSync(join(tmpdir(), "argus-fallback-"));
     const fallbackStore = await openStore({ path: join(fallbackDir, "argus.db") });
     try {
-      if (!opts.skipSync) await syncStore(opts, fallbackStore, stats, diagnostics);
+      await syncStore(opts, fallbackStore, stats, diagnostics);
       return {
-        parsed: await fallbackStore.readResolved({
-          sources: normalizeSources(opts.sources) as AgentSource[],
-          since: opts.query?.since,
-          until: opts.query?.until,
-          projectSubstring: opts.query?.projectSubstring,
-        }),
+        parsed: await fallbackStore.readResolved(resolvedQuery(opts)),
         stats: { ...stats, fallback: true },
         diagnostics,
       };
@@ -636,6 +567,22 @@ export async function parseAllIncrementalDetailed(
   } finally {
     if (ownsStore && store) await store.close();
   }
+}
+
+/** Index operation: bring the store current (producers reconcile + materialize — writes the store),
+ *  then read. The only writer to the read model. */
+export async function parseAllIncrementalDetailed(
+  opts: IncrementalParseOptions = {},
+): Promise<IncrementalParseDetails> {
+  return runPipeline(opts, true);
+}
+
+/** Pure read of the materialized store — no sync, no writes (CQS). For read-only callers (the
+ *  serve/upload legs of `argus run`, where the index leg is the sole writer). */
+export async function readStore(
+  opts: IncrementalParseOptions = {},
+): Promise<IncrementalParseDetails> {
+  return runPipeline(opts, false);
 }
 
 export async function parseAllIncremental(

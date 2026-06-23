@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../src/store/store.ts";
-import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
+import { syncStatsSummary, parseAllIncrementalDetailed, readStore } from "../src/indexing/pipeline.ts";
 import type { SyncStats } from "../src/indexing/pipeline.ts";
 import type { AgentSource, MessageRecord, ParseResult, ToolUse } from "../src/types.ts";
 
@@ -147,7 +147,7 @@ describe("parseAllIncrementalDetailed", () => {
     expect(changed.parsed.messages.at(-1)?.usage).toMatchObject({ input: 3, output: 1 });
   });
 
-  test("skipSync reads the materialized store without reconciling (read-only legs of `run`)", async () => {
+  test("readStore reads the materialized store without reconciling (read-only legs of `run`)", async () => {
     const root = tempRoot();
     const codexSessionsDir = copyFixture("codex-sessions", root);
     const opts = {
@@ -160,12 +160,12 @@ describe("parseAllIncrementalDetailed", () => {
     const indexed = await parseAllIncrementalDetailed(opts);
     expect(indexed.parsed.sessions.size).toBeGreaterThan(0);
 
-    // Remove the transcripts from disk: a read-only read must return the stored rows straight from
-    // the read model, without touching disk, re-parsing, or writing (no fallback to a direct parse
-    // that would omit retained sessions).
+    // Remove the transcripts from disk: a pure read must return the stored rows straight from the
+    // read model, without touching disk, re-parsing, or writing (no fallback to a direct parse that
+    // would omit retained sessions).
     rmSync(codexSessionsDir, { recursive: true, force: true });
 
-    const readOnly = await parseAllIncrementalDetailed({ ...opts, skipSync: true });
+    const readOnly = await readStore(opts);
     expect(readOnly.parsed.sessions.size).toBe(indexed.parsed.sessions.size);
     expect(readOnly.stats).toMatchObject({ parsed: 0, replaced: 0, hits: 0, deleted: 0, archived: 0, fallback: false });
   });
