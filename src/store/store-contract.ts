@@ -69,6 +69,7 @@ export interface SourcePosition {
 
 export type FactKind =
   | "session"
+  | "interaction"
   | "message"
   | "invocation"
   | "tool_result"
@@ -150,6 +151,8 @@ export interface UsageFact {
   id: string;
   source: AgentSource;
   sourceSessionId: string;
+  /** Owning interaction (#117). Optional until producers emit interactions. */
+  interactionId?: string;
   providerMessageId?: string;
   requestId?: string;
   timestampMs: number;
@@ -163,12 +166,50 @@ export interface UsageFact {
   position: SourcePosition;
 }
 
+/** Who authored an interaction's opening prompt (see docs/session-model.md). Only `human`-initiated
+ *  prompts carry intent — task interpretation filters on this. */
+export type InteractionInitiator = "human" | "agent" | "harness";
+
+/** How an interaction's loop ended — a fact (mechanical), distinct from a task's interpreted outcome.
+ *  `interrupted` = a known human interrupt (a friction signal); `incomplete` = stopped with no
+ *  response, cause unknown; `error` = the loop failed. */
+export type InteractionDisposition = "completed" | "interrupted" | "incomplete" | "error";
+
+/**
+ * One interaction: prompt → agent loop → response (see docs/session-model.md). The atomic unit of a
+ * session. Text is NOT stored — the slot positions let Interpret re-read prompt/response from disk
+ * without re-deriving structure from role tags. Its invocations and usage are linked back by
+ * `interactionId`; tasks (#122) will span interactions rather than message seqs.
+ */
+export interface InteractionFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  /** Ordinal within its session, in source/timeline order (0-based). */
+  seq: number;
+  /** Who authored the opening prompt. */
+  initiator: InteractionInitiator;
+  /** How the loop ended. */
+  disposition: InteractionDisposition;
+  /** Times the harness compacted context *during* this interaction's loop (usually 0). Not a boundary. */
+  compactionCount: number;
+  /** Interaction start time (the opening prompt's timestamp) when the source carries one. */
+  timestampMs?: number;
+  /** Position of the opening prompt's text. */
+  promptPosition: SourcePosition;
+  /** Position of the response slot, when the interaction produced one (absent if interrupted/incomplete). */
+  responsePosition?: SourcePosition;
+  position: SourcePosition;
+}
+
 export interface InvocationFact {
   id: string;
   source: AgentSource;
   sourceSessionId: string;
   /** Usage-bearing message/token event that owns this invocation. */
   messageId: string;
+  /** Owning interaction (#117). Optional until producers emit interactions; pairs with `messageId`. */
+  interactionId?: string;
   invocationId?: string;
   timestampMs?: number;
   name: string;
@@ -177,6 +218,13 @@ export interface InvocationFact {
   mcpServer?: string;
   mcpTool?: string;
   filePath?: string;
+  /** Position of this call's paired tool result (the result half of the call+result unit), when present. */
+  resultPosition?: SourcePosition;
+  /** Permission outcome for this call: a human approval, a denial (human or policy), or auto-approved
+   *  under policy. A primary friction signal. Absent when the source doesn't expose it. */
+  permissionDecision?: "approved" | "denied" | "auto";
+  /** Whether the call resolved: `completed` (response arrived) or `interrupted` (call made, no response). */
+  invocationDisposition?: "completed" | "interrupted";
   position: SourcePosition;
 }
 
@@ -251,6 +299,8 @@ export interface SessionRelationshipFact {
 
 export interface NormalizedFacts {
   sessions: SessionFact[];
+  /** Interactions (#117). Optional until producers emit them; reconcile treats absent as empty. */
+  interactions?: InteractionFact[];
   messages: UsageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
