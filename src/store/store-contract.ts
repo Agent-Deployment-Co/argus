@@ -69,6 +69,7 @@ export interface SourcePosition {
 
 export type FactKind =
   | "session"
+  | "prompt"
   | "interaction"
   | "message"
   | "invocation"
@@ -176,10 +177,31 @@ export type InteractionInitiator = "human" | "agent" | "harness";
 export type InteractionDisposition = "completed" | "interrupted" | "incomplete" | "error";
 
 /**
+ * A producer-emitted marker for one interaction-opening prompt (a user-role turn that opens an
+ * exchange — not a tool-result delivery). Reconcile groups the deduped/ordered timeline into
+ * InteractionFacts using these as the opening boundaries. Only `human`-initiated prompts open a
+ * (main-session) interaction; `agent` markers (a subagent session's own prompts, folded onto the
+ * parent) are loop content, never new openings — this is what keeps subagent prompts from becoming
+ * phantom interactions/tasks (#118). Carries `dedupKey` (a replay-stable id like the record uuid)
+ * so a resumed session's replayed prompt collapses to one in reconcile.
+ */
+export interface PromptFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  initiator: InteractionInitiator;
+  timestampMs?: number;
+  /** Replay-stable identity (e.g. record uuid) for dedup across resumed-session files; falls back to
+   *  position when the source has no stable id. */
+  dedupKey?: string;
+  position: SourcePosition;
+}
+
+/**
  * One interaction: prompt → agent loop → response (see docs/session-model.md). The atomic unit of a
- * session. Text is NOT stored — the slot positions let Interpret re-read prompt/response from disk
- * without re-deriving structure from role tags. Its invocations and usage are linked back by
- * `interactionId`; tasks (#122) will span interactions rather than message seqs.
+ * session. **Reconcile-derived**, not a per-file fact: reconcile groups the deduped timeline into
+ * these. Text is NOT stored — the slot positions let Interpret re-read prompt/response from disk
+ * without re-deriving structure from role tags. Tasks (#122) will span interactions.
  */
 export interface InteractionFact {
   id: string;
@@ -299,8 +321,9 @@ export interface SessionRelationshipFact {
 
 export interface NormalizedFacts {
   sessions: SessionFact[];
-  /** Interactions (#117). Optional until producers emit them; reconcile treats absent as empty. */
-  interactions?: InteractionFact[];
+  /** Interaction-opening prompt markers (#117). Optional until producers emit them; reconcile groups
+   *  these + the deduped messages into InteractionFacts. */
+  prompts?: PromptFact[];
   messages: UsageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
