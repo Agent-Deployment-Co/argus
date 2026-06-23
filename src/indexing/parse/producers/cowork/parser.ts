@@ -18,6 +18,7 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
+  type PromptFact,
   type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
@@ -458,6 +459,7 @@ function parseCoworkTranscript(
 ): { facts: NormalizedFacts; diagnostics: ParserDiagnostic[] } {
   const facts: NormalizedFacts = {
     sessions: [],
+    prompts: [],
     messages: [],
     invocations: [],
     toolResults: [],
@@ -533,6 +535,21 @@ function parseCoworkTranscript(
       const taskText = coworkUserMessageText(record);
       const nativeSessionId =
         typeof record.value.session_id === "string" ? record.value.session_id : "";
+      if (taskText) {
+        // Interaction-opening prompt marker (#117). Cowork has no subagents (initiator human);
+        // dedupKey = record uuid where present so replayed turns collapse in reconcile.
+        const promptTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
+        const prompt: PromptFact = {
+          id: createFactId("prompt", "cowork", sourceSessionId, record.position, "user_message"),
+          source: "cowork",
+          sourceSessionId,
+          initiator: "human",
+          position: record.position,
+        };
+        if (Number.isFinite(promptTimestamp)) prompt.timestampMs = promptTimestamp;
+        if (typeof record.value.uuid === "string" && record.value.uuid) prompt.dedupKey = record.value.uuid;
+        facts.prompts!.push(prompt);
+      }
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       if (generatedTitle && !sessionFact.firstPrompt) {
         sessionFact.firstPrompt = generatedTitle;

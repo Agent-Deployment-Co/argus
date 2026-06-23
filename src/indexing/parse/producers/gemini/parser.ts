@@ -20,9 +20,11 @@ import {
   type FileFingerprint,
   type FileIdentity,
   type FileParseResult,
+  type InteractionInitiator,
   type InvocationFact,
   type UsageFact,
   type NormalizedFacts,
+  type PromptFact,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type ParserDescriptor,
@@ -995,12 +997,27 @@ function factsFromConversation(
     .map((text) => argusGeneratedPromptTitle(text) ?? text)
     .find(Boolean);
   const taskCandidates: TaskCandidateFact[] = [];
+  const prompts: PromptFact[] = [];
+  // A subagent session (parent inferred from path) is agent-initiated; gemini doesn't fold subagents,
+  // so its agent prompts still open that session's own interactions (#117).
+  const promptInitiator: InteractionInitiator = parentSessionId ? "agent" : "human";
   for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex++) {
     const positioned = conversation.messages[messageIndex]!;
     const message = positioned.value;
     if (message.type !== "user") continue;
     const taskText = textFromGeminiContent(message.content, TASK_TEXT_LIMIT);
     if (!taskText) continue;
+    const promptTimestamp = parseTimestamp(message.timestamp);
+    const prompt: PromptFact = {
+      id: createFactId("prompt", "gemini", sourceSessionId, positioned.position, "user_message"),
+      source: "gemini",
+      sourceSessionId,
+      initiator: promptInitiator,
+      position: positioned.position,
+    };
+    if (!Number.isNaN(promptTimestamp)) prompt.timestampMs = promptTimestamp;
+    if (typeof message.id === "string" && message.id) prompt.dedupKey = message.id;
+    prompts.push(prompt);
     const next = conversation.messages[messageIndex + 1];
     const nextText =
       next?.value.type === "user"
@@ -1097,6 +1114,7 @@ function factsFromConversation(
 
   return {
     sessions: [session],
+    prompts,
     messages,
     invocations,
     toolResults,
