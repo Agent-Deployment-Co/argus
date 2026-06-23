@@ -19,6 +19,7 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
+  type PromptFact,
   type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
@@ -527,6 +528,7 @@ export function parseCodexTranscript(
   const pendingResults: PendingToolResult[] = [];
   const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
+  const prompts: PromptFact[] = [];
   const taskCandidates: TaskCandidateFact[] = [];
   const rawTurnIds = new Set<string>();
   let rawTurnsWithoutId = 0;
@@ -576,6 +578,20 @@ export function parseCodexTranscript(
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
       responseUserMessages++;
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
+      if (taskText) {
+        // Interaction-opening prompt marker (#117). Codex has no subagents (initiator always human)
+        // and no replay, so no dedupKey — reconcile falls back to position.
+        const promptTimestamp = timestampMs(record.value.timestamp);
+        const prompt: PromptFact = {
+          id: createFactId("prompt", "codex", sourceSessionId, record.position, "user_message"),
+          source: "codex",
+          sourceSessionId,
+          initiator: "human",
+          position: record.position,
+        };
+        if (promptTimestamp != null) prompt.timestampMs = promptTimestamp;
+        prompts.push(prompt);
+      }
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
       if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
@@ -766,6 +782,7 @@ export function parseCodexTranscript(
 
   const facts: NormalizedFacts = {
     sessions: [],
+    prompts,
     messages,
     invocations,
     toolResults,

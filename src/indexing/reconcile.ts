@@ -16,6 +16,7 @@ import {
   createFactId,
   type InteractionDisposition,
   type InteractionFact,
+  type InteractionInitiator,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type PromptFact,
@@ -65,12 +66,14 @@ export interface ReconcileResult extends ParseResult {
   interactions: InteractionFact[];
 }
 
-/** A timeline entry used to derive interactions: a human prompt (opens one) or an assistant turn. */
+/** A timeline entry used to derive interactions: an opening prompt or an assistant turn. */
 type TimelineEntry = {
   sid: string;
   kind: "prompt" | "turn";
   ts: number;
   position: SourcePosition;
+  /** Set on prompt entries — the interaction it opens inherits this initiator. */
+  initiator?: InteractionInitiator;
 };
 
 function compareTimeline(a: TimelineEntry, b: TimelineEntry): number {
@@ -121,7 +124,7 @@ function deriveInteractions(
         source,
         sourceSessionId: sid,
         seq: seq++,
-        initiator: "human",
+        initiator: open.initiator ?? "human",
         disposition,
         compactionCount: compactions.filter(inSpan).length,
         timestampMs: open.ts,
@@ -536,13 +539,16 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     perSession.set(name, sessionStat);
   }
 
-  // Interaction openings (#117): human prompts only — agent/harness markers are loop content, not
-  // openings. Dedupe across resumed-session replays by (canonical session, replay-stable key).
+  // Interaction openings (#117): a prompt opens an interaction in its *own* session. A prompt whose
+  // session canonicalizes to a different (parent) session is a folded subagent prompt — loop content
+  // of the parent, never an opening (this is what stops subagent prompts becoming phantom
+  // interactions, #118). A non-folded subagent session (e.g. gemini, which doesn't canonicalize)
+  // keeps its own agent-initiated openings. Dedupe replays by (session, replay-stable key).
   const promptsBySession = new Map<string, TimelineEntry[]>();
   const seenPrompts = new Set<string>();
   for (const prompt of orderedPrompts(fragments)) {
-    if (prompt.initiator !== "human") continue;
     const sid = canonicalSessionId(prompt.sourceSessionId);
+    if (sid !== prompt.sourceSessionId) continue; // folded subagent prompt → loop content, not an opening
     if (!wanted(sid)) continue;
     const key = `${sid}\0${prompt.dedupKey ?? `${prompt.position.originKey}:${prompt.position.recordIndex}:${prompt.position.itemIndex}`}`;
     if (seenPrompts.has(key)) continue;
@@ -552,6 +558,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       kind: "prompt",
       ts: prompt.timestampMs ?? 0,
       position: prompt.position,
+      initiator: prompt.initiator,
     });
   }
   const interactions = deriveInteractions(

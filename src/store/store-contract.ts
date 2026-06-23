@@ -6,8 +6,9 @@ import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from
  * Increment when serialized fragment semantics change incompatibly.
  * Source parser versions remain independent so one adapter can invalidate narrowly.
  * v2: dropped external (AgentsView) import fragments — stale stores re-parse from disk.
+ * v3: producers emit interaction-opening PromptFacts (#117); stale fragments re-parse.
  */
-export const PARSED_FRAGMENT_CONTRACT_VERSION = 2;
+export const PARSED_FRAGMENT_CONTRACT_VERSION = 3;
 
 /** Decimal string used for filesystem values that may exceed JavaScript's safe integer range. */
 export type SerializedInt64 = string;

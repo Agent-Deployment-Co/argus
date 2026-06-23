@@ -6,8 +6,50 @@ import {
   parseClaudeTranscriptFile,
 } from "../src/indexing/parse/producers/claude/parser.ts";
 import { claudeProducer } from "../src/indexing/parse/producers/claude/index.ts";
-import { reconcileSessions } from "../src/indexing/reconcile.ts";
-import type { ParsedFileFragment } from "../src/store/store-contract.ts";
+import { codexProducer } from "../src/indexing/parse/producers/codex/index.ts";
+import { geminiProducer } from "../src/indexing/parse/producers/gemini/index.ts";
+import { coworkProducer } from "../src/indexing/parse/producers/cowork/index.ts";
+import {
+  discoverCodexFiles,
+  parseCodexTranscriptPath,
+} from "../src/indexing/parse/producers/codex/parser.ts";
+import {
+  discoverGeminiTranscripts,
+  parseGeminiTranscriptPath,
+} from "../src/indexing/parse/producers/gemini/parser.ts";
+import {
+  discoverCoworkTranscripts,
+  parseCoworkTranscriptPath,
+} from "../src/indexing/parse/producers/cowork/parser.ts";
+import { reconcileSessions, type ProducerCapabilities } from "../src/indexing/reconcile.ts";
+import type { DiscoveryResult, FileParseResult, ParsedFileFragment } from "../src/store/store-contract.ts";
+
+const FIXTURES = join(import.meta.dir, "fixtures");
+
+function fragmentsFromDiscovery(
+  discovery: DiscoveryResult,
+  parsePath: (path: string) => FileParseResult,
+): ParsedFileFragment[] {
+  expect(discovery.status).toBe("complete");
+  const fragments: ParsedFileFragment[] = [];
+  for (const file of discovery.files) {
+    const result = parsePath(file.file.path);
+    if (result.status === "current") fragments.push(result.fragment);
+  }
+  return fragments;
+}
+
+function assertValidInteractions(caps: ProducerCapabilities, fragments: ParsedFileFragment[]) {
+  const { interactions } = reconcileSessions({ caps, fragments, auxiliaryFragments: [] });
+  expect(interactions.length).toBeGreaterThan(0);
+  for (const interaction of interactions) {
+    expect(["human", "agent", "harness"]).toContain(interaction.initiator);
+    expect(["completed", "interrupted", "incomplete", "error"]).toContain(interaction.disposition);
+    expect(interaction.promptPosition).toBeDefined();
+    expect(interaction.seq).toBeGreaterThanOrEqual(0);
+  }
+  return interactions;
+}
 
 const PROJECTS = join(import.meta.dir, "fixtures", "projects");
 const HISTORY = join(import.meta.dir, "fixtures", "history.jsonl");
@@ -54,5 +96,32 @@ describe("reconcile derives interactions (#117)", () => {
     const completed = result.interactions.filter((i) => i.disposition === "completed");
     expect(completed.length).toBeGreaterThan(0);
     for (const interaction of completed) expect(interaction.responsePosition).toBeDefined();
+  });
+});
+
+describe("reconcile derives interactions across sources (#117)", () => {
+  test("codex", () => {
+    const fragments = fragmentsFromDiscovery(
+      discoverCodexFiles(join(FIXTURES, "codex-sessions")),
+      parseCodexTranscriptPath,
+    );
+    const interactions = assertValidInteractions(codexProducer.capabilities, fragments);
+    expect(interactions.every((i) => i.initiator === "human")).toBe(true);
+  });
+
+  test("cowork", () => {
+    const fragments = fragmentsFromDiscovery(
+      discoverCoworkTranscripts(join(FIXTURES, "cowork-sessions")),
+      parseCoworkTranscriptPath,
+    );
+    assertValidInteractions(coworkProducer.capabilities, fragments);
+  });
+
+  test("gemini", () => {
+    const fragments = fragmentsFromDiscovery(
+      discoverGeminiTranscripts(join(FIXTURES, "gemini")),
+      parseGeminiTranscriptPath,
+    );
+    assertValidInteractions(geminiProducer.capabilities, fragments);
   });
 });
