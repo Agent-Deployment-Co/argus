@@ -26,6 +26,7 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
+  type PromptFact,
   type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
@@ -746,6 +747,7 @@ function parseTranscript(
 } {
   const facts: NormalizedFacts = {
     sessions: [],
+    prompts: [],
     messages: [],
     invocations: [],
     toolResults: [],
@@ -883,6 +885,20 @@ function parseTranscript(
     if (record.value.type === "user") {
       if (isCountableClaudeUserMessage(record.value)) {
         session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
+        // Interaction-opening prompt marker (#117). A subagent session's own prompts are
+        // agent-initiated (loop content once folded onto the parent), so reconcile won't open a
+        // main-session interaction for them. dedupKey = record uuid (stable across resumed replays).
+        const promptTs = timestampMs(record.value.timestamp);
+        const prompt: PromptFact = {
+          id: createFactId("prompt", "claude", sourceSessionId, record.position, "user_message"),
+          source: "claude",
+          sourceSessionId,
+          initiator: session.fact.kind === "subagent" ? "agent" : "human",
+          position: record.position,
+        };
+        if (Number.isFinite(promptTs)) prompt.timestampMs = promptTs;
+        if (typeof record.value.uuid === "string" && record.value.uuid) prompt.dedupKey = record.value.uuid;
+        facts.prompts!.push(prompt);
       }
       const taskText = claudeUserMessageText(record);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
