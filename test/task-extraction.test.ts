@@ -10,8 +10,8 @@ import {
   parseTaskOutcomeOutput,
   splitCommand,
   taskFactsFromSpecs,
-} from "../src/task-extraction.ts";
-import type { TaskCandidateFact, TaskFact } from "../src/store-contract.ts";
+} from "../src/indexing/interpret/task-extraction.ts";
+import type { TaskCandidateFact, TaskFact } from "../src/store/store-contract.ts";
 
 const candidates: TaskCandidateFact[] = [
   {

@@ -22,9 +22,9 @@ import {
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
-} from "../../store-contract.ts";
-import { type FrictionEvent } from "../../friction.ts";
-import { COWORK_SESSIONS_DIR } from "../../paths.ts";
+} from "../../../../store/store-contract.ts";
+import { type FrictionEvent } from "../../../friction.ts";
+import { COWORK_SESSIONS_DIR } from "../../../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   argusGeneratedPromptTitle,
@@ -32,10 +32,10 @@ import {
   isClaudeGeneratedContextText,
   shouldSkipTaskCandidateText,
   textFromUserContent,
-} from "../../task-candidates.ts";
-import { parseMcpTool } from "../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../dialogue.ts";
-import { emptyUsage } from "../../types.ts";
+} from "../../../interpret/task-candidates.ts";
+import { parseMcpTool } from "../../../../tool-categories.ts";
+import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
+import { emptyUsage } from "../../../../types.ts";
 import {
   estimateClaudeResultTokens,
   fingerprintClaudeFile,

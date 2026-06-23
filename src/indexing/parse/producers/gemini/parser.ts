@@ -36,17 +36,17 @@ import {
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
   type AuxiliaryParserAdapter,
-} from "../../store-contract.ts";
-import { GEMINI_DIR } from "../../paths.ts";
+} from "../../../../store/store-contract.ts";
+import { GEMINI_DIR } from "../../../../paths.ts";
 import {
   TASK_TEXT_LIMIT,
   argusGeneratedPromptTitle,
   shouldSkipTaskCandidateText,
   textFromUserContent,
-} from "../../task-candidates.ts";
-import { parseMcpTool } from "../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../dialogue.ts";
-import { emptyUsage, totalTokens, type Usage } from "../../types.ts";
+} from "../../../interpret/task-candidates.ts";
+import { parseMcpTool } from "../../../../tool-categories.ts";
+import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
+import { emptyUsage, totalTokens, type Usage } from "../../../../types.ts";
 
 export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
 export const GEMINI_AUXILIARY_ROOT_ID = "gemini-config";

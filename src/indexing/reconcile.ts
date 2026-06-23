@@ -17,10 +17,10 @@ import {
   type ParsedFileFragment,
   type SessionFact,
   type TaskFact,
-} from "./store-contract.ts";
+} from "../store/store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
-import { projectLabel } from "./parse.ts";
-import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
+import { projectLabel } from "../parse.ts";
+import { categorizeTool, parseMcpTool } from "../tool-categories.ts";
 import type {
   AgentSource,
   MessageRecord,
@@ -28,7 +28,7 @@ import type {
   SessionMeta,
   ToolResultStat,
   ToolUse,
-} from "./types.ts";
+} from "../types.ts";
 
 /** What a producer observes, read generically by the engine instead of source conditionals. */
 export interface ProducerCapabilities {

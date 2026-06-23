@@ -6,8 +6,8 @@ import {
   parseGeminiTranscriptPath,
   reconstructGeminiDialogue,
 } from "./parser.ts";
-import type { NativeProducer, ProducerContext } from "../../producer.ts";
-import { defaultUnknownProjectLabel } from "../../reconcile.ts";
+import type { NativeProducer, ProducerContext } from "../../../producer.ts";
+import { defaultUnknownProjectLabel } from "../../../reconcile.ts";
 
 // Gemini resolves cwd from auxiliary project roots and labels cwd-less sessions by transcript file.
 // It does not (today) canonicalize subagents or dedupe by provider id.

@@ -9,10 +9,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openStore } from "../src/store.ts";
+import { openStore } from "../src/store/store.ts";
 import { parseAll } from "../src/parse.ts";
-import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/parse-incremental.ts";
-import type { SyncStats } from "../src/parse-incremental.ts";
+import { syncStatsSummary, parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
+import type { SyncStats } from "../src/indexing/pipeline.ts";
 import type { AgentSource, MessageRecord, ParseResult, ToolUse } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");

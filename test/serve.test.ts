@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { PushPayloadSchema, SCHEMA_VERSION } from "@agentdeploymentco/argus-schema";
-import { aggregate } from "../src/aggregate.ts";
+import { aggregate } from "../src/reporting/aggregate.ts";
 import { parseAll } from "../src/parse.ts";
 import { computeRecommendations } from "../src/api/recommendations.ts";
 import { createApp, type Snapshot } from "../src/api/serve.ts";
-import type { TaskFact } from "../src/store-contract.ts";
+import type { TaskFact } from "../src/store/store-contract.ts";
 import type { PluginInfo } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");

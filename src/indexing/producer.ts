@@ -7,10 +7,10 @@ import type {
   DiscoveryResult,
   FileParseResult,
   TranscriptParserAdapter,
-} from "./store-contract.ts";
+} from "../store/store-contract.ts";
 import type { ProducerCapabilities } from "./reconcile.ts";
-import type { DialogueTurn } from "./dialogue.ts";
-import type { AgentSource } from "./types.ts";
+import type { DialogueTurn } from "./interpret/dialogue.ts";
+import type { AgentSource } from "../types.ts";
 
 /** Filesystem locations + options a producer needs to discover its sessions. */
 export interface ProducerContext {

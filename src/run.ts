@@ -4,11 +4,11 @@
 // each leg so one failing never takes the others down. Foreground only: a service manager (systemd,
 // launchd, Docker) owns backgrounding, restarts, and logging.
 import { superviseLoop } from "./backoff.ts";
-import type { BuildDashboardOptions, Log } from "./dashboard-builder.ts";
+import type { BuildDashboardOptions, Log } from "./reporting/dashboard-builder.ts";
 import { startServer } from "./api/serve.ts";
 import { watchIndex, watchSync } from "./watch.ts";
 import type { SyncOptions } from "./cli-options.ts";
-import type { TaskExtractionOptions } from "./task-extraction.ts";
+import type { TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
 
 export interface RunOptions extends SyncOptions {
   port: number;

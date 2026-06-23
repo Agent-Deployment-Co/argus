@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildSessionDetail, buildSessionList } from "../src/api/session-list.ts";
-import type { SessionAggregate } from "../src/store-contract.ts";
+import type { SessionAggregate } from "../src/store/store-contract.ts";
 import type { MessageRecord, SessionMeta, Usage } from "../src/types.ts";
 
 function usage(input: number): Usage {

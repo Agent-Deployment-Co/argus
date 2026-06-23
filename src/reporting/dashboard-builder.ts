@@ -4,12 +4,12 @@
 import { aggregate } from "./aggregate.ts";
 import type { Dashboard } from "./aggregate.ts";
 import { loadPlugins } from "./inventory.ts";
-import type { TranscriptSource } from "./parse.ts";
-import { syncStatsSummary } from "./parse-incremental.ts";
-import { openSessionStore } from "./session-store.ts";
-import type { ParserDiagnostic } from "./store-contract.ts";
-import { heuristicSummary, summaryFactsFromMessages } from "./summarize.ts";
-import type { MessageRecord } from "./types.ts";
+import type { TranscriptSource } from "../parse.ts";
+import { syncStatsSummary } from "../indexing/pipeline.ts";
+import { openSessionStore } from "../store/session-store.ts";
+import type { ParserDiagnostic } from "../store/store-contract.ts";
+import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
+import type { MessageRecord } from "../types.ts";
 
 export type Log = (s: string) => void;
 

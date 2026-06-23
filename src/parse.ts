@@ -20,9 +20,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "./friction.ts";
+import { claudeFrictionEvents, foldFrictionEvents, type FrictionEvent } from "./indexing/friction.ts";
 import { CODEX_SESSIONS_DIR, COWORK_SESSIONS_DIR, GEMINI_DIR, HISTORY_FILE, PROJECTS_DIR } from "./paths.ts";
-import { isCountableClaudeUserMessage } from "./task-candidates.ts";
+import { isCountableClaudeUserMessage } from "./indexing/interpret/task-candidates.ts";
 import { categorizeTool, parseMcpTool } from "./tool-categories.ts";
 import {
   emptyUsage,

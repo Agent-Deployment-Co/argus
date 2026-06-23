@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { aggregate } from "../src/aggregate.ts";
+import { aggregate } from "../src/reporting/aggregate.ts";
 import { parseAll } from "../src/parse.ts";
 import { emptyUsage, type MessageRecord, type ParseResult, type PluginInfo } from "../src/types.ts";
 

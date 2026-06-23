@@ -15,20 +15,20 @@ import {
   type ParserDiagnostic,
   type ResolvedQuery,
   type Store,
-} from "./store-contract.ts";
-import { openStore, rebuildStore } from "./store.ts";
-import { parseAll, type ParseOptions, type TranscriptSource } from "./parse.ts";
+} from "../store/store-contract.ts";
+import { openStore, rebuildStore } from "../store/store.ts";
+import { parseAll, type ParseOptions, type TranscriptSource } from "../parse.ts";
 import {
   canonicalSessionIds,
   reconcileSessions,
   type ReconcileResult,
 } from "./reconcile.ts";
 import type { NativeProducer, ProducerContext } from "./producer.ts";
-import { NATIVE_PRODUCERS, nativeProducerForSource } from "./producers/index.ts";
-import type { AgentSource, MessageRecord, ParseResult } from "./types.ts";
-import type { TaskCandidateFact, TaskFact } from "./store-contract.ts";
-import { extractTasksWithOutcome } from "./task-extraction.ts";
-import type { ResolvedTaskExtraction } from "./config.ts";
+import { NATIVE_PRODUCERS, nativeProducerForSource } from "./parse/producers/index.ts";
+import type { AgentSource, MessageRecord, ParseResult } from "../types.ts";
+import type { TaskCandidateFact, TaskFact } from "../store/store-contract.ts";
+import { extractTasksWithOutcome } from "./interpret/task-extraction.ts";
+import type { ResolvedTaskExtraction } from "../config.ts";
 
 export interface SyncStats {
   hits: number;

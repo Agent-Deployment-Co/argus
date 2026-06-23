@@ -14,7 +14,7 @@ import {
   parseAllIncrementalDetailed,
   type SyncStats,
   type IncrementalParseOptions,
-} from "../src/parse-incremental.ts";
+} from "../src/indexing/pipeline.ts";
 import type { AgentSource } from "../src/types.ts";
 
 type Format = "table" | "json";

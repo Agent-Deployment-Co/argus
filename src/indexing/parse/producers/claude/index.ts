@@ -7,7 +7,7 @@ import {
   parseClaudeTranscriptPath,
   reconstructClaudeDialogue,
 } from "./parser.ts";
-import type { NativeProducer, ProducerContext } from "../../producer.ts";
+import type { NativeProducer, ProducerContext } from "../../../producer.ts";
 
 // Claude observes everything: subagent canonicalization, provider-id dedup, and friction.
 export const claudeProducer: NativeProducer = {

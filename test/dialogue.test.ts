@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sliceDialogueByTime, type DialogueTurn } from "../src/dialogue.ts";
-import { claudeProducer } from "../src/producers/claude/index.ts";
-import { codexProducer } from "../src/producers/codex/index.ts";
-import { coworkProducer } from "../src/producers/cowork/index.ts";
-import { geminiProducer } from "../src/producers/gemini/index.ts";
+import { sliceDialogueByTime, type DialogueTurn } from "../src/indexing/interpret/dialogue.ts";
+import { claudeProducer } from "../src/indexing/parse/producers/claude/index.ts";
+import { codexProducer } from "../src/indexing/parse/producers/codex/index.ts";
+import { coworkProducer } from "../src/indexing/parse/producers/cowork/index.ts";
+import { geminiProducer } from "../src/indexing/parse/producers/gemini/index.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
