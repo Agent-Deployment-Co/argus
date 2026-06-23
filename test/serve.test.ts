@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { PushPayloadSchema, SCHEMA_VERSION } from "@agentdeploymentco/argus-schema";
 import { aggregate } from "../src/reporting/aggregate.ts";
-import { parseAll } from "../src/parse.ts";
+import { parseFixtures } from "./helpers/parse-fixtures.ts";
 import { computeRecommendations } from "../src/api/recommendations.ts";
 import { createApp, type Snapshot } from "../src/api/serve.ts";
 import type { TaskFact } from "../src/store/store-contract.ts";
@@ -13,15 +13,18 @@ const FIX = join(import.meta.dir, "fixtures");
 /** Same-origin marker the web app sends on mutating requests (see rejectCrossSite in serve.ts). */
 const SAME_ORIGIN = { headers: { "X-Argus-App": "1" }, method: "POST" } as const;
 
+// Parse fixtures once via the real pipeline (temp store); each fixtureSnapshot() re-aggregates the
+// cached ParseResult so the helper stays synchronous and call sites are unchanged.
+const FIXTURE_PARSED = await parseFixtures({
+  projectsDir: join(FIX, "projects"),
+  historyFile: join(FIX, "history.jsonl"),
+  codexSessionsDir: join(FIX, "codex-sessions"),
+  geminiDir: join(FIX, "gemini"),
+  sources: ["claude", "codex", "gemini"],
+});
+
 function fixtureSnapshot(): Snapshot {
-  const parsed = parseAll({
-    projectsDir: join(FIX, "projects"),
-    historyFile: join(FIX, "history.jsonl"),
-    codexSessionsDir: join(FIX, "codex-sessions"),
-    geminiDir: join(FIX, "gemini"),
-    sources: ["claude", "codex", "gemini"],
-  });
-  const dashboard = aggregate(parsed, new Map<string, PluginInfo>(), new Map());
+  const dashboard = aggregate(FIXTURE_PARSED, new Map<string, PluginInfo>(), new Map());
   dashboard.generatedAtMs = 1_780_000_000_000;
   return { dashboard, recommendations: computeRecommendations(dashboard), generatedAtMs: dashboard.generatedAtMs };
 }

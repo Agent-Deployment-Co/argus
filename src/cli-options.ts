@@ -1,7 +1,7 @@
 // Shared option shapes and the citty-args → options converters, factored out of cli.ts so the
 // command bodies (index-ops.ts), the long-running loops (watch.ts), and the orchestrator (run.ts)
 // can reuse them without importing cli.ts (which would create a cycle).
-import type { TranscriptSource } from "./parse.ts";
+import type { TranscriptSource } from "./types.ts";
 import type { BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
 
 export type Source = "all" | TranscriptSource;

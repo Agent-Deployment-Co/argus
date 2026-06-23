@@ -11,7 +11,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dashboard } from "../reporting/aggregate.ts";
 import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
-import type { TranscriptSource } from "../parse.ts";
+import type { TranscriptSource } from "../types.ts";
 import {
   buildSessionDetail,
   buildSessionList,

@@ -6,7 +6,7 @@ import {
   parseAllIncrementalDetailed,
   type SyncStats,
 } from "../indexing/pipeline.ts";
-import type { TranscriptSource } from "../parse.ts";
+import type { TranscriptSource } from "../types.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
 import type { AgentSource, ParseResult } from "../types.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";

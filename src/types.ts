@@ -20,6 +20,10 @@ export type { ToolCategory } from "./tool-categories.ts";
 
 export type AgentSource = "claude" | "codex" | "gemini" | "cowork";
 
+/** The set of agent sources Argus can index. Alias of AgentSource, used where a value names a
+ *  transcript source to collect (CLI flags, discovery options). */
+export type TranscriptSource = AgentSource;
+
 export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   source: AgentSource;
   /** CLI-only: raw user-message count when the source exposes it. */
