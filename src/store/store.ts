@@ -33,7 +33,7 @@ import type {
 import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "../types.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 9;
+export const STORE_SCHEMA_VERSION = 11;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -119,6 +119,37 @@ interface FragmentStorage {
 //      This is NOT re-derivable once a source ages off disk, so it is preserved across schema
 //      changes via real migrations (MIGRATIONS below), never silently dropped.
 //   3. source_coverage + session_ownership — freshness attestation and per-session ownership.
+
+// Shared so a fresh schema (CREATE_SCHEMA_SQL) and the v10 -> v11 migration can't drift. Secondary
+// indexes are intentionally NOT created here — no query reads these tables until #121 (the GROUP BY
+// flip), which adds indexes tuned to its actual query shapes; until then they'd be pure write cost.
+const RESOLVED_INTERACTIONS_DDL = `
+  CREATE TABLE resolved_interactions (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    ts INTEGER,
+    initiator TEXT NOT NULL,
+    disposition TEXT NOT NULL,
+    compaction_count INTEGER NOT NULL DEFAULT 0,
+    interaction_json TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  );`;
+const RESOLVED_INVOCATIONS_DDL = `
+  CREATE TABLE resolved_invocations (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    interaction_seq INTEGER,
+    tool TEXT NOT NULL,
+    category TEXT NOT NULL,
+    mcp_server TEXT,
+    mcp_tool TEXT,
+    skill TEXT,
+    file_path TEXT,
+    PRIMARY KEY (session_id, seq)
+  );`;
+
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
     id TEXT PRIMARY KEY,
@@ -218,7 +249,7 @@ const CREATE_SCHEMA_SQL = `
   CREATE INDEX resolved_sessions_source ON resolved_sessions(source);
   CREATE INDEX resolved_sessions_archived ON resolved_sessions(archived);
 
-  CREATE TABLE resolved_messages (
+  CREATE TABLE resolved_usage (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
     seq INTEGER NOT NULL,
     source TEXT NOT NULL,
@@ -241,13 +272,26 @@ const CREATE_SCHEMA_SQL = `
     cache_write_1h INTEGER,
     model TEXT,
     attribution_skill TEXT,
+    -- The interaction (#117) this usage row falls under, as resolved_interactions.seq in the same
+    -- session. NULL until usage<->interaction linking is populated (the interaction spine itself is
+    -- persisted in resolved_interactions below).
+    interaction_seq INTEGER,
     PRIMARY KEY (session_id, seq)
   );
-  CREATE INDEX resolved_messages_date ON resolved_messages(date);
-  CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
-  CREATE INDEX resolved_messages_source ON resolved_messages(source);
-  CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
-  CREATE INDEX resolved_messages_date_model ON resolved_messages(date, model);
+  CREATE INDEX resolved_usage_date ON resolved_usage(date);
+  CREATE INDEX resolved_usage_ts ON resolved_usage(ts);
+  CREATE INDEX resolved_usage_source ON resolved_usage(source);
+  CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq);
+  CREATE INDEX resolved_usage_date_model ON resolved_usage(date, model);
+
+  -- The interaction spine (#117): one row per interaction (prompt -> loop -> response). Promoted
+  -- initiator/disposition columns back the friction/outcome GROUP BY (#121); interaction_json keeps
+  -- the full fact (incl. prompt/response slot positions) for detail reads.
+  ${RESOLVED_INTERACTIONS_DDL}
+
+  -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
+  -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
+  ${RESOLVED_INVOCATIONS_DDL}
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -399,7 +443,7 @@ async function readResolvedSessionSnapshot(
   if (!row) return undefined;
   const messageRows = await all<{ record_json: string }>(
     db,
-    "SELECT record_json FROM resolved_messages WHERE session_id = ? ORDER BY seq",
+    "SELECT record_json FROM resolved_usage WHERE session_id = ? ORDER BY seq",
     [sessionId],
   );
   const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
@@ -729,6 +773,53 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       CREATE INDEX resolved_messages_date_model ON resolved_messages(date, model);
     `,
   },
+  // 9 -> 10: "message" is retired as a unit of meaning (#117); the per-assistant-turn usage table is
+  // renamed resolved_messages -> resolved_usage. RENAME preserves all rows (incl. archived sessions);
+  // indexes are re-created under the new name for consistency with a fresh schema.
+  9: {
+    to: 10,
+    sql: `
+      ALTER TABLE resolved_messages RENAME TO resolved_usage;
+      DROP INDEX IF EXISTS resolved_messages_date;
+      DROP INDEX IF EXISTS resolved_messages_ts;
+      DROP INDEX IF EXISTS resolved_messages_source;
+      DROP INDEX IF EXISTS resolved_messages_task;
+      DROP INDEX IF EXISTS resolved_messages_date_model;
+      CREATE INDEX resolved_usage_date ON resolved_usage(date);
+      CREATE INDEX resolved_usage_ts ON resolved_usage(ts);
+      CREATE INDEX resolved_usage_source ON resolved_usage(source);
+      CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq);
+      CREATE INDEX resolved_usage_date_model ON resolved_usage(date, model);
+    `,
+  },
+  // 10 -> 11: first-class interactions + per-invocation rows (#117/#119). Add resolved_interactions
+  // and resolved_invocations (+ resolved_usage.interaction_seq). Backfill invocations from the
+  // existing record_json.toolUses arrays so the new GROUP BY views (#121) work on current stores
+  // without a re-index; interactions backfill on the next index (they're reconcile-derived).
+  10: {
+    to: 11,
+    sql: `
+      ALTER TABLE resolved_usage ADD COLUMN interaction_seq INTEGER;
+      ${RESOLVED_INTERACTIONS_DDL}
+      ${RESOLVED_INVOCATIONS_DDL}
+
+      INSERT INTO resolved_invocations
+        (session_id, seq, source, tool, category, mcp_server, mcp_tool, skill, file_path)
+      SELECT session_id,
+             ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY msg_seq, item) - 1,
+             source, tool, category, mcp_server, mcp_tool, skill, file_path
+      FROM (
+        SELECT m.session_id AS session_id, m.seq AS msg_seq, je.key AS item, m.source AS source,
+               json_extract(je.value, '$.name') AS tool,
+               json_extract(je.value, '$.category') AS category,
+               json_extract(je.value, '$.mcpServer') AS mcp_server,
+               json_extract(je.value, '$.mcpTool') AS mcp_tool,
+               json_extract(je.value, '$.skill') AS skill,
+               json_extract(je.value, '$.filePath') AS file_path
+        FROM resolved_usage m, json_each(m.record_json, '$.toolUses') je
+      );
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -785,8 +876,10 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
-    await get(db, "SELECT task_seq, input_tokens, model, attribution_skill FROM resolved_messages LIMIT 1");
+    await get(db, "SELECT task_seq, input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
+    await get(db, "SELECT session_id, initiator, disposition, interaction_json FROM resolved_interactions LIMIT 1");
+    await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
     if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
@@ -1245,7 +1338,7 @@ export class SqliteStore implements Store {
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>> {
     return this.schedule(async () => {
       // One pass for the whole session: map each task's seq -> id, then bucket the attributed
-      // messages (resolved_messages.task_seq references resolved_tasks.seq) by task id. Tasks with no
+      // messages (resolved_usage.task_seq references resolved_tasks.seq) by task id. Tasks with no
       // attributed messages simply don't appear in the map (callers treat that as zero).
       const taskRows = await all<{ seq: number; task_json: string }>(
         this.db,
@@ -1257,7 +1350,7 @@ export class SqliteStore implements Store {
 
       const rows = await all<{ record_json: string; task_seq: number | null }>(
         this.db,
-        "SELECT record_json, task_seq FROM resolved_messages WHERE session_id = ? AND task_seq IS NOT NULL ORDER BY seq",
+        "SELECT record_json, task_seq FROM resolved_usage WHERE session_id = ? AND task_seq IS NOT NULL ORDER BY seq",
         [sessionId],
       );
       const byTask = new Map<string, MessageRecord[]>();
@@ -1275,7 +1368,7 @@ export class SqliteStore implements Store {
     return this.schedule(async () => {
       const rows = await all<{ record_json: string }>(
         this.db,
-        "SELECT record_json FROM resolved_messages WHERE session_id = ? ORDER BY seq",
+        "SELECT record_json FROM resolved_usage WHERE session_id = ? ORDER BY seq",
         [sessionId],
       );
       return rows.map((row) => JSON.parse(row.record_json) as MessageRecord);
@@ -1309,7 +1402,7 @@ export class SqliteStore implements Store {
       }
       if (dateConds.length) {
         sessionConds.push(
-          `EXISTS (SELECT 1 FROM resolved_messages m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
+          `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
         );
         sessionParams.push(...dateParams);
       }
@@ -1345,7 +1438,7 @@ export class SqliteStore implements Store {
         `SELECT session_id, model,
             SUM(input_tokens) AS input, SUM(output_tokens) AS output, SUM(cache_read) AS cache_read,
             SUM(cache_write_5m) AS cache_write_5m, SUM(cache_write_1h) AS cache_write_1h
-         FROM resolved_messages ${msgFilters.messageWhere}
+         FROM resolved_usage ${msgFilters.messageWhere}
          GROUP BY session_id, model`,
         msgFilters.messageParams,
       );
@@ -1378,7 +1471,7 @@ export class SqliteStore implements Store {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(
       this.db,
-      `SELECT session_id, record_json FROM resolved_messages ${filters.messageWhere}
+      `SELECT session_id, record_json FROM resolved_usage ${filters.messageWhere}
        ORDER BY ts, source, session_id, seq`,
       filters.messageParams,
     );
@@ -1502,8 +1595,8 @@ export class SqliteStore implements Store {
           };
           await insertRows(
             this.db,
-            "resolved_messages",
-            // Usage/model/skill are mirrored into real columns (see resolved_messages DDL) so SQL
+            "resolved_usage",
+            // Usage/model/skill are mirrored into real columns (see resolved_usage DDL) so SQL
             // can do token & cost GROUP BY without re-walking record_json in JS.
             [
               "session_id",
@@ -1559,6 +1652,46 @@ export class SqliteStore implements Store {
             "resolved_tool_results",
             ["session_id", "name", "count", "approx_tokens"],
             session.toolResults.map((tr) => [sid, tr.name, tr.count, tr.approxTokens]),
+          );
+          // The interaction spine (#117/#119): one row per reconcile-derived interaction. seq is the
+          // interaction's own ordinal (not the array index) so the PK and interaction_json agree and
+          // #122 can reference one source of truth for the usage<->interaction link.
+          await insertRows(
+            this.db,
+            "resolved_interactions",
+            ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "interaction_json"],
+            (session.interactions ?? []).map((interaction) => [
+              sid,
+              interaction.seq,
+              interaction.source,
+              interaction.timestampMs ?? null,
+              interaction.initiator,
+              interaction.disposition,
+              interaction.compactionCount,
+              JSON.stringify(interaction),
+            ]),
+          );
+          // Per-tool-use rows (#113 Part B) from the reconciled messages' toolUses, so byTool/byMcp/
+          // bySkill become GROUP BY queries (#121). Result-size stats stay in resolved_tool_results.
+          // Flattened in one pass; seq is the array index (matches the migration's ROW_NUMBER backfill).
+          await insertRows(
+            this.db,
+            "resolved_invocations",
+            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path"],
+            session.messages
+              .flatMap((message) => message.toolUses.map((toolUse) => ({ message, toolUse })))
+              .map(({ message, toolUse }, seq) => [
+                sid,
+                seq,
+                message.source,
+                null, // interaction_seq — usage<->interaction linking not yet populated (#122)
+                toolUse.name,
+                toolUse.category,
+                toolUse.mcpServer ?? null,
+                toolUse.mcpTool ?? null,
+                toolUse.skill ?? null,
+                toolUse.filePath ?? null,
+              ]),
           );
           await run(
             this.db,
@@ -1648,10 +1781,10 @@ export class SqliteStore implements Store {
       return {
         schemaVersion: await pragmaNumber(this.db, "user_version"),
         sessions: await count("SELECT COUNT(*) AS n FROM resolved_sessions"),
-        messages: await count("SELECT COUNT(*) AS n FROM resolved_messages"),
+        messages: await count("SELECT COUNT(*) AS n FROM resolved_usage"),
         tasks: await count("SELECT COUNT(*) AS n FROM resolved_tasks"),
         messagesWithTask: await count(
-          "SELECT COUNT(*) AS n FROM resolved_messages WHERE task_seq IS NOT NULL",
+          "SELECT COUNT(*) AS n FROM resolved_usage WHERE task_seq IS NOT NULL",
         ),
       };
     });

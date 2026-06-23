@@ -1,5 +1,5 @@
 // Per-task metric rollups, computed on demand from the messages attributed to a task
-// (resolved_messages.task_seq). This is deliberately NOT part of the big snapshot — it's read
+// (resolved_usage.task_seq). This is deliberately NOT part of the big snapshot — it's read
 // lazily per task, the direction #69 moves the web app toward (query the store directly).
 import { cost } from "../pricing.ts";
 import { addUsage, emptyUsage, totalTokens, type MessageRecord, type Usage } from "../types.ts";
