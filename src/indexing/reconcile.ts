@@ -66,6 +66,13 @@ export interface ReconcileResult extends ParseResult {
   interactions: InteractionFact[];
 }
 
+/** Append `value` to the array at `key`, creating it on first use. */
+function pushInto<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
 /** A timeline entry used to derive interactions: an opening prompt or an assistant turn. */
 type TimelineEntry = {
   sid: string;
@@ -74,51 +81,80 @@ type TimelineEntry = {
   position: SourcePosition;
   /** Set on prompt entries — the interaction it opens inherits this initiator. */
   initiator?: InteractionInitiator;
+  /** Set on turn entries — true if this turn was folded from a subagent (a different source session).
+   *  Folded turns are loop content, never the main agent's response slot. */
+  folded?: boolean;
 };
 
+/**
+ * Timeline order. Within one transcript file (same originKey) record order is authoritative, so we
+ * order by position and ignore timestamps — this is what keeps a timestamp-less prompt (ts → 0) from
+ * sorting ahead of the file's real-timestamped turns. Across files (resumed/subagent transcripts)
+ * record indices aren't comparable, so order by timestamp.
+ */
 function compareTimeline(a: TimelineEntry, b: TimelineEntry): number {
+  if (a.position.originKey === b.position.originKey) {
+    return a.position.recordIndex - b.position.recordIndex || a.position.itemIndex - b.position.itemIndex;
+  }
   return (
     a.ts - b.ts ||
-    (a.position.originKey < b.position.originKey ? -1 : a.position.originKey > b.position.originKey ? 1 : 0) ||
-    a.position.recordIndex - b.position.recordIndex ||
-    a.position.itemIndex - b.position.itemIndex
+    (a.position.originKey < b.position.originKey ? -1 : 1)
   );
 }
 
+/** Per-session friction timestamps used to set interaction disposition/compactionCount. Compaction
+ *  boundary and summary markers are kept apart because a single compaction emits both — counting the
+ *  concatenation would double it (mirrors friction.ts's max(boundaries, summaries)). */
+type SpanSignals = {
+  interruptionMs: number[];
+  compactBoundaryMs: number[];
+  compactSummaryMs: number[];
+};
+
 /**
- * Group a session's human prompts + assistant turns into interactions: each human prompt opens one,
- * the assistant turns until the next human prompt are its loop, and the last of those is the response
- * slot. Disposition reuses the folded friction signals (interruption timestamps in the span → the
- * loop was interrupted); compactionCount counts compaction events in the span. Agent-initiated
- * prompts (folded subagent sessions) are not openings — they're loop content — which is what keeps
- * subagent prompts from spawning phantom interactions (#118).
+ * Group a session's opening prompts + assistant turns into interactions: each opening prompt opens
+ * one, the turns until the next opening are its loop, and the last turn *from the interaction's own
+ * session* (not a folded subagent turn) is the response slot. Disposition reuses folded friction
+ * (interruption in the span → interrupted); compactionCount = max(boundary, summary) markers in the
+ * span. Folded subagent prompts aren't openings — they're loop content — which is what keeps subagent
+ * prompts from spawning phantom interactions (#118).
+ *
+ * Span attribution: an interaction owns `[startTs, endTs]`, but the boundary `ts` (which equals the
+ * next interaction's start) belongs to the *earlier* interaction — so an interrupt sharing a coarse
+ * millisecond with the following prompt is credited to the interaction it actually ended, not the
+ * next one.
  */
 function deriveInteractions(
   source: AgentSource,
   promptsBySession: Map<string, TimelineEntry[]>,
   turnsBySession: Map<string, TimelineEntry[]>,
-  interruptionMsBySession: Map<string, number[]>,
-  compactionMsBySession: Map<string, number[]>,
+  signalsBySession: Map<string, SpanSignals>,
 ): InteractionFact[] {
   const out: InteractionFact[] = [];
   for (const [sid, prompts] of promptsBySession) {
     const turns = turnsBySession.get(sid) ?? [];
     const events = [...prompts, ...turns].sort(compareTimeline);
-    const interruptions = interruptionMsBySession.get(sid) ?? [];
-    const compactions = compactionMsBySession.get(sid) ?? [];
+    const signals = signalsBySession.get(sid) ?? { interruptionMs: [], compactBoundaryMs: [], compactSummaryMs: [] };
     let open: TimelineEntry | null = null;
     let responsePosition: SourcePosition | undefined;
     let seq = 0;
     const flush = (endTs: number) => {
       if (!open) return;
       const startTs = open.ts;
-      const inSpan = (ms: number) => ms >= startTs && ms < endTs;
-      const interrupted = interruptions.some(inSpan);
+      // Lower bound is inclusive only for the first interaction; otherwise the boundary ts belongs to
+      // the previous interaction (the one it ended), not this one.
+      const lowerInclusive = seq === 0;
+      const inSpan = (ms: number) => (lowerInclusive ? ms >= startTs : ms > startTs) && ms <= endTs;
+      const interrupted = signals.interruptionMs.some(inSpan);
       const disposition: InteractionDisposition = interrupted
         ? "interrupted"
         : responsePosition
           ? "completed"
           : "incomplete";
+      const compactionCount = Math.max(
+        signals.compactBoundaryMs.filter(inSpan).length,
+        signals.compactSummaryMs.filter(inSpan).length,
+      );
       out.push({
         id: createFactId("interaction", source, sid, open.position),
         source,
@@ -126,7 +162,7 @@ function deriveInteractions(
         seq: seq++,
         initiator: open.initiator ?? "human",
         disposition,
-        compactionCount: compactions.filter(inSpan).length,
+        compactionCount,
         timestampMs: open.ts,
         promptPosition: open.position,
         ...(responsePosition ? { responsePosition } : {}),
@@ -140,7 +176,9 @@ function deriveInteractions(
         flush(event.ts);
         open = event;
         responsePosition = undefined;
-      } else if (open) {
+      } else if (open && !event.folded) {
+        // Only the interaction's own (non-folded) turns are the response — a folded subagent turn is
+        // loop content, and must not become the parent interaction's response slot.
         responsePosition = event.position;
       }
     }
@@ -237,74 +275,33 @@ export function toolUseFromInvocation(
   return toolUse;
 }
 
-function orderedMessages(fragments: ParsedFileFragment[]) {
-  return fragments
-    .flatMap((fragment) => fragment.facts.messages)
-    .sort((a, b) =>
-      compareReconciliationOrder(
-        {
-          timestampMs: a.timestampMs,
-          source: a.source,
-          sourceSessionId: a.sourceSessionId,
-          position: a.position,
-          stableId: a.id,
-        },
-        {
-          timestampMs: b.timestampMs,
-          source: b.source,
-          sourceSessionId: b.sourceSessionId,
-          position: b.position,
-          stableId: b.id,
-        },
-      ),
-    );
+/** A fact that carries the fields the global reconciliation order needs. */
+type OrderableFact = {
+  timestampMs?: number;
+  source: AgentSource;
+  sourceSessionId: string;
+  position: SourcePosition;
+  id: string;
+};
+
+/** Sort facts by the canonical global timeline order (a missing timestamp sorts as 0). */
+function orderedByReconciliation<T extends OrderableFact>(facts: T[]): T[] {
+  const key = (fact: T) => ({
+    timestampMs: fact.timestampMs ?? 0,
+    source: fact.source,
+    sourceSessionId: fact.sourceSessionId,
+    position: fact.position,
+    stableId: fact.id,
+  });
+  return facts.sort((a, b) => compareReconciliationOrder(key(a), key(b)));
 }
 
-function orderedPrompts(fragments: ParsedFileFragment[]): PromptFact[] {
-  return fragments
-    .flatMap((fragment) => fragment.facts.prompts ?? [])
-    .sort((a, b) =>
-      compareReconciliationOrder(
-        {
-          timestampMs: a.timestampMs ?? 0,
-          source: a.source,
-          sourceSessionId: a.sourceSessionId,
-          position: a.position,
-          stableId: a.id,
-        },
-        {
-          timestampMs: b.timestampMs ?? 0,
-          source: b.source,
-          sourceSessionId: b.sourceSessionId,
-          position: b.position,
-          stableId: b.id,
-        },
-      ),
-    );
-}
-
-function orderedTasks(fragments: ParsedFileFragment[]): TaskFact[] {
-  return fragments
-    .flatMap((fragment) => fragment.facts.tasks ?? [])
-    .sort((a, b) =>
-      compareReconciliationOrder(
-        {
-          timestampMs: a.timestampMs ?? 0,
-          source: a.source,
-          sourceSessionId: a.sourceSessionId,
-          position: a.position,
-          stableId: a.id,
-        },
-        {
-          timestampMs: b.timestampMs ?? 0,
-          source: b.source,
-          sourceSessionId: b.sourceSessionId,
-          position: b.position,
-          stableId: b.id,
-        },
-      ),
-    );
-}
+const orderedMessages = (fragments: ParsedFileFragment[]) =>
+  orderedByReconciliation(fragments.flatMap((fragment) => fragment.facts.messages));
+const orderedPrompts = (fragments: ParsedFileFragment[]): PromptFact[] =>
+  orderedByReconciliation(fragments.flatMap((fragment) => fragment.facts.prompts ?? []));
+const orderedTasks = (fragments: ParsedFileFragment[]): TaskFact[] =>
+  orderedByReconciliation(fragments.flatMap((fragment) => fragment.facts.tasks ?? []));
 
 /**
  * Reconcile one producer's fragments into sessions + messages + tool-result stats. Generic over
@@ -415,10 +412,18 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
 
   // Friction (#37): folded only for producers that observe it; absence then means zero, not unknown.
   // Events carry stable ids so resumed-session replays dedupe here instead of double-counting.
-  // Interruption/compaction timestamps are also bucketed per session so interaction derivation can
-  // set disposition=interrupted / compactionCount per span (#117).
-  const interruptionMsBySession = new Map<string, number[]>();
-  const compactionMsBySession = new Map<string, number[]>();
+  // Interruption/compaction timestamps are also bucketed per session (boundary and summary kept
+  // apart, since one compaction emits both) so interaction derivation can set disposition=interrupted
+  // / compactionCount per span (#117).
+  const signalsBySession = new Map<string, SpanSignals>();
+  const spanSignalsFor = (sid: string): SpanSignals => {
+    let signals = signalsBySession.get(sid);
+    if (!signals) {
+      signals = { interruptionMs: [], compactBoundaryMs: [], compactSummaryMs: [] };
+      signalsBySession.set(sid, signals);
+    }
+    return signals;
+  };
   if (caps.observesFriction) {
     const frictionEventsBySession = new Map<string, FrictionEvent[]>();
     const seenFrictionEventIds = new Set<string>();
@@ -434,11 +439,9 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
           seenFrictionEventIds.add(key);
           events.push(event);
           if (event.timestampMs == null) continue;
-          if (event.kind === "interruption") {
-            (interruptionMsBySession.get(sid) ?? interruptionMsBySession.set(sid, []).get(sid)!).push(event.timestampMs);
-          } else if (event.kind === "compact_boundary" || event.kind === "compact_summary") {
-            (compactionMsBySession.get(sid) ?? compactionMsBySession.set(sid, []).get(sid)!).push(event.timestampMs);
-          }
+          if (event.kind === "interruption") spanSignalsFor(sid).interruptionMs.push(event.timestampMs);
+          else if (event.kind === "compact_boundary") spanSignalsFor(sid).compactBoundaryMs.push(event.timestampMs);
+          else if (event.kind === "compact_summary") spanSignalsFor(sid).compactSummaryMs.push(event.timestampMs);
         }
       }
     }
@@ -468,11 +471,14 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     const sessionId = canonicalSessionId(fact.sourceSessionId);
     if (!wanted(sessionId)) continue;
     // Surviving (deduped) assistant turn on the timeline — an input to interaction derivation (#117).
-    (turnsBySession.get(sessionId) ?? turnsBySession.set(sessionId, []).get(sessionId)!).push({
+    // `folded` marks a turn whose own session canonicalizes to a different (parent) session — a
+    // subagent turn folded into the parent: loop content, never the parent's response slot.
+    pushInto(turnsBySession, sessionId, {
       sid: sessionId,
       kind: "turn",
       ts: fact.timestampMs,
       position: fact.position,
+      folded: fact.sourceSessionId !== sessionId,
     });
     const session = sessions.get(sessionId);
     if (fact.stopReason && session?.friction) {
@@ -553,7 +559,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     const key = `${sid}\0${prompt.dedupKey ?? `${prompt.position.originKey}:${prompt.position.recordIndex}:${prompt.position.itemIndex}`}`;
     if (seenPrompts.has(key)) continue;
     seenPrompts.add(key);
-    (promptsBySession.get(sid) ?? promptsBySession.set(sid, []).get(sid)!).push({
+    pushInto(promptsBySession, sid, {
       sid,
       kind: "prompt",
       ts: prompt.timestampMs ?? 0,
@@ -565,8 +571,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     fragments[0]?.parser.source ?? ("claude" as AgentSource),
     promptsBySession,
     turnsBySession,
-    interruptionMsBySession,
-    compactionMsBySession,
+    signalsBySession,
   );
 
   return {

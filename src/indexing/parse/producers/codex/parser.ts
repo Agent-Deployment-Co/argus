@@ -2,7 +2,9 @@ import { readFileSync, readdirSync, statSync, type BigIntStats } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
+  buildPromptFact,
   createFactId,
+  type PromptFact,
   createFileIdentity,
   sameFileFingerprint,
   stableId,
@@ -19,7 +21,6 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
-  type PromptFact,
   type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
@@ -578,21 +579,21 @@ export function parseCodexTranscript(
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
       responseUserMessages++;
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
-      if (taskText) {
-        // Interaction-opening prompt marker (#117). Codex has no subagents (initiator always human)
-        // and no replay, so no dedupKey — reconcile falls back to position.
-        const promptTimestamp = timestampMs(record.value.timestamp);
-        const prompt: PromptFact = {
-          id: createFactId("prompt", "codex", sourceSessionId, record.position, "user_message"),
-          source: "codex",
-          sourceSessionId,
-          initiator: "human",
-          position: record.position,
-        };
-        if (promptTimestamp != null) prompt.timestampMs = promptTimestamp;
-        prompts.push(prompt);
-      }
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns). Codex
+      // has no subagents (so human-initiated, derived from the absent subagent kind) and — as far as
+      // we observe — no cross-file replay, so there's no replay-stable id; reconcile dedups by
+      // position. If Codex ever resumes across rollout files, a stable dedupKey would be needed here.
+      if (taskText && !generatedTitle) {
+        prompts.push(
+          buildPromptFact({
+            source: "codex",
+            sourceSessionId,
+            position: record.position,
+            timestampMs: timestampMs(record.value.timestamp),
+          }),
+        );
+      }
       if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
       if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
         if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);

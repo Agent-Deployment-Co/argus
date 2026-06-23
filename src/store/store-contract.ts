@@ -174,7 +174,13 @@ export type InteractionInitiator = "human" | "agent" | "harness";
 
 /** How an interaction's loop ended — a fact (mechanical), distinct from a task's interpreted outcome.
  *  `interrupted` = a known human interrupt (a friction signal); `incomplete` = stopped with no
- *  response, cause unknown; `error` = the loop failed. */
+ *  response, cause unknown; `error` = the loop failed.
+ *
+ *  Support matrix (mirrors the friction module, which only some producers observe): `interrupted`
+ *  and a non-zero `compactionCount` are derivable only for producers that observe friction (claude,
+ *  cowork). For codex/gemini, which expose no interrupt/compaction markers, an interaction that lacks
+ *  a response is `incomplete` (cause unknown) — it is *not* a claim that no interrupt happened, the
+ *  same unknown-vs-zero distinction the friction module documents. */
 export type InteractionDisposition = "completed" | "interrupted" | "incomplete" | "error";
 
 /**
@@ -682,6 +688,34 @@ export function createFactId(
     position.itemIndex,
     sourceIdentity,
   ]);
+}
+
+/**
+ * Build an interaction-opening PromptFact uniformly across producers (#117). Centralizing this keeps
+ * the guards consistent (timestamp set only when finite; dedupKey only when present) and derives
+ * `initiator` from the owning session's kind — a `subagent` session's prompts are agent-initiated —
+ * rather than each producer re-deriving "is this agent-initiated?" and drifting.
+ */
+export function buildPromptFact(args: {
+  source: AgentSource;
+  sourceSessionId: string;
+  position: SourcePosition;
+  /** Owning session kind; a `subagent` session's prompts are agent-initiated. */
+  kind?: SessionKind;
+  /** Replay-stable id (record uuid / message id) so resumed-session replays dedupe in reconcile. */
+  dedupKey?: string;
+  timestampMs?: number;
+}): PromptFact {
+  const prompt: PromptFact = {
+    id: createFactId("prompt", args.source, args.sourceSessionId, args.position, "user_message"),
+    source: args.source,
+    sourceSessionId: args.sourceSessionId,
+    initiator: args.kind === "subagent" ? "agent" : "human",
+    position: args.position,
+  };
+  if (args.timestampMs != null && Number.isFinite(args.timestampMs)) prompt.timestampMs = args.timestampMs;
+  if (args.dedupKey) prompt.dedupKey = args.dedupKey;
+  return prompt;
 }
 
 /** Locale-independent total order for global first-occurrence and tie-breaking rules. */

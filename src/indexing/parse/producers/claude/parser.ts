@@ -8,6 +8,7 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
+  buildPromptFact,
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
@@ -26,7 +27,6 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
-  type PromptFact,
   type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
@@ -883,25 +883,27 @@ function parseTranscript(
     if (record.value.type !== "assistant") open = undefined;
 
     if (record.value.type === "user") {
-      if (isCountableClaudeUserMessage(record.value)) {
-        session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
-        // Interaction-opening prompt marker (#117). A subagent session's own prompts are
-        // agent-initiated (loop content once folded onto the parent), so reconcile won't open a
-        // main-session interaction for them. dedupKey = record uuid (stable across resumed replays).
-        const promptTs = timestampMs(record.value.timestamp);
-        const prompt: PromptFact = {
-          id: createFactId("prompt", "claude", sourceSessionId, record.position, "user_message"),
-          source: "claude",
-          sourceSessionId,
-          initiator: session.fact.kind === "subagent" ? "agent" : "human",
-          position: record.position,
-        };
-        if (Number.isFinite(promptTs)) prompt.timestampMs = promptTs;
-        if (typeof record.value.uuid === "string" && record.value.uuid) prompt.dedupKey = record.value.uuid;
-        facts.prompts!.push(prompt);
-      }
       const taskText = claudeUserMessageText(record);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (isCountableClaudeUserMessage(record.value)) {
+        session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
+        // Interaction-opening prompt marker (#117). Skip Argus's own analysis/extraction prompts —
+        // they aren't human turns and would open phantom interactions (same exclusion the
+        // task-candidate path applies). A subagent session's prompts are agent-initiated (so reconcile
+        // won't open a folded interaction for them) — derived centrally from the session kind.
+        if (!generatedTitle) {
+          facts.prompts!.push(
+            buildPromptFact({
+              source: "claude",
+              sourceSessionId,
+              position: record.position,
+              kind: session.fact.kind,
+              timestampMs: timestampMs(record.value.timestamp),
+              dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
+            }),
+          );
+        }
+      }
       if (generatedTitle && !session.fact.firstPrompt) {
         session.fact.firstPrompt = generatedTitle;
       }

@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
+  buildPromptFact,
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
@@ -18,7 +19,6 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
-  type PromptFact,
   type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
@@ -535,22 +535,22 @@ function parseCoworkTranscript(
       const taskText = coworkUserMessageText(record);
       const nativeSessionId =
         typeof record.value.session_id === "string" ? record.value.session_id : "";
-      if (taskText) {
-        // Interaction-opening prompt marker (#117). Cowork has no subagents (initiator human);
-        // dedupKey = record uuid where present so replayed turns collapse in reconcile.
-        const promptTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
-        const prompt: PromptFact = {
-          id: createFactId("prompt", "cowork", sourceSessionId, record.position, "user_message"),
-          source: "cowork",
-          sourceSessionId,
-          initiator: "human",
-          position: record.position,
-        };
-        if (Number.isFinite(promptTimestamp)) prompt.timestampMs = promptTimestamp;
-        if (typeof record.value.uuid === "string" && record.value.uuid) prompt.dedupKey = record.value.uuid;
-        facts.prompts!.push(prompt);
-      }
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns); initiator
+      // is derived from the session kind (cowork has no subagents); dedupKey = record uuid so replayed
+      // turns collapse in reconcile.
+      if (taskText && !generatedTitle) {
+        facts.prompts!.push(
+          buildPromptFact({
+            source: "cowork",
+            sourceSessionId,
+            position: record.position,
+            kind: sessionFact?.kind,
+            timestampMs: timestampMs(record.value.timestamp ?? record.value._audit_timestamp),
+            dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
+          }),
+        );
+      }
       if (generatedTitle && !sessionFact.firstPrompt) {
         sessionFact.firstPrompt = generatedTitle;
       }
