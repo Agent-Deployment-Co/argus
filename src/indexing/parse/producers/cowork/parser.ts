@@ -32,6 +32,7 @@ import {
   argusGeneratedPromptTitle,
   hasClaudeToolResultContent,
   isClaudeGeneratedContextText,
+  isCountableClaudeUserMessage,
   shouldSkipTaskCandidateText,
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
@@ -50,7 +51,9 @@ export const COWORK_SESSIONS_ROOT_ID = "cowork-sessions";
 // v3: excludes Argus task-extraction prompts from task candidates.
 // v4: labels Argus task-extraction sessions with their target session.
 // v5: excludes and labels Argus session-analysis prompts.
-export const COWORK_TRANSCRIPT_PARSER_VERSION = "5";
+// v6: processes live (non-replay, timestamped) user prompts, dedupes turns by uuid, and sets
+//     firstPrompt / userMessages / agentMessages / rawTurns (#131).
+export const COWORK_TRANSCRIPT_PARSER_VERSION = "6";
 export const COWORK_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "cowork-jsonl",
   source: "cowork",
@@ -474,6 +477,12 @@ function parseCoworkTranscript(
   let sessionFact: SessionFact | undefined;
   const invocationNames = new Map<string, string>();
   const invocationFacts = new Map<string, InvocationFact>();
+  // Turn-level facts come from live user events only (replays are verbatim re-appends), so a live
+  // turn logged twice is collapsed by `uuid`; assistant turns dedupe by provider message id; tool
+  // results dedupe by tool_use_id since a turn's live and replayed copies can both carry them (#131).
+  const seenUserUuids = new Set<string>();
+  const seenAssistantIds = new Set<string>();
+  const seenToolResultIds = new Set<string>();
   let open: OpenAssistantMessage | undefined;
 
   const cwd = metadata?.userSelectedFolders?.[0] ?? undefined;
@@ -486,6 +495,110 @@ function parseCoworkTranscript(
     if (!next || next.value.session_id !== nativeSessionId) return undefined;
     return coworkUserMessageText(next);
   };
+
+  // User records carry the real prompts. The Cowork desktop-app audit format emits them as live
+  // events (isReplay:false) that DO carry a timestamp, plus verbatim replayed copies after a resume.
+  const handleUserRecord = (record: PositionedRecord, recordIndex: number): void => {
+    open = undefined;
+    if (!sessionFact) return;
+    const sourceSessionId = sessionFact.sourceSessionId;
+    const content = Array.isArray(record.value.message?.content) ? record.value.message.content : [];
+    const ts = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
+
+    // Tool results may be carried by a turn's live copy, its replayed copy, or both — extract from
+    // any user record but dedupe by tool_use_id so the same result isn't counted twice. Kept
+    // independent of turn dedup below: a replay can carry a tool_result its live twin lacks.
+    for (const [itemIndex, part] of content.entries()) {
+      if (!part || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
+      if (seenToolResultIds.has(part.tool_use_id)) continue;
+      seenToolResultIds.add(part.tool_use_id);
+      const position = { ...record.position, itemIndex };
+      const key = invocationMapKey(sourceSessionId, part.tool_use_id);
+      const invocation = invocationFacts.get(key);
+      const observedToolName = invocation?.name ?? invocationNames.get(key);
+      facts.toolResults.push({
+        id: createFactId("tool_result", "cowork", sourceSessionId, position, part.tool_use_id),
+        source: "cowork",
+        sourceSessionId,
+        invocationId: part.tool_use_id,
+        ...(invocation ? { resolvedInvocationFactId: invocation.id } : {}),
+        ...(observedToolName ? { observedToolName } : {}),
+        approxTokens: estimateClaudeResultTokens(part.content),
+        position,
+      });
+    }
+
+    // Turn-level facts (counts, prompt marker, task candidate, firstPrompt) come from LIVE events
+    // only. reconstructCoworkDialogue (used for task interpretation) drops every replay, so taking
+    // turns from live events keeps the indexed turns and the judged dialogue in agreement, and a
+    // replayed copy can never double-count a turn regardless of whether it carries a uuid (#131).
+    // A truly bare placeholder (no isReplay, no timestamp/_audit_timestamp) isn't a real turn.
+    if (record.value.isReplay === true || !Number.isFinite(ts)) return;
+    // Belt-and-suspenders against a live event logged twice; real Cowork records carry a uuid.
+    const uuid =
+      typeof record.value.uuid === "string" && record.value.uuid ? record.value.uuid : undefined;
+    if (uuid) {
+      if (seenUserUuids.has(uuid)) return;
+      seenUserUuids.add(uuid);
+    }
+
+    const taskText = coworkUserMessageText(record);
+    const nativeSessionId =
+      typeof record.value.session_id === "string" ? record.value.session_id : "";
+    const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+    // Cowork's audit.jsonl is a flattened log that doesn't currently carry subagent (sidechain)
+    // turns — but Cowork does run subagents, so guard defensively. A sidechain turn is agent-authored
+    // *loop content*: it is neither a human task candidate (#118) nor an interaction opening. Because
+    // Cowork emits a single (kind `main`) session, we can't route it to a distinct subagent session
+    // id the way Claude/Gemini do, so reconcile's fold-filter wouldn't catch it — emitting an
+    // agent-initiated prompt here would just split the human interaction in two. So we skip the
+    // prompt marker entirely; its tokens/tools still count as the surrounding interaction's loop.
+    // (Full Cowork subagent attribution is #128.)
+    const agentInitiated = isAgentInitiated(sessionFact.kind) || record.value.isSidechain === true;
+    // Count real human turns and title the session from the first one (#131). Same filter the
+    // Claude/Codex producers use — tool-result echoes, compaction summaries, and Argus-generated
+    // context aren't human turns. Sidechain (agent-authored) turns are loop content, not human.
+    if (isCountableClaudeUserMessage(record.value) && !agentInitiated) {
+      sessionFact.userMessages = (sessionFact.userMessages ?? 0) + 1;
+      if (taskText && !sessionFact.firstPrompt) sessionFact.firstPrompt = taskText;
+    }
+    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns.
+    if (taskText && !generatedTitle && !agentInitiated) {
+      facts.prompts!.push(
+        buildPromptFact({
+          source: "cowork",
+          sourceSessionId,
+          position: record.position,
+          kind: sessionFact.kind,
+          timestampMs: ts,
+          dedupKey: uuid,
+        }),
+      );
+    }
+    if (generatedTitle && !sessionFact.firstPrompt) {
+      sessionFact.firstPrompt = generatedTitle;
+    }
+    if (
+      taskText &&
+      !agentInitiated &&
+      !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
+    ) {
+      const task: TaskCandidateFact = {
+        id: createFactId("task_candidate", "cowork", sourceSessionId, record.position, "user_message"),
+        source: "cowork",
+        sourceSessionId,
+        text: taskText,
+        position: record.position,
+        timestampMs: ts,
+      };
+      facts.taskCandidates.push(task);
+    }
+  };
+
+  // The desktop app sometimes logs the opening prompt as the first record, *before* system/init
+  // establishes the session. Buffer any such user records and replay them once the session exists,
+  // so a session's very first prompt isn't lost (#131).
+  const pendingPreInitUsers: { record: PositionedRecord; recordIndex: number }[] = [];
 
   for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
     const record = records[recordIndex]!;
@@ -513,96 +626,23 @@ function parseCoworkTranscript(
         };
         sessionFact = fact;
         facts.sessions.push(fact);
+        // Replay any prompts that arrived before this init established the session (#131).
+        for (const pending of pendingPreInitUsers) handleUserRecord(pending.record, pending.recordIndex);
+        pendingPreInitUsers.length = 0;
       }
       open = undefined;
       continue;
     }
 
-    if (!sessionFact) continue;
+    if (!sessionFact) {
+      // No session yet — keep early user records so the opening prompt isn't lost (#131).
+      if (record.value.type === "user") pendingPreInitUsers.push({ record, recordIndex });
+      continue;
+    }
     const sourceSessionId = sessionFact.sourceSessionId;
 
-    // Bare queued desktop-app user events (no isReplay, no timestamp) — skip
-    if (record.value.type === "user" && record.value.isReplay !== true) {
-      open = undefined;
-      continue;
-    }
-
-    // Replayed user messages: extract tool_result facts for result-size attribution
     if (record.value.type === "user") {
-      open = undefined;
-      const content = Array.isArray(record.value.message?.content)
-        ? record.value.message.content
-        : [];
-      const taskText = coworkUserMessageText(record);
-      const nativeSessionId =
-        typeof record.value.session_id === "string" ? record.value.session_id : "";
-      const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
-      // Cowork's audit.jsonl is a flattened log that doesn't currently carry subagent (sidechain)
-      // turns — but Cowork does run subagents, so guard defensively. A sidechain turn is agent-authored
-      // *loop content*: it is neither a human task candidate (#118) nor an interaction opening. Because
-      // Cowork emits a single (kind `main`) session, we can't route it to a distinct subagent session
-      // id the way Claude/Gemini do, so reconcile's fold-filter wouldn't catch it — emitting an
-      // agent-initiated prompt here would just split the human interaction in two. So we skip the
-      // prompt marker entirely; its tokens/tools still count as the surrounding interaction's loop.
-      // (Full Cowork subagent attribution is #128.)
-      const agentInitiated = isAgentInitiated(sessionFact?.kind) || record.value.isSidechain === true;
-      // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns;
-      // dedupKey = record uuid so replayed turns collapse in reconcile.
-      if (taskText && !generatedTitle && !agentInitiated) {
-        facts.prompts!.push(
-          buildPromptFact({
-            source: "cowork",
-            sourceSessionId,
-            position: record.position,
-            kind: sessionFact?.kind,
-            timestampMs: timestampMs(record.value.timestamp ?? record.value._audit_timestamp),
-            dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
-          }),
-        );
-      }
-      if (generatedTitle && !sessionFact.firstPrompt) {
-        sessionFact.firstPrompt = generatedTitle;
-      }
-      if (
-        taskText &&
-        !agentInitiated &&
-        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
-      ) {
-        const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);
-        const task: TaskCandidateFact = {
-          id: createFactId(
-            "task_candidate",
-            "cowork",
-            sourceSessionId,
-            record.position,
-            "user_message",
-          ),
-          source: "cowork",
-          sourceSessionId,
-          text: taskText,
-          position: record.position,
-        };
-        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
-        facts.taskCandidates.push(task);
-      }
-      for (const [itemIndex, part] of content.entries()) {
-        if (!part || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
-        const position = { ...record.position, itemIndex };
-        const key = invocationMapKey(sourceSessionId, part.tool_use_id);
-        const invocation = invocationFacts.get(key);
-        const observedToolName = invocation?.name ?? invocationNames.get(key);
-        const result: ToolResultFact = {
-          id: createFactId("tool_result", "cowork", sourceSessionId, position, part.tool_use_id),
-          source: "cowork",
-          sourceSessionId,
-          invocationId: part.tool_use_id,
-          ...(invocation ? { resolvedInvocationFactId: invocation.id } : {}),
-          ...(observedToolName ? { observedToolName } : {}),
-          approxTokens: estimateClaudeResultTokens(part.content),
-          position,
-        };
-        facts.toolResults.push(result);
-      }
+      handleUserRecord(record, recordIndex);
       continue;
     }
 
@@ -678,6 +718,19 @@ function parseCoworkTranscript(
       continue;
     }
 
+    // Count agent turns (#131) at the point a new message is actually created — past the synthetic
+    // and invalid-timestamp guards — so agentMessages stays in sync with the messages indexed.
+    // Deduped by provider message id since one assistant message is split across streaming records
+    // (and a resumed session re-appends earlier ones verbatim).
+    if (providerMessageId) {
+      if (!seenAssistantIds.has(providerMessageId)) {
+        seenAssistantIds.add(providerMessageId);
+        sessionFact.agentMessages = (sessionFact.agentMessages ?? 0) + 1;
+      }
+    } else {
+      sessionFact.agentMessages = (sessionFact.agentMessages ?? 0) + 1;
+    }
+
     const requestId =
       typeof record.value.requestId === "string" && record.value.requestId
         ? record.value.requestId
@@ -720,6 +773,10 @@ function parseCoworkTranscript(
     }
     addInvocations(record, message, facts, invocationFacts);
   }
+
+  // Raw conversational turns. Cowork has no independent turn signal, so fall back to the human
+  // turn count — the same fallback the Codex producer uses (`rawTurns ... || userMessages`) (#131).
+  if (sessionFact?.userMessages) sessionFact.rawTurns = sessionFact.userMessages;
 
   return { facts, diagnostics };
 }
