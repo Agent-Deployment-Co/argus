@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -177,6 +177,48 @@ describe("Claude transcript fragments", () => {
         kind: "subagent",
       }),
     ]);
+  });
+
+  test("excludes a subagent's worker prompt from task candidates (#118 / #100)", () => {
+    // A subagent transcript lives under <session>/subagents/<agent>.jsonl; discovery gives it the
+    // file identity the parser needs to recognize it as an agent-initiated subagent session.
+    const root = temporaryDirectory();
+    const project = join(root, "-Users-fixture-proj");
+    mkdirSync(join(project, "sess9", "subagents"), { recursive: true });
+    writeFileSync(
+      join(project, "sess9.jsonl"),
+      [
+        { type: "user", sessionId: "sess9", cwd: "/Users/fixture/proj", uuid: "u-main-1", timestamp: "2026-06-01T00:00:00.000Z", message: { content: [{ type: "text", text: "fetch a PR and run code review" }] } },
+        { type: "assistant", sessionId: "sess9", timestamp: "2026-06-01T00:00:01.000Z", message: { id: "m-main-1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "on it" }] } },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+    writeFileSync(
+      join(project, "sess9", "subagents", "worker.jsonl"),
+      [
+        { type: "user", sessionId: "sess9", isSidechain: true, uuid: "u-sub-1", timestamp: "2026-06-01T00:00:02.000Z", message: { content: [{ type: "text", text: "Run the finder over these files" }] } },
+        { type: "assistant", sessionId: "sess9", isSidechain: true, timestamp: "2026-06-01T00:00:03.000Z", message: { id: "m-sub-1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "found 8 things" }] } },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+
+    const discovery = discoverClaudeTranscripts(root);
+    expect(discovery.status).toBe("complete");
+    const worker = discovery.files.find((file) => file.file.relativePath.endsWith("subagents/worker.jsonl"))!;
+    const parsed = parseClaudeTranscriptFile(worker, {
+      historyInputId: claudeHistoryFileIdentity(HISTORY).id,
+    });
+    expect(parsed.status).toBe("current");
+    if (parsed.status !== "current") throw new Error("expected current Claude transcript");
+    const facts = parsed.fragment.facts;
+    expect(facts.sessions[0]?.kind).toBe("subagent");
+    // The worker prompt is agent-authored, so it produces NO task candidate — it can't resurface as a
+    // phantom task once folded onto the parent (#100).
+    expect(facts.taskCandidates).toEqual([]);
+    // It is still recorded as an agent-initiated prompt marker (interaction structure, #117).
+    expect(facts.prompts?.map((prompt) => prompt.initiator)).toEqual(["agent"]);
   });
 
   test("keeps resumed provider-message replays separate and diagnoses malformed lines", () => {
