@@ -277,7 +277,7 @@ export type TaskFrustration = "none" | "low" | "high";
 /**
  * A task's span over the reconciled session timeline (#88 "chapters"): an inclusive range of
  * message seq. Subsequent facts fall under the chapter that contains them; the materializer stamps
- * each message's owning task from these spans (resolved_messages.task_seq).
+ * each message's owning task from these spans (resolved_usage.task_seq).
  */
 export interface TaskChapter {
   startSeq: number;
@@ -499,6 +499,8 @@ export interface MaterializeSession {
   messages: MessageRecord[];
   toolResults: Array<{ name: string; count: number; approxTokens: number }>;
   tasks?: TaskFact[];
+  /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions. */
+  interactions?: InteractionFact[];
 }
 
 /** Per-source freshness attestation. */
@@ -534,7 +536,7 @@ export interface StoreStats {
   sessions: number;
   messages: number;
   tasks: number;
-  /** Messages attributed to a task (resolved_messages.task_seq IS NOT NULL) — chapter coverage. */
+  /** Messages attributed to a task (resolved_usage.task_seq IS NOT NULL) — chapter coverage. */
   messagesWithTask: number;
 }
 
@@ -585,7 +587,7 @@ export interface ReadModelStore {
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
-  /** Messages attributed to each task in a session (by resolved_messages.task_seq), keyed by task id,
+  /** Messages attributed to each task in a session (by resolved_usage.task_seq), keyed by task id,
    *  oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
   /** All messages for one session, oldest first. Backs the on-demand /api/session/:id detail. */

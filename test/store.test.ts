@@ -411,9 +411,19 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_source");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_tasks_ts");
       await rawExec(db, "DROP TABLE IF EXISTS resolved_tasks");
-      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_task");
+      // v10 renamed resolved_messages -> resolved_usage and re-created its indexes; restore the
+      // pre-rename name (dropping the new-named indexes so the v9 -> v10 migration re-creates them
+      // without conflict) and strip everything added after v4.
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_ts");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_source");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_task");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date_model");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
+      await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN interaction_seq");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN task_seq");
-      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_date_model");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN input_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN output_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN cache_read");
@@ -422,6 +432,11 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN model");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN attribution_skill");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN archived");
+      // Recreate the v4-era base indexes under the old name so the 9 -> 10 rename migration's
+      // `DROP INDEX IF EXISTS resolved_messages_*` actually drops populated indexes (fidelity).
+      await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
+      await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
+      await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
       await rawExec(db, "PRAGMA user_version = 4");
     });
 
@@ -722,7 +737,7 @@ describe("SQLite store", () => {
     }
   });
 
-  test("materializeSessions stamps resolved_messages.task_seq from task chapter spans", async () => {
+  test("materializeSessions stamps resolved_usage.task_seq from task chapter spans", async () => {
     const path = storePath();
     const store = await openStore({ path });
     try {
@@ -764,7 +779,7 @@ describe("SQLite store", () => {
       const rows = await withRawDatabase(path, (db) =>
         rawAll<{ seq: number; task_seq: number | null }>(
           db,
-          `SELECT seq, task_seq FROM resolved_messages WHERE session_id = '${sid}' ORDER BY seq`,
+          `SELECT seq, task_seq FROM resolved_usage WHERE session_id = '${sid}' ORDER BY seq`,
         ),
       );
       expect(rows.map((r) => r.task_seq)).toEqual([0, 0, 1, 1]);
@@ -822,7 +837,7 @@ describe("SQLite store", () => {
         }>(
           db,
           `SELECT input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h, model, attribution_skill
-           FROM resolved_messages WHERE session_id = '${sid}' AND seq = 0`,
+           FROM resolved_usage WHERE session_id = '${sid}' AND seq = 0`,
         ),
       );
       expect(row).toEqual({
@@ -925,10 +940,26 @@ describe("SQLite store", () => {
     // Degrade to v8: drop the promoted columns/index and stamp the older version. record_json is
     // untouched, so the 8 -> 9 migration must reconstruct the columns from it.
     await withRawDatabase(path, async (db) => {
-      await rawExec(db, "DROP INDEX IF EXISTS resolved_messages_date_model");
+      // v10 renamed resolved_messages -> resolved_usage; restore the pre-rename name (dropping the
+      // new-named indexes so the v9 -> v10 migration re-creates them) before stripping the v9 columns.
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_ts");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_source");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_task");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date_model");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
+      await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN interaction_seq");
       for (const col of ["input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h", "model", "attribution_skill"]) {
         await rawExec(db, `ALTER TABLE resolved_messages DROP COLUMN ${col}`);
       }
+      // Recreate the v8-era indexes under the old name (v8 had date/ts/source + the v7 task index) so
+      // the 9 -> 10 rename migration drops populated indexes, not no-ops.
+      await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
+      await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
+      await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
+      await rawExec(db, "CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq)");
       await rawExec(db, "PRAGMA user_version = 8");
     });
 
@@ -938,7 +969,7 @@ describe("SQLite store", () => {
         rawGet<{ input_tokens: number; output_tokens: number; cache_read: number; model: string; attribution_skill: string }>(
           db,
           `SELECT input_tokens, output_tokens, cache_read, model, attribution_skill
-           FROM resolved_messages WHERE session_id = '${sid}' AND seq = 0`,
+           FROM resolved_usage WHERE session_id = '${sid}' AND seq = 0`,
         ),
       );
       expect(row).toEqual({
@@ -956,6 +987,136 @@ describe("SQLite store", () => {
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("materializeSessions writes resolved_interactions and resolved_invocations (#119)", async () => {
+    const path = storePath();
+    const sid = "claude:iact";
+    const store = await openStore({ path });
+    await store.materializeSessions("claude", [
+      {
+        meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          {
+            source: "claude",
+            sessionId: sid,
+            project: "p",
+            cwd: "/tmp/p",
+            gitBranch: "",
+            ts: 1000,
+            date: "2026-06-01",
+            model: "claude-opus-4",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+            attributionSkill: null,
+            toolUses: [
+              { name: "Bash", category: "shell" },
+              { name: "mcp__srv__do", category: "mcp", mcpServer: "srv", mcpTool: "do" },
+            ],
+          },
+        ],
+        toolResults: [],
+        // Passed out of seq order on purpose: the row's seq must come from interaction.seq, not the
+        // array index — so seq 1 (agent) must land at seq 1 even though it's first in the array.
+        interactions: [
+          {
+            id: "i1",
+            source: "claude",
+            sourceSessionId: sid,
+            seq: 1,
+            initiator: "agent",
+            disposition: "incomplete",
+            compactionCount: 0,
+            timestampMs: 2000,
+            promptPosition: { originKey: "f", recordIndex: 2, itemIndex: 0 },
+            position: { originKey: "f", recordIndex: 2, itemIndex: 0 },
+          },
+          {
+            id: "i0",
+            source: "claude",
+            sourceSessionId: sid,
+            seq: 0,
+            initiator: "human",
+            disposition: "completed",
+            compactionCount: 0,
+            timestampMs: 1000,
+            promptPosition: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+            position: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+          },
+        ],
+      },
+    ]);
+    await store.close();
+
+    const rows = await withRawDatabase(path, async (db) => ({
+      interactions: await rawAll<{ seq: number; initiator: string; disposition: string }>(
+        db,
+        `SELECT seq, initiator, disposition FROM resolved_interactions WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+      invocations: await rawAll<{ tool: string; category: string; mcp_server: string | null }>(
+        db,
+        `SELECT tool, category, mcp_server FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+    }));
+    expect(rows.interactions).toEqual([
+      { seq: 0, initiator: "human", disposition: "completed" },
+      { seq: 1, initiator: "agent", disposition: "incomplete" },
+    ]);
+    expect(rows.invocations).toEqual([
+      { tool: "Bash", category: "shell", mcp_server: null },
+      { tool: "mcp__srv__do", category: "mcp", mcp_server: "srv" },
+    ]);
+  });
+
+  test("v10 -> v11 backfills resolved_invocations from record_json.toolUses (#119)", async () => {
+    const path = storePath();
+    const sid = "claude:backfill-inv";
+    const initial = await openStore({ path });
+    await initial.materializeSessions("claude", [
+      {
+        meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          {
+            source: "claude",
+            sessionId: sid,
+            project: "p",
+            cwd: "/tmp/p",
+            gitBranch: "",
+            ts: 1000,
+            date: "2026-06-01",
+            model: "claude-opus-4",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+            attributionSkill: null,
+            toolUses: [
+              { name: "Read", category: "file-io" },
+              { name: "Bash", category: "shell" },
+            ],
+          },
+        ],
+        toolResults: [],
+      },
+    ]);
+    await initial.close();
+
+    // Degrade to v10: drop the v11 additions so re-opening runs the 10 -> 11 backfill over record_json.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
+      await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN interaction_seq");
+      await rawExec(db, "PRAGMA user_version = 10");
+    });
+
+    const migrated = await openStore({ path });
+    await migrated.close();
+    const invocations = await withRawDatabase(path, (db) =>
+      rawAll<{ tool: string; category: string }>(
+        db,
+        `SELECT tool, category FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+    );
+    expect(invocations).toEqual([
+      { tool: "Read", category: "file-io" },
+      { tool: "Bash", category: "shell" },
+    ]);
   });
 
   test("clearIndex drops the structural index but preserves the resolved read model", async () => {
