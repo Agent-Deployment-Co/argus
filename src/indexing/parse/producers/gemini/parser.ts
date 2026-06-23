@@ -19,10 +19,12 @@ import {
   type DiscoveryResult,
   type FileFingerprint,
   type FileIdentity,
+  buildPromptFact,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
+  type PromptFact,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
   type ParserDescriptor,
@@ -995,12 +997,29 @@ function factsFromConversation(
     .map((text) => argusGeneratedPromptTitle(text) ?? text)
     .find(Boolean);
   const taskCandidates: TaskCandidateFact[] = [];
+  const prompts: PromptFact[] = [];
+  // gemini doesn't fold subagents, so a subagent session (parent inferred from path) keeps its own
+  // agent-initiated openings — derived centrally from the session kind by buildPromptFact (#117).
+  const sessionFactKind = sessionKind(conversation, parentSessionId);
   for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex++) {
     const positioned = conversation.messages[messageIndex]!;
     const message = positioned.value;
     if (message.type !== "user") continue;
     const taskText = textFromGeminiContent(message.content, TASK_TEXT_LIMIT);
     if (!taskText) continue;
+    // Skip Argus's own prompts (not human turns) so they don't open phantom interactions.
+    if (!argusGeneratedPromptTitle(taskText)) {
+      prompts.push(
+        buildPromptFact({
+          source: "gemini",
+          sourceSessionId,
+          position: positioned.position,
+          kind: sessionFactKind,
+          timestampMs: parseTimestamp(message.timestamp),
+          dedupKey: typeof message.id === "string" ? message.id : undefined,
+        }),
+      );
+    }
     const next = conversation.messages[messageIndex + 1];
     const nextText =
       next?.value.type === "user"
@@ -1042,7 +1061,7 @@ function factsFromConversation(
     position: conversation.position,
   };
 
-  const messages: MessageFact[] = [];
+  const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
   const toolResults: ToolResultFact[] = [];
   for (const positioned of conversation.messages) {
@@ -1097,6 +1116,7 @@ function factsFromConversation(
 
   return {
     sessions: [session],
+    prompts,
     messages,
     invocations,
     toolResults,

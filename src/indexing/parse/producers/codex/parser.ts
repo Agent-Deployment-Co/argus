@@ -2,7 +2,9 @@ import { readFileSync, readdirSync, statSync, type BigIntStats } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
+  buildPromptFact,
   createFactId,
+  type PromptFact,
   createFileIdentity,
   sameFileFingerprint,
   stableId,
@@ -12,7 +14,7 @@ import {
   type FileFingerprint,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParsedFileFragment,
   type ParserDescriptor,
@@ -525,8 +527,9 @@ export function parseCodexTranscript(
   let pendingInvocations: PendingInvocation[] = [];
   const invocationByScopedId = new Map<string, PendingInvocation>();
   const pendingResults: PendingToolResult[] = [];
-  const messages: MessageFact[] = [];
+  const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
+  const prompts: PromptFact[] = [];
   const taskCandidates: TaskCandidateFact[] = [];
   const rawTurnIds = new Set<string>();
   let rawTurnsWithoutId = 0;
@@ -577,6 +580,20 @@ export function parseCodexTranscript(
       responseUserMessages++;
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns). Codex
+      // has no subagents (so human-initiated, derived from the absent subagent kind) and — as far as
+      // we observe — no cross-file replay, so there's no replay-stable id; reconcile dedups by
+      // position. If Codex ever resumes across rollout files, a stable dedupKey would be needed here.
+      if (taskText && !generatedTitle) {
+        prompts.push(
+          buildPromptFact({
+            source: "codex",
+            sourceSessionId,
+            position: record.position,
+            timestampMs: timestampMs(record.value.timestamp),
+          }),
+        );
+      }
       if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
       if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
         if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
@@ -766,6 +783,7 @@ export function parseCodexTranscript(
 
   const facts: NormalizedFacts = {
     sessions: [],
+    prompts,
     messages,
     invocations,
     toolResults,
