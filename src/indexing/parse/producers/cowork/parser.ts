@@ -4,6 +4,7 @@ import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
   buildPromptFact,
   createFactId,
+  isAgentInitiated,
   createFileIdentity,
   sameFileFingerprint,
   stableId,
@@ -536,10 +537,18 @@ function parseCoworkTranscript(
       const nativeSessionId =
         typeof record.value.session_id === "string" ? record.value.session_id : "";
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
-      // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns); initiator
-      // is derived from the session kind (cowork has no subagents); dedupKey = record uuid so replayed
-      // turns collapse in reconcile.
-      if (taskText && !generatedTitle) {
+      // Cowork's audit.jsonl is a flattened log that doesn't currently carry subagent (sidechain)
+      // turns — but Cowork does run subagents, so guard defensively. A sidechain turn is agent-authored
+      // *loop content*: it is neither a human task candidate (#118) nor an interaction opening. Because
+      // Cowork emits a single (kind `main`) session, we can't route it to a distinct subagent session
+      // id the way Claude/Gemini do, so reconcile's fold-filter wouldn't catch it — emitting an
+      // agent-initiated prompt here would just split the human interaction in two. So we skip the
+      // prompt marker entirely; its tokens/tools still count as the surrounding interaction's loop.
+      // (Full Cowork subagent attribution is #128.)
+      const agentInitiated = isAgentInitiated(sessionFact?.kind) || record.value.isSidechain === true;
+      // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns;
+      // dedupKey = record uuid so replayed turns collapse in reconcile.
+      if (taskText && !generatedTitle && !agentInitiated) {
         facts.prompts!.push(
           buildPromptFact({
             source: "cowork",
@@ -556,6 +565,7 @@ function parseCoworkTranscript(
       }
       if (
         taskText &&
+        !agentInitiated &&
         !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
       ) {
         const taskTimestamp = timestampMs(record.value.timestamp ?? record.value._audit_timestamp);

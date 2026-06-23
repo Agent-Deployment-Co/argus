@@ -222,9 +222,9 @@ describe("Gemini transcript fragments", () => {
       kind: "subagent",
       firstPrompt: "update the generated file",
     });
-    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
-      "update the generated file",
-    ]);
+    // A subagent session's prompts are agent-authored, not human intent, so they yield no task
+    // candidates (#118) — even though the session still records its firstPrompt + relationships.
+    expect(fragment.facts.taskCandidates).toEqual([]);
     expect(fragment.facts.relationships).toEqual([
       expect.objectContaining({
         childSourceSessionId: "gemini:gemini-subagent",
