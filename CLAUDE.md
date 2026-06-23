@@ -76,10 +76,15 @@ source identifier / slug stays `cowork` (all lowercase).
 
 The pipeline is a one-way data flow; each stage is its own module:
 
-`parse.ts` → `aggregate.ts` → (`serve.ts` web app | `push.ts` snapshot)
+`parse.ts` → `aggregate.ts` → (`api/serve.ts` web app | `push.ts` snapshot)
 
 `dashboard-builder.ts` wraps `parse → aggregate` as `buildDashboard()`, the single entry point the
 `sync` command and the web server both call.
+
+The HTTP API layer lives under **`src/api/`**: `serve.ts` (the Hono server + routes) plus the
+serve-only modules that build its responses — `session-list.ts`, `recommendations.ts`,
+`task-metrics.ts`, `debug-info.ts`. Nothing under `src/api/` is used by the `sync`/CLI pipeline;
+`dashboard-builder.ts` stays in `src/` because both serve and sync call it.
 
 - **`parse.ts`** — Reads raw `.jsonl` transcripts into `MessageRecord[]` + session metadata.
   This is the most subtle file; accuracy lives here:
@@ -126,16 +131,27 @@ The pipeline is a one-way data flow; each stage is its own module:
   for the web app's session-title fallback. (The old opt-in `claude -p` summarizer was removed in
   favor of #88's task interpretation.)
 
-- **`serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer` to
-  listen via `@hono/node-server`) exposing `GET /api/snapshot` (`{ dashboard, recommendations,
-  generatedAtMs }`, cached 30s in-memory, `?refresh` forces a re-read) and serving the React+Vite SPA
-  in `web/` from `dist/web` (SPA fallback to `index.html`). The frontend stack (React, Vite, TanStack
-  Router/Query/Table, Chart.js via react-chartjs-2) is **devDependencies only** — bundled into
-  `dist/web` at build, never installed by end users; only `hono`+`@hono/node-server` are runtime deps.
-  `web/src/types.ts` imports the CLI `Dashboard` types **type-only** from `src/`, so the API payload and
-  UI can't drift. The preferred UI; full design + rationale in **`docs/web-app.md`**. `serve` takes only
-  `--port`/`-p` and `--open`; it shows the whole warm store read-only (no source/date filters) and
-  resolves per-session-reindex task extraction from `argus.json`.
+- **`api/serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer`
+  to listen via `@hono/node-server`) serving the React+Vite SPA in `web/` from `dist/web` (SPA fallback
+  to `index.html`) and exposing the JSON API:
+  - `GET /api/snapshot` — the aggregate dashboard (`{ dashboard, recommendations, generatedAtMs }`),
+    narrowed by `since`/`until`/`project`/`source` query params (mapped into `buildDashboard`'s
+    filters; unknown source → 400). Built fresh per request — no server cache; concurrent identical
+    builds share one in-flight promise and the client's React Query `staleTime` absorbs reloads.
+    `includeSessions:false`, so the heavy per-session array is **not** in this payload.
+  - `GET /api/sessions` — paginated/filtered/sorted session list (`api/session-list.ts` over
+    `store.readSessionAggregates`, a SQL `GROUP BY` — no per-message JS walk).
+  - `GET /api/session/:id` — one session's full `SessionRow`, built on demand from its messages.
+  - `POST /api/sessions/:id/reindex`, `GET /api/sessions/:id/task-metrics`, `GET /api/debug`.
+
+  The frontend stack (React, Vite, TanStack Router/Query/Table, Chart.js via react-chartjs-2) is
+  **devDependencies only** — bundled into `dist/web` at build, never installed by end users; only
+  `hono`+`@hono/node-server` are runtime deps. `web/src/types.ts` imports the CLI `Dashboard` types
+  **type-only** from `src/` (incl. `src/api/`), so the API payload and UI can't drift. The preferred
+  UI; full design + rationale in **`docs/web-app.md`**. `serve` takes only `--port`/`-p` and `--open`
+  (the date/source filters are per-request query params, not CLI flags) and resolves per-session-reindex
+  task extraction from `argus.json`. New `/api/sessions`+`/api/session/:id` response shapes are
+  local-only (not on the `@agentdeploymentco/argus-schema` sync wire).
 
 - **`push.ts`** — The upload mechanics behind `argus sync` (the command was renamed from `push`; the
   module keeps its name). Detects user (git email → `$USER@host`) and org (email domain), POSTs the

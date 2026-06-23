@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { computeRecommendations } from "../src/recommendations.ts";
-import type { Dashboard, FrictionTotals, PluginRow, SessionHealth, SessionRow } from "../src/types.ts";
+import { computeRecommendations } from "../src/api/recommendations.ts";
+import type { Dashboard, FrictionTotals, PluginRow } from "../src/types.ts";
 
 function ft(over: Partial<FrictionTotals> = {}): FrictionTotals {
   return { observableSessions: 0, interruptions: 0, rejections: 0, compactions: 0, turns: 0, ...over };
@@ -8,21 +8,6 @@ function ft(over: Partial<FrictionTotals> = {}): FrictionTotals {
 
 function plugin(name: string, enabled: boolean, used: boolean): PluginRow {
   return { name, marketplace: "test", enabled, used, skills: [], skillMessages: 0, skillTokens: 0, skillCost: 0, mcpCalls: 0 };
-}
-
-function session(health: Partial<SessionHealth>): SessionRow {
-  const defaultHealth: SessionHealth = {
-    interruptions: null, rejections: null, compactions: null, turns: null,
-    medianTurnMs: null, maxTurnMs: null, stopReasons: null, tokenGrowth: null,
-    outcome: "unknown",
-  };
-  return {
-    source: "claude", sessionId: "s1", project: "p/1",
-    start: 0, end: 0, durationMs: 0, messages: 1, models: [], topSkills: [],
-    userMessages: null, agentMessages: null, rawTurns: null,
-    toolCounts: {}, filesTouched: [], total: 0, cost: 0, firstPrompt: "", summary: "",
-    health: { ...defaultHealth, ...health },
-  };
 }
 
 function baseDash(over: Partial<Dashboard> = {}): Dashboard {
@@ -44,6 +29,8 @@ function baseDash(over: Partial<Dashboard> = {}): Dashboard {
     byProject: [],
     sessions: [],
     frictionTotals: ft(),
+    highTokenGrowthSessions: 0,
+    outcomeCounts: { clean: 0, interrupted: 0, unknown: 0 },
     byModelDaily: [],
     bySkillDaily: [],
     ...over,
@@ -58,7 +45,7 @@ describe("computeRecommendations", () => {
   test("ids are stable and unique", () => {
     const d = baseDash({
       byPlugin: [plugin("jj", true, false)],
-      sessions: [session({ tokenGrowth: 7 })],
+      highTokenGrowthSessions: 1,
       frictionTotals: ft({ observableSessions: 1, interruptions: 2, rejections: 3, compactions: 1 }),
     });
     const ids = computeRecommendations(d).map((r) => r.id);
@@ -84,8 +71,8 @@ describe("ruleUnusedPlugins", () => {
 });
 
 describe("ruleTokenGrowth", () => {
-  test("fires when any session has tokenGrowth >= 5", () => {
-    const d = baseDash({ sessions: [session({ tokenGrowth: 6.2 })], frictionTotals: ft({ observableSessions: 1 }) });
+  test("fires when any session had high token growth", () => {
+    const d = baseDash({ highTokenGrowthSessions: 1, frictionTotals: ft({ observableSessions: 1 }) });
     const recs = computeRecommendations(d);
     const r = recs.find((x) => x.id === "token-growth")!;
     expect(r).toBeDefined();
@@ -94,14 +81,13 @@ describe("ruleTokenGrowth", () => {
   });
 
   test("escalates to warning at 3+ high-growth sessions", () => {
-    const high = Array.from({ length: 3 }, () => session({ tokenGrowth: 8 }));
-    const d = baseDash({ sessions: high, frictionTotals: ft({ observableSessions: 3 }) });
+    const d = baseDash({ highTokenGrowthSessions: 3, frictionTotals: ft({ observableSessions: 3 }) });
     const r = computeRecommendations(d).find((x) => x.id === "token-growth")!;
     expect(r.severity).toBe("warning");
   });
 
-  test("silent when tokenGrowth is below 5 or null", () => {
-    const d = baseDash({ sessions: [session({ tokenGrowth: 3 }), session({ tokenGrowth: null })] });
+  test("silent when no session had high token growth", () => {
+    const d = baseDash({ highTokenGrowthSessions: 0 });
     expect(computeRecommendations(d).find((x) => x.id === "token-growth")).toBeUndefined();
   });
 });

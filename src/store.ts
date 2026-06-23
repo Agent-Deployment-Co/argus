@@ -25,14 +25,15 @@ import type {
   PhysicalFileIdentity,
   ReconstructedFragments,
   ResolvedQuery,
+  SessionAggregate,
   SourceCoverageRow,
   StoreStats,
   TranscriptIndex,
 } from "./store-contract.ts";
-import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat } from "./types.ts";
+import type { AgentSource, MessageRecord, ParseResult, SessionMeta, ToolResultStat, Usage } from "./types.ts";
 import { STORE_FILE } from "./paths.ts";
 
-export const STORE_SCHEMA_VERSION = 8;
+export const STORE_SCHEMA_VERSION = 9;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -229,12 +230,24 @@ const CREATE_SCHEMA_SQL = `
     -- The task (chapter) this message falls under, as resolved_tasks.seq in the same session.
     -- NULL = unattributed (no task extracted, or message outside any chapter).
     task_seq INTEGER,
+    -- Usage/model promoted out of record_json so token & cost breakdowns can be done in SQL
+    -- (GROUP BY) instead of re-walking every message in JS. record_json stays authoritative;
+    -- these mirror message.usage.* / message.model / message.attributionSkill. Cost is NOT stored
+    -- (it's priced in JS, per-model, from these sums — pricing is linear so SUM-then-price is exact).
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read INTEGER,
+    cache_write_5m INTEGER,
+    cache_write_1h INTEGER,
+    model TEXT,
+    attribution_skill TEXT,
     PRIMARY KEY (session_id, seq)
   );
   CREATE INDEX resolved_messages_date ON resolved_messages(date);
   CREATE INDEX resolved_messages_ts ON resolved_messages(ts);
   CREATE INDEX resolved_messages_source ON resolved_messages(source);
   CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
+  CREATE INDEX resolved_messages_date_model ON resolved_messages(date, model);
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -692,6 +705,30 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq);
     `,
   },
+  // 8 -> 9: promote usage/model/skill out of record_json into real columns so token & cost
+  // breakdowns can be computed in SQL (GROUP BY) instead of re-walking every message in JS.
+  // Backfill existing rows directly from the JSON blob — no JS re-parse needed.
+  8: {
+    to: 9,
+    sql: `
+      ALTER TABLE resolved_messages ADD COLUMN input_tokens INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN output_tokens INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN cache_read INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN cache_write_5m INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN cache_write_1h INTEGER;
+      ALTER TABLE resolved_messages ADD COLUMN model TEXT;
+      ALTER TABLE resolved_messages ADD COLUMN attribution_skill TEXT;
+      UPDATE resolved_messages SET
+        input_tokens = json_extract(record_json, '$.usage.input'),
+        output_tokens = json_extract(record_json, '$.usage.output'),
+        cache_read = json_extract(record_json, '$.usage.cacheRead'),
+        cache_write_5m = json_extract(record_json, '$.usage.cacheWrite5m'),
+        cache_write_1h = json_extract(record_json, '$.usage.cacheWrite1h'),
+        model = json_extract(record_json, '$.model'),
+        attribution_skill = json_extract(record_json, '$.attributionSkill');
+      CREATE INDEX resolved_messages_date_model ON resolved_messages(date, model);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -748,7 +785,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
-    await get(db, "SELECT task_seq FROM resolved_messages LIMIT 1");
+    await get(db, "SELECT task_seq, input_tokens, model, attribution_skill FROM resolved_messages LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
@@ -1234,6 +1271,109 @@ export class SqliteStore implements Store {
     });
   }
 
+  readSessionMessages(sessionId: string): Promise<MessageRecord[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ record_json: string }>(
+        this.db,
+        "SELECT record_json FROM resolved_messages WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      return rows.map((row) => JSON.parse(row.record_json) as MessageRecord);
+    });
+  }
+
+  readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]> {
+    return this.schedule(async () => {
+      // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
+      // model) token sums from the promoted columns. A date filter only selects sessions (included if
+      // they have a message in range, via EXISTS); the token sums below are whole-session, not windowed.
+      const sessionConds: string[] = ["s.archived = 0"];
+      const sessionParams: unknown[] = [];
+      if (query?.sources?.length) {
+        sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
+        sessionParams.push(...query.sources);
+      }
+      if (query?.projectSubstring) {
+        sessionConds.push("instr(s.cwd, ?) > 0");
+        sessionParams.push(query.projectSubstring);
+      }
+      const dateConds: string[] = [];
+      const dateParams: unknown[] = [];
+      if (query?.since) {
+        dateConds.push("m.date >= ?");
+        dateParams.push(query.since);
+      }
+      if (query?.until) {
+        dateConds.push("m.date <= ?");
+        dateParams.push(query.until);
+      }
+      if (dateConds.length) {
+        sessionConds.push(
+          `EXISTS (SELECT 1 FROM resolved_messages m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
+        );
+        sessionParams.push(...dateParams);
+      }
+      const sessionRows = await all<{
+        session_id: string;
+        first_ts: number | null;
+        last_ts: number | null;
+        message_count: number;
+        meta_json: string;
+      }>(
+        this.db,
+        `SELECT session_id, first_ts, last_ts, message_count, meta_json
+         FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
+        sessionParams,
+      );
+
+      // Whole-session token sums per (session, model): scoped by source ONLY, deliberately NOT by the
+      // date window. A session is selected by the EXISTS check above (has a message in range), but its
+      // totals reflect the full session — so the row is internally consistent with its whole-session
+      // first_ts / last_ts / message_count / meta counts, and the recent/tokens/cost sorts agree.
+      // (A session is single-source, so the source filter never splits a session's sum.)
+      const msgFilters = buildResolvedFilters(query?.sources?.length ? { sources: query.sources } : undefined);
+      const usageRows = await all<{
+        session_id: string;
+        model: string | null;
+        input: number;
+        output: number;
+        cache_read: number;
+        cache_write_5m: number;
+        cache_write_1h: number;
+      }>(
+        this.db,
+        `SELECT session_id, model,
+            SUM(input_tokens) AS input, SUM(output_tokens) AS output, SUM(cache_read) AS cache_read,
+            SUM(cache_write_5m) AS cache_write_5m, SUM(cache_write_1h) AS cache_write_1h
+         FROM resolved_messages ${msgFilters.messageWhere}
+         GROUP BY session_id, model`,
+        msgFilters.messageParams,
+      );
+      const byModelBySession = new Map<string, { model: string; usage: Usage }[]>();
+      for (const row of usageRows) {
+        const list = byModelBySession.get(row.session_id) ?? byModelBySession.set(row.session_id, []).get(row.session_id)!;
+        list.push({
+          model: row.model ?? "",
+          usage: {
+            input: row.input ?? 0,
+            output: row.output ?? 0,
+            cacheRead: row.cache_read ?? 0,
+            cacheWrite5m: row.cache_write_5m ?? 0,
+            cacheWrite1h: row.cache_write_1h ?? 0,
+          },
+        });
+      }
+
+      return sessionRows.map((row) => ({
+        meta: JSON.parse(row.meta_json) as SessionMeta,
+        byModel: byModelBySession.get(row.session_id) ?? [],
+        firstTs: row.first_ts,
+        lastTs: row.last_ts,
+        messageCount: row.message_count,
+      }));
+    });
+  }
+
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {
     const filters = buildResolvedFilters(query);
     const messageRows = await all<{ session_id: string; record_json: string }>(
@@ -1363,7 +1503,26 @@ export class SqliteStore implements Store {
           await insertRows(
             this.db,
             "resolved_messages",
-            ["session_id", "seq", "source", "ts", "date", "cwd", "project", "record_json", "task_seq"],
+            // Usage/model/skill are mirrored into real columns (see resolved_messages DDL) so SQL
+            // can do token & cost GROUP BY without re-walking record_json in JS.
+            [
+              "session_id",
+              "seq",
+              "source",
+              "ts",
+              "date",
+              "cwd",
+              "project",
+              "record_json",
+              "task_seq",
+              "input_tokens",
+              "output_tokens",
+              "cache_read",
+              "cache_write_5m",
+              "cache_write_1h",
+              "model",
+              "attribution_skill",
+            ],
             session.messages.map((message, seq) => [
               sid,
               seq,
@@ -1374,6 +1533,13 @@ export class SqliteStore implements Store {
               message.project,
               JSON.stringify(message),
               taskSeqForMessage(seq),
+              message.usage.input,
+              message.usage.output,
+              message.usage.cacheRead,
+              message.usage.cacheWrite5m,
+              message.usage.cacheWrite1h,
+              message.model,
+              message.attributionSkill,
             ]),
           );
           await insertRows(

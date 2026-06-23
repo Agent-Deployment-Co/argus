@@ -1,16 +1,46 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createContext, useContext, type ReactNode } from "react";
 import type { Dashboard, DebugInfo, SessionRow, Snapshot, TaskMetrics } from "../types";
 
-export const SNAPSHOT_QUERY_KEY = ["snapshot"] as const;
+/** Global dashboard filters, threaded into /api/snapshot's query string (the server pushes them down
+ *  to the store read). Only date-range + source are server-side; `project` stays a client-side refine
+ *  in the Sessions list because the UI's project label isn't the working-directory the server filters. */
+export interface SnapshotFilters {
+  since?: string;
+  until?: string;
+  source?: string;
+}
+
+export const KNOWN_SOURCES = ["claude", "codex", "gemini", "cowork"] as const;
+
+/** Stable cache key for a filter set — also gates which values are actually sent to the server. */
+function snapshotQueryKey(filters: SnapshotFilters) {
+  return ["snapshot", filters.since ?? null, filters.until ?? null, sanitizedSource(filters.source)] as const;
+}
+
+/** Only forward a source the server recognizes; an unknown value (e.g. a stray `source:` token typed
+ *  into the Sessions search) would otherwise 400 the whole snapshot. "all"/unset means no filter. */
+function sanitizedSource(source: string | undefined): string | null {
+  return source && (KNOWN_SOURCES as readonly string[]).includes(source) ? source : null;
+}
+
+function snapshotUrl(filters: SnapshotFilters): string {
+  const params = new URLSearchParams();
+  if (filters.since) params.set("since", filters.since);
+  if (filters.until) params.set("until", filters.until);
+  const source = sanitizedSource(filters.source);
+  if (source) params.set("source", source);
+  const qs = params.toString();
+  return qs ? `/api/snapshot?${qs}` : "/api/snapshot";
+}
 
 export interface ReindexResponse {
   tasks: NonNullable<SessionRow["tasks"]>;
   diagnostics?: { message: string }[];
 }
 
-async function fetchSnapshot(): Promise<Snapshot> {
-  const res = await fetch("/api/snapshot");
+async function fetchSnapshot(filters: SnapshotFilters): Promise<Snapshot> {
+  const res = await fetch(snapshotUrl(filters));
   if (!res.ok) throw new Error(`Failed to load data (${res.status})`);
   return res.json();
 }
@@ -70,11 +100,18 @@ export function useSessionTaskMetrics(sessionId: string) {
   });
 }
 
-/** Fetch the dashboard snapshot. Cached by React Query so navigating between screens is instant.
- *  Pass `enabled: false` to skip the fetch entirely — the /debug page does this so it stays usable
- *  even when the snapshot read is broken or slow. */
-export function useSnapshotQuery(enabled = true) {
-  return useQuery({ queryKey: SNAPSHOT_QUERY_KEY, queryFn: fetchSnapshot, staleTime: 30_000, enabled });
+/** Fetch the dashboard snapshot for the given filters. Cached by React Query (keyed on the filters)
+ *  so navigating between screens is instant and changing a filter refetches just that slice; the old
+ *  data stays on screen while the new slice loads. Pass `enabled: false` to skip the fetch entirely —
+ *  the /debug page does this so it stays usable even when the snapshot read is broken or slow. */
+export function useSnapshotQuery(filters: SnapshotFilters, enabled = true) {
+  return useQuery({
+    queryKey: snapshotQueryKey(filters),
+    queryFn: () => fetchSnapshot(filters),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    enabled,
+  });
 }
 
 const Ctx = createContext<Snapshot | null>(null);

@@ -6,7 +6,8 @@ import { Dash, OutcomeCell, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
-import { reindexSession, useSessionTaskMetrics, useSnapshot } from "../lib/snapshot";
+import { reindexSession, useSessionTaskMetrics } from "../lib/snapshot";
+import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
@@ -25,9 +26,9 @@ const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 const TASK_VIEW: "card" | "drawer" = "drawer";
 
 export function SessionDetail() {
-  const { dashboard: d } = useSnapshot();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
-  const s = d.sessions.find((x) => x.sessionId === sessionId);
+  const detail = useSessionDetailQuery(sessionId);
+  const s = detail.data;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
   const onTaskClick = (id: string) =>
@@ -46,6 +47,9 @@ export function SessionDetail() {
     },
   });
 
+  if (detail.isPending) {
+    return <div className="session-empty">Loading session…</div>;
+  }
   if (!s) {
     return <div className="session-empty">Session not found — it may have aged out of the current window.</div>;
   }
