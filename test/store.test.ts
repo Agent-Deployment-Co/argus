@@ -419,7 +419,10 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_source");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_task");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date_model");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
       await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN interaction_seq");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN task_seq");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN input_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN output_tokens");
@@ -939,7 +942,10 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_source");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_task");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_usage_date_model");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
       await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
+      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN interaction_seq");
       for (const col of ["input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h", "model", "attribution_skill"]) {
         await rawExec(db, `ALTER TABLE resolved_messages DROP COLUMN ${col}`);
       }
@@ -970,6 +976,119 @@ describe("SQLite store", () => {
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("materializeSessions writes resolved_interactions and resolved_invocations (#119)", async () => {
+    const path = storePath();
+    const sid = "claude:iact";
+    const store = await openStore({ path });
+    await store.materializeSessions("claude", [
+      {
+        meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          {
+            source: "claude",
+            sessionId: sid,
+            project: "p",
+            cwd: "/tmp/p",
+            gitBranch: "",
+            ts: 1000,
+            date: "2026-06-01",
+            model: "claude-opus-4",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+            attributionSkill: null,
+            toolUses: [
+              { name: "Bash", category: "shell" },
+              { name: "mcp__srv__do", category: "mcp", mcpServer: "srv", mcpTool: "do" },
+            ],
+          },
+        ],
+        toolResults: [],
+        interactions: [
+          {
+            id: "i1",
+            source: "claude",
+            sourceSessionId: sid,
+            seq: 0,
+            initiator: "human",
+            disposition: "completed",
+            compactionCount: 0,
+            timestampMs: 1000,
+            promptPosition: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+            position: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+          },
+        ],
+      },
+    ]);
+    await store.close();
+
+    const rows = await withRawDatabase(path, async (db) => ({
+      interactions: await rawAll<{ seq: number; initiator: string; disposition: string }>(
+        db,
+        `SELECT seq, initiator, disposition FROM resolved_interactions WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+      invocations: await rawAll<{ tool: string; category: string; mcp_server: string | null }>(
+        db,
+        `SELECT tool, category, mcp_server FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+    }));
+    expect(rows.interactions).toEqual([{ seq: 0, initiator: "human", disposition: "completed" }]);
+    expect(rows.invocations).toEqual([
+      { tool: "Bash", category: "shell", mcp_server: null },
+      { tool: "mcp__srv__do", category: "mcp", mcp_server: "srv" },
+    ]);
+  });
+
+  test("v10 -> v11 backfills resolved_invocations from record_json.toolUses (#119)", async () => {
+    const path = storePath();
+    const sid = "claude:backfill-inv";
+    const initial = await openStore({ path });
+    await initial.materializeSessions("claude", [
+      {
+        meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          {
+            source: "claude",
+            sessionId: sid,
+            project: "p",
+            cwd: "/tmp/p",
+            gitBranch: "",
+            ts: 1000,
+            date: "2026-06-01",
+            model: "claude-opus-4",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+            attributionSkill: null,
+            toolUses: [
+              { name: "Read", category: "file-io" },
+              { name: "Bash", category: "shell" },
+            ],
+          },
+        ],
+        toolResults: [],
+      },
+    ]);
+    await initial.close();
+
+    // Degrade to v10: drop the v11 additions so re-opening runs the 10 -> 11 backfill over record_json.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
+      await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN interaction_seq");
+      await rawExec(db, "PRAGMA user_version = 10");
+    });
+
+    const migrated = await openStore({ path });
+    await migrated.close();
+    const invocations = await withRawDatabase(path, (db) =>
+      rawAll<{ tool: string; category: string }>(
+        db,
+        `SELECT tool, category FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+    );
+    expect(invocations).toEqual([
+      { tool: "Read", category: "file-io" },
+      { tool: "Bash", category: "shell" },
+    ]);
   });
 
   test("clearIndex drops the structural index but preserves the resolved read model", async () => {

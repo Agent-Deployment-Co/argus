@@ -12,6 +12,7 @@ import {
   type CompleteDiscovery,
   type DiscoveredFile,
   type DiscoveryResult,
+  type InteractionFact,
   type MaterializeSession,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
@@ -305,6 +306,15 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
     }
     list.push(message);
   }
+  const interactionsBySession = new Map<string, InteractionFact[]>();
+  for (const interaction of output.interactions) {
+    let list = interactionsBySession.get(interaction.sourceSessionId);
+    if (!list) {
+      list = [];
+      interactionsBySession.set(interaction.sourceSessionId, list);
+    }
+    list.push(interaction);
+  }
   const sessions: MaterializeSession[] = [];
   for (const [sid, meta] of output.sessions) {
     const perSession = output.toolResultsBySession.get(sid);
@@ -320,6 +330,7 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
       messages: messagesBySession.get(sid) ?? [],
       toolResults,
       tasks: output.tasksBySession.get(sid) ?? [],
+      interactions: interactionsBySession.get(sid) ?? [],
     });
   }
   return sessions;
