@@ -149,6 +149,10 @@ export interface ToolUse {
   mcpTool?: string;
   /** For file tools (Edit/Write/Read/NotebookEdit): the target path. */
   filePath?: string;
+  /** Approx token weight of this call's paired tool *result* (output dumped back into context),
+   *  summed across the result(s) correlated to this call. Absent/0 when no result resolved to this
+   *  call. The call+result unit (#130) — backs byTool/heaviestToolResults result-size GROUP BYs. */
+  approxResultTokens?: number;
 }
 
 /** One assistant message — the unit that carries token usage + skill attribution. */

@@ -402,7 +402,6 @@ describe("SQLite store", () => {
           filePath: "/tmp/p/rollout.jsonl",
         },
         messages: [],
-        toolResults: [],
       },
     ]);
     await initial.close();
@@ -437,6 +436,12 @@ describe("SQLite store", () => {
       await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
       await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
       await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
+      // resolved_tool_results existed from v1; recreate it so the 11 -> 12 migration's DROP runs
+      // against a populated table (fresh v12 schema no longer creates it).
+      await rawExec(
+        db,
+        "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
+      );
       await rawExec(db, "PRAGMA user_version = 4");
     });
 
@@ -592,7 +597,6 @@ describe("SQLite store", () => {
           attributionSkill: null,
           toolUses: [],
         })),
-        toolResults: [],
       });
 
       const first = await store.materializeSessions("claude", [session(3)]);
@@ -659,7 +663,6 @@ describe("SQLite store", () => {
             filePath: "/tmp/p/rollout.jsonl",
           },
           messages: [],
-          toolResults: [],
           tasks: [task, untimestampedTask, earlierTask],
         },
       ]);
@@ -717,11 +720,6 @@ describe("SQLite store", () => {
           filePath: "/tmp/p/rollout.jsonl",
         },
         messages: [message(ts)],
-        toolResults: [
-          { name: "apply_patch", count: 1, approxTokens: 2 },
-          { name: "Bash", count: 1, approxTokens: 3 },
-          { name: "Edit", count: 1, approxTokens: 5 },
-        ],
       });
 
       await store.materializeSessions("codex", [{ ...materialized(1000), tasks: [task] }]);
@@ -771,7 +769,6 @@ describe("SQLite store", () => {
         {
           meta: { source: "codex", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
           messages: [message(1000), message(1001), message(1002), message(1003)],
-          toolResults: [],
           tasks: [task("a", 0, 1), task("b", 2, 3)],
         },
       ]);
@@ -822,7 +819,6 @@ describe("SQLite store", () => {
               toolUses: [],
             },
           ],
-          toolResults: [],
         },
       ]);
       const row = await withRawDatabase(path, (db) =>
@@ -876,12 +872,10 @@ describe("SQLite store", () => {
           meta: { source: "codex", sessionId: "codex:a", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/r.jsonl" },
           // two models, two dates
           messages: [msg("codex:a", "2026-06-01", "gpt-5", 10), msg("codex:a", "2026-06-01", "gpt-5", 5), msg("codex:a", "2026-06-03", "gpt-4", 7)],
-          toolResults: [],
         },
         {
           meta: { source: "codex", sessionId: "codex:b", project: "p", cwd: "/tmp/proj-b", filePath: "/tmp/proj-b/r.jsonl" },
           messages: [msg("codex:b", "2026-06-02", "gpt-5", 3)],
-          toolResults: [],
         },
       ]);
 
@@ -932,7 +926,6 @@ describe("SQLite store", () => {
             toolUses: [],
           },
         ],
-        toolResults: [],
       },
     ]);
     await initial.close();
@@ -960,6 +953,11 @@ describe("SQLite store", () => {
       await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
       await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
       await rawExec(db, "CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq)");
+      // Recreate resolved_tool_results (present since v1) so the 11 -> 12 migration's DROP runs.
+      await rawExec(
+        db,
+        "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
+      );
       await rawExec(db, "PRAGMA user_version = 8");
     });
 
@@ -1009,12 +1007,11 @@ describe("SQLite store", () => {
             usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
             attributionSkill: null,
             toolUses: [
-              { name: "Bash", category: "shell" },
+              { name: "Bash", category: "shell", approxResultTokens: 42 },
               { name: "mcp__srv__do", category: "mcp", mcpServer: "srv", mcpTool: "do" },
             ],
           },
         ],
-        toolResults: [],
         // Passed out of seq order on purpose: the row's seq must come from interaction.seq, not the
         // array index — so seq 1 (agent) must land at seq 1 even though it's first in the array.
         interactions: [
@@ -1052,18 +1049,20 @@ describe("SQLite store", () => {
         db,
         `SELECT seq, initiator, disposition FROM resolved_interactions WHERE session_id = '${sid}' ORDER BY seq`,
       ),
-      invocations: await rawAll<{ tool: string; category: string; mcp_server: string | null }>(
+      invocations: await rawAll<{ tool: string; category: string; mcp_server: string | null; approx_result_tokens: number }>(
         db,
-        `SELECT tool, category, mcp_server FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
+        `SELECT tool, category, mcp_server, approx_result_tokens FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
       ),
     }));
     expect(rows.interactions).toEqual([
       { seq: 0, initiator: "human", disposition: "completed" },
       { seq: 1, initiator: "agent", disposition: "incomplete" },
     ]);
+    // Each row is the call+result unit (#130): the Bash call carries its paired result size; the
+    // result-less MCP call defaults to 0.
     expect(rows.invocations).toEqual([
-      { tool: "Bash", category: "shell", mcp_server: null },
-      { tool: "mcp__srv__do", category: "mcp", mcp_server: "srv" },
+      { tool: "Bash", category: "shell", mcp_server: null, approx_result_tokens: 42 },
+      { tool: "mcp__srv__do", category: "mcp", mcp_server: "srv", approx_result_tokens: 0 },
     ]);
   });
 
@@ -1092,7 +1091,6 @@ describe("SQLite store", () => {
             ],
           },
         ],
-        toolResults: [],
       },
     ]);
     await initial.close();
@@ -1102,6 +1100,11 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP TABLE IF EXISTS resolved_interactions");
       await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
       await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN interaction_seq");
+      // resolved_tool_results existed at v10; recreate it so the 11 -> 12 migration's DROP runs.
+      await rawExec(
+        db,
+        "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
+      );
       await rawExec(db, "PRAGMA user_version = 10");
     });
 
@@ -1117,6 +1120,71 @@ describe("SQLite store", () => {
       { tool: "Read", category: "file-io" },
       { tool: "Bash", category: "shell" },
     ]);
+  });
+
+  test("v11 -> v12 folds resolved_tool_results onto resolved_invocations, then drops it (#130)", async () => {
+    const path = storePath();
+    const sid = "claude:fold-results";
+    const initial = await openStore({ path });
+    // Two Bash calls + one Read call. Per-tool result totals live in resolved_tool_results at v11.
+    await initial.materializeSessions("claude", [
+      {
+        meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          {
+            source: "claude",
+            sessionId: sid,
+            project: "p",
+            cwd: "/tmp/p",
+            gitBranch: "",
+            ts: 1000,
+            date: "2026-06-01",
+            model: "claude-opus-4",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+            attributionSkill: null,
+            toolUses: [
+              { name: "Bash", category: "shell" },
+              { name: "Bash", category: "shell" },
+              { name: "Read", category: "file-io" },
+            ],
+          },
+        ],
+      },
+    ]);
+    await initial.close();
+
+    // Degrade to v11: strip the v12 columns and re-create resolved_tool_results with per-name totals.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN args");
+      await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN approx_result_tokens");
+      await rawExec(
+        db,
+        "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
+      );
+      await rawExec(db, `INSERT INTO resolved_tool_results VALUES ('${sid}', 'Bash', 2, 100), ('${sid}', 'Read', 1, 30)`);
+      await rawExec(db, "PRAGMA user_version = 11");
+    });
+
+    const migrated = await openStore({ path });
+    await migrated.close();
+    const result = await withRawDatabase(path, async (db) => ({
+      rows: await rawAll<{ seq: number; tool: string; approx_result_tokens: number }>(
+        db,
+        `SELECT seq, tool, approx_result_tokens FROM resolved_invocations WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+      toolResultsTable: await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resolved_tool_results'",
+      ),
+    }));
+    // The per-(session, tool) total lands on that tool's first invocation row; same-name siblings stay 0,
+    // so a GROUP BY tool SUM reproduces the old per-name totals exactly.
+    expect(result.rows).toEqual([
+      { seq: 0, tool: "Bash", approx_result_tokens: 100 },
+      { seq: 1, tool: "Bash", approx_result_tokens: 0 },
+      { seq: 2, tool: "Read", approx_result_tokens: 30 },
+    ]);
+    expect(result.toolResultsTable).toBeUndefined(); // table dropped
   });
 
   test("clearIndex drops the structural index but preserves the resolved read model", async () => {
@@ -1135,7 +1203,6 @@ describe("SQLite store", () => {
             filePath: "/tmp/p/r.jsonl",
           },
           messages: [],
-          toolResults: [],
         },
       ]);
 

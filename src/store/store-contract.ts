@@ -493,11 +493,11 @@ export interface SessionAggregate {
   messageCount: number;
 }
 
-/** One reconciled session ready to materialize: its meta, messages, and tool-result stats. */
+/** One reconciled session ready to materialize: its meta, messages, tasks, and interactions. Tool
+ *  result sizes ride on each message's toolUses (#130: approxResultTokens) — no separate field. */
 export interface MaterializeSession {
   meta: SessionMeta;
   messages: MessageRecord[];
-  toolResults: Array<{ name: string; count: number; approxTokens: number }>;
   tasks?: TaskFact[];
   /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions. */
   interactions?: InteractionFact[];
