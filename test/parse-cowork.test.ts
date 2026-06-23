@@ -53,6 +53,86 @@ describe("cowork sidechain guard (#118)", () => {
   });
 });
 
+describe("cowork live-prompt indexing (#131)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  });
+
+  function parseRecords(records: Record<string, unknown>[]) {
+    const root = mkdtempSync(join(tmpdir(), "argus-cowork-131-"));
+    dirs.push(root);
+    const transcript = join(root, "audit.jsonl");
+    writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n"));
+    const parsed = parseCoworkTranscriptPath(transcript);
+    if (parsed.status !== "current") throw new Error(`expected current, got ${parsed.status}`);
+    return parsed.fragment.facts;
+  }
+
+  test("a live user turn plus a replayed copy collapses to one (resumed session)", () => {
+    const facts = parseRecords([
+      { type: "system", subtype: "init", session_id: "s131a", cwd: "/Users/you/proj" },
+      // Live prompt (isReplay:false, timestamped) — the real user turn.
+      { type: "user", uuid: "u1", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "Fix the login bug" }] } },
+      // Replayed copy of the same turn after a resume — same uuid, must not double-count.
+      { type: "user", uuid: "u1", isReplay: true, timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "Fix the login bug" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:02.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "On it." }] } },
+    ]);
+    const session = facts.sessions[0]!;
+    expect(session.firstPrompt).toBe("Fix the login bug");
+    expect(session.userMessages).toBe(1);
+    expect(session.agentMessages).toBe(1);
+    expect(session.rawTurns).toBe(1);
+    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Fix the login bug"]);
+  });
+
+  test("a never-resumed session (only live prompts) still reports title, counts, tasks", () => {
+    const facts = parseRecords([
+      { type: "system", subtype: "init", session_id: "s131b", cwd: "/Users/you/proj" },
+      { type: "user", uuid: "u1", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "Add a dark mode toggle" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:02.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "Sure." }] } },
+      { type: "user", uuid: "u2", timestamp: "2026-06-01T00:00:03.000Z", message: { content: [{ type: "text", text: "Also persist the preference" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:04.000Z", message: { id: "a2", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "Done." }] } },
+    ]);
+    const session = facts.sessions[0]!;
+    expect(session.firstPrompt).toBe("Add a dark mode toggle");
+    expect(session.userMessages).toBe(2);
+    expect(session.agentMessages).toBe(2);
+    expect(facts.taskCandidates.map((t) => t.text)).toEqual([
+      "Add a dark mode toggle",
+      "Also persist the preference",
+    ]);
+  });
+
+  test("an opening prompt logged before system/init is not lost", () => {
+    // The desktop app sometimes logs the first prompt as the very first record, ahead of init.
+    const facts = parseRecords([
+      { type: "user", uuid: "u1", timestamp: "2026-06-01T00:00:00.500Z", message: { content: [{ type: "text", text: "Set up the project" }] } },
+      { type: "system", subtype: "init", session_id: "s131d", cwd: "/Users/you/proj" },
+      { type: "assistant", timestamp: "2026-06-01T00:00:01.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "Will do." }] } },
+    ]);
+    const session = facts.sessions[0]!;
+    expect(session.firstPrompt).toBe("Set up the project");
+    expect(session.userMessages).toBe(1);
+    expect(session.agentMessages).toBe(1);
+    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Set up the project"]);
+  });
+
+  test("a truly bare queued event (no isReplay, no timestamp) is still skipped", () => {
+    const facts = parseRecords([
+      { type: "system", subtype: "init", session_id: "s131c", cwd: "/Users/you/proj" },
+      // Bare placeholder: no isReplay and no timestamp/_audit_timestamp — not a real turn.
+      { type: "user", uuid: "u0", message: { content: [{ type: "text", text: "queued placeholder" }] } },
+      { type: "user", uuid: "u1", timestamp: "2026-06-01T00:00:01.000Z", message: { content: [{ type: "text", text: "the real prompt" }] } },
+      { type: "assistant", timestamp: "2026-06-01T00:00:02.000Z", message: { id: "a1", model: "claude-sonnet-4-6", usage: { input_tokens: 1 }, content: [{ type: "text", text: "ok" }] } },
+    ]);
+    const session = facts.sessions[0]!;
+    expect(session.firstPrompt).toBe("the real prompt");
+    expect(session.userMessages).toBe(1);
+    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["the real prompt"]);
+  });
+});
+
 describe("discoverCoworkTranscripts", () => {
   test("finds only audit.jsonl files across the 3-level hierarchy", () => {
     const result = discoverCoworkTranscripts(FIX);
@@ -149,21 +229,21 @@ describe("parseCoworkTranscriptFile", () => {
       expect(rejections).toHaveLength(1);
     });
 
-    test("bare user message (no isReplay) is skipped", () => {
+    test("tool_result facts come only from the user turn that carries them", () => {
       const file = discoverOne("session-111");
       const result = parseCoworkTranscriptFile(file);
       if (result.status !== "current") throw new Error("parse failed");
-      // Only the isReplay=true user messages produce tool result facts.
-      // The bare user message carries no tool_result, so toolResults = 1 (from the second turn).
+      // Only the tool_result user turn produces a tool result fact; the prompt turns carry none.
       const { toolResults } = result.fragment.facts;
       expect(toolResults).toHaveLength(1);
       expect(toolResults[0]!.invocationId).toBe("tool_1");
     });
 
-    test("emits task candidates from replayed user messages without duplicating bare events", () => {
+    test("live and replayed copies of a turn collapse to one task candidate (#131)", () => {
       const file = discoverOne("session-111");
       const result = parseCoworkTranscriptFile(file);
       if (result.status !== "current") throw new Error("parse failed");
+      // Each prompt appears as a live event and a replayed copy sharing a uuid; dedup keeps one.
       expect(result.fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
         "Hello",
         "Do something",
@@ -173,6 +253,28 @@ describe("parseCoworkTranscriptFile", () => {
         Date.parse("2026-05-23T10:00:11.000Z"),
       ]);
       expect(result.fragment.facts.tasks).toEqual([]);
+    });
+
+    test("sets firstPrompt and user/agent/turn counts from real prompts (#131)", () => {
+      const file = discoverOne("session-111");
+      const result = parseCoworkTranscriptFile(file);
+      if (result.status !== "current") throw new Error("parse failed");
+      const session = result.fragment.facts.sessions[0]!;
+      expect(session.firstPrompt).toBe("Hello");
+      // Two human turns (Hello, Do something) — live + replayed copies collapse by uuid.
+      expect(session.userMessages).toBe(2);
+      // Two assistant messages (msg_aaa1, msg_aaa2), deduped across streaming records.
+      expect(session.agentMessages).toBe(2);
+      expect(session.rawTurns).toBe(2);
+    });
+
+    test("a single live (non-replayed) prompt marker is emitted per turn (#131)", () => {
+      const file = discoverOne("session-111");
+      const result = parseCoworkTranscriptFile(file);
+      if (result.status !== "current") throw new Error("parse failed");
+      const prompts = result.fragment.facts.prompts ?? [];
+      expect(prompts).toHaveLength(2);
+      expect(prompts.every((p) => p.initiator === "human")).toBe(true);
     });
 
     test("thinking_tokens records are skipped", () => {
