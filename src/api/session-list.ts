@@ -6,7 +6,7 @@
 import { buildSessionRow } from "../aggregate.ts";
 import { cost } from "../pricing.ts";
 import type { SessionAggregate, TaskFact } from "../store-contract.ts";
-import { heuristicSummary } from "../summarize.ts";
+import { heuristicSummary, summaryFactsFromMessages } from "../summarize.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
 export type SessionSort = "recent" | "tokens" | "cost";
@@ -113,23 +113,13 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
 
 /** Build the full detail row for one session from its messages (oldest first) — the same SessionRow
  *  the dashboard would produce, computed on demand so heavy per-session content never rides the bulk
- *  payload. The heuristic summary is derived here the way buildDashboard derives it. */
+ *  payload. The summary uses the shared `summaryFactsFromMessages` so it matches the dashboard exactly. */
 export function buildSessionDetail(
   sessionId: string,
   messages: MessageRecord[],
   meta: SessionMeta | undefined,
   tasks: TaskFact[],
 ): SessionRow {
-  const topSkills: string[] = [];
-  const toolCounts: Record<string, number> = {};
-  const filesTouched: string[] = [];
-  for (const m of messages) {
-    if (m.attributionSkill && !topSkills.includes(m.attributionSkill)) topSkills.push(m.attributionSkill);
-    for (const tu of m.toolUses) {
-      toolCounts[tu.name] = (toolCounts[tu.name] || 0) + 1;
-      if (tu.filePath && !filesTouched.includes(tu.filePath)) filesTouched.push(tu.filePath);
-    }
-  }
-  const summary = heuristicSummary({ firstPrompt: meta?.firstPrompt || "", topSkills, toolCounts, filesTouched });
+  const summary = heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
   return buildSessionRow(sessionId, messages, meta, summary, tasks);
 }

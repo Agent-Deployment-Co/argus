@@ -397,7 +397,8 @@ export interface ResolvedQuery {
  *  the price table lives in JS. Local-only (not on the sync wire). */
 export interface SessionAggregate {
   meta: SessionMeta;
-  /** Token sums per model, over the messages matching the query (date-filtered when filters apply). */
+  /** Whole-session token sums per model (source-scoped, NOT windowed by the date filter — see
+   *  readSessionAggregates), so they're consistent with the whole-session firstTs/lastTs/counts. */
   byModel: { model: string; usage: Usage }[];
   /** First/last message timestamps (epoch ms) for this session from resolved_sessions. */
   firstTs: number | null;
@@ -487,8 +488,8 @@ export interface Store {
   readSessionMessages(sessionId: string): Promise<MessageRecord[]>;
   /** Per-session token rollups for the paginated session list: one entry per matching session with
    *  its meta + per-model token sums (SQL `GROUP BY`, no per-message JS walk). Filters match
-   *  readResolved (sources/since/until/project); date filters keep only sessions with an in-range
-   *  message and sum only in-range messages. */
+   *  readResolved (sources/since/until/project). The date filter selects which sessions appear (those
+   *  with a message in range); each row's token sums are whole-session, not windowed. */
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;

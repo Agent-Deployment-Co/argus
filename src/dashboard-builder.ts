@@ -8,7 +8,8 @@ import type { TranscriptSource } from "./parse.ts";
 import { syncStatsSummary } from "./parse-incremental.ts";
 import { openSessionStore } from "./session-store.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
-import { heuristicSummary } from "./summarize.ts";
+import { heuristicSummary, summaryFactsFromMessages } from "./summarize.ts";
+import type { MessageRecord } from "./types.ts";
 
 export type Log = (s: string) => void;
 
@@ -89,25 +90,16 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
 
   const plugins = loadPlugins();
 
-  // Build a heuristic one-line summary per session from its aggregated facts.
-  const factsBySession = new Map<string, { firstPrompt: string; topSkills: string[]; toolCounts: Record<string, number>; filesTouched: string[] }>();
+  // A heuristic one-line summary per session, from the same fact derivation /api/session/:id uses.
+  const messagesBySession = new Map<string, MessageRecord[]>();
   for (const m of parseResult.messages) {
-    const f = factsBySession.get(m.sessionId) || {
-      firstPrompt: parseResult.sessions.get(m.sessionId)?.firstPrompt || "",
-      topSkills: [],
-      toolCounts: {},
-      filesTouched: [],
-    };
-    if (m.attributionSkill && !f.topSkills.includes(m.attributionSkill)) f.topSkills.push(m.attributionSkill);
-    for (const tu of m.toolUses) {
-      f.toolCounts[tu.name] = (f.toolCounts[tu.name] || 0) + 1;
-      if (tu.filePath && !f.filesTouched.includes(tu.filePath)) f.filesTouched.push(tu.filePath);
-    }
-    factsBySession.set(m.sessionId, f);
+    (messagesBySession.get(m.sessionId) ?? messagesBySession.set(m.sessionId, []).get(m.sessionId)!).push(m);
   }
-
   const summaries = new Map<string, string>();
-  for (const [sid, f] of factsBySession) summaries.set(sid, heuristicSummary(f));
+  for (const [sid, msgs] of messagesBySession) {
+    const firstPrompt = parseResult.sessions.get(sid)?.firstPrompt || "";
+    summaries.set(sid, heuristicSummary(summaryFactsFromMessages(msgs, firstPrompt)));
+  }
 
   const dash = aggregate(parseResult, plugins, summaries, { includeSessions: opts.includeSessions });
   dash.generatedAtMs = Date.now();
