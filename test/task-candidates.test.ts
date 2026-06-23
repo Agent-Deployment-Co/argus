@@ -6,8 +6,8 @@ import {
   shouldSkipTaskCandidateText,
   taskExtractionPromptTitle,
   taskOutcomePromptTitle,
-} from "../src/task-candidates.ts";
-import { buildTaskOutcomePrompt } from "../src/task-extraction.ts";
+} from "../src/indexing/interpret/task-candidates.ts";
+import { buildTaskOutcomePrompt } from "../src/indexing/interpret/task-extraction.ts";
 
 describe("task candidate filtering", () => {
   test("skips Argus task extraction prompts so embedded source sessions are not re-extracted", () => {

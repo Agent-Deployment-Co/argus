@@ -9,7 +9,7 @@ import {
   type DiscoveryResult,
   type ParsedAuxiliaryFragment,
   type ParsedFileFragment,
-} from "../src/store-contract.ts";
+} from "../src/store/store-contract.ts";
 
 const transcriptFile = {
   id: "claude:projects:transcript:session.jsonl",

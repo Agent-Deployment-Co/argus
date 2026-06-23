@@ -2,7 +2,7 @@
 // `argus run`). These commands assume a flaky laptop — it sleeps and wakes, drops Wi-Fi, loses the
 // network for stretches — so every wait is cancellable, every retry is bounded with jitter, and a
 // crashing leg restarts instead of taking the process down. Nothing here ever busy-waits.
-import type { Log } from "./dashboard-builder.ts";
+import type { Log } from "./reporting/dashboard-builder.ts";
 
 /**
  * Resolve after `ms`, or earlier when `signal` aborts. Always resolves (never rejects) so callers

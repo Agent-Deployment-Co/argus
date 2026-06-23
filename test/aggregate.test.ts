@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { aggregate } from "../src/aggregate.ts";
-import { parseAll } from "../src/parse.ts";
+import { aggregate } from "../src/reporting/aggregate.ts";
+import { parseFixtures } from "./helpers/parse-fixtures.ts";
 import { emptyUsage, type MessageRecord, type ParseResult, type PluginInfo } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
-const parsed = parseAll({ projectsDir: join(FIX, "projects"), historyFile: join(FIX, "history.jsonl") });
+const parsed = await parseFixtures({ projectsDir: join(FIX, "projects"), historyFile: join(FIX, "history.jsonl") });
 const dash = aggregate(parsed, new Map<string, PluginInfo>(), new Map());
 
 describe("aggregate", () => {

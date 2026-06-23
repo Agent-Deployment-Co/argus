@@ -11,7 +11,7 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
-import { buildDashboard, summaryLine, type BuildDashboardOptions, type Log } from "./dashboard-builder.ts";
+import { buildDashboard, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE } from "./paths.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";

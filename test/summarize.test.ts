@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { heuristicSummary } from "../src/summarize.ts";
+import { heuristicSummary } from "../src/indexing/interpret/summarize.ts";
 
 describe("heuristicSummary", () => {
   test("includes prompt, skills, top tools, and file count", () => {
