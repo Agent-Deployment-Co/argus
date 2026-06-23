@@ -6,8 +6,9 @@ import type { AgentSource, MessageRecord, ParseResult, SessionMeta, Usage } from
  * Increment when serialized fragment semantics change incompatibly.
  * Source parser versions remain independent so one adapter can invalidate narrowly.
  * v2: dropped external (AgentsView) import fragments — stale stores re-parse from disk.
+ * v3: producers emit interaction-opening PromptFacts (#117); stale fragments re-parse.
  */
-export const PARSED_FRAGMENT_CONTRACT_VERSION = 2;
+export const PARSED_FRAGMENT_CONTRACT_VERSION = 3;
 
 /** Decimal string used for filesystem values that may exceed JavaScript's safe integer range. */
 export type SerializedInt64 = string;
@@ -69,6 +70,8 @@ export interface SourcePosition {
 
 export type FactKind =
   | "session"
+  | "prompt"
+  | "interaction"
   | "message"
   | "invocation"
   | "tool_result"
@@ -139,10 +142,19 @@ export interface SessionFact {
   position: SourcePosition;
 }
 
-export interface MessageFact {
+/**
+ * Token usage as metered by the provider at the assistant-turn grain (Claude `message.usage`, Codex
+ * `token_count` events). Named for what it is — the model retires "message" as a unit of meaning; a
+ * raw record is an *event* and this is the usage it carries. Not a structural unit: it is a metered
+ * detail inside an interaction's loop. A row exists at this grain because cost is priced per-model
+ * (SUM-then-price is exact only within one model). (#117 will attribute it to its owning interaction.)
+ */
+export interface UsageFact {
   id: string;
   source: AgentSource;
   sourceSessionId: string;
+  /** Owning interaction (#117). Optional until producers emit interactions. */
+  interactionId?: string;
   providerMessageId?: string;
   requestId?: string;
   timestampMs: number;
@@ -156,12 +168,77 @@ export interface MessageFact {
   position: SourcePosition;
 }
 
+/** Who authored an interaction's opening prompt (see docs/session-model.md). Only `human`-initiated
+ *  prompts carry intent — task interpretation filters on this. */
+export type InteractionInitiator = "human" | "agent" | "harness";
+
+/** How an interaction's loop ended — a fact (mechanical), distinct from a task's interpreted outcome.
+ *  `interrupted` = a known human interrupt (a friction signal); `incomplete` = stopped with no
+ *  response, cause unknown; `error` = the loop failed.
+ *
+ *  Support matrix (mirrors the friction module, which only some producers observe): `interrupted`
+ *  and a non-zero `compactionCount` are derivable only for producers that observe friction (claude,
+ *  cowork). For codex/gemini, which expose no interrupt/compaction markers, an interaction that lacks
+ *  a response is `incomplete` (cause unknown) — it is *not* a claim that no interrupt happened, the
+ *  same unknown-vs-zero distinction the friction module documents. */
+export type InteractionDisposition = "completed" | "interrupted" | "incomplete" | "error";
+
+/**
+ * A producer-emitted marker for one interaction-opening prompt (a user-role turn that opens an
+ * exchange — not a tool-result delivery). Reconcile groups the deduped/ordered timeline into
+ * InteractionFacts using these as the opening boundaries. Only `human`-initiated prompts open a
+ * (main-session) interaction; `agent` markers (a subagent session's own prompts, folded onto the
+ * parent) are loop content, never new openings — this is what keeps subagent prompts from becoming
+ * phantom interactions/tasks (#118). Carries `dedupKey` (a replay-stable id like the record uuid)
+ * so a resumed session's replayed prompt collapses to one in reconcile.
+ */
+export interface PromptFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  initiator: InteractionInitiator;
+  timestampMs?: number;
+  /** Replay-stable identity (e.g. record uuid) for dedup across resumed-session files; falls back to
+   *  position when the source has no stable id. */
+  dedupKey?: string;
+  position: SourcePosition;
+}
+
+/**
+ * One interaction: prompt → agent loop → response (see docs/session-model.md). The atomic unit of a
+ * session. **Reconcile-derived**, not a per-file fact: reconcile groups the deduped timeline into
+ * these. Text is NOT stored — the slot positions let Interpret re-read prompt/response from disk
+ * without re-deriving structure from role tags. Tasks (#122) will span interactions.
+ */
+export interface InteractionFact {
+  id: string;
+  source: AgentSource;
+  sourceSessionId: string;
+  /** Ordinal within its session, in source/timeline order (0-based). */
+  seq: number;
+  /** Who authored the opening prompt. */
+  initiator: InteractionInitiator;
+  /** How the loop ended. */
+  disposition: InteractionDisposition;
+  /** Times the harness compacted context *during* this interaction's loop (usually 0). Not a boundary. */
+  compactionCount: number;
+  /** Interaction start time (the opening prompt's timestamp) when the source carries one. */
+  timestampMs?: number;
+  /** Position of the opening prompt's text. */
+  promptPosition: SourcePosition;
+  /** Position of the response slot, when the interaction produced one (absent if interrupted/incomplete). */
+  responsePosition?: SourcePosition;
+  position: SourcePosition;
+}
+
 export interface InvocationFact {
   id: string;
   source: AgentSource;
   sourceSessionId: string;
   /** Usage-bearing message/token event that owns this invocation. */
   messageId: string;
+  /** Owning interaction (#117). Optional until producers emit interactions; pairs with `messageId`. */
+  interactionId?: string;
   invocationId?: string;
   timestampMs?: number;
   name: string;
@@ -170,6 +247,13 @@ export interface InvocationFact {
   mcpServer?: string;
   mcpTool?: string;
   filePath?: string;
+  /** Position of this call's paired tool result (the result half of the call+result unit), when present. */
+  resultPosition?: SourcePosition;
+  /** Permission outcome for this call: a human approval, a denial (human or policy), or auto-approved
+   *  under policy. A primary friction signal. Absent when the source doesn't expose it. */
+  permissionDecision?: "approved" | "denied" | "auto";
+  /** Whether the call resolved: `completed` (response arrived) or `interrupted` (call made, no response). */
+  invocationDisposition?: "completed" | "interrupted";
   position: SourcePosition;
 }
 
@@ -244,7 +328,10 @@ export interface SessionRelationshipFact {
 
 export interface NormalizedFacts {
   sessions: SessionFact[];
-  messages: MessageFact[];
+  /** Interaction-opening prompt markers (#117). Optional until producers emit them; reconcile groups
+   *  these + the deduped messages into InteractionFacts. */
+  prompts?: PromptFact[];
+  messages: UsageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
   taskCandidates: TaskCandidateFact[];
@@ -601,6 +688,34 @@ export function createFactId(
     position.itemIndex,
     sourceIdentity,
   ]);
+}
+
+/**
+ * Build an interaction-opening PromptFact uniformly across producers (#117). Centralizing this keeps
+ * the guards consistent (timestamp set only when finite; dedupKey only when present) and derives
+ * `initiator` from the owning session's kind — a `subagent` session's prompts are agent-initiated —
+ * rather than each producer re-deriving "is this agent-initiated?" and drifting.
+ */
+export function buildPromptFact(args: {
+  source: AgentSource;
+  sourceSessionId: string;
+  position: SourcePosition;
+  /** Owning session kind; a `subagent` session's prompts are agent-initiated. */
+  kind?: SessionKind;
+  /** Replay-stable id (record uuid / message id) so resumed-session replays dedupe in reconcile. */
+  dedupKey?: string;
+  timestampMs?: number;
+}): PromptFact {
+  const prompt: PromptFact = {
+    id: createFactId("prompt", args.source, args.sourceSessionId, args.position, "user_message"),
+    source: args.source,
+    sourceSessionId: args.sourceSessionId,
+    initiator: args.kind === "subagent" ? "agent" : "human",
+    position: args.position,
+  };
+  if (args.timestampMs != null && Number.isFinite(args.timestampMs)) prompt.timestampMs = args.timestampMs;
+  if (args.dedupKey) prompt.dedupKey = args.dedupKey;
+  return prompt;
 }
 
 /** Locale-independent total order for global first-occurrence and tie-breaking rules. */

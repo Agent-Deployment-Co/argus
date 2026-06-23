@@ -8,6 +8,7 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
+  buildPromptFact,
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
@@ -20,7 +21,7 @@ import {
   type FileIdentity,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParserDescriptor,
   type ParserDiagnostic,
@@ -49,7 +50,7 @@ export const CLAUDE_CONFIG_ROOT_ID = "claude-config";
 export const CLAUDE_TRANSCRIPT_ROOT_ID = CLAUDE_PROJECTS_ROOT_ID;
 export const CLAUDE_AUXILIARY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
 export const CLAUDE_HISTORY_ROOT_ID = CLAUDE_CONFIG_ROOT_ID;
-// v2: emits SessionFact.frictionEvents and MessageFact.stopReason (#37).
+// v2: emits SessionFact.frictionEvents and UsageFact.stopReason (#37).
 // v3: friction events carry timestampMs for the session-outcome proxy (#38).
 // v5: emits filtered user task candidates for explicit per-session task extraction.
 // v6: excludes Argus task-extraction prompts from task candidates.
@@ -82,7 +83,7 @@ interface PositionedRecord {
 interface OpenAssistantMessage {
   providerMessageId: string;
   sourceSessionId: string;
-  message?: MessageFact;
+  message?: UsageFact;
   pending: PositionedRecord[];
 }
 
@@ -628,7 +629,7 @@ function invocationMapKey(sourceSessionId: string, invocationId: string): string
 
 function addInvocations(
   record: PositionedRecord,
-  message: MessageFact,
+  message: UsageFact,
   facts: NormalizedFacts,
   invocationFacts: Map<string, InvocationFact>,
 ): void {
@@ -672,11 +673,11 @@ function addInvocations(
   }
 }
 
-function createMessageFact(
+function createUsageFact(
   record: PositionedRecord,
   sourceSessionId: string,
   diagnostics: ParserDiagnostic[],
-): MessageFact | undefined {
+): UsageFact | undefined {
   if (record.value.message?.model === "<synthetic>") return undefined;
   const timestamp = timestampMs(record.value.timestamp);
   if (!Number.isFinite(timestamp)) {
@@ -746,6 +747,7 @@ function parseTranscript(
 } {
   const facts: NormalizedFacts = {
     sessions: [],
+    prompts: [],
     messages: [],
     invocations: [],
     toolResults: [],
@@ -881,11 +883,27 @@ function parseTranscript(
     if (record.value.type !== "assistant") open = undefined;
 
     if (record.value.type === "user") {
-      if (isCountableClaudeUserMessage(record.value)) {
-        session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
-      }
       const taskText = claudeUserMessageText(record);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      if (isCountableClaudeUserMessage(record.value)) {
+        session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
+        // Interaction-opening prompt marker (#117). Skip Argus's own analysis/extraction prompts —
+        // they aren't human turns and would open phantom interactions (same exclusion the
+        // task-candidate path applies). A subagent session's prompts are agent-initiated (so reconcile
+        // won't open a folded interaction for them) — derived centrally from the session kind.
+        if (!generatedTitle) {
+          facts.prompts!.push(
+            buildPromptFact({
+              source: "claude",
+              sourceSessionId,
+              position: record.position,
+              kind: session.fact.kind,
+              timestampMs: timestampMs(record.value.timestamp),
+              dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
+            }),
+          );
+        }
+      }
       if (generatedTitle && !session.fact.firstPrompt) {
         session.fact.firstPrompt = generatedTitle;
       }
@@ -974,7 +992,7 @@ function parseTranscript(
       continue;
     }
 
-    const message = createMessageFact(record, sourceSessionId, diagnostics);
+    const message = createUsageFact(record, sourceSessionId, diagnostics);
     if (!message) continue;
     facts.messages.push(message);
 

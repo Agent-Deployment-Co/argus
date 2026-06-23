@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   PARSED_FRAGMENT_CONTRACT_VERSION,
+  buildPromptFact,
   createFactId,
   createFileIdentity,
   sameFileFingerprint,
@@ -12,7 +13,7 @@ import {
   type FileIdentity,
   type FileParseResult,
   type InvocationFact,
-  type MessageFact,
+  type UsageFact,
   type NormalizedFacts,
   type ParserDescriptor,
   type ParserDiagnostic,
@@ -66,7 +67,7 @@ interface PositionedRecord {
 interface OpenAssistantMessage {
   providerMessageId: string;
   sourceSessionId: string;
-  message?: MessageFact;
+  message?: UsageFact;
   pending: PositionedRecord[];
 }
 
@@ -406,7 +407,7 @@ function coworkResultFrictionEvents(
 
 function addInvocations(
   record: PositionedRecord,
-  message: MessageFact,
+  message: UsageFact,
   facts: NormalizedFacts,
   invocationFacts: Map<string, InvocationFact>,
 ): void {
@@ -458,6 +459,7 @@ function parseCoworkTranscript(
 ): { facts: NormalizedFacts; diagnostics: ParserDiagnostic[] } {
   const facts: NormalizedFacts = {
     sessions: [],
+    prompts: [],
     messages: [],
     invocations: [],
     toolResults: [],
@@ -534,6 +536,21 @@ function parseCoworkTranscript(
       const nativeSessionId =
         typeof record.value.session_id === "string" ? record.value.session_id : "";
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
+      // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns); initiator
+      // is derived from the session kind (cowork has no subagents); dedupKey = record uuid so replayed
+      // turns collapse in reconcile.
+      if (taskText && !generatedTitle) {
+        facts.prompts!.push(
+          buildPromptFact({
+            source: "cowork",
+            sourceSessionId,
+            position: record.position,
+            kind: sessionFact?.kind,
+            timestampMs: timestampMs(record.value.timestamp ?? record.value._audit_timestamp),
+            dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
+          }),
+        );
+      }
       if (generatedTitle && !sessionFact.firstPrompt) {
         sessionFact.firstPrompt = generatedTitle;
       }
@@ -656,7 +673,7 @@ function parseCoworkTranscript(
         ? record.value.requestId
         : undefined;
 
-    const message: MessageFact = {
+    const message: UsageFact = {
       id: createFactId(
         "message",
         "cowork",
