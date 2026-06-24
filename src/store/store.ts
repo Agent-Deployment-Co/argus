@@ -43,7 +43,7 @@ import type {
   Usage,
 } from "../types.ts";
 import type { ToolCategory } from "../tool-categories.ts";
-import { classifyOutcome, emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
+import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
 export const STORE_SCHEMA_VERSION = 13;
@@ -1788,9 +1788,9 @@ export class SqliteStore implements Store {
       sampleArgs: sampleArgsBySkill.get(r.skill) ?? "",
     }));
 
-    // Friction/outcome/growth — from session metadata + light scans, no full message materialization.
+    // Friction/growth — from session metadata + light scans, no full message materialization.
     // Sessions in scope = those with a message in the window (matches aggregate's per-session rollups).
-    const { friction, growth, outcome } = await this.readHealthRollups(query, usage);
+    const { friction, growth } = await this.readHealthRollups(query, usage);
 
     return {
       usageByDateModel,
@@ -1808,60 +1808,41 @@ export class SqliteStore implements Store {
       skillInvocations,
       frictionTotals: friction.totals,
       projectFriction: friction.byProject,
-      outcomeCounts: outcome,
       highTokenGrowthSessions: growth,
     };
   }
 
-  /** Session-level health rollups (friction totals + per-project, outcome tally, high-growth count)
-   *  without materializing messages or parsing metadata JSON: friction signals are promoted columns
-   *  on resolved_sessions; the outcome proxy needs each session's DATE-WINDOWED last-message ts (so a
-   *  narrowing filter classifies on the last in-window message, matching the JS walk — not the whole-
-   *  session end), its last non-null stop reason, and its last interruption; token-growth is a SQL
-   *  window over the usage rows (first vs last decile, matching the JS k). */
+  /** Session-level health rollups (friction totals + per-project, high-growth count) without
+   *  materializing messages or parsing metadata JSON: friction signals are promoted columns on
+   *  resolved_sessions; token-growth is a SQL window over the usage rows (first vs last decile,
+   *  matching the JS k). (The session-level outcome proxy was removed in #122 — outcome is per task.) */
   private async readHealthRollups(
     query: ResolvedQuery | undefined,
     usage: ReturnType<typeof buildResolvedFilters>,
   ): Promise<{
     friction: { totals: FrictionTotals; byProject: Array<{ project: string; friction: FrictionTotals }> };
     growth: number;
-    outcome: { clean: number; interrupted: number; unknown: number };
   }> {
-    // In-scope sessions (those with a message in the window) joined to their promoted friction columns,
-    // with the DATE-WINDOWED last-message ts. Reuses the shared filter against the usage row's columns.
+    // In-scope sessions (those with a message in the window) joined to their promoted friction columns.
+    // Reuses the shared filter against the usage row's columns.
     const joinFilter = buildResolvedFilters(query, { sourceColumn: "m.source", dateColumn: "m.date", cwdColumn: "m.cwd" });
     const sessions = await all<{
       session_id: string;
       project: string;
-      last_ts: number | null;
       fi: number | null;
       fr: number | null;
       fc: number | null;
       ft: number | null;
-      lim: number | null;
     }>(
       this.db,
-      `SELECT m.session_id AS session_id, MAX(m.ts) AS last_ts, s.project AS project,
+      `SELECT m.session_id AS session_id, s.project AS project,
               s.friction_interruptions AS fi, s.friction_rejections AS fr, s.friction_compactions AS fc,
-              s.friction_turns AS ft, s.last_interruption_ms AS lim
+              s.friction_turns AS ft
        FROM resolved_usage m JOIN resolved_sessions s ON s.session_id = m.session_id
        ${joinFilter.messageWhere}
        GROUP BY m.session_id`,
       joinFilter.messageParams,
     );
-
-    // Last non-null stop reason per in-scope session (for the outcome proxy), reading the promoted
-    // stop_reason column (no json_extract) and filtered like the usage walk.
-    const stopRows = await all<{ session_id: string; stop_reason: string | null }>(
-      this.db,
-      `SELECT session_id, stop_reason FROM (
-         SELECT session_id, stop_reason,
-                ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS rn
-         FROM resolved_usage ${usage.messageWhere ? `${usage.messageWhere} AND` : "WHERE"} stop_reason IS NOT NULL
-       ) WHERE rn = 1`,
-      usage.messageParams,
-    );
-    const lastStopReason = new Map(stopRows.map((r) => [r.session_id, r.stop_reason]));
 
     // Token-growth ratio per session: mean total tokens of the last decile over the first decile, with
     // k = floor(n/10) and n >= 10 — the same slice the JS tokenGrowth uses.
@@ -1889,10 +1870,7 @@ export class SqliteStore implements Store {
 
     const totals = emptyFrictionTotals();
     const byProjectMap = new Map<string, FrictionTotals>();
-    const outcome = { clean: 0, interrupted: 0, unknown: 0 };
     for (const row of sessions) {
-      // Shared outcome classifier (#7): same rule as the JS aggregate's sessionOutcome.
-      outcome[classifyOutcome(row.last_ts, row.lim, lastStopReason.get(row.session_id) ?? null)] += 1;
       // Friction rollup over sessions where friction is observable (interruptions promoted, non-NULL).
       if (row.fi != null) {
         const pf = byProjectMap.get(row.project) ?? emptyFrictionTotals();
@@ -1902,7 +1880,7 @@ export class SqliteStore implements Store {
       }
     }
     const byProject = [...byProjectMap.entries()].map(([project, friction]) => ({ project, friction }));
-    return { friction: { totals, byProject }, growth: highTokenGrowthSessions, outcome };
+    return { friction: { totals, byProject }, growth: highTokenGrowthSessions };
   }
 
   private async readResolvedCore(query?: ResolvedQuery): Promise<ParseResult> {

@@ -300,11 +300,6 @@ describe("session health (#38)", () => {
     });
   });
 
-  test("outcome is interrupted when the last activity is an interruption", () => {
-    // u-int-3 (10:05) lands after the last assistant message (10:01:01).
-    expect(row.health.outcome).toBe("interrupted");
-  });
-
   test("rolls friction up to totals and per-project meta", () => {
     expect(dash.frictionTotals).toEqual({
       observableSessions: 1,
@@ -323,29 +318,12 @@ describe("session health (#38)", () => {
     });
   });
 
-  test("outcome is clean when the last stop reason is end_turn and no trailing interruption", () => {
-    const friction = emptySessionFriction();
-    friction.lastInterruptionMs = 1000; // interrupted mid-session, then continued
-    const msgs = [
-      syntheticMessage({ ts: 500, stopReason: "tool_use" }),
-      syntheticMessage({ ts: 2000, stopReason: "end_turn" }),
-    ];
-    const health = aggregated(syntheticParse(msgs, friction)).sessions[0]!.health;
-    expect(health.outcome).toBe("clean");
-  });
-
-  test("outcome is unknown for a mid-tool-use tail or when nothing is recorded", () => {
-    const tail = aggregated(
-      syntheticParse([syntheticMessage({ ts: 1, stopReason: "tool_use" })], emptySessionFriction()),
-    ).sessions[0]!.health;
-    expect(tail.outcome).toBe("unknown");
-
+  test("friction is null (not zero) for a source that doesn't observe it", () => {
     const codex = aggregated({
       messages: [syntheticMessage({ ts: 1, source: "codex", sessionId: "cx", project: "p" })],
       sessions: new Map(),
       toolResults: new Map(),
     }).sessions[0]!.health;
-    expect(codex.outcome).toBe("unknown");
     expect(codex.interruptions).toBeNull();
     expect(codex.stopReasons).toBeNull();
   });

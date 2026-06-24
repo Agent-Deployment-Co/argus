@@ -59,12 +59,6 @@ export interface SessionHealth {
    * might have been better restarted. Null when the session is too short (<10 messages).
    */
   tokenGrowth: number | null;
-  /**
-   * How the session ended: "interrupted" when the final activity was a user interruption,
-   * "clean" when the last recorded stop reason is end_turn/stop_sequence, else "unknown"
-   * (mid-tool-use tails — possibly still running — and sources without stop reasons).
-   */
-  outcome: "clean" | "interrupted" | "unknown";
 }
 
 /** Cross-session friction rollup over sessions where friction is observable. */
@@ -108,9 +102,6 @@ export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   /** Count of sessions whose context grew ≥ 5× start-to-finish — the token-growth recommendation's
    *  input, kept as a scalar so it survives even when the per-session array is omitted from the payload. */
   highTokenGrowthSessions: number;
-  /** Session outcome tallies for the Health doughnut, kept as scalars so they survive the omitted
-   *  per-session array. */
-  outcomeCounts: { clean: number; interrupted: number; unknown: number };
   /** Per-model token totals per day — parallel to `daily`, for the stacked model-over-time chart. */
   byModelDaily: { date: string; byModel: Record<string, number> }[];
   /** Per-skill token totals per day — parallel to `daily`, for the skill-usage-over-time chart. */

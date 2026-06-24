@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { Dash, OutcomeCell, Skills } from "../components/pills";
+import { Dash, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
@@ -142,9 +142,8 @@ export function SessionDetail() {
       </section>
 
       <section>
-        <h3>Outcome &amp; friction</h3>
+        <h3>Friction</h3>
         <div className="kv">
-          <Row k="Outcome" v={<OutcomeCell outcome={h.outcome} />} />
           <Row k="Interruptions" v={numOrDash(h.interruptions)} />
           <Row k="Rejections" v={numOrDash(h.rejections)} />
           <Row k="Compactions" v={numOrDash(h.compactions)} />
