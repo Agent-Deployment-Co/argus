@@ -10,7 +10,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dashboard } from "../reporting/aggregate.ts";
-import { buildDashboard, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
+import { buildSnapshot, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
   buildSessionDetail,
@@ -348,7 +348,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       if (existing) return existing;
     }
     const pending = (async () => {
-      const dashboard = await buildDashboard(buildOpts, log);
+      // Built from SQL GROUP BY rollups (#121): the snapshot no longer materializes every usage row.
+      const dashboard = await buildSnapshot(buildOpts, log);
       return {
         dashboard,
         recommendations: computeRecommendations(dashboard),

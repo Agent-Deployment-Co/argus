@@ -19,6 +19,7 @@ import {
   type ParserDiagnostic,
   type ResolvedQuery,
   type Store,
+  type DashboardAggregates,
 } from "../store/store-contract.ts";
 import { openStore, rebuildStore } from "../store/store.ts";
 import { type ParseOptions } from "./discover.ts";
@@ -313,23 +314,22 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   const interactionsBySession = groupBy(output.interactions, (i) => i.sourceSessionId);
   const sessions: MaterializeSession[] = [];
   for (const [sid, meta] of output.sessions) {
-    const perSession = output.toolResultsBySession.get(sid);
-    const toolResults = perSession
-      ? [...perSession].map(([name, stat]) => ({
-          name,
-          count: stat.count,
-          approxTokens: stat.approxTokens,
-        }))
-      : [];
     sessions.push({
       meta,
       messages: messagesBySession.get(sid) ?? [],
-      toolResults,
       tasks: output.tasksBySession.get(sid) ?? [],
       interactions: interactionsBySession.get(sid) ?? [],
     });
   }
   return sessions;
+}
+
+/** Note tool results that didn't correlate to a parsed call (#130) — their sizes are dropped from the
+ *  per-tool result-size totals. Usually zero; logged only when it happens so the drift isn't silent. */
+function logOrphanResults(output: ReconcileResult, log?: (message: string) => void): void {
+  if (!log || output.orphanResultCount <= 0) return;
+  const n = output.orphanResultCount;
+  log(`  Left ${n} tool result${n === 1 ? "" : "s"} out of size totals (couldn't match them to a tool call).`);
 }
 
 /** Map a source session id to its canonical id (subagent child -> parent) for a producer. */
@@ -482,6 +482,7 @@ async function syncStore(
         canonicalIds: touched,
       });
       const materialize = toMaterializeSessions(output);
+      logOrphanResults(output, opts.log);
       // Opt-in (#91): re-extract tasks only for sessions whose files actually changed — the widened
       // touched set (deletions / aux changes) re-materializes without new tasks, so the materializer
       // preserves their stored tasks rather than paying for an LLM call per unchanged session.
@@ -543,10 +544,14 @@ function resolvedQuery(opts: IncrementalParseOptions): ResolvedQuery {
  *     store would report success having persisted nothing, and degrading would mask a corrupt store
  *     the user should be told to `reindex --force`.
  */
-async function runPipeline(
+async function runPipeline<T>(
   opts: IncrementalParseOptions,
-  { sync, degradeOnError }: { sync: boolean; degradeOnError: boolean },
-): Promise<IncrementalParseDetails> {
+  {
+    sync,
+    degradeOnError,
+    read,
+  }: { sync: boolean; degradeOnError: boolean; read: (store: Store, query?: ResolvedQuery) => Promise<T> },
+): Promise<{ result: T; stats: SyncStats; diagnostics: ParserDiagnostic[] }> {
   const stats = cloneStats();
   const diagnostics: ParserDiagnostic[] = [];
   let store = opts.store;
@@ -559,7 +564,7 @@ async function runPipeline(
       ownsStore = true;
     }
     if (sync) await syncStore(opts, store, stats, diagnostics);
-    return { parsed: await store.readResolved(resolvedQuery(opts)), stats, diagnostics };
+    return { result: await read(store, resolvedQuery(opts)), stats, diagnostics };
   } catch (error) {
     if (!degradeOnError) throw error; // index: fail loud rather than write to a discarded temp store.
     diagnostics.push(
@@ -578,7 +583,7 @@ async function runPipeline(
     try {
       await syncStore(opts, fallbackStore, stats, diagnostics);
       return {
-        parsed: await fallbackStore.readResolved(resolvedQuery(opts)),
+        result: await read(fallbackStore, resolvedQuery(opts)),
         stats: { ...stats, fallback: true },
         diagnostics,
       };
@@ -596,7 +601,12 @@ async function runPipeline(
 export async function parseAllIncrementalDetailed(
   opts: IncrementalParseOptions = {},
 ): Promise<IncrementalParseDetails> {
-  return runPipeline(opts, { sync: true, degradeOnError: false });
+  const { result, stats, diagnostics } = await runPipeline(opts, {
+    sync: true,
+    degradeOnError: false,
+    read: (store, query) => store.readResolved(query),
+  });
+  return { parsed: result, stats, diagnostics };
 }
 
 /** Pure read of the materialized store — no sync, no writes (CQS). For read-only callers (the
@@ -605,7 +615,25 @@ export async function parseAllIncrementalDetailed(
 export async function readStore(
   opts: IncrementalParseOptions = {},
 ): Promise<IncrementalParseDetails> {
-  return runPipeline(opts, { sync: false, degradeOnError: true });
+  const { result, stats, diagnostics } = await runPipeline(opts, {
+    sync: false,
+    degradeOnError: true,
+    read: (store, query) => store.readResolved(query),
+  });
+  return { parsed: result, stats, diagnostics };
+}
+
+/** Pure read of the pre-grouped dashboard aggregates for the serve snapshot (#121) — same degrade
+ *  behavior as readStore, but reads SQL GROUP BY rollups instead of materializing every usage row. */
+export async function readSnapshotAggregates(
+  opts: IncrementalParseOptions = {},
+): Promise<{ aggregates: DashboardAggregates; stats: SyncStats; diagnostics: ParserDiagnostic[] }> {
+  const { result, stats, diagnostics } = await runPipeline(opts, {
+    sync: false,
+    degradeOnError: true,
+    read: (store, query) => store.readDashboardAggregates(query),
+  });
+  return { aggregates: result, stats, diagnostics };
 }
 
 export async function parseAllIncremental(

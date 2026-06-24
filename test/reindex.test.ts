@@ -104,7 +104,6 @@ describe("reindexSession", () => {
         {
           meta: { source: "codex", sessionId: "codex:imported1", project: "p", cwd: "/tmp/p", filePath: "" },
           messages: [],
-          toolResults: [],
         },
       ]);
       const result = await reindexSession("codex:imported1", { store });

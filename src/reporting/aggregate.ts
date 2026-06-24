@@ -1,6 +1,12 @@
 import { skillPlugin } from "./inventory.ts";
+import {
+  classifyOutcome,
+  emptyFrictionTotals,
+  foldFriction,
+  HIGH_TOKEN_GROWTH_RATIO,
+} from "../health.ts";
 import { cost, unpricedModels } from "../pricing.ts";
-import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory } from "../tool-categories.ts";
+import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory, UNATTRIBUTED_SKILL } from "../tool-categories.ts";
 import {
   addUsage,
   type Dashboard,
@@ -38,6 +44,63 @@ function usageCost(u: Usage, model: string): number {
   return cost(u, model);
 }
 
+/** Fold per-skill + per-MCP-server usage into per-plugin rows, seeding all known plugins so
+ *  enabled-but-unused ones still surface. Shared by the JS aggregate and the SQL snapshot builder so
+ *  byPlugin is identical on both paths. */
+export function foldPlugins(
+  bySkill: NamedUsage[],
+  byMcpServer: Array<{ server: string; calls: number }>,
+  plugins: Map<string, PluginInfo>,
+): PluginRow[] {
+  const pluginAgg = new Map<string, PluginRow>();
+  const ensurePlugin = (name: string): PluginRow => {
+    let row = pluginAgg.get(name);
+    if (!row) {
+      const info = plugins.get(name);
+      row = {
+        name,
+        marketplace: info?.marketplace || "",
+        enabled: info?.enabled ?? false,
+        used: false,
+        version: info?.version,
+        installedAt: info?.installedAt,
+        skills: [],
+        skillMessages: 0,
+        skillTokens: 0,
+        skillCost: 0,
+        mcpCalls: 0,
+      };
+      pluginAgg.set(name, row);
+    }
+    return row;
+  };
+  // seed all known plugins so unused-but-enabled ones show up
+  for (const name of plugins.keys()) ensurePlugin(name);
+
+  for (const s of bySkill) {
+    const pname = (s.meta?.plugin as string | null) ?? null;
+    if (!pname) continue;
+    const row = ensurePlugin(pname);
+    row.used = true;
+    if (!row.skills.includes(s.name)) row.skills.push(s.name);
+    row.skillMessages += s.messages;
+    row.skillTokens += s.total;
+    row.skillCost += s.cost;
+  }
+  // attribute MCP servers to plugins by name match (best-effort).
+  for (const s of byMcpServer) {
+    if (pluginAgg.has(s.server)) {
+      const row = ensurePlugin(s.server);
+      row.used = true;
+      row.mcpCalls += s.calls;
+    }
+  }
+  return [...pluginAgg.values()].sort((a, b) => {
+    if (a.used !== b.used) return a.used ? -1 : 1;
+    return b.skillTokens - a.skillTokens;
+  });
+}
+
 // ---- session health (#38) ----
 
 function median(values: number[]): number | null {
@@ -65,19 +128,16 @@ function sessionOutcome(
   msgs: MessageRecord[],
   friction: SessionFriction | undefined,
 ): SessionHealth["outcome"] {
-  // The user interrupted after the assistant's last message and never re-prompted.
-  const lastMessageTs = msgs[msgs.length - 1]!.ts;
-  if (friction?.lastInterruptionMs != null && friction.lastInterruptionMs >= lastMessageTs) {
-    return "interrupted";
-  }
+  // Last non-null stop reason (a trailing tool_use means the transcript ends mid-work -> "unknown").
+  let lastStopReason: string | undefined;
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const stopReason = msgs[i]!.stopReason;
-    if (!stopReason) continue;
-    // A trailing tool_use means the transcript ends mid-work — possibly a live session —
-    // so it stays "unknown" rather than guessing "abandoned".
-    return stopReason === "end_turn" || stopReason === "stop_sequence" ? "clean" : "unknown";
+    if (msgs[i]!.stopReason) {
+      lastStopReason = msgs[i]!.stopReason;
+      break;
+    }
   }
-  return "unknown";
+  // Shared with the SQL snapshot path (store.readHealthRollups) so both classify identically (#7).
+  return classifyOutcome(msgs[msgs.length - 1]!.ts, friction?.lastInterruptionMs, lastStopReason);
 }
 
 /** msgs must be in timestamp order (parse guarantees it). */
@@ -224,7 +284,7 @@ export function aggregate(
     sourceMap.set(m.source, src);
 
     // skill attribution
-    const skill = m.attributionSkill ?? "(none)";
+    const skill = m.attributionSkill ?? UNATTRIBUTED_SKILL;
     const sk = skillMap.get(skill) || { u: emptyUsage(), messages: 0 };
     addUsage(sk.u, m.usage);
     sk.messages++;
@@ -277,7 +337,7 @@ export function aggregate(
   const modelCost = new Map<string, number>();
   for (const m of messages) {
     const c = usageCost(m.usage, m.model);
-    const sk = m.attributionSkill ?? "(none)";
+    const sk = m.attributionSkill ?? UNATTRIBUTED_SKILL;
     skillCost.set(sk, (skillCost.get(sk) || 0) + c);
     projectCost.set(m.project, (projectCost.get(m.project) || 0) + c);
     sourceCost.set(m.source, (sourceCost.get(m.source) || 0) + c);
@@ -377,53 +437,7 @@ export function aggregate(
     .slice(0, 15);
 
   // ---- plugins (fold skills + mcp usage; include enabled-but-unused) ----
-  const pluginAgg = new Map<string, PluginRow>();
-  const ensurePlugin = (name: string): PluginRow => {
-    let row = pluginAgg.get(name);
-    if (!row) {
-      const info = plugins.get(name);
-      row = {
-        name,
-        marketplace: info?.marketplace || "",
-        enabled: info?.enabled ?? false,
-        used: false,
-        version: info?.version,
-        installedAt: info?.installedAt,
-        skills: [],
-        skillMessages: 0,
-        skillTokens: 0,
-        skillCost: 0,
-        mcpCalls: 0,
-      };
-      pluginAgg.set(name, row);
-    }
-    return row;
-  };
-  // seed all known plugins so unused-but-enabled ones show up
-  for (const name of plugins.keys()) ensurePlugin(name);
-
-  for (const s of bySkill) {
-    const pname = (s.meta?.plugin as string | null) ?? null;
-    if (!pname) continue;
-    const row = ensurePlugin(pname);
-    row.used = true;
-    if (!row.skills.includes(s.name)) row.skills.push(s.name);
-    row.skillMessages += s.messages;
-    row.skillTokens += s.total;
-    row.skillCost += s.cost;
-  }
-  // attribute MCP servers to plugins by name match (best-effort).
-  for (const s of byMcpServer) {
-    if (pluginAgg.has(s.server)) {
-      const row = ensurePlugin(s.server);
-      row.used = true;
-      row.mcpCalls += s.calls;
-    }
-  }
-  const byPlugin = [...pluginAgg.values()].sort((a, b) => {
-    if (a.used !== b.used) return a.used ? -1 : 1;
-    return b.skillTokens - a.skillTokens;
-  });
+  const byPlugin = foldPlugins(bySkill, byMcpServer, plugins);
 
   // ---- sessions ----
   const bySession = new Map<string, MessageRecord[]>();
@@ -439,13 +453,7 @@ export function aggregate(
   sessionRows.sort((a, b) => b.start - a.start);
 
   // ---- friction rollups (#38): totals + per-project, over friction-observable sessions ----
-  const emptyFrictionTotals = (): FrictionTotals => ({
-    observableSessions: 0,
-    interruptions: 0,
-    rejections: 0,
-    compactions: 0,
-    turns: 0,
-  });
+  // The fold + zero-builder are shared with the SQL snapshot path via src/health.ts (#9).
   const frictionTotals = emptyFrictionTotals();
   const projectFriction = new Map<string, FrictionTotals>();
   for (const row of sessionRows) {
@@ -453,13 +461,13 @@ export function aggregate(
     if (h.interruptions == null) continue; // friction not observable for this source
     const pf = projectFriction.get(row.project) ?? emptyFrictionTotals();
     if (!projectFriction.has(row.project)) projectFriction.set(row.project, pf);
-    for (const bucket of [frictionTotals, pf]) {
-      bucket.observableSessions++;
-      bucket.interruptions += h.interruptions;
-      bucket.rejections += h.rejections ?? 0;
-      bucket.compactions += h.compactions ?? 0;
-      bucket.turns += h.turns ?? 0;
-    }
+    const contribution = {
+      interruptions: h.interruptions,
+      rejections: h.rejections ?? 0,
+      compactions: h.compactions ?? 0,
+      turns: h.turns ?? 0,
+    };
+    for (const bucket of [frictionTotals, pf]) foldFriction(bucket, contribution);
   }
   for (const project of byProject) {
     const friction = projectFriction.get(project.name);
@@ -468,7 +476,7 @@ export function aggregate(
   // Token-growth recommendation input, as a scalar so it survives when sessions are omitted from the
   // serve payload (the rec layer can't re-derive it from an empty sessions array otherwise).
   const highTokenGrowthSessions = sessionRows.filter(
-    (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= 5,
+    (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= HIGH_TOKEN_GROWTH_RATIO,
   ).length;
   const outcomeCounts = { clean: 0, interrupted: 0, unknown: 0 };
   for (const row of sessionRows) outcomeCounts[row.health.outcome ?? "unknown"]++;
