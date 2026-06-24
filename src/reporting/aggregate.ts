@@ -1,10 +1,5 @@
 import { skillPlugin } from "./inventory.ts";
-import {
-  classifyOutcome,
-  emptyFrictionTotals,
-  foldFriction,
-  HIGH_TOKEN_GROWTH_RATIO,
-} from "../health.ts";
+import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { cost, unpricedModels } from "../pricing.ts";
 import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory, UNATTRIBUTED_SKILL } from "../tool-categories.ts";
 import {
@@ -124,22 +119,6 @@ function tokenGrowth(msgs: MessageRecord[]): number | null {
   return first > 0 ? mean(msgs.slice(-k)) / first : null;
 }
 
-function sessionOutcome(
-  msgs: MessageRecord[],
-  friction: SessionFriction | undefined,
-): SessionHealth["outcome"] {
-  // Last non-null stop reason (a trailing tool_use means the transcript ends mid-work -> "unknown").
-  let lastStopReason: string | undefined;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i]!.stopReason) {
-      lastStopReason = msgs[i]!.stopReason;
-      break;
-    }
-  }
-  // Shared with the SQL snapshot path (store.readHealthRollups) so both classify identically (#7).
-  return classifyOutcome(msgs[msgs.length - 1]!.ts, friction?.lastInterruptionMs, lastStopReason);
-}
-
 /** msgs must be in timestamp order (parse guarantees it). */
 function sessionHealth(msgs: MessageRecord[], friction: SessionFriction | undefined): SessionHealth {
   return {
@@ -151,7 +130,6 @@ function sessionHealth(msgs: MessageRecord[], friction: SessionFriction | undefi
     maxTurnMs: friction?.turnDurationsMs.length ? Math.max(...friction.turnDurationsMs) : null,
     stopReasons: friction?.stopReasons ?? null,
     tokenGrowth: tokenGrowth(msgs),
-    outcome: sessionOutcome(msgs, friction),
   };
 }
 
@@ -478,8 +456,6 @@ export function aggregate(
   const highTokenGrowthSessions = sessionRows.filter(
     (s) => s.health.tokenGrowth !== null && s.health.tokenGrowth >= HIGH_TOKEN_GROWTH_RATIO,
   ).length;
-  const outcomeCounts = { clean: 0, interrupted: 0, unknown: 0 };
-  for (const row of sessionRows) outcomeCounts[row.health.outcome ?? "unknown"]++;
 
   return {
     generatedAtMs: 0,
@@ -510,6 +486,5 @@ export function aggregate(
     sessions: opts.includeSessions === false ? [] : sessionRows,
     frictionTotals,
     highTokenGrowthSessions,
-    outcomeCounts,
   };
 }

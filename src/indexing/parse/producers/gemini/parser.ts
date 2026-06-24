@@ -34,7 +34,6 @@ import {
   type SessionFact,
   type SessionRelationshipFact,
   type SourcePosition,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -48,7 +47,6 @@ import {
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../../../types.ts";
 
 export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
@@ -554,41 +552,6 @@ export function normalizeGeminiUsage(raw: any): Usage {
   return usage;
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Gemini transcript (#91). Reuses the producer's own
- * append-only replay (legacy .json object or JSONL with rewind/$set), then maps user/gemini records
- * to turns — so the file-format knowledge stays here, not duplicated in the dialogue consumer.
- */
-export function reconstructGeminiDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const file = createFileIdentity({
-    source: "gemini",
-    rootId: "",
-    role: "transcript",
-    relativePath: path,
-    path,
-  });
-  const { conversation } = replayGeminiConversation(raw, file);
-  if (!conversation) return [];
-  const turns: DialogueTurn[] = [];
-  for (const positioned of conversation.messages) {
-    const message = positioned.value;
-    const ts = parseTimestamp(message.timestamp);
-    if (message.type === "user") {
-      const turn = dialogueTurn("user", textFromGeminiContent(message.content, TASK_TEXT_LIMIT), ts);
-      if (turn) turns.push(turn);
-    } else if (message.type === "gemini") {
-      const turn = dialogueTurn("assistant", textFromGeminiContent(message.content, TASK_TEXT_LIMIT), ts);
-      if (turn) turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 export function textFromGeminiContent(content: unknown, limit = 500): string {
   return textFromUserContent(content, limit);
@@ -997,7 +960,6 @@ function factsFromConversation(
     .map((message) => textFromGeminiContent(message.value.content))
     .map((text) => argusGeneratedPromptTitle(text) ?? text)
     .find(Boolean);
-  const taskCandidates: TaskCandidateFact[] = [];
   const prompts: PromptFact[] = [];
   // gemini doesn't fold subagents, so a subagent session (parent inferred from path) keeps its own
   // agent-initiated openings — derived centrally from the session kind by buildPromptFact (#117).
@@ -1010,6 +972,16 @@ function factsFromConversation(
     if (!taskText) continue;
     // Skip Argus's own prompts (not human turns) so they don't open phantom interactions.
     if (!argusGeneratedPromptTitle(taskText)) {
+      // The prompt carries task text (#122) when this opening is a task start — human-initiated (a
+      // subagent session's prompts are agent-authored, not human intent — #118) and past the noise
+      // filter. That text is the sole source of task candidates; there is no separate candidate fact.
+      const next = conversation.messages[messageIndex + 1];
+      const nextText =
+        next?.value.type === "user"
+          ? textFromGeminiContent(next.value.content, TASK_TEXT_LIMIT)
+          : undefined;
+      const isTaskStart =
+        !isAgentInitiated(sessionFactKind) && !shouldSkipTaskCandidateText(taskText, nextText);
       prompts.push(
         buildPromptFact({
           source: "gemini",
@@ -1018,34 +990,10 @@ function factsFromConversation(
           kind: sessionFactKind,
           timestampMs: parseTimestamp(message.timestamp),
           dedupKey: typeof message.id === "string" ? message.id : undefined,
+          text: isTaskStart ? taskText : undefined,
         }),
       );
     }
-    // Only human-initiated prompts become task candidates (#118): a subagent session's prompts are
-    // agent-authored, not human intent. (Same agent-initiated rule the prompt-fact initiator uses.)
-    if (isAgentInitiated(sessionFactKind)) continue;
-    const next = conversation.messages[messageIndex + 1];
-    const nextText =
-      next?.value.type === "user"
-        ? textFromGeminiContent(next.value.content, TASK_TEXT_LIMIT)
-        : undefined;
-    if (shouldSkipTaskCandidateText(taskText, nextText)) continue;
-    const taskTimestamp = parseTimestamp(message.timestamp);
-    const task: TaskCandidateFact = {
-      id: createFactId(
-        "task_candidate",
-        "gemini",
-        sourceSessionId,
-        positioned.position,
-        "user_message",
-      ),
-      source: "gemini",
-      sourceSessionId,
-      text: taskText,
-      position: positioned.position,
-    };
-    if (!Number.isNaN(taskTimestamp)) task.timestampMs = taskTimestamp;
-    taskCandidates.push(task);
   }
   const session: SessionFact = {
     id: createFactId(
@@ -1093,6 +1041,10 @@ function factsFromConversation(
       usage,
       ...(cwd ? { cwd } : {}),
       attributionSkill: null,
+      // Assistant text (#122), in-memory: becomes the interaction's responseText for pass-2 dialogue.
+      ...(textFromGeminiContent(message.content, TASK_TEXT_LIMIT)
+        ? { text: textFromGeminiContent(message.content, TASK_TEXT_LIMIT) }
+        : {}),
       position: positioned.position,
     });
     const related = invocationFacts(positioned, sourceSessionId, messageId, timestampMs);
@@ -1124,7 +1076,6 @@ function factsFromConversation(
     messages,
     invocations,
     toolResults,
-    taskCandidates,
     tasks: [],
     relationships,
   };

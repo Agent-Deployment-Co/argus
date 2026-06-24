@@ -30,7 +30,6 @@ function baseDash(over: Partial<Dashboard> = {}): Dashboard {
     sessions: [],
     frictionTotals: ft(),
     highTokenGrowthSessions: 0,
-    outcomeCounts: { clean: 0, interrupted: 0, unknown: 0 },
     byModelDaily: [],
     bySkillDaily: [],
     ...over,

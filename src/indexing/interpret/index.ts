@@ -1,17 +1,11 @@
 // The Interpret stage: the one model-driven, opt-in step of the pipeline. It derives interpretations
-// of a session that aren't in the transcript — today, the #91 two-pass task extraction (segment
-// chapters, then judge per-task outcome/frustration). Facts (Parse/Reconcile) are deterministic and
-// always run; Interpret runs only when enabled and is versioned by its prompt/model.
+// of a session that aren't in the transcript — the #91/#122 two-pass task extraction (segment tasks
+// over the session's interactions, then judge per-task outcome/frustration). Facts (Parse/Reconcile)
+// are deterministic and always run; Interpret runs only when enabled and is versioned by its prompt/model.
 //
-// Future (#122): this is the home for tasks-as-interaction-spans and a content-keyed interpreter
-// cache. For now it hosts the single task interpreter; summarize stays a read-time reporting helper.
-import type { NativeProducer } from "../producer.ts";
-import type {
-  MaterializeSession,
-  ParsedFileFragment,
-  ParserDiagnostic,
-  TaskCandidateFact,
-} from "../../store/store-contract.ts";
+// It operates entirely on the reconcile-derived interactions (#122), which carry in-memory prompt and
+// response text — there is no separate candidate list or reconstructed dialogue.
+import type { MaterializeSession, ParserDiagnostic } from "../../store/store-contract.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
 
@@ -26,36 +20,28 @@ function sessionProgressLabel(session: MaterializeSession): string {
   return `${session.meta.project} (${shortId})`;
 }
 
+/** Does this session have at least one human interaction opening with task text — i.e. a task candidate? */
+function hasTaskCandidate(session: MaterializeSession): boolean {
+  return (session.interactions ?? []).some((i) => i.initiator === "human" && !!i.promptText);
+}
+
 /**
- * Run the two-pass task extraction (#91) for the given materialized sessions, attaching the result
- * to each session before it's stored (so the chapters' messages get task_seq at materialize). Only
- * sessions in `targets` (the ones whose transcripts actually changed) are re-extracted; others keep
- * their stored tasks via the materializer's preserve-on-unchanged guard. The reconstructed dialogue
- * is an in-memory intermediate — nothing with message text is persisted.
+ * Run the two-pass task extraction (#91/#122) for the given materialized sessions, attaching the result
+ * to each session before it's stored (so its interactions get task_seq at materialize). Only sessions
+ * in `targets` (the ones whose transcripts actually changed) are re-extracted; others keep their stored
+ * tasks via the materializer's preserve-on-unchanged guard. Extraction reads the interactions' in-memory
+ * prompt/response text — nothing with message text is persisted.
  */
 export async function extractTasksForSessions(
-  producer: NativeProducer,
   sessions: MaterializeSession[],
-  fragments: ParsedFileFragment[],
-  toCanonical: (sourceSessionId: string) => string,
   targets: Set<string>,
   taskExtraction: ResolvedTaskExtraction,
   diagnostics: ParserDiagnostic[],
   log?: (message: string) => void,
 ): Promise<void> {
-  const candidatesBySession = new Map<string, TaskCandidateFact[]>();
-  for (const fragment of fragments) {
-    for (const candidate of fragment.facts.taskCandidates) {
-      const id = toCanonical(candidate.sourceSessionId);
-      const list = candidatesBySession.get(id) ?? [];
-      list.push(candidate);
-      candidatesBySession.set(id, list);
-    }
-  }
+  // Task candidates are the session's human interaction openings (#122) — already on session.interactions.
   const toExtract = sessions.filter(
-    (session) =>
-      targets.has(session.meta.sessionId) &&
-      (candidatesBySession.get(session.meta.sessionId)?.length ?? 0) > 0,
+    (session) => targets.has(session.meta.sessionId) && hasTaskCandidate(session),
   );
   if (!toExtract.length) return;
   // Task extraction runs an AI model per session, so it can take a while — emit a heartbeat as each
@@ -67,13 +53,9 @@ export async function extractTasksForSessions(
   for (const session of toExtract) {
     const sid = session.meta.sessionId;
     log?.(`  [${++done}/${toExtract.length}] ${sessionProgressLabel(session)}…`);
-    const messageTimestamps = session.messages.map((message) => message.ts);
-    const dialogue = producer.reconstructDialogue(session.meta.filePath);
     const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
       sid,
-      candidatesBySession.get(sid)!,
-      messageTimestamps,
-      dialogue,
+      session.interactions ?? [],
       taskExtraction,
     );
     diagnostics.push(...extractionDiagnostics);

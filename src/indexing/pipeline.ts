@@ -488,10 +488,7 @@ async function syncStore(
       // preserves their stored tasks rather than paying for an LLM call per unchanged session.
       if (taskExtractionActive(opts.taskExtraction)) {
         await extractTasksForSessions(
-          producer,
           materialize,
-          fragments,
-          canon,
           canonicalSessionIds(producer.capabilities, changedFragments),
           opts.taskExtraction!,
           diagnostics,
@@ -717,15 +714,6 @@ export async function reindexSession(
         diagnostics,
       };
     }
-    const toCanonical = canonicalizer(
-      producer.capabilities,
-      fragments.flatMap((fragment) =>
-        fragment.facts.relationships.map((r) => ({
-          child: r.childSourceSessionId,
-          parent: r.parentSourceSessionId,
-        })),
-      ),
-    );
     // Reconcile WITH the producer's auxiliary fragments (Claude history first-prompts, Gemini project
     // roots) so the refreshed session keeps its aux-derived fields (firstPrompt, cwd/project) — a bare
     // transcript reconcile would otherwise wipe them, regressing the session vs. a full index.
@@ -739,10 +727,7 @@ export async function reindexSession(
     const materialize = toMaterializeSessions(output);
     if (taskExtractionActive(opts.taskExtraction)) {
       await extractTasksForSessions(
-        producer,
         materialize,
-        fragments,
-        toCanonical,
         new Set([sessionId]),
         opts.taskExtraction!,
         diagnostics,

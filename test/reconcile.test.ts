@@ -59,6 +59,7 @@ function assertValidInteractions(caps: ProducerCapabilities, fragments: ParsedFi
 
 const PROJECTS = join(import.meta.dir, "fixtures", "projects");
 const FRICTION_PROJECTS = join(import.meta.dir, "fixtures", "friction-projects");
+const RESPONSE_TEXT_PROJECTS = join(import.meta.dir, "fixtures", "response-text-projects");
 const HISTORY = join(import.meta.dir, "fixtures", "history.jsonl");
 
 function claudeFragments(projectsDir = PROJECTS): ParsedFileFragment[] {
@@ -103,6 +104,45 @@ describe("reconcile derives interactions (#117)", () => {
     const completed = result.interactions.filter((i) => i.disposition === "completed");
     expect(completed.length).toBeGreaterThan(0);
     for (const interaction of completed) expect(interaction.responsePosition).toBeDefined();
+  });
+});
+
+describe("codex responseText accumulates a turn's messages and doesn't leak across interactions (#122)", () => {
+  // codex-resp: turn 1's response streams as two assistant message records before the token_count
+  // flush (must accumulate, not last-win); then an unflushed "orphan" assistant message precedes the
+  // next user prompt (must NOT leak onto interaction 1's response).
+  const fragments = fragmentsFromDiscovery(
+    discoverCodexFiles(join(FIXTURES, "codex-response-text")),
+    parseCodexTranscriptPath,
+  );
+  const { interactions } = reconcileSessions({
+    caps: codexProducer.capabilities,
+    fragments,
+    auxiliaryFragments: [],
+  });
+
+  test("accumulates multi-message responses and drops orphaned text on the next prompt", () => {
+    expect(interactions.length).toBe(2);
+    expect(interactions[0]!.responseText).toBe("part one\npart two");
+    expect(interactions[1]!.responseText).toBe("answer two");
+  });
+});
+
+describe("interaction responseText captures the assistant's prose (#122)", () => {
+  // resp1: one prompt; the answer streams as a same-id split — a `thinking` chunk carries the usage
+  // (and wins dedup) while the `text` chunk carries "here is the answer" — and the interaction then
+  // ends on a separate tool-only turn. Both the dedup drop and the trailing tool turn previously left
+  // responseText empty, so outcome judging saw "no assistant response".
+  const { interactions } = reconcileSessions({
+    caps: claudeProducer.capabilities,
+    fragments: claudeFragments(RESPONSE_TEXT_PROJECTS),
+    auxiliaryFragments: [],
+  });
+
+  test("folds the deduped continuation text and isn't clobbered by a trailing tool turn", () => {
+    expect(interactions.length).toBe(1);
+    expect(interactions[0]!.disposition).toBe("completed");
+    expect(interactions[0]!.responseText).toBe("here is the answer");
   });
 });
 

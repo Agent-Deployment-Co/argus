@@ -20,7 +20,6 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -37,7 +36,6 @@ import {
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage } from "../../../../types.ts";
 import {
   estimateClaudeResultTokens,
@@ -118,57 +116,6 @@ function timestampMs(value: unknown): number {
   return Date.parse(value);
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Cowork JSONL transcript (#91). Same shape as
- * Claude (message.content), but timestamps fall back to _audit_timestamp and replayed user events
- * (isReplay) are skipped so resumed sessions don't double-count.
- */
-export function reconstructCoworkDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const turns: DialogueTurn[] = [];
-  const seenAssistant = new Set<string>();
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let value: Record<string, any>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      value = parsed;
-    } catch {
-      continue;
-    }
-    const ts = timestampMs(value.timestamp ?? value._audit_timestamp);
-    if (value.type === "user") {
-      if (value.isReplay === true) continue;
-      const content = value.message?.content;
-      if (hasClaudeToolResultContent(content)) continue;
-      const text = textFromUserContent(content);
-      if (text && !isClaudeGeneratedContextText(text)) {
-        const turn = dialogueTurn("user", text, ts);
-        if (turn) turns.push(turn);
-      }
-    } else if (value.type === "assistant") {
-      // Same fix as the Claude parser: a single assistant message is often split across records (a
-      // tool_use record with no text, then the text record), so only let a NON-EMPTY turn claim the
-      // dedup slot — otherwise the answer record (same id) is dropped and outcome judging thinks the
-      // assistant never replied. First non-empty occurrence per id wins (re-appends still dedup).
-      const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
-      if (!turn) continue;
-      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
-      if (id) {
-        if (seenAssistant.has(id)) continue;
-        seenAssistant.add(id);
-      }
-      turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 function diagnostic(
   code: string,
@@ -467,7 +414,6 @@ function parseCoworkTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -528,9 +474,7 @@ function parseCoworkTranscript(
       });
     }
 
-    // Turn-level facts (counts, prompt marker, task candidate, firstPrompt) come from LIVE events
-    // only. reconstructCoworkDialogue (used for task interpretation) drops every replay, so taking
-    // turns from live events keeps the indexed turns and the judged dialogue in agreement, and a
+    // Turn-level facts (counts, prompt marker + text, firstPrompt) come from LIVE events only, so a
     // replayed copy can never double-count a turn regardless of whether it carries a uuid (#131).
     // A truly bare placeholder (no isReplay, no timestamp/_audit_timestamp) isn't a real turn.
     if (record.value.isReplay === true || !Number.isFinite(ts)) return;
@@ -562,8 +506,20 @@ function parseCoworkTranscript(
       sessionFact.userMessages = (sessionFact.userMessages ?? 0) + 1;
       if (taskText && !sessionFact.firstPrompt) sessionFact.firstPrompt = taskText;
     }
-    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns.
-    if (taskText && !generatedTitle && !agentInitiated) {
+    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns,
+    // and — like the count/title path's isCountableClaudeUserMessage — tool-result deliveries and
+    // Claude-injected context blobs, so harness/tool text never opens an interaction or becomes a task
+    // candidate (its promptText would otherwise feed the judge tool noise as the user's words).
+    if (
+      taskText &&
+      !generatedTitle &&
+      !agentInitiated &&
+      !hasClaudeToolResultContent(record.value.message?.content) &&
+      !isClaudeGeneratedContextText(taskText)
+    ) {
+      // The prompt carries task text (#122) when this opening is a task start (past the noise filter)
+      // — the sole source of task candidates; there is no separate candidate fact.
+      const isTaskStart = !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId));
       facts.prompts!.push(
         buildPromptFact({
           source: "cowork",
@@ -572,26 +528,12 @@ function parseCoworkTranscript(
           kind: sessionFact.kind,
           timestampMs: ts,
           dedupKey: uuid,
+          text: isTaskStart ? taskText : undefined,
         }),
       );
     }
     if (generatedTitle && !sessionFact.firstPrompt) {
       sessionFact.firstPrompt = generatedTitle;
-    }
-    if (
-      taskText &&
-      !agentInitiated &&
-      !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
-    ) {
-      const task: TaskCandidateFact = {
-        id: createFactId("task_candidate", "cowork", sourceSessionId, record.position, "user_message"),
-        source: "cowork",
-        sourceSessionId,
-        text: taskText,
-        position: record.position,
-        timestampMs: ts,
-      };
-      facts.taskCandidates.push(task);
     }
   };
 
@@ -690,13 +632,23 @@ function parseCoworkTranscript(
       continue;
     }
 
-    // Continuation of an already-created message: update stop_reason and add invocations
+    // Continuation of an already-created message: update stop_reason, accumulate any answer text, and
+    // add invocations. One assistant message streams across records sharing a providerMessageId — e.g.
+    // a `thinking` chunk (no text) carries the usage that builds the UsageFact, then the `text` chunk
+    // carries the answer. Fold the non-empty text from every chunk onto the message so its in-memory
+    // text (#122) is the full response, not just whatever the first usage-bearing chunk held.
     if (isContinuation && open?.message) {
       if (
         !open.message.stopReason &&
         typeof record.value.message?.stop_reason === "string"
       ) {
         open.message.stopReason = record.value.message.stop_reason;
+      }
+      const continuationText = textFromUserContent(record.value.message?.content);
+      if (continuationText) {
+        open.message.text = (
+          open.message.text ? `${open.message.text}\n${continuationText}` : continuationText
+        ).slice(0, TASK_TEXT_LIMIT);
       }
       addInvocations(record, open.message, facts, invocationFacts);
       continue;
@@ -760,6 +712,10 @@ function parseCoworkTranscript(
           : null,
       ...(typeof record.value.message?.stop_reason === "string"
         ? { stopReason: record.value.message.stop_reason }
+        : {}),
+      // Assistant text (#122), in-memory: becomes the interaction's responseText for pass-2 dialogue.
+      ...(textFromUserContent(record.value.message?.content)
+        ? { text: textFromUserContent(record.value.message?.content) }
         : {}),
       position: record.position,
     };

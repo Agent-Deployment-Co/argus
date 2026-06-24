@@ -111,11 +111,11 @@ describe("Gemini transcript fragments", () => {
       rawProjectId: "fixture-hash",
       firstPrompt: "gemini hello",
     });
-    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+    expect(fragment.facts.prompts!.filter((p) => p.text).map((task) => task.text)).toEqual([
       "gemini hello",
       "run the checks",
     ]);
-    expect(fragment.facts.taskCandidates.map((task) => task.timestampMs)).toEqual([
+    expect(fragment.facts.prompts!.filter((p) => p.text).map((task) => task.timestampMs)).toEqual([
       Date.parse("2026-06-01T10:00:00.000Z"),
       Date.parse("2026-06-01T10:02:00.000Z"),
     ]);
@@ -194,7 +194,7 @@ describe("Gemini transcript fragments", () => {
       cwd: "/Users/fixture/gemini-legacy",
       firstPrompt: "search the docs",
     });
-    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual(["search the docs"]);
+    expect(fragment.facts.prompts!.filter((p) => p.text).map((task) => task.text)).toEqual(["search the docs"]);
     expect(fragment.facts.messages[0]?.usage).toEqual({
       input: 15,
       output: 5,
@@ -224,7 +224,7 @@ describe("Gemini transcript fragments", () => {
     });
     // A subagent session's prompts are agent-authored, not human intent, so they yield no task
     // candidates (#118) — even though the session still records its firstPrompt + relationships.
-    expect(fragment.facts.taskCandidates).toEqual([]);
+    expect(fragment.facts.prompts!.filter((p) => p.text)).toEqual([]);
     expect(fragment.facts.relationships).toEqual([
       expect.objectContaining({
         childSourceSessionId: "gemini:gemini-subagent",

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  assignChapters,
   buildTaskExtractionPrompt,
   buildTaskOutcomePrompt,
   claudeProviderArgs,
@@ -11,28 +10,36 @@ import {
   splitCommand,
   taskFactsFromSpecs,
 } from "../src/indexing/interpret/task-extraction.ts";
-import type { TaskCandidateFact, TaskFact } from "../src/store/store-contract.ts";
+import {
+  assignInteractionTaskSeqs,
+  type InteractionFact,
+  type TaskFact,
+} from "../src/store/store-contract.ts";
 
-const candidates: TaskCandidateFact[] = [
-  {
-    id: "candidate:0",
+// Pass-1 input is the session's human interaction openings (#122) — each carrying its prompt text.
+function candidate(seq: number, promptText: string, timestampMs?: number, responseText?: string): InteractionFact {
+  return {
+    id: `i${seq}`,
     source: "codex",
     sourceSessionId: "codex:one",
-    timestampMs: Date.parse("2026-06-11T15:00:00.000Z"),
-    text: "add a facts command",
-    position: { originKey: "file:codex-one", recordIndex: 2, itemIndex: 0 },
-  },
-  {
-    id: "candidate:1",
-    source: "codex",
-    sourceSessionId: "codex:one",
-    text: "also make it configurable",
-    position: { originKey: "file:codex-one", recordIndex: 4, itemIndex: 0 },
-  },
+    seq,
+    initiator: "human",
+    disposition: "completed",
+    compactionCount: 0,
+    promptPosition: { originKey: "file:codex-one", recordIndex: 2 + seq * 2, itemIndex: 0 },
+    position: { originKey: "file:codex-one", recordIndex: 2 + seq * 2, itemIndex: 0 },
+    promptText,
+    ...(timestampMs != null ? { timestampMs } : {}),
+    ...(responseText != null ? { responseText } : {}),
+  };
+}
+const candidates: InteractionFact[] = [
+  candidate(0, "add a facts command", Date.parse("2026-06-11T15:00:00.000Z")),
+  candidate(1, "also make it configurable"),
 ];
 
 describe("task extraction", () => {
-  test("builds a prompt with indexed filtered user messages", () => {
+  test("builds a prompt with indexed task prompts", () => {
     const prompt = buildTaskExtractionPrompt("codex:one", candidates, "Return JSON.");
     expect(prompt).toContain("Return JSON.");
     expect(prompt).toContain('"sessionId": "codex:one"');
@@ -51,7 +58,7 @@ describe("task extraction", () => {
     ]);
   });
 
-  test("turns extracted specs into derived task facts", () => {
+  test("turns extracted specs into derived task facts anchored to interactions", () => {
     const facts = taskFactsFromSpecs("codex:one", candidates, [
       { description: "Add configurable task extraction", messageIndexes: [1, 0, 20] },
     ]);
@@ -61,11 +68,20 @@ describe("task extraction", () => {
         sourceSessionId: "codex:one",
         timestampMs: Date.parse("2026-06-11T15:00:00.000Z"),
         description: "Add configurable task extraction",
-        evidence: "message indexes: 0, 1",
+        evidence: "interactions: 0, 1",
         evidenceKind: "llm_inference",
         position: expect.objectContaining({ recordIndex: 2 }),
       }),
     ]);
+  });
+
+  test("drops a spec the model couldn't anchor to any valid prompt index (#122)", () => {
+    expect(
+      taskFactsFromSpecs("codex:one", candidates, [
+        { description: "unanchored", messageIndexes: [] },
+        { description: "bogus indexes", messageIndexes: [9, -1] },
+      ]),
+    ).toEqual([]);
   });
 
   test("emits debug logs through the configured sink", async () => {
@@ -119,27 +135,23 @@ describe("task outcome (pass 2)", () => {
     expect(parseTaskOutcomeOutput('{"outcome":"weird"}')).toEqual({ outcome: "unclear", frustration: "none" });
   });
 
-  test("builds a prompt carrying the task and role-tagged dialogue", () => {
-    const prompt = buildTaskOutcomePrompt("Add a facts command", [
-      { role: "user", text: "add it", timestampMs: 1 },
-      { role: "assistant", text: "done", timestampMs: 2 },
-    ]);
+  test("builds a prompt carrying the task and the interactions' prompt/response dialogue", () => {
+    const prompt = buildTaskOutcomePrompt("Add a facts command", [candidate(0, "add it", undefined, "done")]);
     expect(prompt).toContain("Task: Add a facts command");
     expect(prompt).toContain('"role": "user"');
     expect(prompt).toContain('"text": "done"');
-    // Timestamps are an internal alignment detail — not sent to the judge.
-    expect(prompt).not.toContain("timestampMs");
   });
 
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {
-    expect(await judgeTaskOutcome("t", [{ role: "user", text: "x" }], { provider: "off" })).toEqual({
+    // Provider off short-circuits even with text; no-text interactions short-circuit even with a provider.
+    expect(await judgeTaskOutcome("t", [candidate(0, "x")], { provider: "off" })).toEqual({
       diagnostics: [],
     });
     expect(await judgeTaskOutcome("t", [], { provider: "claude" })).toEqual({ diagnostics: [] });
   });
 });
 
-describe("assignChapters", () => {
+describe("assignInteractionTaskSeqs", () => {
   function task(id: string, timestampMs?: number): TaskFact {
     return {
       id,
@@ -152,18 +164,38 @@ describe("assignChapters", () => {
       ...(timestampMs != null ? { timestampMs } : {}),
     };
   }
+  function interaction(seq: number, timestampMs?: number): InteractionFact {
+    return {
+      id: `i${seq}`,
+      source: "codex",
+      sourceSessionId: "codex:chapters",
+      seq,
+      initiator: "human",
+      disposition: "completed",
+      compactionCount: 0,
+      promptPosition: { originKey: "f", recordIndex: seq, itemIndex: 0 },
+      position: { originKey: "f", recordIndex: seq, itemIndex: 0 },
+      ...(timestampMs != null ? { timestampMs } : {}),
+    };
+  }
 
-  test("bookmarks the timeline: each message joins the latest task started at/before it", () => {
+  test("bookmarks the timeline: each interaction joins the latest task started at/before it", () => {
     const tasks = [task("a", 100), task("b", 300)];
-    // Message timestamps by reconciled seq (ascending). seq 0 precedes any task.
-    assignChapters(tasks, [50, 120, 200, 350, 400]);
-    expect(tasks[0]!.chapter).toEqual({ startSeq: 1, endSeq: 2 }); // task a owns [120,200]
-    expect(tasks[1]!.chapter).toEqual({ startSeq: 3, endSeq: 4 }); // task b owns [350,400]
+    // Interactions in seq order; interaction 0 (ts 50) precedes any task → unassigned.
+    const map = assignInteractionTaskSeqs(tasks, [
+      interaction(0, 50),
+      interaction(1, 120),
+      interaction(2, 200),
+      interaction(3, 350),
+    ]);
+    expect(map.get(0)).toBeUndefined(); // before task a
+    expect(map.get(1)).toBe(0); // task a (index 0)
+    expect(map.get(2)).toBe(0); // still task a
+    expect(map.get(3)).toBe(1); // task b (index 1)
   });
 
-  test("tasks without a timestamp get no chapter", () => {
-    const tasks = [task("a")];
-    assignChapters(tasks, [100, 200]);
-    expect(tasks[0]!.chapter).toBeUndefined();
+  test("interactions/tasks without a timestamp are unattributed", () => {
+    expect(assignInteractionTaskSeqs([task("a")], [interaction(0, 100)]).size).toBe(0);
+    expect(assignInteractionTaskSeqs([task("a", 100)], [interaction(0)]).size).toBe(0);
   });
 });

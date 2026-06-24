@@ -9,7 +9,6 @@ import type {
   TranscriptParserAdapter,
 } from "../store/store-contract.ts";
 import type { ProducerCapabilities } from "./reconcile.ts";
-import type { DialogueTurn } from "./interpret/dialogue.ts";
 import type { AgentSource } from "../types.ts";
 
 /** Filesystem locations + options a producer needs to discover its sessions. */
@@ -37,12 +36,6 @@ export interface NativeProducer {
    * up files (subagents) added since the last full index. Omit when a session is always one file.
    */
   discoverSessionTranscripts?(mainTranscriptPath: string): string[];
-  /**
-   * Reconstruct the ordered human↔assistant dialogue for one transcript (#91), stripping tool-call
-   * noise. The transcript file format is this producer's concern, so each owns its reconstruction.
-   * The result is an in-memory analysis intermediate — never persisted.
-   */
-  reconstructDialogue(path: string): DialogueTurn[];
   /** Optional auxiliary inputs (claude history first-prompts, gemini project roots). */
   discoverAuxiliary?(ctx: ProducerContext): DiscoveryResult;
   auxiliaryParser?(): AuxiliaryParserAdapter;

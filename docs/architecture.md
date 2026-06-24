@@ -64,12 +64,15 @@ split into two tiers — `StructuralIndexStore` (the `index_*` map) and `ReadMod
    (for change detection), and which sessions each file maps to*. No message content. **Fully
    re-derivable from disk** — `index refresh` rebuilds it freely.
 
-2. **Trusted read model** — `resolved_sessions` / `resolved_messages` / `resolved_tool_results` /
-   `resolved_tasks`. The finished, reconciled rows consumers read directly. **Not re-derivable** once a
-   transcript ages off disk, so it is preserved across schema changes via real migrations (never
-   silently dropped). `resolved_messages.task_seq` links each message to the task ("chapter") it falls
-   under; `resolved_tasks` holds the per-task interpretation (see
-   [task-interpretation.md](./task-interpretation.md)).
+2. **Trusted read model** — `resolved_sessions` / `resolved_usage` / `resolved_interactions` /
+   `resolved_invocations` / `resolved_tasks`. The finished, reconciled rows consumers read directly.
+   **Not re-derivable** once a transcript ages off disk, so it is preserved across schema changes via
+   real migrations (never silently dropped). `resolved_usage` (per-assistant-turn token metering) and
+   `resolved_invocations` (per call+result tool use) each link to their owning interaction via
+   `interaction_seq`; task membership lives on `resolved_interactions.task_seq` (a task spans the
+   interactions sharing a `task_seq`, #122) — the leaf tables carry no task pointer, so token/tool
+   rollups at task grain join `usage`/`invocation → interaction → task`. `resolved_tasks` holds the
+   per-task interpretation (see [task-interpretation.md](./task-interpretation.md)).
 
 3. **Bookkeeping** — `source_coverage` (per-source freshness digest) and `session_ownership`
    (which producer owns each canonical session).
@@ -118,7 +121,7 @@ the transcript doesn't state: it runs an AI model over a session to extract its 
 judge each task's outcome. It's
 non-deterministic and costs a model call per session, so it's off by default and gated by `argus.json`.
 When enabled, indexing a *changed* session also runs interpretation and attaches the tasks before the
-session is materialized (so chapter messages get their `task_seq`). Full design:
+session is materialized (so its interactions get their `task_seq`, #122). Full design:
 [task-interpretation.md](./task-interpretation.md).
 
 ### Per run, per native producer
