@@ -17,32 +17,38 @@ non-deterministic, prompt/model-versioned, and expensive — which is why it's s
 
 ## What it produces
 
-A task is no longer just `{description, messageIndexes}`; it's a **chapter** of the session:
+A task is no longer just `{description, messageIndexes}`; it's a set of the session's **interactions**
+(its "chapter"), plus the judged outcome:
 
-- **`chapter`** — an inclusive span over the session's reconciled messages (`{startSeq, endSeq}`).
-  Chapters bookmark the timeline: a message belongs to the latest task that started at or before it.
+- **span over interactions** — a task owns the interactions bookmarked to it (an interaction belongs
+  to the latest task that started at or before it). The span is *derivable* (`min`/`max` of the owned
+  interaction seqs), not stored on the `TaskFact`.
 - **`outcome`** — `success` | `failure` | `unclear`.
 - **`frustration`** — `none` | `low` | `high`.
 - **`signals`** — short evidence tags (e.g. `repeated re-asks`, `no access`).
 - **`outcomeReason`** — a one-line rationale.
 
-`TaskFact` (in `src/store-contract.ts`) carries these. It is **local-only** — not part of the pushed
-wire contract (`@agentdeploymentco/argus-schema`) — so these fields don't affect `argus sync`.
+`TaskFact` (in `src/store/store-contract.ts`) carries these. It is **local-only** — not part of the
+pushed wire contract (`@agentdeploymentco/argus-schema`) — so these fields don't affect `argus sync`.
 
-### Fact → task attribution
+### Interaction → task attribution (#122)
 
-`resolved_messages` has a `task_seq` column (schema v8): the `resolved_tasks.seq` of the chapter a
-message falls under (NULL = unattributed). It's stamped at materialize from the chapter spans, so the
-messages — and the tool calls / skills inside them — are queryable per task. (Tool *results* are still
-a session-level aggregate; attributing them per task is future work.)
+Task membership lives on `resolved_interactions.task_seq`: the `resolved_tasks.seq` of the task an
+interaction falls under (NULL = unattributed). It's stamped at materialize via the shared
+`assignInteractionTaskSeqs` bookmark. The leaf tables carry **no** task pointer — each `resolved_usage`
+row and `resolved_invocation` links to its owning interaction via `interaction_seq`, so tokens / tool
+calls / skills are queryable per task by joining `usage`/`invocation → interaction → task`. (Tool
+*results* ride on each invocation as `approx_result_tokens`, #130.)
 
 ## The two passes
 
 1. **Segment (pass 1).** Runs over the filtered user messages (the existing `TaskCandidateFact`s) to
-   produce the task list, then computes each task's chapter span by timestamp bookmark.
-2. **Judge (pass 2).** For each chapter, feeds the **whole** human↔assistant dialogue for that task to
-   the model and records outcome + frustration + signals. The final message alone is a weak signal
-   (users rage-quit; agents over-claim), so pass 2 reads the entire exchange.
+   produce the task list.
+2. **Judge (pass 2).** For each task, feeds the **whole** human↔assistant dialogue projected over the
+   task's **interactions** (slice `[first owned interaction's ts, the next task's first interaction's
+   ts)`, so boundaries align to interaction openings) to the model and records outcome + frustration +
+   signals. The final message alone is a weak signal (users rage-quit; agents over-claim), so pass 2
+   reads the entire exchange.
 
 Both passes run for every native source (claude, codex, gemini, cowork) — they judge from the
 reconstructed dialogue, not the Claude-only friction signals.
@@ -51,7 +57,7 @@ reconstructed dialogue, not the Claude-only friction signals.
 
 Pass 2 needs the actual user/assistant **text**, which the store deliberately doesn't keep. Each
 producer reconstructs it on demand from the raw transcript via
-`NativeProducer.reconstructDialogue(path)` (`src/dialogue.ts` holds the shared `DialogueTurn` type and
+`NativeProducer.reconstructDialogue(path)` (`src/indexing/interpret/dialogue.ts` holds the shared `DialogueTurn` type and
 time-slicing helper; the per-source extraction lives in each producer's parser, since file format is a
 producer concern). The dialogue is an in-memory intermediate, consumed by the passes and discarded —
 **no message text is ever written to the store.**
