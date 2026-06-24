@@ -2032,6 +2032,7 @@ export class SqliteStore implements Store {
               "model",
               "attribution_skill",
               "stop_reason",
+              "interaction_seq",
             ],
             session.messages.map((message, seq) => [
               sid,
@@ -2051,6 +2052,7 @@ export class SqliteStore implements Store {
               message.model,
               message.attributionSkill,
               message.stopReason ?? null,
+              message.interactionSeq ?? null,
             ]),
           );
           await insertRows(
@@ -2097,7 +2099,7 @@ export class SqliteStore implements Store {
                 sid,
                 seq,
                 message.source,
-                null, // interaction_seq — usage<->interaction linking not yet populated (#122)
+                message.interactionSeq ?? null, // owning interaction (#122), from the call's message
                 toolUse.name,
                 toolUse.category,
                 toolUse.mcpServer ?? null,

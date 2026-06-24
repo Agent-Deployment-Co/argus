@@ -90,6 +90,9 @@ export type TimelineEntry = {
   /** Set on turn entries — true if this turn was folded from a subagent (a different source session).
    *  Folded turns are loop content, never the main agent's response slot. */
   folded?: boolean;
+  /** Set on turn entries — the index into the flat `messages` array this turn was built from, so the
+   *  interaction it lands under can be written back onto that MessageRecord (#122). */
+  messageIndex?: number;
 };
 
 /**
@@ -156,8 +159,12 @@ function deriveInteractions(
   promptsBySession: Map<string, TimelineEntry[]>,
   turnsBySession: Map<string, TimelineEntry[]>,
   signalsBySession: Map<string, SpanSignals>,
-): InteractionFact[] {
+): { interactions: InteractionFact[]; messageInteractionSeq: Map<number, number> } {
   const out: InteractionFact[] = [];
+  // Each turn that lands inside an open interaction maps its source message (by flat-array index) to
+  // that interaction's seq (#122). Turns before a session's first opening prompt have no open
+  // interaction and are left unmapped (NULL interaction_seq).
+  const messageInteractionSeq = new Map<number, number>();
   for (const [sid, prompts] of promptsBySession) {
     const turns = turnsBySession.get(sid) ?? [];
     const events = [...prompts, ...turns];
@@ -205,15 +212,18 @@ function deriveInteractions(
         flush(event.ts);
         open = event;
         responsePosition = undefined;
-      } else if (open && !event.folded) {
+      } else if (open) {
+        // Every turn inside the open span — folded or not — is that interaction's loop content, so it
+        // attributes to this interaction's seq (the value `seq` will take at flush, pre-increment).
+        if (event.messageIndex != null) messageInteractionSeq.set(event.messageIndex, seq);
         // Only the interaction's own (non-folded) turns are the response — a folded subagent turn is
         // loop content, and must not become the parent interaction's response slot.
-        responsePosition = event.position;
+        if (!event.folded) responsePosition = event.position;
       }
     }
     flush(Number.POSITIVE_INFINITY);
   }
-  return out;
+  return { interactions: out, messageInteractionSeq };
 }
 
 /**
@@ -543,6 +553,9 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       ts: fact.timestampMs,
       position: fact.position,
       folded: fact.sourceSessionId !== sessionId,
+      // Index of the MessageRecord pushed for this fact below — lets interaction derivation map this
+      // turn back onto its message so we can stamp message.interactionSeq (#122).
+      messageIndex: messages.length,
     });
     const session = sessions.get(sessionId);
     if (fact.stopReason && session?.friction) {
@@ -605,12 +618,18 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       initiator: prompt.initiator,
     });
   }
-  const interactions = deriveInteractions(
+  const { interactions, messageInteractionSeq } = deriveInteractions(
     fragments[0]?.parser.source ?? ("claude" as AgentSource),
     promptsBySession,
     turnsBySession,
     signalsBySession,
   );
+  // Stamp each usage row with its owning interaction's seq (#122) so materialize can persist
+  // resolved_usage.interaction_seq (and resolved_invocations.interaction_seq from the same message).
+  for (const [index, seq] of messageInteractionSeq) {
+    const message = messages[index];
+    if (message) message.interactionSeq = seq;
+  }
 
   return {
     messages,

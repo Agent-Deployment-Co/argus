@@ -169,6 +169,10 @@ export interface MessageRecord {
   attributionSkill: string | null; // skill active for this message
   /** Assistant stop_reason (claude only) — first non-null across the message's streamed lines. */
   stopReason?: string;
+  /** Owning interaction's seq within its session (#122), as resolved_interactions.seq — the usage
+   *  row attributes to this interaction. Absent for a turn that precedes the session's first prompt
+   *  (no open interaction); reconcile derives it from the interaction spine. */
+  interactionSeq?: number;
   toolUses: ToolUse[];
 }
 
