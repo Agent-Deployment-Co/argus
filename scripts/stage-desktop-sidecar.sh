@@ -5,7 +5,8 @@
 #
 # Flags (may be combined):
 #   --build      Compile the CLI binary/binaries before staging.
-#   --universal  Stage both aarch64 and x86_64 macOS binaries (required for
+#   --universal  Cross-compile for both macOS arches, lipo them into a universal
+#                binary, and stage it as argus-universal-apple-darwin (required for
 #                `tauri build --target universal-apple-darwin`). Implies --build.
 #
 # Without --universal the host triple is used (local dev default).
@@ -29,11 +30,15 @@ if $universal; then
   bun run build:web
   echo "Cross-compiling for aarch64-apple-darwin…"
   bun build --compile --target=bun-darwin-arm64 src/cli.ts \
-    --outfile desktop/src-tauri/binaries/argus-aarch64-apple-darwin
+    --outfile /tmp/argus-aarch64-apple-darwin
   echo "Cross-compiling for x86_64-apple-darwin…"
   bun build --compile --target=bun-darwin-x64 src/cli.ts \
-    --outfile desktop/src-tauri/binaries/argus-x86_64-apple-darwin
-  echo "Staged sidecars -> desktop/src-tauri/binaries/argus-{aarch64,x86_64}-apple-darwin"
+    --outfile /tmp/argus-x86_64-apple-darwin
+  echo "Creating universal binary with lipo…"
+  lipo -create -output desktop/src-tauri/binaries/argus-universal-apple-darwin \
+    /tmp/argus-aarch64-apple-darwin /tmp/argus-x86_64-apple-darwin
+  rm /tmp/argus-aarch64-apple-darwin /tmp/argus-x86_64-apple-darwin
+  echo "Staged sidecar -> desktop/src-tauri/binaries/argus-universal-apple-darwin"
 else
   if $build; then
     bun run build:compile
