@@ -170,22 +170,6 @@ fn open_dashboard(app: &AppHandle) {
     }
 }
 
-/// Kick off the browser sign-in flow (`argus login`, Cloudflare Access). Fire-and-forget: it opens
-/// a browser and exits; the running sidecar's sync leg recovers from dormant once a token lands.
-fn sign_in(app: &AppHandle) {
-    match app.shell().sidecar("argus").and_then(|c| c.args(["login"]).spawn()) {
-        Ok((mut rx, _child)) => {
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    if let CommandEvent::Stdout(line) | CommandEvent::Stderr(line) = event {
-                        log::info!("[argus login] {}", String::from_utf8_lossy(&line).trim_end());
-                    }
-                }
-            });
-        }
-        Err(err) => log::error!("starting sign-in: {err}"),
-    }
-}
 
 /// Toggle launch-at-login and return the new state so the menu checkmark can follow.
 fn toggle_autostart(app: &AppHandle) -> bool {
