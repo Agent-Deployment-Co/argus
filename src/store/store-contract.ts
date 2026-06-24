@@ -282,16 +282,6 @@ export type TaskOutcome = "success" | "failure" | "unclear";
 /** How frustrated the user seemed across the task (re-asks, escalating tone, refusals). */
 export type TaskFrustration = "none" | "low" | "high";
 
-/**
- * A task's span over the reconciled session timeline (#88 "chapters"): an inclusive range of
- * message seq. Subsequent facts fall under the chapter that contains them; the materializer stamps
- * each message's owning task from these spans (resolved_usage.task_seq).
- */
-export interface TaskChapter {
-  startSeq: number;
-  endSeq: number;
-}
-
 export interface TaskFact {
   id: string;
   source: AgentSource;
@@ -302,8 +292,6 @@ export interface TaskFact {
   description: string;
   evidence: string;
   evidenceKind: "llm_inference" | "user_message";
-  /** The chapter span this task owns over the session's reconciled messages (pass 1). */
-  chapter?: TaskChapter;
   /** Per-task outcome, judged from the reconstructed task dialogue (pass 2). */
   outcome?: TaskOutcome;
   frustration?: TaskFrustration;
@@ -588,7 +576,7 @@ export interface StoreStats {
   sessions: number;
   messages: number;
   tasks: number;
-  /** Messages attributed to a task (resolved_usage.task_seq IS NOT NULL) — chapter coverage. */
+  /** Usage rows whose owning interaction is attributed to a task (#122) — task coverage. */
   messagesWithTask: number;
 }
 
@@ -639,8 +627,8 @@ export interface ReadModelStore {
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
-  /** Messages attributed to each task in a session (by resolved_usage.task_seq), keyed by task id,
-   *  oldest first. Tasks with no attributed messages are absent from the map. */
+  /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
+   *  task id, oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
   /** All messages for one session, oldest first. Backs the on-demand /api/session/:id detail. */
   readSessionMessages(sessionId: string): Promise<MessageRecord[]>;
@@ -783,6 +771,38 @@ export function buildPromptFact(args: {
   if (args.timestampMs != null && Number.isFinite(args.timestampMs)) prompt.timestampMs = args.timestampMs;
   if (args.dedupKey) prompt.dedupKey = args.dedupKey;
   return prompt;
+}
+
+/**
+ * Assign each interaction to its owning task (#122), bookmark semantics: an interaction belongs to the
+ * latest task that started at or before it. Returns a map of interaction `seq` -> task index (which is
+ * the `resolved_tasks.seq` materialize writes, since it stores `tasks` in array order). Only dated
+ * tasks participate; an interaction earlier than the first task, or without a timestamp, is
+ * unattributed (absent from the map -> NULL `resolved_interactions.task_seq`). Pure, so the store
+ * (resolved_interactions.task_seq) and the Interpret stage (dialogue slicing) assign identically.
+ */
+export function assignInteractionTaskSeqs(
+  tasks: TaskFact[],
+  interactions: InteractionFact[],
+): Map<number, number> {
+  const out = new Map<number, number>();
+  const indexOfTask = new Map<TaskFact, number>();
+  tasks.forEach((task, index) => indexOfTask.set(task, index));
+  const dated = tasks
+    .filter((task): task is TaskFact & { timestampMs: number } => task.timestampMs != null)
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+  if (!dated.length) return out;
+  for (const interaction of interactions) {
+    const ts = interaction.timestampMs;
+    if (ts == null) continue;
+    let owner: (TaskFact & { timestampMs: number }) | undefined;
+    for (const task of dated) {
+      if (task.timestampMs <= ts) owner = task;
+      else break;
+    }
+    if (owner) out.set(interaction.seq, indexOfTask.get(owner)!);
+  }
+  return out;
 }
 
 /** Locale-independent total order for global first-occurrence and tie-breaking rules. */

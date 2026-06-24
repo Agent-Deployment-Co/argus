@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import sqlite3, { type Database, type RunResult } from "sqlite3";
+import { assignInteractionTaskSeqs } from "./store-contract.ts";
 import type {
   AuxiliaryFact,
   StoredFragment,
@@ -45,7 +46,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { classifyOutcome, emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 12;
+export const STORE_SCHEMA_VERSION = 13;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -144,9 +145,18 @@ const RESOLVED_INTERACTIONS_DDL = `
     initiator TEXT NOT NULL,
     disposition TEXT NOT NULL,
     compaction_count INTEGER NOT NULL DEFAULT 0,
+    -- The task (chapter) this interaction falls under, as resolved_tasks.seq in the same session (#122).
+    -- NULL = unattributed (no task extracted, or the interaction precedes the first task). Task membership
+    -- lives ONLY here; the leaf tables (resolved_usage/resolved_invocations) carry no task pointer —
+    -- task-grain rollups join usage/invocation -> interaction (interaction_seq) -> task (task_seq).
+    task_seq INTEGER,
     interaction_json TEXT NOT NULL,
     PRIMARY KEY (session_id, seq)
   );`;
+// Indexes the task<->interaction join (readSessionTaskMessages, messagesWithTask) rides. Shared by
+// CREATE_SCHEMA_SQL and the v12 -> v13 migration.
+const RESOLVED_INTERACTIONS_INDEXES = `
+  CREATE INDEX resolved_interactions_task ON resolved_interactions(session_id, task_seq);`;
 const RESOLVED_INVOCATIONS_DDL = `
   CREATE TABLE resolved_invocations (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -300,9 +310,6 @@ const CREATE_SCHEMA_SQL = `
     cwd TEXT NOT NULL,
     project TEXT NOT NULL,
     record_json TEXT NOT NULL,
-    -- The task (chapter) this message falls under, as resolved_tasks.seq in the same session.
-    -- NULL = unattributed (no task extracted, or message outside any chapter).
-    task_seq INTEGER,
     -- Usage/model promoted out of record_json so token & cost breakdowns can be done in SQL
     -- (GROUP BY) instead of re-walking every message in JS. record_json stays authoritative;
     -- these mirror message.usage.* / message.model / message.attributionSkill. Cost is NOT stored
@@ -318,21 +325,21 @@ const CREATE_SCHEMA_SQL = `
     -- value in SQL instead of json_extract'ing every windowed row per /api/snapshot request (#121).
     stop_reason TEXT,
     -- The interaction (#117) this usage row falls under, as resolved_interactions.seq in the same
-    -- session. NULL until usage<->interaction linking is populated (the interaction spine itself is
-    -- persisted in resolved_interactions below).
+    -- session (#122). NULL only for a turn that precedes the session's first opening prompt, or for a
+    -- row materialized before #122 / migrated and not yet re-indexed. Task grain joins through here.
     interaction_seq INTEGER,
     PRIMARY KEY (session_id, seq)
   );
   CREATE INDEX resolved_usage_date ON resolved_usage(date);
   CREATE INDEX resolved_usage_ts ON resolved_usage(ts);
   CREATE INDEX resolved_usage_source ON resolved_usage(source);
-  CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq);
   CREATE INDEX resolved_usage_date_model ON resolved_usage(date, model);
 
   -- The interaction spine (#117): one row per interaction (prompt -> loop -> response). Promoted
   -- initiator/disposition columns back the friction/outcome GROUP BY (#121); interaction_json keeps
   -- the full fact (incl. prompt/response slot positions) for detail reads.
   ${RESOLVED_INTERACTIONS_DDL}
+  ${RESOLVED_INTERACTIONS_INDEXES}
 
   -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
   -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
@@ -819,13 +826,22 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   // without a re-index; interactions backfill on the next index (they're reconcile-derived).
   10: {
     to: 11,
-    // The resolved_invocations DDL is inlined at the v11 shape (NOT the shared constant) so this
-    // migration keeps producing the v11 table even as the shared constant evolves; v11 -> v12 below
-    // adds the columns #130 introduced. resolved_interactions is unchanged since v11, so it still
-    // shares the constant.
+    // Both new-table DDLs are inlined at their v11 shape (NOT the shared constants) so this migration
+    // keeps producing the v11 tables even as the shared constants evolve: v11 -> v12 adds the #130
+    // invocation columns, v12 -> v13 adds resolved_interactions.task_seq (#122).
     sql: `
       ALTER TABLE resolved_usage ADD COLUMN interaction_seq INTEGER;
-      ${RESOLVED_INTERACTIONS_DDL}
+      CREATE TABLE resolved_interactions (
+        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        ts INTEGER,
+        initiator TEXT NOT NULL,
+        disposition TEXT NOT NULL,
+        compaction_count INTEGER NOT NULL DEFAULT 0,
+        interaction_json TEXT NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
       CREATE TABLE resolved_invocations (
         session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
         seq INTEGER NOT NULL,
@@ -922,6 +938,23 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         last_interruption_ms = json_extract(meta_json, '$.friction.lastInterruptionMs');
     `,
   },
+  // 12 -> 13: tasks span INTERACTIONS, not messages (#122). Task membership moves onto
+  // resolved_interactions.task_seq (the leaf tables carry no task pointer); the pre-interaction
+  // resolved_usage.task_seq (where messages pointed straight at a chapter, sliced by message seq) is
+  // dropped. Existing task attribution can't be carried over — it lived on usage rows whose
+  // interaction_seq is NULL until a re-index repopulates the interaction spine — so task_seq starts
+  // NULL on every interaction and fills on the next index with task extraction (same "re-index for
+  // reconcile-derived data" story as the v10 -> v11 interactions backfill). SQLite >= 3.35 (sqlite3 v6
+  // bundles newer) supports DROP COLUMN.
+  12: {
+    to: 13,
+    sql: `
+      ALTER TABLE resolved_interactions ADD COLUMN task_seq INTEGER;
+      ${RESOLVED_INTERACTIONS_INDEXES}
+      DROP INDEX IF EXISTS resolved_usage_task;
+      ALTER TABLE resolved_usage DROP COLUMN task_seq;
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -978,9 +1011,9 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
-    await get(db, "SELECT task_seq, input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
+    await get(db, "SELECT input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
-    await get(db, "SELECT session_id, initiator, disposition, interaction_json FROM resolved_interactions LIMIT 1");
+    await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
     await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
@@ -1459,8 +1492,9 @@ export class SqliteStore implements Store {
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>> {
     return this.schedule(async () => {
       // One pass for the whole session: map each task's seq -> id, then bucket the attributed
-      // messages (resolved_usage.task_seq references resolved_tasks.seq) by task id. Tasks with no
-      // attributed messages simply don't appear in the map (callers treat that as zero).
+      // messages by task id. Task membership lives on resolved_interactions.task_seq (#122), so a usage
+      // row's task is its owning interaction's task: usage -> interaction (interaction_seq) -> task_seq.
+      // Tasks with no attributed messages simply don't appear in the map (callers treat that as zero).
       const taskRows = await all<{ seq: number; task_json: string }>(
         this.db,
         "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
@@ -1471,7 +1505,11 @@ export class SqliteStore implements Store {
 
       const rows = await all<{ record_json: string; task_seq: number | null }>(
         this.db,
-        "SELECT record_json, task_seq FROM resolved_usage WHERE session_id = ? AND task_seq IS NOT NULL ORDER BY seq",
+        `SELECT u.record_json AS record_json, i.task_seq AS task_seq
+         FROM resolved_usage u
+         JOIN resolved_interactions i ON i.session_id = u.session_id AND i.seq = u.interaction_seq
+         WHERE u.session_id = ? AND i.task_seq IS NOT NULL
+         ORDER BY u.seq`,
         [sessionId],
       );
       const byTask = new Map<string, MessageRecord[]>();
@@ -1998,17 +2036,11 @@ export class SqliteStore implements Store {
               JSON.stringify(session.meta),
             ],
           );
-          // Stamp each message with the task (chapter) it falls under, by message seq. The chapter
-          // spans live on the tasks we're about to write (incoming or the preserved snapshot), so the
-          // attribution stays consistent with resolved_tasks.seq and survives a re-materialization
-          // that reuses the stored tasks.
-          const taskSeqForMessage = (msgSeq: number): number | null => {
-            for (let t = 0; t < tasks.length; t++) {
-              const chapter = tasks[t]!.chapter;
-              if (chapter && msgSeq >= chapter.startSeq && msgSeq <= chapter.endSeq) return t;
-            }
-            return null;
-          };
+          // Assign each interaction to its owning task (#122), bookmark semantics over the tasks we're
+          // about to write (incoming or the preserved snapshot), so attribution stays consistent with
+          // resolved_tasks.seq and survives a re-materialization that reuses the stored tasks. The leaf
+          // tables carry no task pointer — task grain joins usage/invocation -> interaction -> task.
+          const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, session.interactions ?? []);
           await insertRows(
             this.db,
             "resolved_usage",
@@ -2023,7 +2055,6 @@ export class SqliteStore implements Store {
               "cwd",
               "project",
               "record_json",
-              "task_seq",
               "input_tokens",
               "output_tokens",
               "cache_read",
@@ -2043,7 +2074,6 @@ export class SqliteStore implements Store {
               message.cwd ?? "",
               message.project,
               JSON.stringify(message),
-              taskSeqForMessage(seq),
               message.usage.input,
               message.usage.output,
               message.usage.cacheRead,
@@ -2069,11 +2099,12 @@ export class SqliteStore implements Store {
           );
           // The interaction spine (#117/#119): one row per reconcile-derived interaction. seq is the
           // interaction's own ordinal (not the array index) so the PK and interaction_json agree and
-          // #122 can reference one source of truth for the usage<->interaction link.
+          // the usage<->interaction link references one source of truth. task_seq (#122) carries the
+          // interaction's owning task — task membership lives only here.
           await insertRows(
             this.db,
             "resolved_interactions",
-            ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "interaction_json"],
+            ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "task_seq", "interaction_json"],
             (session.interactions ?? []).map((interaction) => [
               sid,
               interaction.seq,
@@ -2082,6 +2113,7 @@ export class SqliteStore implements Store {
               interaction.initiator,
               interaction.disposition,
               interaction.compactionCount,
+              taskSeqByInteraction.get(interaction.seq) ?? null,
               JSON.stringify(interaction),
             ]),
           );
@@ -2202,8 +2234,12 @@ export class SqliteStore implements Store {
         sessions: await count("SELECT COUNT(*) AS n FROM resolved_sessions"),
         messages: await count("SELECT COUNT(*) AS n FROM resolved_usage"),
         tasks: await count("SELECT COUNT(*) AS n FROM resolved_tasks"),
+        // Usage rows whose owning interaction is attributed to a task (#122): join through the
+        // interaction since task membership lives on resolved_interactions.task_seq, not the leaf.
         messagesWithTask: await count(
-          "SELECT COUNT(*) AS n FROM resolved_usage WHERE task_seq IS NOT NULL",
+          `SELECT COUNT(*) AS n FROM resolved_usage u
+           JOIN resolved_interactions i ON i.session_id = u.session_id AND i.seq = u.interaction_seq
+           WHERE i.task_seq IS NOT NULL`,
         ),
       };
     });

@@ -422,7 +422,8 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
       await rawExec(db, "ALTER TABLE resolved_usage RENAME TO resolved_messages");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN interaction_seq");
-      await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN task_seq");
+      // v13 dropped resolved_usage.task_seq, and v4 predates it (added at 7 -> 8) — so there's nothing
+      // to strip here; the 7 -> 8 migration re-adds it on the way up.
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN input_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN output_tokens");
       await rawExec(db, "ALTER TABLE resolved_messages DROP COLUMN cache_read");
@@ -740,12 +741,14 @@ describe("SQLite store", () => {
     }
   });
 
-  test("materializeSessions stamps resolved_usage.task_seq from task chapter spans", async () => {
+  test("materializeSessions assigns tasks to interactions (#122) and joins task↔message through them", async () => {
     const path = storePath();
     const store = await openStore({ path });
     try {
       const sid = "codex:chapters";
-      const message = (ts: number) => ({
+      // Each message carries its owning interaction's seq (reconcile stamps this; here we set it
+      // directly since we materialize a hand-built session). 4 messages across 2 interactions.
+      const message = (ts: number, interactionSeq: number) => ({
         source: "codex" as const,
         sessionId: sid,
         project: "p",
@@ -756,41 +759,65 @@ describe("SQLite store", () => {
         model: "gpt-5",
         usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
         attributionSkill: null,
+        interactionSeq,
         toolUses: [],
       });
-      const task = (seqLabel: string, startSeq: number, endSeq: number) => ({
+      const interaction = (seq: number, ts: number) => ({
+        id: `iact:${sid}:${seq}`,
+        source: "codex" as const,
+        sourceSessionId: sid,
+        seq,
+        initiator: "human" as const,
+        disposition: "completed" as const,
+        compactionCount: 0,
+        timestampMs: ts,
+        promptPosition: { originKey: "file:chapters", recordIndex: seq, itemIndex: 0 },
+        position: { originKey: "file:chapters", recordIndex: seq, itemIndex: 0 },
+      });
+      const task = (seqLabel: string, ts: number) => ({
         id: `task:${sid}:${seqLabel}`,
         source: "codex" as const,
         sourceSessionId: sid,
         description: `task ${seqLabel}`,
-        evidence: `chapter ${startSeq}-${endSeq}`,
+        evidence: `task at ${ts}`,
         evidenceKind: "llm_inference" as const,
-        chapter: { startSeq, endSeq },
+        timestampMs: ts,
         outcome: "success" as const,
-        position: { originKey: "file:chapters", recordIndex: startSeq, itemIndex: 0 },
+        position: { originKey: "file:chapters", recordIndex: 0, itemIndex: 0 },
       });
-      // 4 messages, two chapters: [0,1] → task 0, [2,3] → task 1.
+      // interaction 0 (ts 1000) → task a; interaction 1 (ts 1002) → task b (bookmark: latest task whose
+      // ts ≤ the interaction's). Messages inherit task via their interaction.
       await store.materializeSessions("codex", [
         {
           meta: { source: "codex", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
-          messages: [message(1000), message(1001), message(1002), message(1003)],
-          tasks: [task("a", 0, 1), task("b", 2, 3)],
+          messages: [message(1000, 0), message(1001, 0), message(1002, 1), message(1003, 1)],
+          interactions: [interaction(0, 1000), interaction(1, 1002)],
+          tasks: [task("a", 1000), task("b", 1002)],
         },
       ]);
 
-      const rows = await withRawDatabase(path, (db) =>
+      // Task membership lives on resolved_interactions.task_seq; the leaf has interaction_seq only.
+      const iact = await withRawDatabase(path, (db) =>
         rawAll<{ seq: number; task_seq: number | null }>(
           db,
-          `SELECT seq, task_seq FROM resolved_usage WHERE session_id = '${sid}' ORDER BY seq`,
+          `SELECT seq, task_seq FROM resolved_interactions WHERE session_id = '${sid}' ORDER BY seq`,
         ),
       );
-      expect(rows.map((r) => r.task_seq)).toEqual([0, 0, 1, 1]);
-      // Outcome + chapter round-trip through task_json.
+      expect(iact).toEqual([
+        { seq: 0, task_seq: 0 },
+        { seq: 1, task_seq: 1 },
+      ]);
+      const usage = await withRawDatabase(path, (db) =>
+        rawAll<{ seq: number; interaction_seq: number | null }>(
+          db,
+          `SELECT seq, interaction_seq FROM resolved_usage WHERE session_id = '${sid}' ORDER BY seq`,
+        ),
+      );
+      expect(usage.map((r) => r.interaction_seq)).toEqual([0, 0, 1, 1]);
       const tasks = await store.readSessionTasks(sid);
-      expect(tasks[0]?.chapter).toEqual({ startSeq: 0, endSeq: 1 });
       expect(tasks[0]?.outcome).toBe("success");
 
-      // readSessionTaskMessages buckets each task's attributed messages (by task_seq) under its id.
+      // readSessionTaskMessages buckets each task's messages by joining usage → interaction → task.
       const byTask = await store.readSessionTaskMessages(sid);
       expect(byTask.get(`task:${sid}:a`)?.map((m) => m.ts)).toEqual([1000, 1001]);
       expect(byTask.get(`task:${sid}:b`)?.map((m) => m.ts)).toEqual([1002, 1003]);
@@ -961,6 +988,9 @@ describe("SQLite store", () => {
       await rawExec(db, "CREATE INDEX resolved_messages_date ON resolved_messages(date)");
       await rawExec(db, "CREATE INDEX resolved_messages_ts ON resolved_messages(ts)");
       await rawExec(db, "CREATE INDEX resolved_messages_source ON resolved_messages(source)");
+      // v13 dropped resolved_usage.task_seq; re-add it (v8 had it, from 7 -> 8) so the v7 task index
+      // and the migration chain's eventual 12 -> 13 DROP COLUMN have a column to act on.
+      await rawExec(db, "ALTER TABLE resolved_messages ADD COLUMN task_seq INTEGER");
       await rawExec(db, "CREATE INDEX resolved_messages_task ON resolved_messages(session_id, task_seq)");
       // Recreate resolved_tool_results (present since v1) so the 11 -> 12 migration's DROP runs.
       await rawExec(
@@ -1110,6 +1140,10 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP TABLE IF EXISTS resolved_invocations");
       await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN interaction_seq");
       await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN stop_reason");
+      // v13 dropped resolved_usage.task_seq; re-add it (v10 had it) so the eventual 12 -> 13 DROP COLUMN
+      // has a column to act on.
+      await rawExec(db, "ALTER TABLE resolved_usage ADD COLUMN task_seq INTEGER");
+      await rawExec(db, "CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq)");
       // v12 promoted friction columns onto resolved_sessions; strip them so the 11 -> 12 ADDs don't collide.
       for (const col of ["friction_interruptions", "friction_rejections", "friction_compactions", "friction_turns", "last_interruption_ms"]) {
         await rawExec(db, `ALTER TABLE resolved_sessions DROP COLUMN ${col}`);
@@ -1187,6 +1221,13 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN args");
       await rawExec(db, "ALTER TABLE resolved_invocations DROP COLUMN approx_result_tokens");
       await rawExec(db, "ALTER TABLE resolved_usage DROP COLUMN stop_reason");
+      // v13 moved task membership: dropped resolved_usage.task_seq, added resolved_interactions.task_seq.
+      // Simulate v11 — re-add the former (so 12 -> 13's DROP COLUMN has a target) and strip the latter
+      // (so 12 -> 13's ADD COLUMN doesn't collide).
+      await rawExec(db, "ALTER TABLE resolved_usage ADD COLUMN task_seq INTEGER");
+      await rawExec(db, "CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq)");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_interactions_task");
+      await rawExec(db, "ALTER TABLE resolved_interactions DROP COLUMN task_seq");
       for (const col of ["friction_interruptions", "friction_rejections", "friction_compactions", "friction_turns", "last_interruption_ms"]) {
         await rawExec(db, `ALTER TABLE resolved_sessions DROP COLUMN ${col}`);
       }
@@ -1233,6 +1274,55 @@ describe("SQLite store", () => {
     // friction promoted from meta_json (friction_turns prefers rawTurns).
     expect(result.session).toEqual({ fi: 3, fr: 1, ft: 4, lim: 999 });
     expect(result.toolResultsTable).toBeUndefined(); // table dropped
+  });
+
+  test("v12 -> v13 moves task membership from resolved_usage onto resolved_interactions (#122)", async () => {
+    const path = storePath();
+    const sid = "claude:v13";
+    const store = await openStore({ path });
+    // A materialized v13 session with two interactions; messages link to them.
+    await store.materializeSessions("claude", [
+      {
+        meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+        messages: [
+          { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1000, date: "2026-06-01", model: "claude-opus-4", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }, attributionSkill: null, interactionSeq: 0, toolUses: [] },
+          { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1002, date: "2026-06-01", model: "claude-opus-4", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }, attributionSkill: null, interactionSeq: 1, toolUses: [] },
+        ],
+        interactions: [
+          { id: "i0", source: "claude", sourceSessionId: sid, seq: 0, initiator: "human", disposition: "completed", compactionCount: 0, timestampMs: 1000, promptPosition: { originKey: "f", recordIndex: 0, itemIndex: 0 }, position: { originKey: "f", recordIndex: 0, itemIndex: 0 } },
+          { id: "i1", source: "claude", sourceSessionId: sid, seq: 1, initiator: "human", disposition: "completed", compactionCount: 0, timestampMs: 1002, promptPosition: { originKey: "f", recordIndex: 1, itemIndex: 0 }, position: { originKey: "f", recordIndex: 1, itemIndex: 0 } },
+        ],
+      },
+    ]);
+    await store.close();
+
+    // Degrade to v12: re-add resolved_usage.task_seq (with data, as a v12 store carried) and strip
+    // resolved_interactions.task_seq (added at v13).
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_interactions_task");
+      await rawExec(db, "ALTER TABLE resolved_interactions DROP COLUMN task_seq");
+      await rawExec(db, "ALTER TABLE resolved_usage ADD COLUMN task_seq INTEGER");
+      await rawExec(db, "CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq)");
+      await rawExec(db, `UPDATE resolved_usage SET task_seq = 0 WHERE session_id = '${sid}'`);
+      await rawExec(db, "PRAGMA user_version = 12");
+    });
+
+    const migrated = await openStore({ path });
+    await migrated.close();
+    const shape = await withRawDatabase(path, async (db) => ({
+      usageHasTaskSeq: await rawGet<{ n: number }>(db, "SELECT COUNT(*) AS n FROM pragma_table_info('resolved_usage') WHERE name = 'task_seq'"),
+      interactionsHasTaskSeq: await rawGet<{ n: number }>(db, "SELECT COUNT(*) AS n FROM pragma_table_info('resolved_interactions') WHERE name = 'task_seq'"),
+      interactions: await rawAll<{ seq: number; task_seq: number | null }>(db, `SELECT seq, task_seq FROM resolved_interactions WHERE session_id = '${sid}' ORDER BY seq`),
+      usageRows: await rawGet<{ n: number }>(db, `SELECT COUNT(*) AS n FROM resolved_usage WHERE session_id = '${sid}'`),
+    }));
+    expect(shape.usageHasTaskSeq?.n).toBe(0); // dropped from the leaf
+    expect(shape.interactionsHasTaskSeq?.n).toBe(1); // moved onto the interaction
+    // No backfill (interaction membership is reconcile-derived) — task_seq starts NULL until re-index.
+    expect(shape.interactions).toEqual([
+      { seq: 0, task_seq: null },
+      { seq: 1, task_seq: null },
+    ]);
+    expect(shape.usageRows?.n).toBe(2); // existing rows preserved
   });
 
   test("clearIndex drops the structural index but preserves the resolved read model", async () => {
