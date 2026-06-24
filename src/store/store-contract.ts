@@ -785,21 +785,22 @@ export function assignInteractionTaskSeqs(
   interactions: InteractionFact[],
 ): Map<number, number> {
   const out = new Map<number, number>();
-  const indexOfTask = new Map<TaskFact, number>();
-  tasks.forEach((task, index) => indexOfTask.set(task, index));
+  // Dated tasks carrying their original index (= resolved_tasks.seq), oldest first.
   const dated = tasks
-    .filter((task): task is TaskFact & { timestampMs: number } => task.timestampMs != null)
-    .sort((a, b) => a.timestampMs - b.timestampMs);
+    .map((task, index) => ({ ts: task.timestampMs, index }))
+    .filter((t): t is { ts: number; index: number } => t.ts != null)
+    .sort((a, b) => a.ts - b.ts);
   if (!dated.length) return out;
-  for (const interaction of interactions) {
-    const ts = interaction.timestampMs;
-    if (ts == null) continue;
-    let owner: (TaskFact & { timestampMs: number }) | undefined;
-    for (const task of dated) {
-      if (task.timestampMs <= ts) owner = task;
-      else break;
-    }
-    if (owner) out.set(interaction.seq, indexOfTask.get(owner)!);
+  // Both sides ascending by ts, so a single advancing pointer over `dated` assigns each interaction to
+  // the latest task started at/before it — O(n log n + m log m), no per-interaction rescan. The helper
+  // runs twice per session per index (Interpret + materialize), so the linear pass matters on long ones.
+  const ordered = interactions
+    .filter((i): i is InteractionFact & { timestampMs: number } => i.timestampMs != null)
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+  let t = -1;
+  for (const interaction of ordered) {
+    while (t + 1 < dated.length && dated[t + 1]!.ts <= interaction.timestampMs) t++;
+    if (t >= 0) out.set(interaction.seq, dated[t]!.index);
   }
   return out;
 }

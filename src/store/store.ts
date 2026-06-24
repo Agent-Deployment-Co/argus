@@ -948,9 +948,13 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   // bundles newer) supports DROP COLUMN.
   12: {
     to: 13,
+    // The index DDL is inlined at its v13 shape (NOT the shared RESOLVED_INTERACTIONS_INDEXES constant)
+    // so this migration keeps producing exactly the v13 index even as that constant evolves — the same
+    // pinning the v10 -> v11 step uses for its table DDL, preventing a future index add/rename from
+    // leaking into this step.
     sql: `
       ALTER TABLE resolved_interactions ADD COLUMN task_seq INTEGER;
-      ${RESOLVED_INTERACTIONS_INDEXES}
+      CREATE INDEX resolved_interactions_task ON resolved_interactions(session_id, task_seq);
       DROP INDEX IF EXISTS resolved_usage_task;
       ALTER TABLE resolved_usage DROP COLUMN task_seq;
     `,
