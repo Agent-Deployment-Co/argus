@@ -408,4 +408,3 @@ These are named so they are not rediscovered as surprises:
   ordered list. Branching is a known future extension, not an oversight.
 - **Session-level outcome rollup.** Outcome is judged per *task*. Rolling per-task outcomes up to a
   single session verdict is deliberately out of scope here.
-</content>
