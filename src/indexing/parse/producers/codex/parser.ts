@@ -540,6 +540,9 @@ export function parseCodexTranscript(
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
       responseUserMessages++;
+      // A new user prompt opens a new interaction; drop any assistant text that never reached a
+      // token_count flush so it can't leak onto this interaction's response (#122).
+      pendingAssistantText = undefined;
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns). Codex
@@ -568,8 +571,14 @@ export function parseCodexTranscript(
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "assistant") {
       responseAssistantMessages++;
+      // Accumulate (don't overwrite): a turn may emit several assistant message records before its
+      // token_count flush, and each carries part of the response (#122). Capped at TASK_TEXT_LIMIT.
       const assistantText = textFromCodexContent(payload.content, TASK_TEXT_LIMIT);
-      if (assistantText) pendingAssistantText = assistantText;
+      if (assistantText) {
+        pendingAssistantText = (
+          pendingAssistantText ? `${pendingAssistantText}\n${assistantText}` : assistantText
+        ).slice(0, TASK_TEXT_LIMIT);
+      }
       continue;
     }
 
@@ -650,12 +659,14 @@ export function parseCodexTranscript(
     const usage = normalizeCodexUsage(info.last_token_usage ?? info.total_token_usage);
     if (totalTokens(usage) === 0) {
       pendingInvocations = [];
+      pendingAssistantText = undefined;
       continue;
     }
 
     const messageTimestamp = timestampMs(record.value.timestamp);
     if (messageTimestamp == null) {
       pendingInvocations = [];
+      pendingAssistantText = undefined;
       diagnostics.push({
         code: "invalid_token_timestamp",
         severity: "warning",
