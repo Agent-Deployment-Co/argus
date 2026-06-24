@@ -583,11 +583,13 @@ export async function extractTasksWithOutcome(
     (a, b) => (a.timestampMs ?? Infinity) - (b.timestampMs ?? Infinity),
   );
 
-  // Each task's dialogue window starts at the earliest interaction bookmarked to it (its own opening),
-  // falling back to the task's own timestamp if it owns none, and ends where the next task's window
-  // begins. Same bookmark the materializer uses, so the judged dialogue matches the stored membership.
+  // Judge each task over the dialogue projected onto the interactions it OWNS — the same
+  // assignInteractionTaskSeqs bookmark the materializer stamps onto resolved_interactions.task_seq, so
+  // the judged dialogue matches the stored membership exactly. A task that owns no interaction (its
+  // anchor falls between two interaction openings — its stored task_seq membership is empty too) is
+  // judged over nothing: no fallback to the task's own timestamp, which would slice in turns the store
+  // attributes to no task (or to the neighbour).
   const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, interactions);
-  const taskIndexOf = new Map(tasks.map((task, index) => [task, index] as const));
   const earliestInteractionTs = new Map<number, number>();
   for (const interaction of interactions) {
     if (interaction.timestampMs == null) continue;
@@ -597,19 +599,19 @@ export async function extractTasksWithOutcome(
     if (prev == null || interaction.timestampMs < prev) earliestInteractionTs.set(taskIndex, interaction.timestampMs);
   }
 
-  const dated = tasks.filter(
-    (task): task is TaskFact & { timestampMs: number } => task.timestampMs != null,
-  );
-  const starts = dated.map((task) => earliestInteractionTs.get(taskIndexOf.get(task)!) ?? task.timestampMs);
+  // Tasks owning ≥1 interaction, oldest first; each task's window ends where the next owner's begins.
+  const owners = tasks
+    .map((task, index) => ({ task, start: earliestInteractionTs.get(index) }))
+    .filter((o): o is { task: TaskFact; start: number } => o.start != null)
+    .sort((a, b) => a.start - b.start);
   logTaskExtractionDebug(
     options,
-    `judging outcome for ${dated.length}/${tasks.length} tasks in ${sessionId}`,
+    `judging outcome for ${owners.length}/${tasks.length} tasks in ${sessionId}`,
   );
-  // `dated` is sorted ascending, so each task's window ends where the next begins — `starts[i + 1]`,
-  // not an O(n) rescan. Tasks sharing a start get an empty [start, start) slice for all but the last,
-  // rather than overlapping windows.
+  // `owners` is sorted ascending, so each window ends where the next begins — `owners[i + 1]`, not an
+  // O(n) rescan. Owners sharing a start get an empty [start, start) slice for all but the last.
   await mapWithLimit(
-    dated.map((task, i) => ({ task, start: starts[i]!, end: starts[i + 1] })),
+    owners.map((o, i) => ({ task: o.task, start: o.start, end: owners[i + 1]?.start })),
     4,
     async ({ task, start, end }) => {
       const slice = sliceDialogueByTime(dialogue, start, end);
