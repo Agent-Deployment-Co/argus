@@ -28,8 +28,8 @@ permissions:
 
 jobs:
   npm:
-    name: npm — per-OS prebuilt binaries
-    runs-on: macos-latest # bun cross-compiles every target from one host
+    name: npm
+    runs-on: ubuntu-latest # bun cross-compiles every target from one host
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
