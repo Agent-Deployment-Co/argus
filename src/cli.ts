@@ -14,7 +14,7 @@ import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type Pu
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { type TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
-import { loadConfig, resolveTaskExtraction } from "./config.ts";
+import { loadConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS } from "./config.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -303,6 +303,57 @@ async function runStatus(log: Log): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// `argus config` helpers
+// ---------------------------------------------------------------------------
+
+/** Recursively flatten a config object into dotted key-value pairs. */
+function flattenObject(obj: unknown, prefix = ""): [string, unknown][] {
+  if (obj == null || typeof obj !== "object" || Array.isArray(obj)) return [];
+  const result: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value != null && typeof value === "object" && !Array.isArray(value)) {
+      result.push(...flattenObject(value, path));
+    } else {
+      result.push([path, value]);
+    }
+  }
+  return result;
+}
+
+async function runConfigGet(key: string, log: Log): Promise<void> {
+  const value = getPath(loadConfig(), key);
+  if (value === undefined) {
+    log("(not set)");
+  } else {
+    process.stdout.write(String(value) + "\n");
+  }
+}
+
+async function runConfigSet(key: string, rawValue: string, log: Log): Promise<void> {
+  const setting = ALL_SETTINGS[key];
+  if (!setting) {
+    throw new Error(`Unknown key: ${JSON.stringify(key)}\nKnown keys: ${Object.keys(ALL_SETTINGS).join(", ")}`);
+  }
+  const parsed = setting.parse(rawValue);
+  const cfg = loadConfig();
+  setPath(cfg as Record<string, unknown>, key, parsed);
+  writeConfig(cfg);
+  log(`${key} = ${JSON.stringify(parsed)}`);
+}
+
+async function runConfigList(log: Log): Promise<void> {
+  const pairs = flattenObject(loadConfig());
+  if (pairs.length === 0) {
+    log("(no settings in argus.json)");
+    return;
+  }
+  for (const [k, v] of pairs) {
+    process.stdout.write(`${k}=${JSON.stringify(v)}\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLI definition (citty). Each subcommand declares its own flags; --help scopes
 // to that subcommand automatically and flag types flow into the run handlers.
 // ---------------------------------------------------------------------------
@@ -533,6 +584,42 @@ const runCmd = defineCommand({
   }),
 });
 
+const configGet = defineCommand({
+  meta: { name: "get", description: "print a setting from argus.json" },
+  args: {
+    key: { type: "positional", required: true, description: "dotted key, e.g. taskExtraction.enabled" },
+  },
+  run: handler((args) => {
+    if (args._.length !== 1) failArg("Usage: argus config get <key>");
+    return runConfigGet(args._[0]!, log);
+  }),
+});
+
+const configSet = defineCommand({
+  meta: { name: "set", description: "write a setting to argus.json" },
+  args: {
+    key: { type: "positional", required: true, description: "dotted key and value, e.g. taskExtraction.enabled true" },
+  },
+  run: handler((args) => {
+    if (args._.length !== 2) failArg("Usage: argus config set <key> <value>");
+    return runConfigSet(args._[0]!, args._[1]!, log);
+  }),
+});
+
+const configList = defineCommand({
+  meta: { name: "list", description: "list all settings currently in argus.json" },
+  run: handler(() => runConfigList(log)),
+});
+
+const config = defineCommand({
+  meta: { name: "config", description: "read and write settings in argus.json" },
+  subCommands: { get: configGet, set: configSet, list: configList },
+  run: async (ctx) => {
+    if (dispatchedSubcommand(ctx) !== undefined) return;
+    await showUsage(ctx.cmd);
+  },
+});
+
 const main = defineCommand({
   meta: {
     name: "argus",
@@ -542,7 +629,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, login },
+  subCommands: { serve, index, sync, run: runCmd, status, login, config },
 });
 
 async function run() {
