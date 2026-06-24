@@ -5,9 +5,10 @@
 #
 # Flags (may be combined):
 #   --build      Compile the CLI binary/binaries before staging.
-#   --universal  Cross-compile for both macOS arches, lipo them into a universal
-#                binary, and stage it as argus-universal-apple-darwin (required for
-#                `tauri build --target universal-apple-darwin`). Implies --build.
+#   --universal  Cross-compile for both macOS arches, stage each as its own
+#                arch-specific binary, and lipo them into argus-universal-apple-darwin.
+#                All three are required for `tauri build --target universal-apple-darwin`.
+#                Implies --build.
 #
 # Without --universal the host triple is used (local dev default).
 set -euo pipefail
@@ -28,17 +29,16 @@ mkdir -p desktop/src-tauri/binaries
 
 if $universal; then
   bun run build:web
+  arm="desktop/src-tauri/binaries/argus-aarch64-apple-darwin"
+  x64="desktop/src-tauri/binaries/argus-x86_64-apple-darwin"
+  uni="desktop/src-tauri/binaries/argus-universal-apple-darwin"
   echo "Cross-compiling for aarch64-apple-darwin…"
-  bun build --compile --target=bun-darwin-arm64 src/cli.ts \
-    --outfile /tmp/argus-aarch64-apple-darwin
+  bun build --compile --target=bun-darwin-arm64 src/cli.ts --outfile "$arm"
   echo "Cross-compiling for x86_64-apple-darwin…"
-  bun build --compile --target=bun-darwin-x64 src/cli.ts \
-    --outfile /tmp/argus-x86_64-apple-darwin
+  bun build --compile --target=bun-darwin-x64  src/cli.ts --outfile "$x64"
   echo "Creating universal binary with lipo…"
-  lipo -create -output desktop/src-tauri/binaries/argus-universal-apple-darwin \
-    /tmp/argus-aarch64-apple-darwin /tmp/argus-x86_64-apple-darwin
-  rm /tmp/argus-aarch64-apple-darwin /tmp/argus-x86_64-apple-darwin
-  echo "Staged sidecar -> desktop/src-tauri/binaries/argus-universal-apple-darwin"
+  lipo -create -output "$uni" "$arm" "$x64"
+  echo "Staged sidecars -> desktop/src-tauri/binaries/argus-{aarch64,x86_64,universal}-apple-darwin"
 else
   if $build; then
     bun run build:compile
