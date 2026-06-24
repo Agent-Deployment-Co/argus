@@ -129,10 +129,26 @@ async function seededStorePath(): Promise<string> {
     lastInterruptionMs: 8500, // between the 06-01 msg (8000) and the 06-02 msg (9000)
   };
 
+  // Session D: messages recorded under a DIFFERENT cwd than the session-level cwd (cwd changed
+  // mid-session). A project filter on the message cwd must scope its usage and its tool calls the same
+  // way — which only holds because invocation project filtering uses the per-row cwd, not the session
+  // cwd. (Under a session-level cwd subquery, D's tools would drop while its usage stayed.)
+  const dMessages: MessageRecord[] = [
+    msg("claude:D", "delta", "/repo/elsewhere", 7000, "2026-06-01", "claude-sonnet-4-6", usage(12, 4, 2), null, [
+      { name: "Bash", category: "shell", approxResultTokens: 3 },
+      { name: "Read", category: "file-io", filePath: "/repo/elsewhere/y.ts", approxResultTokens: 4 },
+    ], "end_turn"),
+  ];
+
   const sessions: MaterializeSession[] = [
     {
       meta: { source: "claude", sessionId: "claude:A", project: "alpha", cwd: "/repo/alpha", filePath: "/repo/alpha/t.jsonl", friction: aFriction, rawTurns: 6 },
       messages: aMessages,
+    },
+    {
+      // Session-level cwd (/repo/delta) deliberately differs from the messages' cwd (/repo/elsewhere).
+      meta: { source: "claude", sessionId: "claude:D", project: "delta", cwd: "/repo/delta", filePath: "/repo/delta/t.jsonl" },
+      messages: dMessages,
     },
     {
       meta: { source: "claude", sessionId: "claude:B", project: "beta", cwd: "/repo/beta", filePath: "/repo/beta/t.jsonl", friction: bFriction, rawTurns: 3 },
@@ -211,15 +227,26 @@ describe("snapshot SQL parity on a rich synthetic store", () => {
     expect(js.outcomeCounts.clean).toBeGreaterThanOrEqual(1); // sessions B + C clean (full window)
   });
 
+  test("a project filter scopes tools by per-row cwd, identically to usage", async () => {
+    const path = await seededStorePath();
+    // Session D's messages live under /repo/elsewhere though its session cwd is /repo/delta. Filtering
+    // on the message cwd must include D's tool calls AND its usage on both paths (the cwd-alignment fix).
+    const { js, sql } = await buildBoth(path, { projectSubstring: "/repo/elsewhere" });
+    assertParity(js, sql);
+    expect(js.totals.sessions).toBe(1); // only D matches
+    expect(new Map(sql.byTool.map((t) => [t.name, t]))).toEqual(new Map(js.byTool.map((t) => [t.name, t])));
+    expect(sql.byTool.length).toBeGreaterThan(0); // D's Bash + Read are counted, not dropped
+  });
+
   test("a narrowing date filter classifies the windowed last message, not the session end", async () => {
     const path = await seededStorePath();
     const { js, sql } = await buildBoth(path, { until: "2026-06-01" });
     assertParity(js, sql);
     // Session B (06-02) is excluded; session C's only in-window msg is 06-01 with the interruption at/
     // after it, so C flips clean -> interrupted under the window. Both paths must agree on that flip.
-    expect(js.totals.sessions).toBe(2); // A + C (B excluded)
-    expect(sql.outcomeCounts.interrupted).toBe(js.outcomeCounts.interrupted);
-    expect(js.outcomeCounts.interrupted).toBeGreaterThanOrEqual(2); // A and C both interrupted in-window
-    expect(js.outcomeCounts.clean).toBe(0); // C's clean 06-02 turn is out of window
+    expect(js.totals.sessions).toBe(3); // A, C, D (all have a 06-01 message); B excluded
+    expect(sql.outcomeCounts).toEqual(js.outcomeCounts);
+    expect(js.outcomeCounts.interrupted).toBe(2); // A and C, both interrupted in-window
+    expect(js.outcomeCounts.clean).toBe(1); // D (end_turn, no interruption); C's clean 06-02 turn is out of window
   });
 });

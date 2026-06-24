@@ -6,7 +6,7 @@ import {
   HIGH_TOKEN_GROWTH_RATIO,
 } from "../health.ts";
 import { cost, unpricedModels } from "../pricing.ts";
-import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory } from "../tool-categories.ts";
+import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, type ToolCategory, UNATTRIBUTED_SKILL } from "../tool-categories.ts";
 import {
   addUsage,
   type Dashboard,
@@ -284,7 +284,7 @@ export function aggregate(
     sourceMap.set(m.source, src);
 
     // skill attribution
-    const skill = m.attributionSkill ?? "(none)";
+    const skill = m.attributionSkill ?? UNATTRIBUTED_SKILL;
     const sk = skillMap.get(skill) || { u: emptyUsage(), messages: 0 };
     addUsage(sk.u, m.usage);
     sk.messages++;
@@ -337,7 +337,7 @@ export function aggregate(
   const modelCost = new Map<string, number>();
   for (const m of messages) {
     const c = usageCost(m.usage, m.model);
-    const sk = m.attributionSkill ?? "(none)";
+    const sk = m.attributionSkill ?? UNATTRIBUTED_SKILL;
     skillCost.set(sk, (skillCost.get(sk) || 0) + c);
     projectCost.set(m.project, (projectCost.get(m.project) || 0) + c);
     sourceCost.set(m.source, (sourceCost.get(m.source) || 0) + c);

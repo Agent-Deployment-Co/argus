@@ -6,7 +6,7 @@
 import { foldPlugins } from "./aggregate.ts";
 import { skillPlugin } from "./inventory.ts";
 import { cost, unpricedModels } from "../pricing.ts";
-import { CATEGORY_LABELS, parseMcpTool, toolDisplayName } from "../tool-categories.ts";
+import { CATEGORY_LABELS, parseMcpTool, toolDisplayName, UNATTRIBUTED_SKILL } from "../tool-categories.ts";
 import type { DashboardAggregates } from "../store/store-contract.ts";
 import {
   addUsage,
@@ -20,8 +20,6 @@ import {
   type ToolStat,
   type Usage,
 } from "../types.ts";
-
-const SKILL_NONE = "(none)";
 
 /** Build the serve snapshot Dashboard from the SQL-grouped inputs. Pure: no DB, no clock. Cost is
  *  priced per `(dimension, model)` in JS exactly as the JS aggregate does — pricing is linear, so
@@ -116,7 +114,7 @@ export function assembleDashboard(agg: DashboardAggregates, plugins: Map<string,
     }))
     .sort((a, b) => b.total - a.total);
 
-  const bySkill: NamedUsage[] = [...foldByDimension(agg.usageBySkillModel, (r) => r.skill || SKILL_NONE).entries()]
+  const bySkill: NamedUsage[] = [...foldByDimension(agg.usageBySkillModel, (r) => r.skill || UNATTRIBUTED_SKILL).entries()]
     .map(([name, v]) => ({
       name,
       messages: v.messages,
@@ -201,7 +199,8 @@ export function assembleDashboard(agg: DashboardAggregates, plugins: Map<string,
     generatedAtMs: 0,
     range: { start: dates[0] || "", end: dates[dates.length - 1] || "" },
     totals: {
-      sessions: agg.totalSessions,
+      // Each session has exactly one source, so the distinct-session total is the sum across sources.
+      sessions: agg.sessionsBySource.reduce((n, r) => n + r.sessions, 0),
       messages: totalMessages,
       usage: totalUsage,
       total: totalTokens(totalUsage),

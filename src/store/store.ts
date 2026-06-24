@@ -159,10 +159,12 @@ const RESOLVED_INVOCATIONS_DDL = `
     mcp_tool TEXT,
     skill TEXT,
     file_path TEXT,
-    -- The owning message's local date (YYYY-MM-DD), denormalized so per-tool breakdowns window by the
-    -- since/until date filter exactly like the usage breakdowns (there is no usage<->invocation link
-    -- to join on). NULL only for archived sessions migrated before the date backfill could run.
+    -- The owning message's local date (YYYY-MM-DD) and cwd, denormalized so per-tool breakdowns window
+    -- by the since/until + project filters EXACTLY like the usage breakdowns (per-row, not session-level
+    -- cwd — there is no usage<->invocation link to join on). NULL only if a migrated row's owning
+    -- message couldn't be re-derived (shouldn't happen: invocation rows are 1:1 with record_json toolUses).
     date TEXT,
+    cwd TEXT,
     -- For Skill/activate_skill calls: the (truncated) args sample, so skillInvocations.sampleArgs is a
     -- SQL read (it's tool-call metadata already on the ToolUse, not conversation text).
     args TEXT,
@@ -312,6 +314,9 @@ const CREATE_SCHEMA_SQL = `
     cache_write_1h INTEGER,
     model TEXT,
     attribution_skill TEXT,
+    -- Assistant stop_reason promoted out of record_json so the outcome proxy reads the last non-null
+    -- value in SQL instead of json_extract'ing every windowed row per /api/snapshot request (#121).
+    stop_reason TEXT,
     -- The interaction (#117) this usage row falls under, as resolved_interactions.seq in the same
     -- session. NULL until usage<->interaction linking is populated (the interaction spine itself is
     -- persisted in resolved_interactions below).
@@ -862,8 +867,10 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
     to: 12,
     sql: `
       ALTER TABLE resolved_invocations ADD COLUMN date TEXT;
+      ALTER TABLE resolved_invocations ADD COLUMN cwd TEXT;
       ALTER TABLE resolved_invocations ADD COLUMN args TEXT;
       ALTER TABLE resolved_invocations ADD COLUMN approx_result_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE resolved_usage ADD COLUMN stop_reason TEXT;
       -- Backfill each (session, tool) result-token total onto that tool's first invocation row, so a
       -- GROUP BY tool SUM reproduces the old per-name totals exactly. A tool whose results never matched
       -- a call row is dropped (accepted orphan drift). args is left NULL (cosmetic; re-index repopulates).
@@ -877,19 +884,26 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         WHERE i2.session_id = resolved_invocations.session_id AND i2.tool = resolved_invocations.tool
       );
       DROP TABLE resolved_tool_results;
-      -- Backfill the denormalized date by re-deriving each invocation's owning message, using the SAME
-      -- (session, msg_seq, toolUse item) ordering the v10 -> v11 backfill assigned invocation seqs with,
-      -- so the row mapping is exact (and matches app-materialized rows, which flatMap in the same order).
+      -- Backfill the denormalized date + cwd by re-deriving each invocation's owning message. Build the
+      -- flattened (session, inv_seq, date, cwd) map ONCE into an indexed temp table, then a single joined
+      -- UPDATE — not a correlated subquery per invocation row (which re-derives the whole set each time,
+      -- O(rows^2), and hangs the first post-upgrade run). inv_seq uses the SAME (session, msg_seq, item)
+      -- order the v10 -> v11 backfill assigned invocation seqs with, so the mapping is exact (and matches
+      -- app-materialized rows, which flatMap in that order). Invocation rows are 1:1 with record_json
+      -- toolUses, so every row resolves — no NULL date is left to silently drop from date-filtered views.
+      CREATE TEMP TABLE _inv_owner AS
+        SELECT m.session_id AS sid,
+               ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.seq, je.key) - 1 AS inv_seq,
+               m.date AS date, m.cwd AS cwd
+        FROM resolved_usage m, json_each(m.record_json, '$.toolUses') je;
+      CREATE INDEX _inv_owner_idx ON _inv_owner(sid, inv_seq);
       UPDATE resolved_invocations
-      SET date = (
-        SELECT flat.date FROM (
-          SELECT m.session_id AS sid,
-                 ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.seq, je.key) - 1 AS inv_seq,
-                 m.date AS date
-          FROM resolved_usage m, json_each(m.record_json, '$.toolUses') je
-        ) flat
-        WHERE flat.sid = resolved_invocations.session_id AND flat.inv_seq = resolved_invocations.seq
-      );
+      SET date = (SELECT o.date FROM _inv_owner o WHERE o.sid = resolved_invocations.session_id AND o.inv_seq = resolved_invocations.seq),
+          cwd = (SELECT o.cwd FROM _inv_owner o WHERE o.sid = resolved_invocations.session_id AND o.inv_seq = resolved_invocations.seq);
+      DROP TABLE _inv_owner;
+      -- Promote stop_reason out of record_json (one pass over usage rows) so the outcome proxy reads a
+      -- column instead of json_extract'ing every windowed row per request.
+      UPDATE resolved_usage SET stop_reason = json_extract(record_json, '$.stopReason');
       ${RESOLVED_INVOCATIONS_INDEXES}
 
       -- Promote friction signals out of meta_json so the snapshot's friction/outcome rollups are SQL,
@@ -1653,50 +1667,37 @@ export class SqliteStore implements Store {
       `SELECT project, COUNT(DISTINCT session_id) AS sessions FROM resolved_usage ${usage.messageWhere} GROUP BY project`,
       usage.messageParams,
     );
-    const totalSessions =
-      (
-        await get<{ n: number }>(
-          this.db,
-          `SELECT COUNT(DISTINCT session_id) AS n FROM resolved_usage ${usage.messageWhere}`,
-          usage.messageParams,
-        )
-      )?.n ?? 0;
+    // totalSessions isn't queried separately: each session has exactly one source, so the assembler
+    // sums sessionsBySource (avoids a redundant COUNT(DISTINCT) full scan per request).
 
-    // Tool breakdowns over resolved_invocations. Call counts are fully filtered: source/date reuse the
-    // shared predicate builder against the invocation's own columns; project (no cwd column here) is a
-    // session-id subquery. Result-size totals below are scoped by SOURCE ONLY, exactly mirroring the
-    // legacy ParseResult.toolResults map (sourceJoin, no date/project window).
-    const invSourceDate = buildResolvedFilters(query, {
-      sourceColumn: "i.source",
-      dateColumn: "i.date",
-      cwdColumn: null, // resolved_invocations has no cwd; project handled as a subquery below
-    });
-    const invConds = invSourceDate.messageWhere ? [invSourceDate.messageWhere.replace(/^WHERE /, "")] : [];
-    const invParams = [...invSourceDate.messageParams];
-    if (query?.projectSubstring) {
-      invConds.push("i.session_id IN (SELECT session_id FROM resolved_sessions WHERE instr(cwd, ?) > 0)");
-      invParams.push(query.projectSubstring);
-    }
-    const invFilter = invConds.length ? `WHERE ${invConds.join(" AND ")}` : "";
+    // Tool breakdowns over resolved_invocations. Call counts are fully filtered via the shared predicate
+    // builder against the invocation's OWN denormalized columns (source/date/cwd) — project windows on
+    // the per-row cwd, identical to the usage breakdowns (a session whose messages span cwds is scoped
+    // the same way on both). Result-size totals below are scoped by SOURCE ONLY, exactly mirroring the
+    // legacy ParseResult.toolResults map (no date/project window).
+    const inv = buildResolvedFilters(query, { sourceColumn: "i.source", dateColumn: "i.date", cwdColumn: "i.cwd" });
+    const invFilter = inv.messageWhere;
+    const invParams = inv.messageParams;
+    const invSource = buildResolvedFilters(query, { sourceColumn: "source" });
 
-    const sourceJoin = buildResolvedFilters(query, { sourceColumn: "s.source" });
     const toolResultStats = (
       await all<{ tool: string; count: number; approx: number | null }>(
         this.db,
-        `SELECT i.tool AS tool, COUNT(*) AS count, SUM(i.approx_result_tokens) AS approx
-         FROM resolved_invocations i
-         JOIN resolved_sessions s ON s.session_id = i.session_id
-         ${sourceJoin.sourceWhere}
-         GROUP BY i.tool`,
-        sourceJoin.sourceParams,
+        // source is a column on resolved_invocations, so no join to resolved_sessions is needed.
+        `SELECT tool, COUNT(*) AS count, SUM(approx_result_tokens) AS approx
+         FROM resolved_invocations ${invSource.sourceWhere}
+         GROUP BY tool`,
+        invSource.sourceParams,
       )
     ).map((r) => ({ tool: r.tool, count: r.count, approxTokens: r.approx ?? 0 }));
 
     const byTool = (
       await all<{ tool: string; category: string; calls: number; sessions: number }>(
         this.db,
-        `SELECT tool, category, COUNT(*) AS calls, COUNT(DISTINCT session_id) AS sessions
-         FROM resolved_invocations i ${invFilter} GROUP BY tool, category`,
+        // Group by tool NAME only (category is deterministic per name; MIN picks the single value) so
+        // the shape matches the JS toolMap, which keys on name alone.
+        `SELECT tool, MIN(category) AS category, COUNT(*) AS calls, COUNT(DISTINCT session_id) AS sessions
+         FROM resolved_invocations i ${invFilter} GROUP BY tool`,
         invParams,
       )
     ).map((r) => ({ tool: r.tool, category: r.category as ToolCategory, calls: r.calls, sessions: r.sessions }));
@@ -1761,7 +1762,6 @@ export class SqliteStore implements Store {
       skillTokensByDate,
       sessionsBySource,
       sessionsByProject,
-      totalSessions,
       toolResultStats,
       byTool,
       byToolCategory,
@@ -1812,13 +1812,14 @@ export class SqliteStore implements Store {
       joinFilter.messageParams,
     );
 
-    // Last non-null stop reason per in-scope session (for the outcome proxy), filtered like the usage walk.
+    // Last non-null stop reason per in-scope session (for the outcome proxy), reading the promoted
+    // stop_reason column (no json_extract) and filtered like the usage walk.
     const stopRows = await all<{ session_id: string; stop_reason: string | null }>(
       this.db,
       `SELECT session_id, stop_reason FROM (
-         SELECT session_id, json_extract(record_json, '$.stopReason') AS stop_reason,
+         SELECT session_id, stop_reason,
                 ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS rn
-         FROM resolved_usage ${usage.messageWhere ? `${usage.messageWhere} AND` : "WHERE"} json_extract(record_json, '$.stopReason') IS NOT NULL
+         FROM resolved_usage ${usage.messageWhere ? `${usage.messageWhere} AND` : "WHERE"} stop_reason IS NOT NULL
        ) WHERE rn = 1`,
       usage.messageParams,
     );
@@ -2030,6 +2031,7 @@ export class SqliteStore implements Store {
               "cache_write_1h",
               "model",
               "attribution_skill",
+              "stop_reason",
             ],
             session.messages.map((message, seq) => [
               sid,
@@ -2048,6 +2050,7 @@ export class SqliteStore implements Store {
               message.usage.cacheWrite1h,
               message.model,
               message.attributionSkill,
+              message.stopReason ?? null,
             ]),
           );
           await insertRows(
@@ -2087,7 +2090,7 @@ export class SqliteStore implements Store {
           await insertRows(
             this.db,
             "resolved_invocations",
-            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path", "date", "args", "approx_result_tokens"],
+            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path", "date", "cwd", "args", "approx_result_tokens"],
             session.messages
               .flatMap((message) => message.toolUses.map((toolUse) => ({ message, toolUse })))
               .map(({ message, toolUse }, seq) => [
@@ -2102,6 +2105,7 @@ export class SqliteStore implements Store {
                 toolUse.skill ?? null,
                 toolUse.filePath ?? null,
                 message.date,
+                message.cwd ?? "",
                 toolUse.args ?? null,
                 toolUse.approxResultTokens ?? 0,
               ]),

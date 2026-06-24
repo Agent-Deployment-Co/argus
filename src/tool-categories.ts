@@ -1,6 +1,10 @@
 // Single source of truth for tool categorization and MCP server/tool name parsing. Used by
 // both the parser (parse.ts) and the aggregator (aggregate.ts).
 
+/** Display label for usage not attributed to any skill. Shared by the JS aggregate and the SQL
+ *  snapshot so the unattributed-skill row name stays in lockstep between the serve and sync paths. */
+export const UNATTRIBUTED_SKILL = "(none)";
+
 export type ToolCategory =
   | "file-io"
   | "shell"
