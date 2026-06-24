@@ -34,7 +34,6 @@ import {
   type SessionFact,
   type SessionRelationshipFact,
   type SourcePosition,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -997,7 +996,6 @@ function factsFromConversation(
     .map((message) => textFromGeminiContent(message.value.content))
     .map((text) => argusGeneratedPromptTitle(text) ?? text)
     .find(Boolean);
-  const taskCandidates: TaskCandidateFact[] = [];
   const prompts: PromptFact[] = [];
   // gemini doesn't fold subagents, so a subagent session (parent inferred from path) keeps its own
   // agent-initiated openings — derived centrally from the session kind by buildPromptFact (#117).
@@ -1010,6 +1008,16 @@ function factsFromConversation(
     if (!taskText) continue;
     // Skip Argus's own prompts (not human turns) so they don't open phantom interactions.
     if (!argusGeneratedPromptTitle(taskText)) {
+      // The prompt carries task text (#122) when this opening is a task start — human-initiated (a
+      // subagent session's prompts are agent-authored, not human intent — #118) and past the noise
+      // filter. That text is the sole source of task candidates; there is no separate candidate fact.
+      const next = conversation.messages[messageIndex + 1];
+      const nextText =
+        next?.value.type === "user"
+          ? textFromGeminiContent(next.value.content, TASK_TEXT_LIMIT)
+          : undefined;
+      const isTaskStart =
+        !isAgentInitiated(sessionFactKind) && !shouldSkipTaskCandidateText(taskText, nextText);
       prompts.push(
         buildPromptFact({
           source: "gemini",
@@ -1018,34 +1026,10 @@ function factsFromConversation(
           kind: sessionFactKind,
           timestampMs: parseTimestamp(message.timestamp),
           dedupKey: typeof message.id === "string" ? message.id : undefined,
+          text: isTaskStart ? taskText : undefined,
         }),
       );
     }
-    // Only human-initiated prompts become task candidates (#118): a subagent session's prompts are
-    // agent-authored, not human intent. (Same agent-initiated rule the prompt-fact initiator uses.)
-    if (isAgentInitiated(sessionFactKind)) continue;
-    const next = conversation.messages[messageIndex + 1];
-    const nextText =
-      next?.value.type === "user"
-        ? textFromGeminiContent(next.value.content, TASK_TEXT_LIMIT)
-        : undefined;
-    if (shouldSkipTaskCandidateText(taskText, nextText)) continue;
-    const taskTimestamp = parseTimestamp(message.timestamp);
-    const task: TaskCandidateFact = {
-      id: createFactId(
-        "task_candidate",
-        "gemini",
-        sourceSessionId,
-        positioned.position,
-        "user_message",
-      ),
-      source: "gemini",
-      sourceSessionId,
-      text: taskText,
-      position: positioned.position,
-    };
-    if (!Number.isNaN(taskTimestamp)) task.timestampMs = taskTimestamp;
-    taskCandidates.push(task);
   }
   const session: SessionFact = {
     id: createFactId(
@@ -1124,7 +1108,6 @@ function factsFromConversation(
     messages,
     invocations,
     toolResults,
-    taskCandidates,
     tasks: [],
     relationships,
   };

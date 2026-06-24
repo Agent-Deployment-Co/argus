@@ -92,7 +92,6 @@ const fragment: ParsedFileFragment = {
         position: position(3),
       },
     ],
-    taskCandidates: [],
     tasks: [],
     relationships: [
       {
@@ -178,16 +177,6 @@ const codexFragment: ParsedFileFragment = {
       },
     ],
     toolResults: [],
-    taskCandidates: [
-      {
-        id: "task-candidate:codex-1",
-        source: "codex",
-        sourceSessionId: "codex:1",
-        timestampMs: 1_717_605_099_000,
-        text: "Fix the tests.",
-        position: { originKey: "codex:sessions:rollout.jsonl", recordIndex: 3, itemIndex: 0 },
-      },
-    ],
     tasks: [
       {
         id: "task:codex-1",
@@ -279,7 +268,6 @@ const geminiFragment: ParsedFileFragment = {
         position: { originKey: "gemini:chats:session.jsonl", recordIndex: 2, itemIndex: 2 },
       },
     ],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   },

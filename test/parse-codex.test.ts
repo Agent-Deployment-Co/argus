@@ -103,7 +103,7 @@ describe("Codex transcript fragments", () => {
       cwd: "/Users/fixture/codex-proj",
       firstPrompt: "codex hello",
     });
-    expect(fragment.facts.taskCandidates).toEqual([
+    expect(fragment.facts.prompts!.filter((p) => p.text)).toEqual([
       expect.objectContaining({
         source: "codex",
         sourceSessionId: "codex:codex-sess1",
@@ -325,7 +325,7 @@ describe("Codex transcript fragments", () => {
     });
 
     expect(fragment.facts.sessions[0]?.firstPrompt).toBe("real task");
-    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+    expect(fragment.facts.prompts!.filter((p) => p.text).map((task) => task.text)).toEqual([
       "real task",
       "after abort task",
     ]);
@@ -389,7 +389,7 @@ describe("Codex transcript fragments", () => {
     expect(fragment.facts.sessions[0]?.firstPrompt).toBe(
       "research the company Luxury Presence and tell me about any public statements",
     );
-    expect(fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+    expect(fragment.facts.prompts!.filter((p) => p.text).map((task) => task.text)).toEqual([
       "research the company Luxury Presence and tell me about any public statements",
     ]);
   });

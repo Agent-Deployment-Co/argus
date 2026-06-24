@@ -23,6 +23,7 @@ import {
   type SessionFact,
   type SourcePosition,
   type TaskFact,
+  type TaskPrompt,
 } from "../store/store-contract.ts";
 import { foldFrictionEvents, type FrictionEvent } from "./friction.ts";
 import { projectLabel } from "./discover.ts";
@@ -65,6 +66,9 @@ export interface ReconcileResult extends ParseResult {
   tasksBySession: Map<string, TaskFact[]>;
   /** Interactions (#117), derived here by grouping the deduped/ordered timeline. */
   interactions: InteractionFact[];
+  /** Pass-1 task-extraction input per canonical session (#122): the human interaction openings that
+   *  are task starts (their prompt text), in interaction order. The sole source of task candidates. */
+  taskPromptsBySession: Map<string, TaskPrompt[]>;
   /** Count of result facts (#130) that didn't correlate to any parsed call — their tokens are dropped
    *  from the per-tool result-size totals (the call deduped away on a resumed session, lives in an
    *  unparsed sibling, etc.). Surfaced for a one-line log; usually 0. */
@@ -87,6 +91,9 @@ export type TimelineEntry = {
   position: SourcePosition;
   /** Set on prompt entries — the interaction it opens inherits this initiator. */
   initiator?: InteractionInitiator;
+  /** Set on prompt entries that are task starts (#122) — the human prompt text. Its presence marks the
+   *  opened interaction as a task candidate; reconcile collects these into taskPromptsBySession. */
+  text?: string;
   /** Set on turn entries — true if this turn was folded from a subagent (a different source session).
    *  Folded turns are loop content, never the main agent's response slot. */
   folded?: boolean;
@@ -159,12 +166,19 @@ function deriveInteractions(
   promptsBySession: Map<string, TimelineEntry[]>,
   turnsBySession: Map<string, TimelineEntry[]>,
   signalsBySession: Map<string, SpanSignals>,
-): { interactions: InteractionFact[]; messageInteractionSeq: Map<number, number> } {
+): {
+  interactions: InteractionFact[];
+  messageInteractionSeq: Map<number, number>;
+  taskPromptsBySession: Map<string, TaskPrompt[]>;
+} {
   const out: InteractionFact[] = [];
   // Each turn that lands inside an open interaction maps its source message (by flat-array index) to
   // that interaction's seq (#122). Turns before a session's first opening prompt have no open
   // interaction and are left unmapped (NULL interaction_seq).
   const messageInteractionSeq = new Map<number, number>();
+  // Pass-1 task-extraction input (#122): each human interaction opening that carries task text becomes
+  // a TaskPrompt keyed to its interaction seq. The sole source of task candidates.
+  const taskPromptsBySession = new Map<string, TaskPrompt[]>();
   for (const [sid, prompts] of promptsBySession) {
     const turns = turnsBySession.get(sid) ?? [];
     const events = [...prompts, ...turns];
@@ -191,11 +205,12 @@ function deriveInteractions(
         signals.compactBoundaryMs.filter(inSpan).length,
         signals.compactSummaryMs.filter(inSpan).length,
       );
+      const interactionSeq = seq++;
       out.push({
         id: createFactId("interaction", source, sid, open.position),
         source,
         sourceSessionId: sid,
-        seq: seq++,
+        seq: interactionSeq,
         initiator: open.initiator ?? "human",
         disposition,
         compactionCount,
@@ -204,6 +219,13 @@ function deriveInteractions(
         ...(responsePosition ? { responsePosition } : {}),
         position: open.position,
       });
+      // A human opening carrying task text is a task candidate (#122): the only source of them. Keyed
+      // to this interaction's seq, with the interaction's own ts so the task it anchors bookmarks here.
+      if (open.text) {
+        const list = taskPromptsBySession.get(sid) ?? [];
+        if (!taskPromptsBySession.has(sid)) taskPromptsBySession.set(sid, list);
+        list.push({ source, interactionSeq, timestampMs: open.ts, text: open.text, position: open.position });
+      }
       open = null;
       responsePosition = undefined;
     };
@@ -223,7 +245,7 @@ function deriveInteractions(
     }
     flush(Number.POSITIVE_INFINITY);
   }
-  return { interactions: out, messageInteractionSeq };
+  return { interactions: out, messageInteractionSeq, taskPromptsBySession };
 }
 
 /**
@@ -616,9 +638,10 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       ts: prompt.timestampMs ?? 0,
       position: prompt.position,
       initiator: prompt.initiator,
+      ...(prompt.text ? { text: prompt.text } : {}),
     });
   }
-  const { interactions, messageInteractionSeq } = deriveInteractions(
+  const { interactions, messageInteractionSeq, taskPromptsBySession } = deriveInteractions(
     fragments[0]?.parser.source ?? ("claude" as AgentSource),
     promptsBySession,
     turnsBySession,
@@ -640,6 +663,7 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     toolResults: new Map<string, ToolResultStat>(),
     tasksBySession,
     interactions,
+    taskPromptsBySession,
     orphanResultCount,
   };
 }

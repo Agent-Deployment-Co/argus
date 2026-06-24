@@ -6,10 +6,10 @@ import {
   type InteractionFact,
   type ParserDiagnostic,
   type SourcePosition,
-  type TaskCandidateFact,
   type TaskFact,
   type TaskFrustration,
   type TaskOutcome,
+  type TaskPrompt,
 } from "../../store/store-contract.ts";
 import { sliceDialogueByTime, type DialogueTurn } from "./dialogue.ts";
 
@@ -139,15 +139,15 @@ function resolveInstructions(
 
 export function buildTaskExtractionPrompt(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  prompts: TaskPrompt[],
   instructions = DEFAULT_TASK_EXTRACTION_PROMPT,
 ): string {
-  const messages = candidates.map((candidate, index) => ({
+  const messages = prompts.map((prompt, index) => ({
     index,
-    ...(candidate.timestampMs != null
-      ? { timestamp: new Date(candidate.timestampMs).toISOString() }
+    ...(prompt.timestampMs != null
+      ? { timestamp: new Date(prompt.timestampMs).toISOString() }
       : {}),
-    text: candidate.text,
+    text: prompt.text,
   }));
   return `${instructions.trim()}\n\nFiltered user messages:\n${JSON.stringify(
     { sessionId, messages },
@@ -319,63 +319,67 @@ async function runProvider(
   return { ok: true, stdout: "{\"tasks\":[]}" };
 }
 
-function uniqueValidIndexes(indexes: number[], candidates: TaskCandidateFact[]): number[] {
+function uniqueValidIndexes(indexes: number[], count: number): number[] {
   return [...new Set(indexes)]
-    .filter((index) => index >= 0 && index < candidates.length)
+    .filter((index) => index >= 0 && index < count)
     .sort((a, b) => a - b);
 }
 
 export function taskFactsFromSpecs(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  prompts: TaskPrompt[],
   specs: ExtractedTaskSpec[],
 ): TaskFact[] {
-  if (!candidates.length) return [];
-  return specs.map((spec, taskIndex) => {
-    const indexes = uniqueValidIndexes(spec.messageIndexes, candidates);
-    const anchor = indexes.length ? candidates[indexes[0]!]! : candidates[0]!;
-    const timestampCandidate = indexes.length
-      ? indexes
-          .map((index) => candidates[index]?.timestampMs)
-          .find((timestamp): timestamp is number => timestamp != null)
-      : anchor.timestampMs;
-    const fact: TaskFact = {
-      id: createFactId(
-        "task",
-        anchor.source,
-        sessionId,
-        anchor.position,
-        `llm:${taskIndex}:${spec.description}:${indexes.join(",")}`,
-      ),
-      source: anchor.source,
-      sourceSessionId: sessionId,
-      description: spec.description,
-      evidence: indexes.length ? `message indexes: ${indexes.join(", ")}` : "message indexes: unknown",
-      evidenceKind: "llm_inference",
-      position: anchor.position,
-    };
-    if (timestampCandidate != null) fact.timestampMs = timestampCandidate;
-    return fact;
-  });
+  if (!prompts.length) return [];
+  return specs
+    .map((spec, taskIndex): TaskFact | null => {
+      const indexes = uniqueValidIndexes(spec.messageIndexes, prompts.length);
+      // A task anchors to the interaction openings it references (#122). A spec the model couldn't
+      // anchor to any valid prompt index is dropped — it would otherwise default onto prompt 0 and
+      // either own no interaction or tie onto the real first task's.
+      if (!indexes.length) return null;
+      const anchor = prompts[indexes[0]!]!;
+      const timestampCandidate = indexes
+        .map((index) => prompts[index]?.timestampMs)
+        .find((timestamp): timestamp is number => timestamp != null);
+      const fact: TaskFact = {
+        id: createFactId(
+          "task",
+          anchor.source,
+          sessionId,
+          anchor.position,
+          `llm:${taskIndex}:${spec.description}:${indexes.join(",")}`,
+        ),
+        source: anchor.source,
+        sourceSessionId: sessionId,
+        description: spec.description,
+        evidence: `interactions: ${indexes.map((index) => prompts[index]!.interactionSeq).join(", ")}`,
+        evidenceKind: "llm_inference",
+        position: anchor.position,
+      };
+      if (timestampCandidate != null) fact.timestampMs = timestampCandidate;
+      return fact;
+    })
+    .filter((fact): fact is TaskFact => fact !== null);
 }
 
 export async function extractTasksForSession(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  prompts: TaskPrompt[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
   logTaskExtractionDebug(
     options,
-    `starting extraction for ${sessionId}: provider=${provider}, filtered user messages=${candidates.length}`,
+    `starting extraction for ${sessionId}: provider=${provider}, prompts=${prompts.length}`,
   );
   if (provider === "off") {
     logTaskExtractionDebug(options, `skipping ${sessionId}: task extraction is off`);
     return { tasks: [], diagnostics };
   }
-  if (candidates.length === 0) {
-    logTaskExtractionDebug(options, `skipping ${sessionId}: no filtered user messages`);
+  if (prompts.length === 0) {
+    logTaskExtractionDebug(options, `skipping ${sessionId}: no task prompts`);
     return { tasks: [], diagnostics };
   }
 
@@ -391,7 +395,7 @@ export async function extractTasksForSession(
       ? "custom prompt"
       : "default prompt";
   logTaskExtractionDebug(options, `using ${promptSource}`);
-  const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions);
+  const prompt = buildTaskExtractionPrompt(sessionId, prompts, instructions);
   logPromptSizeEstimate(`pass 1 (segment) ${sessionId}`, prompt); // TEMP (remove)
   logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
   logTaskExtractionBlock(options, "prompt", prompt);
@@ -420,7 +424,7 @@ export async function extractTasksForSession(
         "task_extraction_failed",
         `Couldn't extract tasks for ${sessionId}: ${result.error ?? "no output"}`,
         "warning",
-        candidates[0]?.position,
+        prompts[0]?.position,
       ),
     );
     return { tasks: [], diagnostics };
@@ -429,7 +433,7 @@ export async function extractTasksForSession(
   try {
     const specs = parseTaskExtractionOutput(result.stdout);
     logTaskExtractionDebug(options, `parsed tasks=${specs.length}`);
-    const tasks = taskFactsFromSpecs(sessionId, candidates, specs);
+    const tasks = taskFactsFromSpecs(sessionId, prompts, specs);
     logTaskExtractionDebug(options, `created tasks=${tasks.length}`);
     return { tasks, diagnostics };
   } catch (error) {
@@ -444,7 +448,7 @@ export async function extractTasksForSession(
           error instanceof Error ? error.message : String(error)
         }`,
         "warning",
-        candidates[0]?.position,
+        prompts[0]?.position,
       ),
     );
     return { tasks: [], diagnostics };
@@ -568,12 +572,12 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
  */
 export async function extractTasksWithOutcome(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  prompts: TaskPrompt[],
   interactions: InteractionFact[],
   dialogue: DialogueTurn[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
-  const pass1 = await extractTasksForSession(sessionId, candidates, options);
+  const pass1 = await extractTasksForSession(sessionId, prompts, options);
   const diagnostics = [...pass1.diagnostics];
   if (!pass1.tasks.length) return { tasks: pass1.tasks, diagnostics };
 

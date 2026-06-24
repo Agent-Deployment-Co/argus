@@ -6,12 +6,7 @@
 // Future (#122): this is the home for tasks-as-interaction-spans and a content-keyed interpreter
 // cache. For now it hosts the single task interpreter; summarize stays a read-time reporting helper.
 import type { NativeProducer } from "../producer.ts";
-import type {
-  MaterializeSession,
-  ParsedFileFragment,
-  ParserDiagnostic,
-  TaskCandidateFact,
-} from "../../store/store-contract.ts";
+import type { MaterializeSession, ParserDiagnostic } from "../../store/store-contract.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
 
@@ -36,26 +31,15 @@ function sessionProgressLabel(session: MaterializeSession): string {
 export async function extractTasksForSessions(
   producer: NativeProducer,
   sessions: MaterializeSession[],
-  fragments: ParsedFileFragment[],
-  toCanonical: (sourceSessionId: string) => string,
   targets: Set<string>,
   taskExtraction: ResolvedTaskExtraction,
   diagnostics: ParserDiagnostic[],
   log?: (message: string) => void,
 ): Promise<void> {
-  const candidatesBySession = new Map<string, TaskCandidateFact[]>();
-  for (const fragment of fragments) {
-    for (const candidate of fragment.facts.taskCandidates) {
-      const id = toCanonical(candidate.sourceSessionId);
-      const list = candidatesBySession.get(id) ?? [];
-      list.push(candidate);
-      candidatesBySession.set(id, list);
-    }
-  }
+  // Task candidates are the session's human interaction openings, already derived by reconcile and
+  // attached as MaterializeSession.taskPrompts (#122) — no separate candidate fact to gather.
   const toExtract = sessions.filter(
-    (session) =>
-      targets.has(session.meta.sessionId) &&
-      (candidatesBySession.get(session.meta.sessionId)?.length ?? 0) > 0,
+    (session) => targets.has(session.meta.sessionId) && (session.taskPrompts?.length ?? 0) > 0,
   );
   if (!toExtract.length) return;
   // Task extraction runs an AI model per session, so it can take a while — emit a heartbeat as each
@@ -70,7 +54,7 @@ export async function extractTasksForSessions(
     const dialogue = producer.reconstructDialogue(session.meta.filePath);
     const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
       sid,
-      candidatesBySession.get(sid)!,
+      session.taskPrompts!,
       session.interactions ?? [],
       dialogue,
       taskExtraction,

@@ -101,7 +101,7 @@ describe("Claude transcript fragments", () => {
       userMessages: 1,
       agentMessages: 2,
     });
-    expect(fragment.facts.taskCandidates).toEqual([
+    expect(fragment.facts.prompts!.filter((p) => p.text)).toEqual([
       expect.objectContaining({
         source: "claude",
         sourceSessionId: "sess1",
@@ -216,7 +216,7 @@ describe("Claude transcript fragments", () => {
     expect(facts.sessions[0]?.kind).toBe("subagent");
     // The worker prompt is agent-authored, so it produces NO task candidate — it can't resurface as a
     // phantom task once folded onto the parent (#100).
-    expect(facts.taskCandidates).toEqual([]);
+    expect(facts.prompts!.filter((p) => p.text)).toEqual([]);
     // It is still recorded as an agent-initiated prompt marker (interaction structure, #117).
     expect(facts.prompts?.map((prompt) => prompt.initiator)).toEqual(["agent"]);
   });
@@ -422,7 +422,7 @@ Filtered user messages:
     expect(parsed.status).toBe("current");
     if (parsed.status !== "current") throw new Error("expected current Claude transcript");
     expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe("Task extraction for codex:one");
-    expect(parsed.fragment.facts.taskCandidates).toEqual([]);
+    expect(parsed.fragment.facts.prompts!.filter((p) => p.text)).toEqual([]);
   });
 
   test("excludes Argus session analysis prompts from task candidates", () => {
@@ -456,7 +456,7 @@ USER: add a new session analysis mode`;
     expect(parsed.fragment.facts.sessions[0]?.firstPrompt).toBe(
       "Session analysis for codex:019ebd64-dee1-7083-9193-1592d42f77ca",
     );
-    expect(parsed.fragment.facts.taskCandidates).toEqual([]);
+    expect(parsed.fragment.facts.prompts!.filter((p) => p.text)).toEqual([]);
   });
 });
 
