@@ -224,6 +224,5 @@ export function assembleDashboard(agg: DashboardAggregates, plugins: Map<string,
     sessions: [],
     frictionTotals: agg.frictionTotals,
     highTokenGrowthSessions: agg.highTokenGrowthSessions,
-    outcomeCounts: agg.outcomeCounts,
   };
 }

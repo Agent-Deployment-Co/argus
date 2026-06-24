@@ -1,15 +1,27 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
+  assignInteractionTaskSeqs,
   createFactId,
+  type InteractionFact,
   type ParserDiagnostic,
   type SourcePosition,
-  type TaskCandidateFact,
   type TaskFact,
   type TaskFrustration,
   type TaskOutcome,
 } from "../../store/store-contract.ts";
-import { sliceDialogueByTime, type DialogueTurn } from "./dialogue.ts";
+
+/** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
+ *  interactions, in order — the projection of prompts+responses the session model describes (#122),
+ *  not a role-tag reconstruction. Built straight from the interactions; never persisted. */
+function interactionTurns(interactions: InteractionFact[]): Array<{ role: "user" | "assistant"; text: string }> {
+  const turns: Array<{ role: "user" | "assistant"; text: string }> = [];
+  for (const interaction of [...interactions].sort((a, b) => a.seq - b.seq)) {
+    if (interaction.promptText) turns.push({ role: "user", text: interaction.promptText });
+    if (interaction.responseText) turns.push({ role: "assistant", text: interaction.responseText });
+  }
+  return turns;
+}
 
 const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
 
@@ -137,7 +149,7 @@ function resolveInstructions(
 
 export function buildTaskExtractionPrompt(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  candidates: InteractionFact[],
   instructions = DEFAULT_TASK_EXTRACTION_PROMPT,
 ): string {
   const messages = candidates.map((candidate, index) => ({
@@ -145,7 +157,7 @@ export function buildTaskExtractionPrompt(
     ...(candidate.timestampMs != null
       ? { timestamp: new Date(candidate.timestampMs).toISOString() }
       : {}),
-    text: candidate.text,
+    text: candidate.promptText ?? "",
   }));
   return `${instructions.trim()}\n\nFiltered user messages:\n${JSON.stringify(
     { sessionId, messages },
@@ -317,63 +329,67 @@ async function runProvider(
   return { ok: true, stdout: "{\"tasks\":[]}" };
 }
 
-function uniqueValidIndexes(indexes: number[], candidates: TaskCandidateFact[]): number[] {
+function uniqueValidIndexes(indexes: number[], count: number): number[] {
   return [...new Set(indexes)]
-    .filter((index) => index >= 0 && index < candidates.length)
+    .filter((index) => index >= 0 && index < count)
     .sort((a, b) => a - b);
 }
 
 export function taskFactsFromSpecs(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  candidates: InteractionFact[],
   specs: ExtractedTaskSpec[],
 ): TaskFact[] {
   if (!candidates.length) return [];
-  return specs.map((spec, taskIndex) => {
-    const indexes = uniqueValidIndexes(spec.messageIndexes, candidates);
-    const anchor = indexes.length ? candidates[indexes[0]!]! : candidates[0]!;
-    const timestampCandidate = indexes.length
-      ? indexes
-          .map((index) => candidates[index]?.timestampMs)
-          .find((timestamp): timestamp is number => timestamp != null)
-      : anchor.timestampMs;
-    const fact: TaskFact = {
-      id: createFactId(
-        "task",
-        anchor.source,
-        sessionId,
-        anchor.position,
-        `llm:${taskIndex}:${spec.description}:${indexes.join(",")}`,
-      ),
-      source: anchor.source,
-      sourceSessionId: sessionId,
-      description: spec.description,
-      evidence: indexes.length ? `message indexes: ${indexes.join(", ")}` : "message indexes: unknown",
-      evidenceKind: "llm_inference",
-      position: anchor.position,
-    };
-    if (timestampCandidate != null) fact.timestampMs = timestampCandidate;
-    return fact;
-  });
+  return specs
+    .map((spec, taskIndex): TaskFact | null => {
+      const indexes = uniqueValidIndexes(spec.messageIndexes, candidates.length);
+      // A task anchors to the interaction openings it references (#122). A spec the model couldn't
+      // anchor to any valid candidate index is dropped — it would otherwise default onto candidate 0
+      // and either own no interaction or tie onto the real first task's.
+      if (!indexes.length) return null;
+      const anchor = candidates[indexes[0]!]!;
+      const timestampCandidate = indexes
+        .map((index) => candidates[index]?.timestampMs)
+        .find((timestamp): timestamp is number => timestamp != null);
+      const fact: TaskFact = {
+        id: createFactId(
+          "task",
+          anchor.source,
+          sessionId,
+          anchor.promptPosition,
+          `llm:${taskIndex}:${spec.description}:${indexes.join(",")}`,
+        ),
+        source: anchor.source,
+        sourceSessionId: sessionId,
+        description: spec.description,
+        evidence: `interactions: ${indexes.map((index) => candidates[index]!.seq).join(", ")}`,
+        evidenceKind: "llm_inference",
+        position: anchor.promptPosition,
+      };
+      if (timestampCandidate != null) fact.timestampMs = timestampCandidate;
+      return fact;
+    })
+    .filter((fact): fact is TaskFact => fact !== null);
 }
 
 export async function extractTasksForSession(
   sessionId: string,
-  candidates: TaskCandidateFact[],
+  candidates: InteractionFact[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
   logTaskExtractionDebug(
     options,
-    `starting extraction for ${sessionId}: provider=${provider}, filtered user messages=${candidates.length}`,
+    `starting extraction for ${sessionId}: provider=${provider}, task-start interactions=${candidates.length}`,
   );
   if (provider === "off") {
     logTaskExtractionDebug(options, `skipping ${sessionId}: task extraction is off`);
     return { tasks: [], diagnostics };
   }
   if (candidates.length === 0) {
-    logTaskExtractionDebug(options, `skipping ${sessionId}: no filtered user messages`);
+    logTaskExtractionDebug(options, `skipping ${sessionId}: no task-start interactions`);
     return { tasks: [], diagnostics };
   }
 
@@ -418,7 +434,7 @@ export async function extractTasksForSession(
         "task_extraction_failed",
         `Couldn't extract tasks for ${sessionId}: ${result.error ?? "no output"}`,
         "warning",
-        candidates[0]?.position,
+        candidates[0]?.promptPosition,
       ),
     );
     return { tasks: [], diagnostics };
@@ -442,7 +458,7 @@ export async function extractTasksForSession(
           error instanceof Error ? error.message : String(error)
         }`,
         "warning",
-        candidates[0]?.position,
+        candidates[0]?.promptPosition,
       ),
     );
     return { tasks: [], diagnostics };
@@ -472,10 +488,10 @@ export interface TaskOutcomeJudgment {
 
 export function buildTaskOutcomePrompt(
   description: string,
-  dialogue: DialogueTurn[],
+  interactions: InteractionFact[],
   instructions = DEFAULT_TASK_OUTCOME_PROMPT,
 ): string {
-  const turns = dialogue.map((turn) => ({ role: turn.role, text: turn.text }));
+  const turns = interactionTurns(interactions);
   return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
 }
 
@@ -506,17 +522,19 @@ export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
   return judgment;
 }
 
-/** Judge one task's outcome from its dialogue slice. Returns undefined when it can't be determined. */
+/** Judge one task's outcome from its interactions' prompt/response dialogue. Returns no judgment when
+ *  extraction is off or the task's interactions carry no text. */
 export async function judgeTaskOutcome(
   description: string,
-  dialogue: DialogueTurn[],
+  interactions: InteractionFact[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ judgment?: TaskOutcomeJudgment; diagnostics: ParserDiagnostic[] }> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
-  if (provider === "off" || dialogue.length === 0) return { diagnostics };
+  const hasText = interactions.some((i) => i.promptText || i.responseText);
+  if (provider === "off" || !hasText) return { diagnostics };
 
-  const prompt = buildTaskOutcomePrompt(description, dialogue);
+  const prompt = buildTaskOutcomePrompt(description, interactions);
   logPromptSizeEstimate(`pass 2 (outcome) "${description.slice(0, 60)}"`, prompt); // TEMP (remove)
   const result = await runProvider(provider, prompt, options);
   if (!result.ok) {
@@ -541,34 +559,6 @@ export async function judgeTaskOutcome(
   }
 }
 
-/**
- * Assign each task a chapter span over the reconciled message timeline by timestamp (bookmark
- * semantics): a message belongs to the latest task that started at or before it. `messageTimestamps`
- * is indexed by message seq (resolved_usage.seq) and is assumed ascending, as the reconciler
- * orders messages. Tasks without a timestamp get no chapter (their messages stay unattributed).
- */
-export function assignChapters(tasks: TaskFact[], messageTimestamps: number[]): void {
-  const dated = tasks
-    .filter((task): task is TaskFact & { timestampMs: number } => task.timestampMs != null)
-    .sort((a, b) => a.timestampMs - b.timestampMs);
-  if (!dated.length || !messageTimestamps.length) return;
-
-  const bounds = new Map<TaskFact, { startSeq: number; endSeq: number }>();
-  for (let seq = 0; seq < messageTimestamps.length; seq++) {
-    const ts = messageTimestamps[seq]!;
-    let owner: TaskFact | undefined;
-    for (const task of dated) {
-      if (task.timestampMs <= ts) owner = task;
-      else break;
-    }
-    if (!owner) continue;
-    const current = bounds.get(owner);
-    if (!current) bounds.set(owner, { startSeq: seq, endSeq: seq });
-    else current.endSeq = seq;
-  }
-  for (const [task, span] of bounds) task.chapter = span;
-}
-
 /** Run async work over items with a small concurrency cap, preserving input order in the result. */
 async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
@@ -584,47 +574,57 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
 }
 
 /**
- * The full two-pass extraction (#91): pass 1 segments the user messages into tasks/chapters, pass 2
- * judges each chapter's outcome from its slice of the reconstructed dialogue. `messageTimestamps`
- * (by reconciled message seq) anchors the chapter spans; `dialogue` is the in-memory intermediate
- * (never stored). Returns task facts carrying chapter spans + outcome fields.
+ * The full two-pass extraction (#91/#122): pass 1 segments the session's human interaction openings
+ * (the only task candidates) into tasks; pass 2 judges each task's outcome from the dialogue projected
+ * over the interactions it owns. `interactions` is the reconcile-derived spine, carrying in-memory
+ * prompt/response text. Materialize independently assigns the same interaction→task membership (via the
+ * shared `assignInteractionTaskSeqs`) onto resolved_interactions.task_seq, so judged dialogue and
+ * stored membership agree exactly.
  */
 export async function extractTasksWithOutcome(
   sessionId: string,
-  candidates: TaskCandidateFact[],
-  messageTimestamps: number[],
-  dialogue: DialogueTurn[],
+  interactions: InteractionFact[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
+  // Task candidates are the human interaction openings that carry task text (#122).
+  const candidates = interactions.filter(
+    (interaction): interaction is InteractionFact & { promptText: string } =>
+      interaction.initiator === "human" && !!interaction.promptText,
+  );
   const pass1 = await extractTasksForSession(sessionId, candidates, options);
   const diagnostics = [...pass1.diagnostics];
   if (!pass1.tasks.length) return { tasks: pass1.tasks, diagnostics };
 
-  // Chronological order so resolved_tasks.seq (and thus task_seq) increases along the timeline.
+  // Chronological order so resolved_tasks.seq (and thus the interaction→task assignment) increases
+  // along the timeline.
   const tasks = [...pass1.tasks].sort(
     (a, b) => (a.timestampMs ?? Infinity) - (b.timestampMs ?? Infinity),
   );
-  assignChapters(tasks, messageTimestamps);
 
-  const dated = tasks.filter(
-    (task): task is TaskFact & { timestampMs: number } => task.timestampMs != null,
-  );
+  // Group each task's owned interactions via the same bookmark the materializer stamps onto
+  // resolved_interactions.task_seq, so the judged dialogue matches the stored membership exactly. A
+  // task that owns no interaction is judged over nothing (consistent with its empty stored membership).
+  const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, interactions);
+  const interactionsByTask = new Map<number, InteractionFact[]>();
+  for (const interaction of interactions) {
+    const taskIndex = taskSeqByInteraction.get(interaction.seq);
+    if (taskIndex == null) continue;
+    const list = interactionsByTask.get(taskIndex) ?? [];
+    if (!interactionsByTask.has(taskIndex)) interactionsByTask.set(taskIndex, list);
+    list.push(interaction);
+  }
   logTaskExtractionDebug(
     options,
-    `judging outcome for ${dated.length}/${tasks.length} tasks in ${sessionId}`,
+    `judging outcome for ${interactionsByTask.size}/${tasks.length} tasks in ${sessionId}`,
   );
-  // `dated` is sorted ascending, so each task's chapter ends where the next begins — `dated[i + 1]`,
-  // not an O(n) rescan. Using the immediate neighbor also handles ties consistently with
-  // assignChapters' last-wins bookmark: tasks sharing a timestamp get an empty [start, start) slice
-  // for all but the last, rather than overlapping windows.
   await mapWithLimit(
-    dated.map((task, i) => ({ task, start: task.timestampMs, end: dated[i + 1]?.timestampMs })),
+    [...interactionsByTask.entries()],
     4,
-    async ({ task, start, end }) => {
-      const slice = sliceDialogueByTime(dialogue, start, end);
+    async ([taskIndex, owned]) => {
+      const task = tasks[taskIndex]!;
       const { judgment, diagnostics: outcomeDiagnostics } = await judgeTaskOutcome(
         task.description,
-        slice,
+        owned,
         options,
       );
       diagnostics.push(...outcomeDiagnostics);

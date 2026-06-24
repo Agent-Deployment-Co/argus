@@ -212,7 +212,6 @@ function assertParity(js: Dashboard, sql: Dashboard): void {
   const jsProjFriction = new Map(js.byProject.map((p) => [p.name, p.meta?.friction]));
   for (const p of sql.byProject) expect(p.meta?.friction).toEqual(jsProjFriction.get(p.name));
   expect(sql.frictionTotals).toEqual(js.frictionTotals);
-  expect(sql.outcomeCounts).toEqual(js.outcomeCounts);
   expect(sql.highTokenGrowthSessions).toBe(js.highTokenGrowthSessions);
 }
 
@@ -223,8 +222,6 @@ describe("snapshot SQL parity on a rich synthetic store", () => {
     assertParity(js, sql);
     // The crafted data must actually exercise the hard paths (else parity is vacuous).
     expect(js.highTokenGrowthSessions).toBeGreaterThanOrEqual(1); // session A grows >= 5x
-    expect(js.outcomeCounts.interrupted).toBeGreaterThanOrEqual(1); // session A interrupted
-    expect(js.outcomeCounts.clean).toBeGreaterThanOrEqual(1); // sessions B + C clean (full window)
   });
 
   test("a project filter scopes tools by per-row cwd, identically to usage", async () => {
@@ -238,15 +235,12 @@ describe("snapshot SQL parity on a rich synthetic store", () => {
     expect(sql.byTool.length).toBeGreaterThan(0); // D's Bash + Read are counted, not dropped
   });
 
-  test("a narrowing date filter classifies the windowed last message, not the session end", async () => {
+  test("a narrowing date filter scopes sessions to the window on both paths", async () => {
     const path = await seededStorePath();
     const { js, sql } = await buildBoth(path, { until: "2026-06-01" });
     assertParity(js, sql);
-    // Session B (06-02) is excluded; session C's only in-window msg is 06-01 with the interruption at/
-    // after it, so C flips clean -> interrupted under the window. Both paths must agree on that flip.
-    expect(js.totals.sessions).toBe(3); // A, C, D (all have a 06-01 message); B excluded
-    expect(sql.outcomeCounts).toEqual(js.outcomeCounts);
-    expect(js.outcomeCounts.interrupted).toBe(2); // A and C, both interrupted in-window
-    expect(js.outcomeCounts.clean).toBe(1); // D (end_turn, no interruption); C's clean 06-02 turn is out of window
+    // Session B (06-02) is excluded; A, C, D each have a 06-01 message and remain in scope.
+    expect(js.totals.sessions).toBe(3);
+    expect(sql.totals.sessions).toBe(js.totals.sessions);
   });
 });

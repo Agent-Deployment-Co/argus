@@ -21,7 +21,6 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -35,7 +34,6 @@ import {
   shouldSkipTaskCandidateText,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../../../types.ts";
 
 export const CODEX_SESSIONS_ROOT_ID = "codex-sessions";
@@ -102,45 +100,6 @@ function numericToken(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Codex JSONL transcript (#91). Codex wraps each
- * message in `payload` (role on payload.role); skips the synthetic <environment_context> user turn,
- * matching task-candidate extraction.
- */
-export function reconstructCodexDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const turns: DialogueTurn[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let value: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      value = parsed;
-    } catch {
-      continue;
-    }
-    const payload = objectValue(value.payload);
-    if (stringValue(payload.type) !== "message") continue;
-    const ts = timestampMs(value.timestamp);
-    const text = textFromCodexContent(payload.content, TASK_TEXT_LIMIT);
-    if (payload.role === "user") {
-      if (text && !isCodexEnvironmentContextText(text)) {
-        const turn = dialogueTurn("user", text, ts);
-        if (turn) turns.push(turn);
-      }
-    } else if (payload.role === "assistant") {
-      const turn = dialogueTurn("assistant", text, ts);
-      if (turn) turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 function normalizeCodexUsage(raw: unknown): Usage {
   const usage = emptyUsage();
@@ -525,12 +484,15 @@ export function parseCodexTranscript(
   let sessionCwd = currentCwd;
   let firstPrompt: string | undefined;
   let pendingInvocations: PendingInvocation[] = [];
+  // Codex meters usage on token_count events, separate from the assistant text records (#122). Track
+  // the latest assistant text since the last token_count so the flushed UsageFact carries the turn's
+  // text — reconcile then reads the response-slot turn's text onto the interaction's responseText.
+  let pendingAssistantText: string | undefined;
   const invocationByScopedId = new Map<string, PendingInvocation>();
   const pendingResults: PendingToolResult[] = [];
   const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
   const prompts: PromptFact[] = [];
-  const taskCandidates: TaskCandidateFact[] = [];
   const rawTurnIds = new Set<string>();
   let rawTurnsWithoutId = 0;
   let userMessageEvents = 0;
@@ -578,6 +540,9 @@ export function parseCodexTranscript(
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "user") {
       responseUserMessages++;
+      // A new user prompt opens a new interaction; drop any assistant text that never reached a
+      // token_count flush so it can't leak onto this interaction's response (#122).
+      pendingAssistantText = undefined;
       const taskText = codexUserMessageText(record, TASK_TEXT_LIMIT);
       const generatedTitle = taskText ? argusGeneratedPromptTitle(taskText) : undefined;
       // Interaction-opening prompt marker (#117). Skip Argus's own prompts (not human turns). Codex
@@ -585,34 +550,35 @@ export function parseCodexTranscript(
       // we observe — no cross-file replay, so there's no replay-stable id; reconcile dedups by
       // position. If Codex ever resumes across rollout files, a stable dedupKey would be needed here.
       if (taskText && !generatedTitle) {
+        // The prompt carries task text (#122) when this opening is a task start (past the noise
+        // filter) — the sole source of task candidates; codex has no subagents, so all openings are
+        // human-initiated. firstPrompt titles the session from the first task-eligible turn (#131).
+        const isTaskStart = !shouldSkipTaskMessage(records, recordIndex, taskText);
+        if (isTaskStart && !firstPrompt) firstPrompt = textFromCodexContent(payload.content);
         prompts.push(
           buildPromptFact({
             source: "codex",
             sourceSessionId,
             position: record.position,
             timestampMs: timestampMs(record.value.timestamp),
+            text: isTaskStart ? taskText : undefined,
           }),
         );
       }
       if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
-      if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
-        if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
-        const taskTimestamp = timestampMs(record.value.timestamp);
-        const task: TaskCandidateFact = {
-          id: createFactId("task_candidate", "codex", sourceSessionId, record.position, "user_message"),
-          source: "codex",
-          sourceSessionId,
-          text: taskText,
-          position: record.position,
-        };
-        if (taskTimestamp != null) task.timestampMs = taskTimestamp;
-        taskCandidates.push(task);
-      }
       continue;
     }
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "assistant") {
       responseAssistantMessages++;
+      // Accumulate (don't overwrite): a turn may emit several assistant message records before its
+      // token_count flush, and each carries part of the response (#122). Capped at TASK_TEXT_LIMIT.
+      const assistantText = textFromCodexContent(payload.content, TASK_TEXT_LIMIT);
+      if (assistantText) {
+        pendingAssistantText = (
+          pendingAssistantText ? `${pendingAssistantText}\n${assistantText}` : assistantText
+        ).slice(0, TASK_TEXT_LIMIT);
+      }
       continue;
     }
 
@@ -693,12 +659,14 @@ export function parseCodexTranscript(
     const usage = normalizeCodexUsage(info.last_token_usage ?? info.total_token_usage);
     if (totalTokens(usage) === 0) {
       pendingInvocations = [];
+      pendingAssistantText = undefined;
       continue;
     }
 
     const messageTimestamp = timestampMs(record.value.timestamp);
     if (messageTimestamp == null) {
       pendingInvocations = [];
+      pendingAssistantText = undefined;
       diagnostics.push({
         code: "invalid_token_timestamp",
         severity: "warning",
@@ -725,8 +693,10 @@ export function parseCodexTranscript(
       usage,
       cwd: currentCwd,
       attributionSkill: null,
+      ...(pendingAssistantText ? { text: pendingAssistantText } : {}),
       position: record.position,
     });
+    pendingAssistantText = undefined;
 
     for (const pending of pendingInvocations) {
       const invocationId = createFactId(
@@ -787,7 +757,6 @@ export function parseCodexTranscript(
     messages,
     invocations,
     toolResults,
-    taskCandidates,
     tasks: [],
     relationships: [],
   };

@@ -83,7 +83,6 @@ export type FactKind =
   | "message"
   | "invocation"
   | "tool_result"
-  | "task_candidate"
   | "relationship"
   | "task";
 
@@ -173,6 +172,10 @@ export interface UsageFact {
   attributionSkill: string | null;
   /** Assistant stop_reason — first non-null value across the message's streamed lines. */
   stopReason?: string;
+  /** The assistant turn's text (#122/#120), in-memory only — reconcile reads it onto the owning
+   *  interaction's responseText and it is never stored on this fact. For sources that split usage from
+   *  message text (codex meters on token_count events), the producer carries the turn's text here. */
+  text?: string;
   position: SourcePosition;
 }
 
@@ -209,6 +212,12 @@ export interface PromptFact {
   /** Replay-stable identity (e.g. record uuid) for dedup across resumed-session files; falls back to
    *  position when the source has no stable id. */
   dedupKey?: string;
+  /** The human prompt's text, set ONLY for human-initiated openings that pass the task noise filter —
+   *  i.e. the interaction openings that are task starts (#122). Reconcile copies it onto the opened
+   *  interaction's promptText (the sole source of task candidates). In-memory only — never written to
+   *  the store (the stored InteractionFact stays text-free). Absent on agent/harness openings and on
+   *  filtered-out human turns (AGENTS.md / env-context / aborted / Argus-generated). */
+  text?: string;
   position: SourcePosition;
 }
 
@@ -236,6 +245,13 @@ export interface InteractionFact {
   promptPosition: SourcePosition;
   /** Position of the response slot, when the interaction produced one (absent if interrupted/incomplete). */
   responsePosition?: SourcePosition;
+  /** The opening prompt's text, for human-initiated task-start interactions (#122). In-memory only:
+   *  the Interpret stage reads it (pass-1 segmentation + pass-2 dialogue); never stored until #120's
+   *  opt-in retention. Absent on agent/harness openings and noise-filtered human turns. */
+  promptText?: string;
+  /** The response slot's text (the interaction's final own-session assistant turn), when present.
+   *  In-memory only — pass-2 dialogue projection; persisted only under #120's opt-in retention. */
+  responseText?: string;
   position: SourcePosition;
 }
 
@@ -282,16 +298,6 @@ export type TaskOutcome = "success" | "failure" | "unclear";
 /** How frustrated the user seemed across the task (re-asks, escalating tone, refusals). */
 export type TaskFrustration = "none" | "low" | "high";
 
-/**
- * A task's span over the reconciled session timeline (#88 "chapters"): an inclusive range of
- * message seq. Subsequent facts fall under the chapter that contains them; the materializer stamps
- * each message's owning task from these spans (resolved_usage.task_seq).
- */
-export interface TaskChapter {
-  startSeq: number;
-  endSeq: number;
-}
-
 export interface TaskFact {
   id: string;
   source: AgentSource;
@@ -302,8 +308,6 @@ export interface TaskFact {
   description: string;
   evidence: string;
   evidenceKind: "llm_inference" | "user_message";
-  /** The chapter span this task owns over the session's reconciled messages (pass 1). */
-  chapter?: TaskChapter;
   /** Per-task outcome, judged from the reconstructed task dialogue (pass 2). */
   outcome?: TaskOutcome;
   frustration?: TaskFrustration;
@@ -311,17 +315,6 @@ export interface TaskFact {
   signals?: string[];
   /** One-line rationale for the outcome judgement. */
   outcomeReason?: string;
-  position: SourcePosition;
-}
-
-export interface TaskCandidateFact {
-  id: string;
-  source: AgentSource;
-  sourceSessionId: string;
-  /** Present when the source user-message record carried a valid timestamp. */
-  timestampMs?: number;
-  /** Filtered user-authored text made available to the task extractor. Not materialized as a task. */
-  text: string;
   position: SourcePosition;
 }
 
@@ -342,7 +335,6 @@ export interface NormalizedFacts {
   messages: UsageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
-  taskCandidates: TaskCandidateFact[];
   tasks: TaskFact[];
   relationships: SessionRelationshipFact[];
 }
@@ -541,7 +533,6 @@ export interface DashboardAggregates {
   skillInvocations: Array<{ skill: string; count: number; sampleArgs: string }>;
   frictionTotals: FrictionTotals;
   projectFriction: Array<{ project: string; friction: FrictionTotals }>;
-  outcomeCounts: { clean: number; interrupted: number; unknown: number };
   highTokenGrowthSessions: number;
 }
 
@@ -551,7 +542,9 @@ export interface MaterializeSession {
   meta: SessionMeta;
   messages: MessageRecord[];
   tasks?: TaskFact[];
-  /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions. */
+  /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions.
+   *  Each carries in-memory promptText/responseText (#122) the Interpret stage reads; materialize
+   *  strips that text (not stored until #120's opt-in retention). */
   interactions?: InteractionFact[];
 }
 
@@ -588,7 +581,7 @@ export interface StoreStats {
   sessions: number;
   messages: number;
   tasks: number;
-  /** Messages attributed to a task (resolved_usage.task_seq IS NOT NULL) — chapter coverage. */
+  /** Usage rows whose owning interaction is attributed to a task (#122) — task coverage. */
   messagesWithTask: number;
 }
 
@@ -639,8 +632,8 @@ export interface ReadModelStore {
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
-  /** Messages attributed to each task in a session (by resolved_usage.task_seq), keyed by task id,
-   *  oldest first. Tasks with no attributed messages are absent from the map. */
+  /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
+   *  task id, oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
   /** All messages for one session, oldest first. Backs the on-demand /api/session/:id detail. */
   readSessionMessages(sessionId: string): Promise<MessageRecord[]>;
@@ -772,6 +765,10 @@ export function buildPromptFact(args: {
   /** Replay-stable id (record uuid / message id) so resumed-session replays dedupe in reconcile. */
   dedupKey?: string;
   timestampMs?: number;
+  /** The human prompt text, set by the producer only when this opening is a task start (#122) —
+   *  human-initiated and past the noise filter. Carried in-memory so reconcile can build the
+   *  per-session task-prompt list; never stored. */
+  text?: string;
 }): PromptFact {
   const prompt: PromptFact = {
     id: createFactId("prompt", args.source, args.sourceSessionId, args.position, "user_message"),
@@ -782,7 +779,41 @@ export function buildPromptFact(args: {
   };
   if (args.timestampMs != null && Number.isFinite(args.timestampMs)) prompt.timestampMs = args.timestampMs;
   if (args.dedupKey) prompt.dedupKey = args.dedupKey;
+  if (args.text) prompt.text = args.text;
   return prompt;
+}
+
+/**
+ * Assign each interaction to its owning task (#122), bookmark semantics: an interaction belongs to the
+ * latest task that started at or before it. Returns a map of interaction `seq` -> task index (which is
+ * the `resolved_tasks.seq` materialize writes, since it stores `tasks` in array order). Only dated
+ * tasks participate; an interaction earlier than the first task, or without a timestamp, is
+ * unattributed (absent from the map -> NULL `resolved_interactions.task_seq`). Pure, so the store
+ * (resolved_interactions.task_seq) and the Interpret stage (dialogue slicing) assign identically.
+ */
+export function assignInteractionTaskSeqs(
+  tasks: TaskFact[],
+  interactions: InteractionFact[],
+): Map<number, number> {
+  const out = new Map<number, number>();
+  // Dated tasks carrying their original index (= resolved_tasks.seq), oldest first.
+  const dated = tasks
+    .map((task, index) => ({ ts: task.timestampMs, index }))
+    .filter((t): t is { ts: number; index: number } => t.ts != null)
+    .sort((a, b) => a.ts - b.ts);
+  if (!dated.length) return out;
+  // Both sides ascending by ts, so a single advancing pointer over `dated` assigns each interaction to
+  // the latest task started at/before it — O(n log n + m log m), no per-interaction rescan. The helper
+  // runs twice per session per index (Interpret + materialize), so the linear pass matters on long ones.
+  const ordered = interactions
+    .filter((i): i is InteractionFact & { timestampMs: number } => i.timestampMs != null)
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+  let t = -1;
+  for (const interaction of ordered) {
+    while (t + 1 < dated.length && dated[t + 1]!.ts <= interaction.timestampMs) t++;
+    if (t >= 0) out.set(interaction.seq, dated[t]!.index);
+  }
+  return out;
 }
 
 /** Locale-independent total order for global first-occurrence and tie-breaking rules. */

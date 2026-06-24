@@ -1,6 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import type { ChartOptions } from "chart.js";
-import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { DataTable, type Column } from "../components/DataTable";
 import { StatCards, type Stat } from "../components/StatCards";
 import { compactProject, fmt } from "../lib/format";
@@ -53,8 +51,6 @@ export function Health() {
     { label: "Turns", value: <>{fmt(ft.turns)} <small>{(ft.turns / n).toFixed(0)}/session</small></> },
   ];
 
-  const oc = d.outcomeCounts;
-  const totalOutcomes = oc.clean + oc.interrupted + oc.unknown || 1;
   const projects = projectFriction(d.byProject);
 
   return (
@@ -62,26 +58,6 @@ export function Health() {
       <section>
         <StatCards stats={cards} />
         <p className="note">{n} observable sessions — native Claude transcripts with friction data. Open a project to drill into its sessions.</p>
-      </section>
-
-      <section>
-        <h2>Outcomes</h2>
-        <div className="panel">
-          <ChartCanvas
-            type="doughnut"
-            height={220}
-            data={{
-              labels: ["Clean", "Interrupted", "Unknown"],
-              datasets: [{ data: [oc.clean, oc.interrupted, oc.unknown], backgroundColor: ["#5dbcdf", "#e2302c", "rgba(243,215,186,.35)"] }],
-            }}
-            options={{
-              plugins: {
-                legend: { position: "right" },
-                tooltip: { callbacks: { label: (c) => `${c.label}: ${c.parsed} (${Math.round((100 * Number(c.parsed)) / totalOutcomes)}%)` } },
-              },
-            } satisfies ChartOptions<"doughnut">}
-          />
-        </div>
       </section>
 
       <section>

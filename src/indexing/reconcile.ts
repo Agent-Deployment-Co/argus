@@ -63,7 +63,8 @@ export interface ReconcileInput {
  *  a separate per-session map — resolved_tool_results is retired. */
 export interface ReconcileResult extends ParseResult {
   tasksBySession: Map<string, TaskFact[]>;
-  /** Interactions (#117), derived here by grouping the deduped/ordered timeline. */
+  /** Interactions (#117), derived here by grouping the deduped/ordered timeline. Each carries in-memory
+   *  promptText/responseText (#122) for the Interpret stage; not persisted (stripped at materialize). */
   interactions: InteractionFact[];
   /** Count of result facts (#130) that didn't correlate to any parsed call — their tokens are dropped
    *  from the per-tool result-size totals (the call deduped away on a resumed session, lives in an
@@ -87,9 +88,16 @@ export type TimelineEntry = {
   position: SourcePosition;
   /** Set on prompt entries — the interaction it opens inherits this initiator. */
   initiator?: InteractionInitiator;
+  /** The entry's text (#122), in-memory: on a prompt entry it's the human task-start prompt text (its
+   *  presence marks the opened interaction as a task candidate -> interaction.promptText); on a turn
+   *  entry it's the assistant text, used for the interaction's responseText (the response-slot turn). */
+  text?: string;
   /** Set on turn entries — true if this turn was folded from a subagent (a different source session).
    *  Folded turns are loop content, never the main agent's response slot. */
   folded?: boolean;
+  /** Set on turn entries — the index into the flat `messages` array this turn was built from, so the
+   *  interaction it lands under can be written back onto that MessageRecord (#122). */
+  messageIndex?: number;
 };
 
 /**
@@ -156,8 +164,15 @@ function deriveInteractions(
   promptsBySession: Map<string, TimelineEntry[]>,
   turnsBySession: Map<string, TimelineEntry[]>,
   signalsBySession: Map<string, SpanSignals>,
-): InteractionFact[] {
+): {
+  interactions: InteractionFact[];
+  messageInteractionSeq: Map<number, number>;
+} {
   const out: InteractionFact[] = [];
+  // Each turn that lands inside an open interaction maps its source message (by flat-array index) to
+  // that interaction's seq (#122). Turns before a session's first opening prompt have no open
+  // interaction and are left unmapped (NULL interaction_seq).
+  const messageInteractionSeq = new Map<number, number>();
   for (const [sid, prompts] of promptsBySession) {
     const turns = turnsBySession.get(sid) ?? [];
     const events = [...prompts, ...turns];
@@ -166,6 +181,7 @@ function deriveInteractions(
     const signals = signalsBySession.get(sid) ?? { interruptionMs: [], compactBoundaryMs: [], compactSummaryMs: [] };
     let open: TimelineEntry | null = null;
     let responsePosition: SourcePosition | undefined;
+    let responseText: string | undefined;
     let seq = 0;
     const flush = (endTs: number) => {
       if (!open) return;
@@ -195,25 +211,42 @@ function deriveInteractions(
         timestampMs: open.ts,
         promptPosition: open.position,
         ...(responsePosition ? { responsePosition } : {}),
+        // Prompt/response text (#122), in-memory only for the Interpret stage — promptText is set only
+        // on human task-start openings (the sole source of task candidates); responseText is the
+        // response slot's text. Materialize strips both; #120 makes persistence opt-in.
+        ...(open.text ? { promptText: open.text } : {}),
+        ...(responseText ? { responseText } : {}),
         position: open.position,
       });
       open = null;
       responsePosition = undefined;
+      responseText = undefined;
     };
     for (const event of events) {
       if (event.kind === "prompt") {
         flush(event.ts);
         open = event;
         responsePosition = undefined;
-      } else if (open && !event.folded) {
+        responseText = undefined;
+      } else if (open) {
+        // Every turn inside the open span — folded or not — is that interaction's loop content, so it
+        // attributes to this interaction's seq (the value `seq` will take at flush, pre-increment).
+        if (event.messageIndex != null) messageInteractionSeq.set(event.messageIndex, seq);
         // Only the interaction's own (non-folded) turns are the response — a folded subagent turn is
-        // loop content, and must not become the parent interaction's response slot.
-        responsePosition = event.position;
+        // loop content, never the parent's response slot. responsePosition tracks the last own turn (so
+        // disposition = completed reflects "the loop produced turns"). responseText tracks the last own
+        // turn that carries PROSE: in agentic loops the literal last turn is usually a tool call with no
+        // text, while the assistant's actual answer is an earlier text turn — so an empty turn must not
+        // clobber the captured response.
+        if (!event.folded) {
+          responsePosition = event.position;
+          if (event.text) responseText = event.text;
+        }
       }
     }
     flush(Number.POSITIVE_INFINITY);
   }
-  return out;
+  return { interactions: out, messageInteractionSeq };
 }
 
 /**
@@ -536,13 +569,19 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     if (!wanted(sessionId)) continue;
     // Surviving (deduped) assistant turn on the timeline — an input to interaction derivation (#117).
     // `folded` marks a turn whose own session canonicalizes to a different (parent) session — a
-    // subagent turn folded into the parent: loop content, never the parent's response slot.
+    // subagent turn folded into the parent: loop content, never the parent's response slot. The
+    // producer already folds a streamed message's chunks into one fact (so fact.text is the full
+    // response, not just the first chunk's), which becomes the interaction's responseText (#122).
     pushInto(turnsBySession, sessionId, {
       sid: sessionId,
       kind: "turn",
       ts: fact.timestampMs,
       position: fact.position,
       folded: fact.sourceSessionId !== sessionId,
+      // Index of the MessageRecord pushed for this fact below — lets interaction derivation map this
+      // turn back onto its message so we can stamp message.interactionSeq (#122).
+      messageIndex: messages.length,
+      ...(fact.text ? { text: fact.text } : {}),
     });
     const session = sessions.get(sessionId);
     if (fact.stopReason && session?.friction) {
@@ -603,14 +642,21 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       ts: prompt.timestampMs ?? 0,
       position: prompt.position,
       initiator: prompt.initiator,
+      ...(prompt.text ? { text: prompt.text } : {}),
     });
   }
-  const interactions = deriveInteractions(
+  const { interactions, messageInteractionSeq } = deriveInteractions(
     fragments[0]?.parser.source ?? ("claude" as AgentSource),
     promptsBySession,
     turnsBySession,
     signalsBySession,
   );
+  // Stamp each usage row with its owning interaction's seq (#122) so materialize can persist
+  // resolved_usage.interaction_seq (and resolved_invocations.interaction_seq from the same message).
+  for (const [index, seq] of messageInteractionSeq) {
+    const message = messages[index];
+    if (message) message.interactionSeq = seq;
+  }
 
   return {
     messages,

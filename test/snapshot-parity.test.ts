@@ -108,10 +108,9 @@ describe("snapshot SQL parity with the JS aggregate", () => {
     expect(new Map(sql.byPlugin.map((p) => [p.name, p]))).toEqual(new Map(js.byPlugin.map((p) => [p.name, p])));
   });
 
-  test("friction / outcome / growth scalars match (unfiltered)", async () => {
+  test("friction / growth scalars match (unfiltered)", async () => {
     const { js, sql } = await buildBoth();
     expect(sql.frictionTotals).toEqual(js.frictionTotals);
-    expect(sql.outcomeCounts).toEqual(js.outcomeCounts);
     expect(sql.highTokenGrowthSessions).toBe(js.highTokenGrowthSessions);
   });
 

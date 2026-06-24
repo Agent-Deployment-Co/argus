@@ -28,7 +28,6 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -43,7 +42,6 @@ import {
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage, type Usage } from "../../../../types.ts";
 
 export const CLAUDE_PROJECTS_ROOT_ID = "claude-projects";
@@ -500,54 +498,6 @@ export function discoverClaudeSessionTranscripts(mainTranscriptPath: string): st
   return files;
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Claude JSONL transcript (#91). Reuses the same
- * "real user turn" gate as task-candidate extraction so the user half matches, takes assistant text
- * blocks (tool_use parts contribute no text), and dedupes resumed-session replays by message id.
- */
-export function reconstructClaudeDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const turns: DialogueTurn[] = [];
-  const seenAssistant = new Set<string>();
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let value: Record<string, any>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      value = parsed;
-    } catch {
-      continue;
-    }
-    const ts = timestampMs(value.timestamp);
-    if (value.type === "user") {
-      if (!isCountableClaudeUserMessage(value)) continue;
-      const turn = dialogueTurn("user", textFromUserContent(value.message?.content), ts);
-      if (turn) turns.push(turn);
-    } else if (value.type === "assistant") {
-      // A single assistant message (one message.id) is often split across records — e.g. a tool_use
-      // record carrying no dialogue text, then the record with the answer text. Only let a NON-EMPTY
-      // turn claim the dedup slot, otherwise the leading empty/tool-only record marks the id as seen
-      // and the real answer (same id) gets dropped — which made pass-2 outcome judging conclude the
-      // assistant never responded. Dedup still drops resumed/compacted re-appends: first non-empty
-      // occurrence per id wins.
-      const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
-      if (!turn) continue;
-      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
-      if (id) {
-        if (seenAssistant.has(id)) continue;
-        seenAssistant.add(id);
-      }
-      turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 function numberOrZero(value: unknown): number {
   const number = Number(value);
@@ -729,6 +679,11 @@ function createUsageFact(
     ...(typeof record.value.message?.stop_reason === "string"
       ? { stopReason: record.value.message.stop_reason }
       : {}),
+    // Assistant text (#122), in-memory: reconcile reads the response-slot turn's text onto the
+    // interaction's responseText for the pass-2 dialogue projection; never stored on the usage row.
+    ...(textFromUserContent(record.value.message?.content)
+      ? { text: textFromUserContent(record.value.message?.content) }
+      : {}),
     position: record.position,
   };
 }
@@ -752,7 +707,6 @@ function parseTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -889,10 +843,19 @@ function parseTranscript(
       if (isCountableClaudeUserMessage(record.value)) {
         session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
         // Interaction-opening prompt marker (#117). Skip Argus's own analysis/extraction prompts —
-        // they aren't human turns and would open phantom interactions (same exclusion the
-        // task-candidate path applies). A subagent session's prompts are agent-initiated (so reconcile
-        // won't open a folded interaction for them) — derived centrally from the session kind.
+        // they aren't human turns and would open phantom interactions. A subagent session's prompts
+        // are agent-initiated (so reconcile won't open a folded interaction for them) — derived
+        // centrally from the session kind.
         if (!generatedTitle) {
+          // The prompt carries task text (#122) when this opening is a task start: human-initiated
+          // (not a subagent's agent-authored prompt — #100/#118) and past the noise filter. That text
+          // is the sole source of task candidates; there is no separate TaskCandidateFact.
+          const taskStartText =
+            taskText &&
+            !isAgentInitiated(session.fact.kind) &&
+            !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
+              ? taskText
+              : undefined;
           facts.prompts!.push(
             buildPromptFact({
               source: "claude",
@@ -901,38 +864,13 @@ function parseTranscript(
               kind: session.fact.kind,
               timestampMs: timestampMs(record.value.timestamp),
               dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
+              text: taskStartText,
             }),
           );
         }
       }
       if (generatedTitle && !session.fact.firstPrompt) {
         session.fact.firstPrompt = generatedTitle;
-      }
-      // Only human-initiated prompts become task candidates (#118). A subagent session's prompts are
-      // agent-authored (the worker instruction), not human intent — and Claude folds subagents onto
-      // the parent, so emitting them would let them resurface as phantom tasks (#100). Same
-      // agent-initiated rule the prompt-fact initiator uses (isAgentInitiated).
-      if (
-        taskText &&
-        !isAgentInitiated(session.fact.kind) &&
-        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
-      ) {
-        const taskTimestamp = timestampMs(record.value.timestamp);
-        const task: TaskCandidateFact = {
-          id: createFactId(
-            "task_candidate",
-            "claude",
-            sourceSessionId,
-            record.position,
-            "user_message",
-          ),
-          source: "claude",
-          sourceSessionId,
-          text: taskText,
-          position: record.position,
-        };
-        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
-        facts.taskCandidates.push(task);
       }
 
       for (const [itemIndex, part] of content.entries()) {
@@ -993,6 +931,16 @@ function parseTranscript(
       // Streamed messages repeat metadata per line; stop_reason is only non-null on the last.
       if (!open.message.stopReason && typeof record.value.message?.stop_reason === "string") {
         open.message.stopReason = record.value.message.stop_reason;
+      }
+      // One assistant message streams across same-id records — e.g. a `thinking` chunk (no text)
+      // carries the usage that builds the UsageFact, then the answer arrives in a later `text` chunk.
+      // Fold each chunk's non-empty text onto the message so its in-memory text (#122) is the full
+      // response (the interaction's responseText), not just whatever the first usage-bearing chunk held.
+      const continuationText = textFromUserContent(record.value.message?.content);
+      if (continuationText) {
+        open.message.text = (
+          open.message.text ? `${open.message.text}\n${continuationText}` : continuationText
+        ).slice(0, TASK_TEXT_LIMIT);
       }
       addInvocations(record, open.message, facts, invocationFacts);
       continue;
