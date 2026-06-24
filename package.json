@@ -43,5 +43,9 @@
     "react-dom": "^19.2.7",
     "typescript": "^5.9.3",
     "vite": "^8.0.16"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Agent-Deployment-Co/argus.git"
   }
 }
