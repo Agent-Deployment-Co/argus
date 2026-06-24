@@ -225,7 +225,6 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
-            let signin = MenuItem::with_id(app, "signin", "Sign in…", true, None::<&str>)?;
             let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
             let autostart = CheckMenuItem::with_id(
                 app,
@@ -252,7 +251,6 @@ pub fn run() {
                     &start_item,
                     &stop_item,
                     &PredefinedMenuItem::separator(app)?,
-                    &signin,
                     &autostart,
                     &PredefinedMenuItem::separator(app)?,
                     &build_id,
@@ -282,7 +280,6 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
-                    "signin" => sign_in(app),
                     "autostart" => {
                         let _ = toggle_autostart(app);
                     }
