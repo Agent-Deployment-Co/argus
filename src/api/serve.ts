@@ -132,9 +132,12 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
-/** Locate the compiled web app. Works whether we're running the bundled CLI (dist/index.js, assets
- *  at dist/web) or from source after `build:web` (src/api/serve.ts, assets at ../../dist/web). */
+/** Locate the compiled web app. Checks ARGUS_WEB_ROOT first (set by the desktop tray shell so it
+ *  can point at the Tauri resource bundle), then falls back to the paths used by the standalone
+ *  CLI: next to the compiled binary (dist/index.js → dist/web) or relative to the source file. */
 function findWebRoot(): string | null {
+  const envRoot = process.env.ARGUS_WEB_ROOT;
+  if (envRoot && existsSync(join(envRoot, "index.html"))) return envRoot;
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     join(here, "web"), // bundled: dist/index.js → dist/web

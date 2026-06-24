@@ -1,6 +1,8 @@
 // The long-running loops behind `argus index --watch`, `argus sync --watch`, and the legs of
 // `argus run`. Each takes an AbortSignal so the caller owns shutdown, and each is built on the
 // backoff primitives so a flaky laptop (sleep/wake, dropped Wi-Fi) never busy-waits or floods logs.
+import { mkdirSync, watch as fsWatch } from "node:fs";
+import { dirname, basename } from "node:path";
 import {
   isLegacyAccessTokenCache,
   isManagedOAuthTokenCache,
@@ -121,6 +123,38 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
 }
 
 /**
+ * Wait until the token file changes on disk (written by `argus login`) or the signal aborts.
+ * Falls back to a 15-minute timeout in case the directory watch fails (e.g. dir doesn't exist yet).
+ * This lets the sync loop stay completely idle — no polling, no refresh attempts — until the user
+ * actually logs in.
+ */
+function waitForTokenFileChange(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      watcher?.close();
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = () => done();
+    signal.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(done, 15 * 60 * 1000);
+    let watcher: ReturnType<typeof fsWatch> | undefined;
+    try {
+      const dir = dirname(ACCESS_TOKEN_FILE);
+      const file = basename(ACCESS_TOKEN_FILE);
+      mkdirSync(dir, { recursive: true });
+      watcher = fsWatch(dir, (_event, name) => { if (name === file) done(); });
+    } catch {
+      // Fall back to the timeout if the watcher can't be armed for any other reason.
+    }
+  });
+}
+
+/**
  * Periodically upload the snapshot until the signal aborts. Started with no usable credential, a
  * standalone `sync --watch` (`onUnauthenticated: "fail"`) throws so the command exits nonzero; the
  * run-embedded leg (`"dormant"`) logs once and waits, recovering after `argus login`. Transient
@@ -131,11 +165,13 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
 export interface WatchSyncDeps {
   resolveCredentials?: (endpoint: string, log: Log) => Promise<PushCredentials | null>;
   push?: (opts: PushLoopOptions, credentials: PushCredentials, log: Log) => Promise<PushResult>;
+  waitForTokenChange?: (signal: AbortSignal) => Promise<void>;
 }
 
 export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortSignal, deps: WatchSyncDeps = {}): Promise<void> {
   const resolveCreds = deps.resolveCredentials ?? resolveCredentials;
   const push = deps.push ?? pushSnapshotForOpts;
+  const waitForToken = deps.waitForTokenChange ?? waitForTokenFileChange;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
 
   // Startup auth preflight: fail fast for the standalone command rather than looping forever with no
@@ -154,8 +190,10 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
       while (!sig.aborted) {
         const cred = await resolveCreds(opts.endpoint, log);
         if (!cred) {
+          // Log once, then park until the token file actually changes — no polling, no repeated
+          // refresh attempts. `argus login` writes the token file, which wakes this wait.
           collapser.note("Not logged in — pausing uploads until you run `argus login`.");
-          await sleep(backoff.next(), sig);
+          await waitForToken(sig);
           continue;
         }
         let res: PushResult;

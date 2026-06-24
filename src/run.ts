@@ -15,6 +15,7 @@ export interface RunOptions extends SyncOptions {
   indexIntervalMin: number;
   syncIntervalMin: number;
   endpoint: string;
+  noSync: boolean;
   taskExtraction: TaskExtractionOptions;
 }
 
@@ -92,15 +93,20 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
   try {
     // Each leg is independently supervised, so a serve crash never stops indexing and an index hiccup
     // never stops serving. The sync leg stays dormant (rather than failing) when not logged in.
-    await Promise.all([
+    const legs: Promise<void>[] = [
       watchIndex({ ...src, intervalMin: opts.indexIntervalMin }, log, ac.signal),
       serveLeg({ port: opts.port, build, taskExtraction: opts.taskExtraction }, log, ac.signal),
-      watchSync(
-        { ...build, endpoint: opts.endpoint, intervalMin: opts.syncIntervalMin, onUnauthenticated: "dormant" },
-        log,
-        ac.signal,
-      ),
-    ]);
+    ];
+    if (!opts.noSync) {
+      legs.push(
+        watchSync(
+          { ...build, endpoint: opts.endpoint, intervalMin: opts.syncIntervalMin, onUnauthenticated: "dormant" },
+          log,
+          ac.signal,
+        ),
+      );
+    }
+    await Promise.all(legs);
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
