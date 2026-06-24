@@ -11,11 +11,6 @@ export function Skills({ skills }: { skills: string[] }) {
   return <>{skills.map((s) => <SkillPill key={s} skill={s} />)}</>;
 }
 
-export function OutcomeCell({ outcome }: { outcome?: string }): ReactNode {
-  if (outcome === "clean") return <span className="pill clean">clean</span>;
-  if (outcome === "interrupted") return <span className="pill interrupted">intr.</span>;
-  return <Dash />;
-}
 
 export function TokGrowthCell({ growth }: { growth: number | null }): ReactNode {
   if (growth == null) return <Dash />;

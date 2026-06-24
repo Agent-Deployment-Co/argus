@@ -529,7 +529,6 @@ export interface DashboardAggregates {
   skillInvocations: Array<{ skill: string; count: number; sampleArgs: string }>;
   frictionTotals: FrictionTotals;
   projectFriction: Array<{ project: string; friction: FrictionTotals }>;
-  outcomeCounts: { clean: number; interrupted: number; unknown: number };
   highTokenGrowthSessions: number;
 }
 
