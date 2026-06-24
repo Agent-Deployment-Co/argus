@@ -42,13 +42,21 @@ bun test test/parse.test.ts               # run a single test file
 bun test -t "dedup"                       # run tests matching a name
 bun run typecheck                         # tsc --noEmit for root src + web/ (also run in CI)
 bun run build:web                         # build web/ → dist/web
-bun run build                             # build the Node CLI (runs build:web first)
+bun run build:compile                     # compile a self-contained CLI binary → dist/argus (bun:sqlite, no Node)
+bun run build:npm                         # build the publishable npm package set → dist/npm/* (all OS/arch)
+bun run desktop:build                     # build the Tauri tray app → desktop/src-tauri/target/**/Argus.app
 ```
 
 CI (`.github/workflows/ci.yml`) typechecks the root and `web/`, runs `bun test`, and verifies
-`build:web` on every push/PR. Development runs `src/cli.ts` directly with Bun. The published npm
-`bin` is `dist/cli.js`, a Node-targeted bundle built with `bun run build`; the web app is built to
-`dist/web` and ships in the same package.
+`build:web` on every push/PR. Development runs `src/cli.ts`
+directly with Bun. There is no Node-targeted bundle: the CLI compiles to a self-contained binary
+with `bun build --compile` (it uses `bun:sqlite`, so it needs no Node/node-gyp). `bun run build:npm`
+emits per-OS packages under `dist/npm/` — a launcher package (`@agentdeploymentco/argus`, the
+published `bin`) plus `@agentdeploymentco/argus-<os>-<cpu>` prebuilt-binary packages it pulls in as
+optional dependencies. The web app builds to `dist/web` and ships beside each binary. The desktop
+tray app lives in `desktop/` (see `docs/`/issue #71) and bundles the compiled CLI as a sidecar.
+The repo root `package.json` is `private` (a dev workspace); the published artifacts are generated
+into `dist/npm/` and the desktop bundles, not the root package.
 
 ## User-facing messages
 

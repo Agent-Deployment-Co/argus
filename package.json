@@ -3,12 +3,7 @@
   "version": "0.1.11",
   "description": "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
   "type": "module",
-  "bin": {
-    "argus": "./dist/cli.js"
-  },
-  "files": [
-    "dist"
-  ],
+  "private": true,
   "scripts": {
     "start": "bun run src/cli.ts",
     "dev": "bash scripts/dev.sh",
@@ -17,22 +12,24 @@
     "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "build": "bun run build:web && bun build src/cli.ts --target=node --external sqlite3 --outfile=dist/cli.js && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js"
-  },
-  "engines": {
-    "node": ">=20.17"
+    "build:compile": "bun run build:web && bun build --compile src/cli.ts --outfile dist/argus",
+    "build:npm": "bun run scripts/build-npm-packages.ts",
+    "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
+    "desktop:dev": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri dev",
+    "desktop:build": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles app",
+    "desktop:dmg": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles dmg"
   },
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
     "@hono/node-server": "^2.0.5",
     "citty": "^0.2.2",
-    "hono": "^4.12.25",
-    "sqlite3": "6"
+    "hono": "^4.12.25"
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.101.0",
     "@tanstack/react-router": "^1.170.15",
     "@tanstack/react-table": "^8.21.3",
+    "@tauri-apps/cli": "^2",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

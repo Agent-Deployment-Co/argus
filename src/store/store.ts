@@ -8,7 +8,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import sqlite3, { type Database, type RunResult } from "sqlite3";
+import { Database, SQLiteError } from "bun:sqlite";
 import { assignInteractionTaskSeqs } from "./store-contract.ts";
 import type {
   AuxiliaryFact,
@@ -75,10 +75,6 @@ export interface OpenStoreOptions {
   now?: () => number;
 }
 
-interface SqliteError extends Error {
-  code?: string;
-  errno?: number;
-}
 
 interface MetadataRow {
   id: string;
@@ -414,49 +410,27 @@ const INSERT_FRAGMENT_SQL = `
     updated_at_ms = excluded.updated_at_ms
 `;
 
-function run(db: Database, sql: string, params: unknown[] = []): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function callback(error) {
-      if (error) reject(error);
-      else resolve(this);
-    });
-  });
+function run(db: Database, sql: string, params: unknown[] = []) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return db.query(sql).run(...(params as any[]));
 }
 
-function exec(db: Database, sql: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+function exec(db: Database, sql: string): void {
+  db.run(sql);
 }
 
-function get<T>(db: Database, sql: string, params: unknown[] = []): Promise<T | undefined> {
-  return new Promise((resolve, reject) => {
-    db.get<T>(sql, params, (error, row) => {
-      if (error) reject(error);
-      else resolve(row);
-    });
-  });
+function get<T>(db: Database, sql: string, params: unknown[] = []): T | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (db.query<T, any[]>(sql).get(...(params as any[])) as T | null) ?? undefined;
 }
 
-function all<T>(db: Database, sql: string, params: unknown[] = []): Promise<T[]> {
-  return new Promise((resolve, reject) => {
-    db.all<T>(sql, params, (error, rows) => {
-      if (error) reject(error);
-      else resolve(rows);
-    });
-  });
+function all<T>(db: Database, sql: string, params: unknown[] = []): T[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return db.query<T, any[]>(sql).all(...(params as any[]));
 }
 
-function closeDatabase(db: Database): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+function closeDatabase(db: Database): void {
+  db.close();
 }
 
 /** Stay well under sqlite3's default bound-parameter limit (999) when batching. */
@@ -595,21 +569,10 @@ function secureSqliteFiles(path: string): void {
   }
 }
 
-function openDatabase(path: string, busyTimeoutMs: number): Promise<Database> {
-  return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database(
-      path,
-      sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE | sqlite3.OPEN_FULLMUTEX,
-      (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        db.configure("busyTimeout", busyTimeoutMs);
-        resolve(db);
-      },
-    );
-  });
+function openDatabase(path: string, busyTimeoutMs: number): Database {
+  const db = new Database(path, { create: true });
+  db.run(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
+  return db;
 }
 
 function rebuildHint(_path: string): string {
@@ -623,37 +586,38 @@ function asStoreError(
   fallbackCode: StoreErrorCode = "io",
 ): StoreError {
   if (error instanceof StoreError) return error;
-  const sqliteError = error as SqliteError;
-  if (sqliteError?.code === "SQLITE_BUSY" || sqliteError?.code === "SQLITE_LOCKED") {
-    return new StoreError(
-      "busy",
-      path,
-      `The local store is in use by another Argus command (waited ${busyTimeoutMs}ms). Close it and try again.`,
-      { cause: error },
-    );
+  if (error instanceof SQLiteError) {
+    if (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED") {
+      return new StoreError(
+        "busy",
+        path,
+        `The local store is in use by another Argus command (waited ${busyTimeoutMs}ms). Close it and try again.`,
+        { cause: error },
+      );
+    }
+    if (error.code === "SQLITE_CORRUPT" || error.code === "SQLITE_NOTADB") {
+      return new StoreError(
+        "corrupt",
+        path,
+        `The local store is damaged or isn't a valid database. ${rebuildHint(path)}`,
+        { cause: error },
+      );
+    }
   }
-  if (sqliteError?.code === "SQLITE_CORRUPT" || sqliteError?.code === "SQLITE_NOTADB") {
-    return new StoreError(
-      "corrupt",
-      path,
-      `The local store is damaged or isn't a valid database. ${rebuildHint(path)}`,
-      { cause: error },
-    );
-  }
-  const message = sqliteError?.message || String(error);
+  const message = (error as Error)?.message || String(error);
   return new StoreError(fallbackCode, path, `Couldn't use the local store at ${path}: ${message}`, {
     cause: error,
   });
 }
 
 async function transaction<T>(db: Database, operation: () => Promise<T>): Promise<T> {
-  await exec(db, "BEGIN IMMEDIATE");
+  exec(db, "BEGIN IMMEDIATE");
   try {
     const value = await operation();
-    await exec(db, "COMMIT");
+    exec(db, "COMMIT");
     return value;
   } catch (error) {
-    await exec(db, "ROLLBACK").catch(() => undefined);
+    try { exec(db, "ROLLBACK"); } catch {}
     throw error;
   }
 }
@@ -1021,7 +985,11 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
   } catch (error) {
-    if ((error as SqliteError).code !== "SQLITE_ERROR") throw error;
+    if (!(error instanceof SQLiteError)) throw error;
+    // Busy/corrupt errors propagate so asStoreError can classify them; anything else
+    // (missing column, wrong table shape, etc.) is a schema mismatch.
+    const c = error.code;
+    if (c === "SQLITE_BUSY" || c === "SQLITE_LOCKED" || c === "SQLITE_CORRUPT" || c === "SQLITE_NOTADB") throw error;
     throw new StoreError(
       "incompatible_schema",
       path,
@@ -2335,11 +2303,11 @@ export async function openStore(
 
   let db: Database | undefined;
   try {
-    db = await openDatabase(path, busyTimeoutMs);
+    db = openDatabase(path, busyTimeoutMs);
     await initializeDatabase(db, path);
     return new SqliteStore(db, path, busyTimeoutMs, now);
   } catch (error) {
-    if (db) await closeDatabase(db).catch(() => undefined);
+    if (db) try { closeDatabase(db); } catch {}
     // The store is a durable archive: open never silently rebuilds. Older owned schemas are migrated
     // in place (initializeDatabase); anything unmigratable/newer/corrupt propagates so retained data
     // is never destroyed without the user opting into `reindex --force`.

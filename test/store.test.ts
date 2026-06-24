@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import sqlite3, { type Database } from "sqlite3";
+import { Database } from "bun:sqlite";
 import {
   STORE_APPLICATION_ID,
   STORE_SCHEMA_VERSION,
@@ -191,57 +191,34 @@ async function expectStored(
   }
 }
 
-function rawOpen(path: string): Promise<Database> {
-  return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database(path, (error) => {
-      if (error) reject(error);
-      else resolve(db);
-    });
-  });
+function rawOpen(path: string): Database {
+  return new Database(path);
 }
 
-function rawExec(db: Database, sql: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+function rawExec(db: Database, sql: string): void {
+  db.run(sql);
 }
 
-function rawGet<T>(db: Database, sql: string): Promise<T | undefined> {
-  return new Promise((resolve, reject) => {
-    db.get<T>(sql, (error, row) => {
-      if (error) reject(error);
-      else resolve(row);
-    });
-  });
+function rawGet<T>(db: Database, sql: string): T | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (db.query<T, any[]>(sql).get() as T | null) ?? undefined;
 }
 
-function rawAll<T>(db: Database, sql: string): Promise<T[]> {
-  return new Promise((resolve, reject) => {
-    db.all<T>(sql, (error, rows) => {
-      if (error) reject(error);
-      else resolve(rows);
-    });
-  });
+function rawAll<T>(db: Database, sql: string): T[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return db.query<T, any[]>(sql).all();
 }
 
-function rawClose(db: Database): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
+function rawClose(db: Database): void {
+  db.close();
 }
 
-async function withRawDatabase<T>(path: string, operation: (db: Database) => Promise<T>): Promise<T> {
-  const db = await rawOpen(path);
+async function withRawDatabase<T>(path: string, operation: (db: Database) => T | Promise<T>): Promise<T> {
+  const db = rawOpen(path);
   try {
     return await operation(db);
   } finally {
-    await rawClose(db);
+    rawClose(db);
   }
 }
 
