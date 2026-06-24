@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "build": "bun run build:web && bun build src/cli.ts --target=node --external sqlite3 --outfile=dist/cli.js && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js",
+    "build": "bun run build:web && bun build src/cli.ts --target=node --outfile=dist/cli.js && tail -n +2 dist/cli.js > dist/cli.temp && echo '#!/usr/bin/env node' | cat - dist/cli.temp > dist/cli.js && rm dist/cli.temp && chmod +x dist/cli.js",
     "build:compile": "bun run build:web && bun build --compile src/cli.ts --outfile dist/argus",
     "build:npm": "bun run scripts/build-npm-packages.ts",
     "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
