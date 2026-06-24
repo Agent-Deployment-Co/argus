@@ -10,7 +10,14 @@ import {
   type TaskFrustration,
   type TaskOutcome,
 } from "../../store/store-contract.ts";
-import { type DialogueTurn } from "./dialogue.ts";
+
+/** One turn of the pass-2 dialogue projection: a prompt (user) or response (assistant) of one
+ *  interaction. The dialogue is the projection of interactions' prompt/response text (#122), not a
+ *  role-tag reconstruction; no message text is ever persisted to the store. */
+export interface DialogueTurn {
+  role: "user" | "assistant";
+  text: string;
+}
 
 const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
 
