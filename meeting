@@ -1,0 +1,487 @@
+Jun 26, 2026
+Meeting Jun 26, 2026 at 09:53 CDT - Transcript
+00:00:26
+
+Hayes Davis: Wrong browser.
+Mando Escamilla: Yeah, it took me a minute to figure out how to add you.
+Hayes Davis: Um okay. Um so at the end as we were wrapping that up um it seemed like maybe we weren't uh or you weren't sure either a what I was asking for or that what I was asking for was a good idea. So, let's let's go back to that um on the
+Mando Escamilla: Oh. Oh, for the uh uh on the on the updates. No, it's uh uh I think it's a it's it's a good idea and the right approach.
+Hayes Davis: updates.
+Mando Escamilla: It's more of a uh like I kind of need to see it in the menu to to know if uh if this is how we'll like it or not. But like it's a it it feels like uh it feels like it's not the final form, but it's the right direction. You know what I mean?
+Hayes Davis: Um, trying to think there's something uh in my head of like
+Mando Escamilla: Um,
+Hayes Davis: Okay. Um, okay.
+
+
+00:01:54
+
+Hayes Davis: Hold on. I'm going to share something. Um, or maybe I'm not
+Mando Escamilla: Is there some setting somewhere I need
+Hayes Davis: No.
+Mando Escamilla: to?
+Hayes Davis: Uh, it's not letting me paste. What the? Um, like I I copied a screenshot and then I I'm trying to
+Mando Escamilla: Oops.
+Hayes Davis: paste it and it will not let me. Is that what's that about? It was working in the other one. Okay, here I'll put it slide. Um, so you see the app store dot dot dot with the like four updates.
+Mando Escamilla: Yeah.
+Hayes Davis: All right. So, um I was thinking maybe what we could do is like have something that
+Mando Escamilla: Yeah.
+Hayes Davis: says like updates or or something like that dot dot dot and like um maybe in parentheses it could say like you know uh update available or something. Um, and then you uh and then you click on that and it open um and there's like uh and then you can trigger the update from there.
+
+
+00:03:33
+
+Hayes Davis: Um that said, I don't know.
+Mando Escamilla: Yeah.
+Hayes Davis: Uh the other option might be to have a um a single like two two menu options. one that's just like, you know, update available, you know, like update, right? And you just click it to update.
+Mando Escamilla: Yeah.
+Hayes Davis: Um, and uh all that we really need from settings in my mind is like as far as an actual setting, the only thing we need is the um is like whether auto update should be only. But the thing that I want to be able to show people is whether like if there was a recent update installed like they should see that that happened. Um if there's something to like if there's a pending update they should see that. So I'm trying to figure out how to like um communicate that to people.
+Mando Escamilla: Right. Yeah. the uh so I'm
+Hayes Davis: Um,
+Mando Escamilla: looking at the Docker settings right now,
+Hayes Davis: Docker has the settings embedded in the application,
+Mando Escamilla: right? And so they have,
+
+
+00:04:52
+
+Hayes Davis: right?
+Mando Escamilla: you know, automatically check always download and automatically update components, which is, you know, uh, not applicable, but it does have that little thing down in the bottom, that update version
+Hayes Davis: Uh, hold on.
+Mando Escamilla: down in the lower right hand corner.
+Hayes Davis: Oh, that little tiny thing. Okay. Good lord.
+Mando Escamilla: Yeah.
+Hayes Davis: That's really, really small.
+Mando Escamilla: Yes. And then when you click
+Hayes Davis: Okay.
+Mando Escamilla: it, you get this screen which like it's like like a flyyou, right? That tells you current, new, etc., etc. Uh, and then the button to install and restart, change preferences, and then change preferences just takes you back to settings. Uh, there's also so when there all this is to say is that when there's a new version to install, you have two places that you
+Hayes Davis: Mhm.
+Mando Escamilla: know. You have it in that tiny lower right hand corner and then you've got it there
+Hayes Davis: Right.
+Mando Escamilla: in the menu.
+Hayes Davis: The install and restart
+Mando Escamilla: Install and restart.
+
+
+00:06:27
+
+Mando Escamilla: Yeah.
+Hayes Davis: thing.
+Mando Escamilla: And so I'm going to install right now and see what happens like when there isn't an update.
+Hayes Davis: Okay.
+Mando Escamilla: You know what I mean?
+Hayes Davis: Yeah.
+Mando Escamilla: Yeah. So that turns into uh check for updates.
+Hayes Davis: Okay, I like that. Like honestly, that is
+Mando Escamilla: and then check for updates like
+Hayes Davis: What does restart and pause do?
+Mando Escamilla: uh I don't know let's see oh it it
+Hayes Davis: I I really don't know if we should be using Docker as our example
+Mando Escamilla: it it's basically Argus start and stop like it it pauses the
+Hayes Davis: example.
+Mando Escamilla: docker demon I don't know.
+Hayes Davis: Okay. Why the hell why is it down
+Mando Escamilla: It's weird.
+Hayes Davis: there?
+Mando Escamilla: Uh, so check for restarts or check for updates rather. Uh, opens the the Docker app and then takes you to like the software update uh, flyyou.
+Hayes Davis: Okay. What does the actual checking for updates in in pari or whatever? Like how do we basically can we can we know that there's an update in the web app if we wanted to in the web UI?
+
+
+00:08:34
+
+Mando Escamilla: Um I don't
+Hayes Davis: I mean,
+Mando Escamilla: know.
+Hayes Davis: I um I'm sure you could write that to some file somewhere and we could
+Mando Escamilla: Yeah.
+Hayes Davis: read it,
+Mando Escamilla: Right. Yeah. I I imagine that imagine that we could,
+Hayes Davis: right?
+Mando Escamilla: right? Like there's uh it would just need well we we enforce the version uh to stay the same between the uh mpm package and the uh Mac OS app.
+Hayes Davis: Okay.
+Mando Escamilla: And so yeah,
+Hayes Davis: Yeah.
+Mando Escamilla: we could write something that manually like checks the updates.json file on GitHub, right? Checks the latest version and then sees if the npm version is the same as that. And if it is uh if it isn't, then there's an update
+Hayes Davis: All right. Well,
+Mando Escamilla: available.
+Hayes Davis: let's just Okay. Um, let's not try to get to a final form. Let's try to get to a form. Um,
+Mando Escamilla: Yeah.
+Hayes Davis: and the So, the only thing I really don't like is just the sort of like silently updating with no no indication whatsoever like that something changed or anything like that, right?
+
+
+00:10:09
+
+Mando Escamilla: Yeah.
+Hayes Davis: Which I guess is what happens today but only on startup,
+Mando Escamilla: Right.
+Hayes Davis: right?
+Mando Escamilla: Right.
+Hayes Davis: Um okay. So the the very first thing to do is check for updates more frequently. Okay. Um and then
+Mando Escamilla: Yes.
+Hayes Davis: uh why don't we do if I'm using the web app? Okay. So right now uh so if we added Okay. if we added checking for updates more frequently, right? Um,
+Mando Escamilla: Yep.
+Hayes Davis: and I'm I'm using the web UI and it like decided
+Mando Escamilla: Yeah.
+Hayes Davis: it wanted to auto update. What would
+Mando Escamilla: Yeah. the the uh when it auto
+Hayes Davis: happen?
+Mando Escamilla: updates the you would still be looking you'd be looking at the web app uh and then while it was installing so the installation process goes download stop Argus install. Kill the Argus uh like Mac app.
+Hayes Davis: Mhm.
+Mando Escamilla: Start the Argus M the Mac app and then that'll start the new
+
+
+00:12:01
+
+Hayes Davis: So essentially the So there is some relatively small window
+Mando Escamilla: one.
+Hayes Davis: in there where if I try to click on something it just won't work because it's not running.
+Mando Escamilla: Correct.
+Hayes Davis: But that's a pretty brief window I would imagine.
+Mando Escamilla: Yeah.
+Hayes Davis: All right, that's um so
+Mando Escamilla: Yeah.
+Hayes Davis: uh I wouldn't Okay, so in that case then how about we have one menu item that okay we have let's say we have a setting in the argus.json JSON which is auto auto update right true false okay um and then let's say that by default we'll just start for a sec let's just say if that is false okay then there is a there is in our
+Mando Escamilla: Yep.
+Hayes Davis: menu there is a thing that says um check for updates Um,
+Mando Escamilla: Yep.
+Hayes Davis: and there is a thing that said that if an update is available, it says install updates.
+Mando Escamilla: Yes.
+Hayes Davis: Okay. So, like if there's an update available, like we're checking on a background and it says install updates, right?
+
+
+00:13:35
+
+Hayes Davis: Okay.
+Mando Escamilla: Yep.
+Hayes Davis: Uh, so it's one menu item. It either says check for updates or install updates,
+Mando Escamilla: Yep.
+Hayes Davis: right? Um, okay. If that setting is true for auto updating,
+Mando Escamilla: Yep.
+Hayes Davis: it will just auto update. Um and
+Mando Escamilla: Yeah.
+Hayes Davis: then uh and so that um you can check for updates if you want to and it What happens if uh so if that auto update setting is true then
+Mando Escamilla: Then when it finds when it finds an update,
+Hayes Davis: um
+Mando Escamilla: it'll just install it and restart
+Hayes Davis: yeah it can I click what happens if I click check for
+Mando Escamilla: itself.
+Hayes Davis: updates in that case it'll check for it and then just install itself.
+Mando Escamilla: That would be my guess.
+Hayes Davis: All right. Um,
+Mando Escamilla: Yeah.
+Hayes Davis: so actually, you know, I think the so maybe the issue is really just about like when the restart happens, I guess,
+Mando Escamilla: Right.
+Hayes Davis: like there's no reason that it shouldn't constantly be checking for updates.
+
+
+00:14:50
+
+Hayes Davis: So, it's not about checking for updates. It's just like um it's just like whether or not it it Yeah.
+Mando Escamilla: whether it applies it. Yeah.
+Hayes Davis: Um Okay. Um and I don't know of a good Okay.
+Mando Escamilla: Yep.
+Hayes Davis: But even more than that, like I don't know of any good reason you wouldn't like we would really want to allow them to like not apply it for any length of time.
+Mando Escamilla: Right.
+Hayes Davis: It's just more of when does it restart to apply it? But I'm thinking about other things we've got that auto update like you know I twice a day the bottom left corner of like the claw desktop app is like there's a new version right just restart to apply or whatever right
+Mando Escamilla: Yep.
+Hayes Davis: um so
+Mando Escamilla: Yep.
+Hayes Davis: uh we need a way I think to know that that's so I think that's it like we're always going to we're always going to like get the updates. We're never going to turn off checking for updates. It's just whether or not it gets um uh it's it's when it's installed.
+
+
+00:16:00
+
+Hayes Davis: So
+Mando Escamilla: Yeah.
+Hayes Davis: okay then in that case I think Um, I'm just trying to think if we care about like when it gets installed or not. um like from the I'm just imagining something in the web UI that's like there's an update available, right? And be able to click something there um as well, right?
+Mando Escamilla: Yeah.
+Hayes Davis: Um this is a little bit different in that it's it's meant to always be running in the background and so you want to apply the updates.
+Mando Escamilla: Right.
+Hayes Davis: Um, so the most of the time you're interacting with it,
+Mando Escamilla: Yes.
+Hayes Davis: you just want it to silently kind of update on songs. So, all right. So, I think that's the So, I think the setting is like auto apply updates, right?
+Mando Escamilla: Yeah.
+Hayes Davis: um automatically update and then
+Mando Escamilla: Yeah.
+Hayes Davis: basically uh so yeah I think that's I I think we're over complicating I think there's one menu item um and that menu item is uh either check or install um and if the auto update setting is on then or the auto apply or whatever we want to
+
+
+00:17:43
+
+Mando Escamilla: Yep.
+Hayes Davis: call it uh then it automatically. Whenever you say check, it'll just automatically install it.
+Mando Escamilla: And if it finds if it finds one, it just installs it when it finds.
+Hayes Davis: And if it finds one, it just install it, right? Um and uh and then the setting for whether or not updates are going to
+Mando Escamilla: Okay.
+Hayes Davis: apply will be in the UI. Um,
+Mando Escamilla: Yep.
+Hayes Davis: so like there will be a single setting, there'll be the settings pane in the UI and there'll be like an updates like tab in there, right?
+Mando Escamilla: Uhhuh.
+Hayes Davis: And you kind of like Docker and you can have check boxes like auto install or something like that.
+Mando Escamilla: Yeah.
+Hayes Davis: Um, and then and then that's that's kind of it, I think. And that's the like vibe that gets us what we want. And so by default it automatically uh checks and installs updates and then you have
+Mando Escamilla: Yep.
+Hayes Davis: control over turning that off if you want it.
+Mando Escamilla: Exactly.
+
+
+00:18:50
+
+Mando Escamilla: I'm into it.
+Hayes Davis: All right.
+Mando Escamilla: Okay.
+Hayes Davis: So no no settings dialogue at all.
+Mando Escamilla: Right.
+Hayes Davis: Okay.
+Mando Escamilla: Right.
+Hayes Davis: No settings dialogue at all. We can leave the about dialogue. Um the uh and there's only one menu item and the menu item is check for updates and if auto apply is not on it's install update something somewhere though should probably tell us
+Mando Escamilla: Yes.
+Hayes Davis: like what update is available or like what the version is that kind of stuff right um because right now in the menu you've got uh the version
+Mando Escamilla: Yeah. Yeah. There's an about or uh there's a version number in the menu.
+Hayes Davis: I don't think we need that in the menu. I think we can just have it in the about
+Mando Escamilla: Yeah.
+Hayes Davis: dialogue.
+Mando Escamilla: Yeah. I think I I added that in there uh before I added the about.
+Hayes Davis: Yeah. So, I think I'd say remove that.
+Mando Escamilla: Yep.
+Hayes Davis: And so then the menu the the menu from top to bottom is um Argus is running or not.
+
+
+00:20:03
+
+Mando Escamilla: Yep.
+Hayes Davis: Um uh open Argus start and stop check for
+Mando Escamilla: Yep.
+Hayes Davis: updates about
+Mando Escamilla: Yep.
+Hayes Davis: quit.
+Mando Escamilla: Yep. I like it.
+Hayes Davis: All right. Um, I would suggest if you would just like look at what um the like uh Apple's like human interface stuff says about the order of those things and try to like be a good citizen.
+Mando Escamilla: Yeah,
+Hayes Davis: Um, and I I'm just looking at Docker and my guess is it's not a good citizen.
+Mando Escamilla: right. Yeah,
+Hayes Davis: It's just just a bunch of random s***.
+Mando Escamilla: it is.
+Hayes Davis: But like uh so anyway,
+Mando Escamilla: Yep.
+Hayes Davis: that would be my my only other request. So, I think let's just do let's just do that. Um, and I'll go ahead and build the web UI for
+Mando Escamilla: Okay,
+Hayes Davis: settings.
+Mando Escamilla: you'll do that.
+Hayes Davis: I'll do that. I'll do the So, you should just assume we can agree on what it's going to be,
+Mando Escamilla: Okay.
+
+
+00:21:06
+
+Hayes Davis: but you should assume there's like a a a thing you can check in the settings for the um for whether or not to auto apply updates.
+Mando Escamilla: Yeah.
+Hayes Davis: Um,
+Mando Escamilla: Yep.
+Hayes Davis: and I will do the web UI because I need to do other settings around tasks and things like that. Um, and LLM stuff I just added. So,
+Mando Escamilla: Yeah.
+Hayes Davis: I will go ahead and just make a settings UI. Um, and I'll include the hub stuff and all that in in there.
+Mando Escamilla: Okay.
+Hayes Davis: Well,
+Mando Escamilla: Um
+Hayes Davis: once that's landed, I don't know if it's actually landed as the the
+Mando Escamilla: the the what the
+Hayes Davis: the hub config stuff that that is that is in that's in main, right?
+Mando Escamilla: uh not yet not yet.
+Hayes Davis: Not yet. Okay. All right. So,
+Mando Escamilla: Jerry is
+Hayes Davis: I won't I will once that's landed, I will add that in there.
+Mando Escamilla: Yes.
+Hayes Davis: But I'm imagining that there will be a gear icon.
+
+
+00:21:56
+
+Hayes Davis: I click on the gear icon.
+Mando Escamilla: Yeah.
+Hayes Davis: Um, and then I have a screen with some like a leftnav with categories and I can just pick stuff.
+Mando Escamilla: Yep.
+Hayes Davis: Um, and then I can I can click things to change them. Um, and that will write to the read and write from the config
+Mando Escamilla: Uh, sounds good.
+Hayes Davis: file.
+Mando Escamilla: the the Mac app will, just to put a real fine point on it, the Mac app will then call a like an API endpoint to get the setting, get the like auto update setting.
+Hayes Davis: Okay.
+Mando Escamilla: uh or should it read from the JSON file directly
+Hayes Davis: Um I guess is the responsibility of know who who knows where the JSON file is is that is that is that encapsulated in the um is that encapsulated in the
+Mando Escamilla: right
+Hayes Davis: like running Argus or is it something that the the wrapper knows as well?
+Mando Escamilla: the rapper does not know it. It is only the only the CLI and the web app know about it right now.
+
+
+00:23:23
+
+Mando Escamilla: But I mean and this is the question, right? It's like should the app know about it or not?
+Hayes Davis: Uh the Okay. The Mac app. the rapper.
+Mando Escamilla: the Mac.
+Hayes Davis: Yeah. Uh
+Mando Escamilla: Yes.
+Hayes Davis: I don't know. Um probably not.
+Mando Escamilla: And yeah,
+Hayes Davis: I mean, I guess it should it can call an an API endpoint. I don't know.
+Mando Escamilla: I think I think the the only uh
+Hayes Davis: Um
+Mando Escamilla: the only time it matters is if it's not running.
+Hayes Davis: but uh yeah. Yeah, that's what that's the only reason. So,
+Mando Escamilla: Yeah.
+Hayes Davis: and that's the thing we're actually trying to achieve here, right? So, in that case, I think it should
+Mando Escamilla: Yes.
+Hayes Davis: uh it should probably be able to reach into the file, I guess, if it's not.
+Mando Escamilla: Just read only like it's
+Hayes Davis: Yeah, it's not changing anything.
+Mando Escamilla: not
+Hayes Davis: So, yeah, I mean, it's more about the location of it and we can always change it.
+
+
+00:24:26
+
+Hayes Davis: So, like I don't know. I I think it should just it should read from the file if it um unless there's a bunch of stuff you got
+Mando Escamilla: Okay.
+Hayes Davis: to do to figure that out in which case um then we can think
+Mando Escamilla: Yeah.
+Hayes Davis: about it differently.
+Mando Escamilla: Okay. Um,
+Hayes Davis: But
+Mando Escamilla: so I think what'll happen is Jerry's going to land this the sync changes that he's got. Um, I'll add in the changes to the menu and I'll add uh or and I'll add in the changes to the uh auto update. I'll remove the uh I'll remove the settings window. Um, and then once all that lands, I'll cut a new
+Hayes Davis: Okay.
+Mando Escamilla: release.
+Hayes Davis: Um where so you you were doing something with the uh website like doc site where what what
+Mando Escamilla: Yeah.
+Hayes Davis: did you do? Where is
+Mando Escamilla: Uh,
+Hayes Davis: that?
+Mando Escamilla: I just pushed up a branch with it.
+Hayes Davis: Because the thing I really want is I want to be able to say like uh I want to be able to say to Christian or somebody like go here,
+
+
+00:26:15
+
+Mando Escamilla: Yeah. Yeah. So if you you pull that down and
+Hayes Davis: right?
+Mando Escamilla: then you run this npm run docs preview, you'll see the the the site which is all it's all garbage. Like it is like a oneshot write some docs prompt. There's nothing there that is worth keeping.
+Hayes Davis: Uh,
+Mando Escamilla: Um, but
+Hayes Davis: hold on a second. Uh, what the hell? Did you share your screen?
+Mando Escamilla: no, I didn't. Sorry.
+Hayes Davis: Oh, I don't um Okay.
+Mando Escamilla: I I just pasted uh that Slack
+Hayes Davis: Uh, okay. Sorry,
+Mando Escamilla: thread.
+Hayes Davis: my um it was it was like your call is in another window and I was like where?
+Mando Escamilla: Oh my god. What?
+Hayes Davis: Um, okay.
+Mando Escamilla: Um, but if you go into the like docs sub directory,
+Hayes Davis: Uh,
+Mando Escamilla: there's a there's now a in on that branch there is a top level docs directory, right? Um, and they're just markdown files.
+Hayes Davis: and where does this get hosted?
+
+
+00:27:36
+
+Hayes Davis: Like how does this happen?
+Mando Escamilla: Uh so it's it it is not publishing yet but uh I was going to get it going uh published on GitHub pages uh and then just set uh like set
+Hayes Davis: Okay.
+Mando Escamilla: the custom domain for the GitHub pages for Argus for the Argus uh page to Argus
+Hayes Davis: Okay.
+Mando Escamilla: Asianeplimate.co.
+Hayes Davis: Um, got it. Uh, okay. So, oh, this is this is just a static site generator.
+Mando Escamilla: Yeah, that's
+Hayes Davis: Got it. Okay, cool. That's all we need.
+Mando Escamilla: it.
+Hayes Davis: Okay, so and looks like what I was just looking at agents view. Um, looks like the same thing it does, but they use something called Zenicle. Um, okay. Uh, okay,
+Mando Escamilla: Yeah.
+Hayes Davis: cool. Um, so where would it Sorry, I got distracted. Um, uh, looking at that. Um, so going pages,
+Mando Escamilla: Yeah.
+Hayes Davis: can we would it be argus agent deployment.co?
+Mando Escamilla: Yeah. Yeah.
+
+
+00:28:58
+
+Mando Escamilla: Yeah. We can set up a a custom domain for it.
+Hayes Davis: All right. And the actual like file I as a user would download
+Mando Escamilla: Uh
+Hayes Davis: to install that's that is like a a DMG file on
+Mando Escamilla: yeah.
+Hayes Davis: GitHub
+Mando Escamilla: So if you share I'm sharing right now.
+Hayes Davis: stuff.
+Mando Escamilla: Hold on. So when you come here over here on the right hand side you see
+Hayes Davis: Yeah.
+Mando Escamilla: releases and then
+Hayes Davis: Yeah. Yeah.
+Mando Escamilla: you download the universal DMG. Double click it. Uh and then it gives you the same like drag over to applications etc
+Hayes Davis: Yeah.
+Mando Escamilla: etc
+Hayes Davis: All right. Cool. So
+Mando Escamilla: and then this latestJ oh it just downloads
+Hayes Davis: here.
+Mando Escamilla: it but latest.json JSON is is it's just a blob that has like version number and then the platforms and like URLs,
+Hayes Davis: All right.
+Mando Escamilla: right?
+Hayes Davis: Okay. Cool. So in order to get to a place where we could send so once we do the updates I think we have something that's like releasable like um so we could send that
+
+
+00:30:47
+
+Mando Escamilla: Yes.
+Hayes Davis: like essentially the link to that DMG file to to Christian right. Um okay all right let's focus on getting there. Um, I will I'm going to go do the settings, I think, because I just I that needs to get done because it's kind of a mess right now how you interact with that
+Mando Escamilla: Yeah.
+Hayes Davis: stuff. Um,
+Mando Escamilla: Yes.
+Hayes Davis: and then uh I can work on the uh the static site or like get getting the getting the like static site like set up or like defined. And then when you're done with the update stuff,
+Mando Escamilla: Yes,
+Hayes Davis: if you can get where it's like
+Mando Escamilla: exactly. Yeah. Um,
+Hayes Davis: publishing,
+Mando Escamilla: yeah, I'll I will add the the publishing workflow here on this this docs branch. Um, and if you want to work on the content and stuff in there, you can as well or you make another one.
+Hayes Davis: I mean I not just I like do you want just go ahead and just
+
+
+00:31:47
+
+Mando Escamilla: But,
+Hayes Davis: move it all to main? Like who cares? We'll fix it. Like
+Mando Escamilla: uh, yeah. Yeah, I can. Yeah, let me let me get the workflow in there and then I'll merge it into main and then we can
+Hayes Davis: Yeah.
+Mando Escamilla: like I'll get it all wired up so that wherever you're working on it,
+Hayes Davis: Yeah.
+Mando Escamilla: it'll publish once you merge
+Hayes Davis: Okay, cool.
+Mando Escamilla: it.
+Hayes Davis: Um, yeah. I I mean I I don't really care that it's like it can be uh whatever.
+Mando Escamilla: Publishing garbage for now.
+Hayes Davis: Yeah.
+Mando Escamilla: Yeah.
+Hayes Davis: Um like nobody's going to care uh at the moment. I just um I want to have it so I can work on it there. Um okay. Uh cool. All right. So the only thing that then that's really gating like giving something to Christian fundamentally is is the updates stuff. So if it's quick to get the publishing thing done and get that merged in,
+
+
+00:32:38
+
+Mando Escamilla: Yeah.
+Hayes Davis: then go ahead and do it. Otherwise, just focus on the update
+Mando Escamilla: Yeah. Yeah.
+Hayes Davis: piece.
+Mando Escamilla: I'm I'm going to get the the uh Well, I'll work on the website stuff first right now. I think it'll go quick. And also, I'm kind of waiting for Jerry to to finish up his sync
+Hayes Davis: Yeah. Okay.
+Mando Escamilla: stuff.
+Hayes Davis: Cool. All right. Um and then I have uh um I did want to wanted to get your opinion real quick before you go. All right. Um Are you good with that?
+Mando Escamilla: Yeah.
+Hayes Davis: Okay.
+Mando Escamilla: Yep.
+Hayes Davis: I'll uh I'll update it and do various things with it, but like um I don't it's not it's good.
+Mando Escamilla: I like it.
+Hayes Davis: I'm not sure if it's my favorite yet, but anyway, I think it does the job. Um, it was really really annoying to deal with an uppercase A and a lowercase G.
+Mando Escamilla: Yeah.
+Hayes Davis: The descender of the G like goes way down below them.
+Mando Escamilla: Pick up much room. Yeah.
+Hayes Davis: And so I went ahead and just did it all caps. And I think it it just it works better that way.
+Mando Escamilla: Yeah, it does. Yeah, I like it.
+
+
+Transcription ended after 00:34:32
+
+This editable transcript was computer generated and might contain errors. People can also change the text after it was created.
