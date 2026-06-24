@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
+  assignInteractionTaskSeqs,
   createFactId,
+  type InteractionFact,
   type ParserDiagnostic,
   type SourcePosition,
   type TaskCandidateFact,
@@ -541,34 +543,6 @@ export async function judgeTaskOutcome(
   }
 }
 
-/**
- * Assign each task a chapter span over the reconciled message timeline by timestamp (bookmark
- * semantics): a message belongs to the latest task that started at or before it. `messageTimestamps`
- * is indexed by message seq (resolved_usage.seq) and is assumed ascending, as the reconciler
- * orders messages. Tasks without a timestamp get no chapter (their messages stay unattributed).
- */
-export function assignChapters(tasks: TaskFact[], messageTimestamps: number[]): void {
-  const dated = tasks
-    .filter((task): task is TaskFact & { timestampMs: number } => task.timestampMs != null)
-    .sort((a, b) => a.timestampMs - b.timestampMs);
-  if (!dated.length || !messageTimestamps.length) return;
-
-  const bounds = new Map<TaskFact, { startSeq: number; endSeq: number }>();
-  for (let seq = 0; seq < messageTimestamps.length; seq++) {
-    const ts = messageTimestamps[seq]!;
-    let owner: TaskFact | undefined;
-    for (const task of dated) {
-      if (task.timestampMs <= ts) owner = task;
-      else break;
-    }
-    if (!owner) continue;
-    const current = bounds.get(owner);
-    if (!current) bounds.set(owner, { startSeq: seq, endSeq: seq });
-    else current.endSeq = seq;
-  }
-  for (const [task, span] of bounds) task.chapter = span;
-}
-
 /** Run async work over items with a small concurrency cap, preserving input order in the result. */
 async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
@@ -584,15 +558,18 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
 }
 
 /**
- * The full two-pass extraction (#91): pass 1 segments the user messages into tasks/chapters, pass 2
- * judges each chapter's outcome from its slice of the reconstructed dialogue. `messageTimestamps`
- * (by reconciled message seq) anchors the chapter spans; `dialogue` is the in-memory intermediate
- * (never stored). Returns task facts carrying chapter spans + outcome fields.
+ * The full two-pass extraction (#91): pass 1 segments the user messages into tasks, pass 2 judges
+ * each task's outcome from the dialogue projected over the task's **interactions** (#122). Tasks span
+ * interactions, so a task's slice is `[its first owned interaction's ts, the next task's first
+ * interaction's ts)` — boundaries align to interaction openings (no mid-loop slices). `interactions`
+ * is the reconcile-derived spine for the session; `dialogue` is the in-memory intermediate (never
+ * stored). Returns task facts carrying outcome fields. Materialize independently assigns the same
+ * interaction→task membership (via the shared `assignInteractionTaskSeqs`) onto resolved_interactions.task_seq.
  */
 export async function extractTasksWithOutcome(
   sessionId: string,
   candidates: TaskCandidateFact[],
-  messageTimestamps: number[],
+  interactions: InteractionFact[],
   dialogue: DialogueTurn[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
@@ -600,25 +577,39 @@ export async function extractTasksWithOutcome(
   const diagnostics = [...pass1.diagnostics];
   if (!pass1.tasks.length) return { tasks: pass1.tasks, diagnostics };
 
-  // Chronological order so resolved_tasks.seq (and thus task_seq) increases along the timeline.
+  // Chronological order so resolved_tasks.seq (and thus the interaction→task assignment) increases
+  // along the timeline.
   const tasks = [...pass1.tasks].sort(
     (a, b) => (a.timestampMs ?? Infinity) - (b.timestampMs ?? Infinity),
   );
-  assignChapters(tasks, messageTimestamps);
+
+  // Each task's dialogue window starts at the earliest interaction bookmarked to it (its own opening),
+  // falling back to the task's own timestamp if it owns none, and ends where the next task's window
+  // begins. Same bookmark the materializer uses, so the judged dialogue matches the stored membership.
+  const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, interactions);
+  const taskIndexOf = new Map(tasks.map((task, index) => [task, index] as const));
+  const earliestInteractionTs = new Map<number, number>();
+  for (const interaction of interactions) {
+    if (interaction.timestampMs == null) continue;
+    const taskIndex = taskSeqByInteraction.get(interaction.seq);
+    if (taskIndex == null) continue;
+    const prev = earliestInteractionTs.get(taskIndex);
+    if (prev == null || interaction.timestampMs < prev) earliestInteractionTs.set(taskIndex, interaction.timestampMs);
+  }
 
   const dated = tasks.filter(
     (task): task is TaskFact & { timestampMs: number } => task.timestampMs != null,
   );
+  const starts = dated.map((task) => earliestInteractionTs.get(taskIndexOf.get(task)!) ?? task.timestampMs);
   logTaskExtractionDebug(
     options,
     `judging outcome for ${dated.length}/${tasks.length} tasks in ${sessionId}`,
   );
-  // `dated` is sorted ascending, so each task's chapter ends where the next begins — `dated[i + 1]`,
-  // not an O(n) rescan. Using the immediate neighbor also handles ties consistently with
-  // assignChapters' last-wins bookmark: tasks sharing a timestamp get an empty [start, start) slice
-  // for all but the last, rather than overlapping windows.
+  // `dated` is sorted ascending, so each task's window ends where the next begins — `starts[i + 1]`,
+  // not an O(n) rescan. Tasks sharing a start get an empty [start, start) slice for all but the last,
+  // rather than overlapping windows.
   await mapWithLimit(
-    dated.map((task, i) => ({ task, start: task.timestampMs, end: dated[i + 1]?.timestampMs })),
+    dated.map((task, i) => ({ task, start: starts[i]!, end: starts[i + 1] })),
     4,
     async ({ task, start, end }) => {
       const slice = sliceDialogueByTime(dialogue, start, end);

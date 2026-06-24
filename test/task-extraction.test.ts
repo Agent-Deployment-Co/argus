@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  assignChapters,
   buildTaskExtractionPrompt,
   buildTaskOutcomePrompt,
   claudeProviderArgs,
@@ -11,7 +10,12 @@ import {
   splitCommand,
   taskFactsFromSpecs,
 } from "../src/indexing/interpret/task-extraction.ts";
-import type { TaskCandidateFact, TaskFact } from "../src/store/store-contract.ts";
+import {
+  assignInteractionTaskSeqs,
+  type InteractionFact,
+  type TaskCandidateFact,
+  type TaskFact,
+} from "../src/store/store-contract.ts";
 
 const candidates: TaskCandidateFact[] = [
   {
@@ -139,7 +143,7 @@ describe("task outcome (pass 2)", () => {
   });
 });
 
-describe("assignChapters", () => {
+describe("assignInteractionTaskSeqs", () => {
   function task(id: string, timestampMs?: number): TaskFact {
     return {
       id,
@@ -152,18 +156,38 @@ describe("assignChapters", () => {
       ...(timestampMs != null ? { timestampMs } : {}),
     };
   }
+  function interaction(seq: number, timestampMs?: number): InteractionFact {
+    return {
+      id: `i${seq}`,
+      source: "codex",
+      sourceSessionId: "codex:chapters",
+      seq,
+      initiator: "human",
+      disposition: "completed",
+      compactionCount: 0,
+      promptPosition: { originKey: "f", recordIndex: seq, itemIndex: 0 },
+      position: { originKey: "f", recordIndex: seq, itemIndex: 0 },
+      ...(timestampMs != null ? { timestampMs } : {}),
+    };
+  }
 
-  test("bookmarks the timeline: each message joins the latest task started at/before it", () => {
+  test("bookmarks the timeline: each interaction joins the latest task started at/before it", () => {
     const tasks = [task("a", 100), task("b", 300)];
-    // Message timestamps by reconciled seq (ascending). seq 0 precedes any task.
-    assignChapters(tasks, [50, 120, 200, 350, 400]);
-    expect(tasks[0]!.chapter).toEqual({ startSeq: 1, endSeq: 2 }); // task a owns [120,200]
-    expect(tasks[1]!.chapter).toEqual({ startSeq: 3, endSeq: 4 }); // task b owns [350,400]
+    // Interactions in seq order; interaction 0 (ts 50) precedes any task → unassigned.
+    const map = assignInteractionTaskSeqs(tasks, [
+      interaction(0, 50),
+      interaction(1, 120),
+      interaction(2, 200),
+      interaction(3, 350),
+    ]);
+    expect(map.get(0)).toBeUndefined(); // before task a
+    expect(map.get(1)).toBe(0); // task a (index 0)
+    expect(map.get(2)).toBe(0); // still task a
+    expect(map.get(3)).toBe(1); // task b (index 1)
   });
 
-  test("tasks without a timestamp get no chapter", () => {
-    const tasks = [task("a")];
-    assignChapters(tasks, [100, 200]);
-    expect(tasks[0]!.chapter).toBeUndefined();
+  test("interactions/tasks without a timestamp are unattributed", () => {
+    expect(assignInteractionTaskSeqs([task("a")], [interaction(0, 100)]).size).toBe(0);
+    expect(assignInteractionTaskSeqs([task("a", 100)], [interaction(0)]).size).toBe(0);
   });
 });

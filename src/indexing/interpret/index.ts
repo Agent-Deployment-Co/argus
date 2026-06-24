@@ -28,7 +28,7 @@ function sessionProgressLabel(session: MaterializeSession): string {
 
 /**
  * Run the two-pass task extraction (#91) for the given materialized sessions, attaching the result
- * to each session before it's stored (so the chapters' messages get task_seq at materialize). Only
+ * to each session before it's stored (so its interactions get task_seq at materialize, #122). Only
  * sessions in `targets` (the ones whose transcripts actually changed) are re-extracted; others keep
  * their stored tasks via the materializer's preserve-on-unchanged guard. The reconstructed dialogue
  * is an in-memory intermediate — nothing with message text is persisted.
@@ -67,12 +67,11 @@ export async function extractTasksForSessions(
   for (const session of toExtract) {
     const sid = session.meta.sessionId;
     log?.(`  [${++done}/${toExtract.length}] ${sessionProgressLabel(session)}…`);
-    const messageTimestamps = session.messages.map((message) => message.ts);
     const dialogue = producer.reconstructDialogue(session.meta.filePath);
     const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
       sid,
       candidatesBySession.get(sid)!,
-      messageTimestamps,
+      session.interactions ?? [],
       dialogue,
       taskExtraction,
     );
