@@ -932,6 +932,16 @@ function parseTranscript(
       if (!open.message.stopReason && typeof record.value.message?.stop_reason === "string") {
         open.message.stopReason = record.value.message.stop_reason;
       }
+      // One assistant message streams across same-id records — e.g. a `thinking` chunk (no text)
+      // carries the usage that builds the UsageFact, then the answer arrives in a later `text` chunk.
+      // Fold each chunk's non-empty text onto the message so its in-memory text (#122) is the full
+      // response (the interaction's responseText), not just whatever the first usage-bearing chunk held.
+      const continuationText = textFromUserContent(record.value.message?.content);
+      if (continuationText) {
+        open.message.text = (
+          open.message.text ? `${open.message.text}\n${continuationText}` : continuationText
+        ).slice(0, TASK_TEXT_LIMIT);
+      }
       addInvocations(record, open.message, facts, invocationFacts);
       continue;
     }

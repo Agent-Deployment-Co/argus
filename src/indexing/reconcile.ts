@@ -233,11 +233,14 @@ function deriveInteractions(
         // attributes to this interaction's seq (the value `seq` will take at flush, pre-increment).
         if (event.messageIndex != null) messageInteractionSeq.set(event.messageIndex, seq);
         // Only the interaction's own (non-folded) turns are the response — a folded subagent turn is
-        // loop content, and must not become the parent interaction's response slot. The last such turn
-        // wins, so responseText tracks the final own-session assistant text.
+        // loop content, never the parent's response slot. responsePosition tracks the last own turn (so
+        // disposition = completed reflects "the loop produced turns"). responseText tracks the last own
+        // turn that carries PROSE: in agentic loops the literal last turn is usually a tool call with no
+        // text, while the assistant's actual answer is an earlier text turn — so an empty turn must not
+        // clobber the captured response.
         if (!event.folded) {
           responsePosition = event.position;
-          responseText = event.text;
+          if (event.text) responseText = event.text;
         }
       }
     }
@@ -566,7 +569,9 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
     if (!wanted(sessionId)) continue;
     // Surviving (deduped) assistant turn on the timeline — an input to interaction derivation (#117).
     // `folded` marks a turn whose own session canonicalizes to a different (parent) session — a
-    // subagent turn folded into the parent: loop content, never the parent's response slot.
+    // subagent turn folded into the parent: loop content, never the parent's response slot. The
+    // producer already folds a streamed message's chunks into one fact (so fact.text is the full
+    // response, not just the first chunk's), which becomes the interaction's responseText (#122).
     pushInto(turnsBySession, sessionId, {
       sid: sessionId,
       kind: "turn",
@@ -576,7 +581,6 @@ export function reconcileSessions(input: ReconcileInput): ReconcileResult {
       // Index of the MessageRecord pushed for this fact below — lets interaction derivation map this
       // turn back onto its message so we can stamp message.interactionSeq (#122).
       messageIndex: messages.length,
-      // Assistant text (#122), in-memory: the response-slot turn's text becomes interaction.responseText.
       ...(fact.text ? { text: fact.text } : {}),
     });
     const session = sessions.get(sessionId);

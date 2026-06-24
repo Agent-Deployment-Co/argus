@@ -623,13 +623,23 @@ function parseCoworkTranscript(
       continue;
     }
 
-    // Continuation of an already-created message: update stop_reason and add invocations
+    // Continuation of an already-created message: update stop_reason, accumulate any answer text, and
+    // add invocations. One assistant message streams across records sharing a providerMessageId — e.g.
+    // a `thinking` chunk (no text) carries the usage that builds the UsageFact, then the `text` chunk
+    // carries the answer. Fold the non-empty text from every chunk onto the message so its in-memory
+    // text (#122) is the full response, not just whatever the first usage-bearing chunk held.
     if (isContinuation && open?.message) {
       if (
         !open.message.stopReason &&
         typeof record.value.message?.stop_reason === "string"
       ) {
         open.message.stopReason = record.value.message.stop_reason;
+      }
+      const continuationText = textFromUserContent(record.value.message?.content);
+      if (continuationText) {
+        open.message.text = (
+          open.message.text ? `${open.message.text}\n${continuationText}` : continuationText
+        ).slice(0, TASK_TEXT_LIMIT);
       }
       addInvocations(record, open.message, facts, invocationFacts);
       continue;
