@@ -1,7 +1,7 @@
 // The long-running loops behind `argus index --watch`, `argus sync --watch`, and the legs of
 // `argus run`. Each takes an AbortSignal so the caller owns shutdown, and each is built on the
 // backoff primitives so a flaky laptop (sleep/wake, dropped Wi-Fi) never busy-waits or floods logs.
-import { watch as fsWatch } from "node:fs";
+import { mkdirSync, watch as fsWatch } from "node:fs";
 import { dirname, basename } from "node:path";
 import {
   isLegacyAccessTokenCache,
@@ -146,9 +146,10 @@ function waitForTokenFileChange(signal: AbortSignal): Promise<void> {
     try {
       const dir = dirname(ACCESS_TOKEN_FILE);
       const file = basename(ACCESS_TOKEN_FILE);
+      mkdirSync(dir, { recursive: true });
       watcher = fsWatch(dir, (_event, name) => { if (name === file) done(); });
     } catch {
-      // Directory doesn't exist yet; the timeout fallback will re-check periodically.
+      // Fall back to the timeout if the watcher can't be armed for any other reason.
     }
   });
 }
