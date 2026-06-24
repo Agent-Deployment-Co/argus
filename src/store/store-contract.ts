@@ -524,10 +524,10 @@ export interface DashboardAggregates {
   usageBySkillModel: Array<{ skill: string } & UsageGroupRow>;
   /** Per (date, skill) total tokens, attributed skills only — backs the skill-over-time chart. */
   skillTokensByDate: Array<{ date: string; skill: string; total: number }>;
-  /** Distinct session counts, for the per-source/-project session tallies and the grand total. */
+  /** Distinct session counts per source/project. The grand total isn't carried — each session has one
+   *  source, so the assembler sums sessionsBySource (avoids a redundant COUNT(DISTINCT) scan). */
   sessionsBySource: Array<{ source: string; sessions: number }>;
   sessionsByProject: Array<{ project: string; sessions: number }>;
-  totalSessions: number;
   /** Per-tool result-size stats, scoped by source ONLY (not date/project) — mirrors the legacy
    *  `ParseResult.toolResults` map. The assembler joins this for every `approxResultTokens` and derives
    *  `heaviestToolResults` from it; call counts/sessions come from the fully-filtered lists below. */
