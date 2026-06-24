@@ -66,9 +66,11 @@ jobs:
         with:
           workspaces: desktop/src-tauri
       - run: bun install --frozen-lockfile
-      # Compile the CLI for this runner's platform and stage it (+ the web app) for Tauri.
+      # Cross-compile the CLI for both macOS arches and stage them (+ the web app) for Tauri.
+      # --universal produces argus-aarch64-apple-darwin and argus-x86_64-apple-darwin, both
+      # required when Tauri builds a universal-apple-darwin bundle.
       - name: Stage sidecar + web
-        run: bash scripts/stage-desktop-sidecar.sh --build
+        run: bash scripts/stage-desktop-sidecar.sh --universal
 
       - name: import Apple Developer Certificate
         # Prevents keychain from locking automatically for 3600 seconds.
