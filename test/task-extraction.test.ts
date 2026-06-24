@@ -14,29 +14,32 @@ import {
   assignInteractionTaskSeqs,
   type InteractionFact,
   type TaskFact,
-  type TaskPrompt,
 } from "../src/store/store-contract.ts";
 
-// Pass-1 input is the session's human interaction openings (#122) — one TaskPrompt per opening.
-const prompts: TaskPrompt[] = [
-  {
+// Pass-1 input is the session's human interaction openings (#122) — each carrying its prompt text.
+function candidate(seq: number, promptText: string, timestampMs?: number): InteractionFact {
+  return {
+    id: `i${seq}`,
     source: "codex",
-    interactionSeq: 0,
-    timestampMs: Date.parse("2026-06-11T15:00:00.000Z"),
-    text: "add a facts command",
-    position: { originKey: "file:codex-one", recordIndex: 2, itemIndex: 0 },
-  },
-  {
-    source: "codex",
-    interactionSeq: 1,
-    text: "also make it configurable",
-    position: { originKey: "file:codex-one", recordIndex: 4, itemIndex: 0 },
-  },
+    sourceSessionId: "codex:one",
+    seq,
+    initiator: "human",
+    disposition: "completed",
+    compactionCount: 0,
+    promptPosition: { originKey: "file:codex-one", recordIndex: 2 + seq * 2, itemIndex: 0 },
+    position: { originKey: "file:codex-one", recordIndex: 2 + seq * 2, itemIndex: 0 },
+    promptText,
+    ...(timestampMs != null ? { timestampMs } : {}),
+  };
+}
+const candidates: InteractionFact[] = [
+  candidate(0, "add a facts command", Date.parse("2026-06-11T15:00:00.000Z")),
+  candidate(1, "also make it configurable"),
 ];
 
 describe("task extraction", () => {
   test("builds a prompt with indexed task prompts", () => {
-    const prompt = buildTaskExtractionPrompt("codex:one", prompts, "Return JSON.");
+    const prompt = buildTaskExtractionPrompt("codex:one", candidates, "Return JSON.");
     expect(prompt).toContain("Return JSON.");
     expect(prompt).toContain('"sessionId": "codex:one"');
     expect(prompt).toContain('"index": 0');
@@ -55,7 +58,7 @@ describe("task extraction", () => {
   });
 
   test("turns extracted specs into derived task facts anchored to interactions", () => {
-    const facts = taskFactsFromSpecs("codex:one", prompts, [
+    const facts = taskFactsFromSpecs("codex:one", candidates, [
       { description: "Add configurable task extraction", messageIndexes: [1, 0, 20] },
     ]);
     expect(facts).toEqual([
@@ -73,7 +76,7 @@ describe("task extraction", () => {
 
   test("drops a spec the model couldn't anchor to any valid prompt index (#122)", () => {
     expect(
-      taskFactsFromSpecs("codex:one", prompts, [
+      taskFactsFromSpecs("codex:one", candidates, [
         { description: "unanchored", messageIndexes: [] },
         { description: "bogus indexes", messageIndexes: [9, -1] },
       ]),
@@ -82,7 +85,7 @@ describe("task extraction", () => {
 
   test("emits debug logs through the configured sink", async () => {
     const logs: string[] = [];
-    const result = await extractTasksForSession("codex:one", prompts, {
+    const result = await extractTasksForSession("codex:one", candidates, {
       provider: "off",
       debugLog: (message) => logs.push(message),
     });
@@ -133,14 +136,12 @@ describe("task outcome (pass 2)", () => {
 
   test("builds a prompt carrying the task and role-tagged dialogue", () => {
     const prompt = buildTaskOutcomePrompt("Add a facts command", [
-      { role: "user", text: "add it", timestampMs: 1 },
-      { role: "assistant", text: "done", timestampMs: 2 },
+      { role: "user", text: "add it" },
+      { role: "assistant", text: "done" },
     ]);
     expect(prompt).toContain("Task: Add a facts command");
     expect(prompt).toContain('"role": "user"');
     expect(prompt).toContain('"text": "done"');
-    // Timestamps are an internal alignment detail — not sent to the judge.
-    expect(prompt).not.toContain("timestampMs");
   });
 
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {

@@ -34,7 +34,6 @@ import {
   shouldSkipTaskCandidateText,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../../../types.ts";
 
 export const CODEX_SESSIONS_ROOT_ID = "codex-sessions";
@@ -101,45 +100,6 @@ function numericToken(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Codex JSONL transcript (#91). Codex wraps each
- * message in `payload` (role on payload.role); skips the synthetic <environment_context> user turn,
- * matching task-candidate extraction.
- */
-export function reconstructCodexDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const turns: DialogueTurn[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let value: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      value = parsed;
-    } catch {
-      continue;
-    }
-    const payload = objectValue(value.payload);
-    if (stringValue(payload.type) !== "message") continue;
-    const ts = timestampMs(value.timestamp);
-    const text = textFromCodexContent(payload.content, TASK_TEXT_LIMIT);
-    if (payload.role === "user") {
-      if (text && !isCodexEnvironmentContextText(text)) {
-        const turn = dialogueTurn("user", text, ts);
-        if (turn) turns.push(turn);
-      }
-    } else if (payload.role === "assistant") {
-      const turn = dialogueTurn("assistant", text, ts);
-      if (turn) turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 function normalizeCodexUsage(raw: unknown): Usage {
   const usage = emptyUsage();
@@ -524,6 +484,10 @@ export function parseCodexTranscript(
   let sessionCwd = currentCwd;
   let firstPrompt: string | undefined;
   let pendingInvocations: PendingInvocation[] = [];
+  // Codex meters usage on token_count events, separate from the assistant text records (#122). Track
+  // the latest assistant text since the last token_count so the flushed UsageFact carries the turn's
+  // text — reconcile then reads the response-slot turn's text onto the interaction's responseText.
+  let pendingAssistantText: string | undefined;
   const invocationByScopedId = new Map<string, PendingInvocation>();
   const pendingResults: PendingToolResult[] = [];
   const messages: UsageFact[] = [];
@@ -604,6 +568,8 @@ export function parseCodexTranscript(
 
     if (recordType === "response_item" && payloadType === "message" && payload.role === "assistant") {
       responseAssistantMessages++;
+      const assistantText = textFromCodexContent(payload.content, TASK_TEXT_LIMIT);
+      if (assistantText) pendingAssistantText = assistantText;
       continue;
     }
 
@@ -716,8 +682,10 @@ export function parseCodexTranscript(
       usage,
       cwd: currentCwd,
       attributionSkill: null,
+      ...(pendingAssistantText ? { text: pendingAssistantText } : {}),
       position: record.position,
     });
+    pendingAssistantText = undefined;
 
     for (const pending of pendingInvocations) {
       const invocationId = createFactId(

@@ -319,7 +319,6 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
       messages: messagesBySession.get(sid) ?? [],
       tasks: output.tasksBySession.get(sid) ?? [],
       interactions: interactionsBySession.get(sid) ?? [],
-      taskPrompts: output.taskPromptsBySession.get(sid) ?? [],
     });
   }
   return sessions;
@@ -489,7 +488,6 @@ async function syncStore(
       // preserves their stored tasks rather than paying for an LLM call per unchanged session.
       if (taskExtractionActive(opts.taskExtraction)) {
         await extractTasksForSessions(
-          producer,
           materialize,
           canonicalSessionIds(producer.capabilities, changedFragments),
           opts.taskExtraction!,
@@ -729,7 +727,6 @@ export async function reindexSession(
     const materialize = toMaterializeSessions(output);
     if (taskExtractionActive(opts.taskExtraction)) {
       await extractTasksForSessions(
-        producer,
         materialize,
         new Set([sessionId]),
         opts.taskExtraction!,

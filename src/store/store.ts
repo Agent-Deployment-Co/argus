@@ -2087,17 +2087,22 @@ export class SqliteStore implements Store {
             this.db,
             "resolved_interactions",
             ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "task_seq", "interaction_json"],
-            (session.interactions ?? []).map((interaction) => [
-              sid,
-              interaction.seq,
-              interaction.source,
-              interaction.timestampMs ?? null,
-              interaction.initiator,
-              interaction.disposition,
-              interaction.compactionCount,
-              taskSeqByInteraction.get(interaction.seq) ?? null,
-              JSON.stringify(interaction),
-            ]),
+            (session.interactions ?? []).map((interaction) => {
+              // promptText/responseText (#122) are in-memory only for the Interpret stage — strip them
+              // so the stored interaction_json stays text-free (persistence is #120's opt-in retention).
+              const { promptText: _p, responseText: _r, ...stored } = interaction;
+              return [
+                sid,
+                interaction.seq,
+                interaction.source,
+                interaction.timestampMs ?? null,
+                interaction.initiator,
+                interaction.disposition,
+                interaction.compactionCount,
+                taskSeqByInteraction.get(interaction.seq) ?? null,
+                JSON.stringify(stored),
+              ];
+            }),
           );
           // Per-tool-use rows (#113 Part B / #130) from the reconciled messages' toolUses, so byTool/
           // byMcp/bySkill/heaviestToolResults become GROUP BY queries (#121). Each row is the call+result
