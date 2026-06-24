@@ -170,22 +170,6 @@ fn open_dashboard(app: &AppHandle) {
     }
 }
 
-/// Kick off the browser sign-in flow (`argus login`, Cloudflare Access). Fire-and-forget: it opens
-/// a browser and exits; the running sidecar's sync leg recovers from dormant once a token lands.
-fn sign_in(app: &AppHandle) {
-    match app.shell().sidecar("argus").and_then(|c| c.args(["login"]).spawn()) {
-        Ok((mut rx, _child)) => {
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    if let CommandEvent::Stdout(line) | CommandEvent::Stderr(line) = event {
-                        log::info!("[argus login] {}", String::from_utf8_lossy(&line).trim_end());
-                    }
-                }
-            });
-        }
-        Err(err) => log::error!("starting sign-in: {err}"),
-    }
-}
 
 /// Toggle launch-at-login and return the new state so the menu checkmark can follow.
 fn toggle_autostart(app: &AppHandle) -> bool {
@@ -225,7 +209,6 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
-            let signin = MenuItem::with_id(app, "signin", "Sign in…", true, None::<&str>)?;
             let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
             let autostart = CheckMenuItem::with_id(
                 app,
@@ -252,7 +235,6 @@ pub fn run() {
                     &start_item,
                     &stop_item,
                     &PredefinedMenuItem::separator(app)?,
-                    &signin,
                     &autostart,
                     &PredefinedMenuItem::separator(app)?,
                     &build_id,
@@ -282,7 +264,6 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
-                    "signin" => sign_in(app),
                     "autostart" => {
                         let _ = toggle_autostart(app);
                     }
