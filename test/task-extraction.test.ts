@@ -13,31 +13,30 @@ import {
 import {
   assignInteractionTaskSeqs,
   type InteractionFact,
-  type TaskCandidateFact,
   type TaskFact,
+  type TaskPrompt,
 } from "../src/store/store-contract.ts";
 
-const candidates: TaskCandidateFact[] = [
+// Pass-1 input is the session's human interaction openings (#122) — one TaskPrompt per opening.
+const prompts: TaskPrompt[] = [
   {
-    id: "candidate:0",
     source: "codex",
-    sourceSessionId: "codex:one",
+    interactionSeq: 0,
     timestampMs: Date.parse("2026-06-11T15:00:00.000Z"),
     text: "add a facts command",
     position: { originKey: "file:codex-one", recordIndex: 2, itemIndex: 0 },
   },
   {
-    id: "candidate:1",
     source: "codex",
-    sourceSessionId: "codex:one",
+    interactionSeq: 1,
     text: "also make it configurable",
     position: { originKey: "file:codex-one", recordIndex: 4, itemIndex: 0 },
   },
 ];
 
 describe("task extraction", () => {
-  test("builds a prompt with indexed filtered user messages", () => {
-    const prompt = buildTaskExtractionPrompt("codex:one", candidates, "Return JSON.");
+  test("builds a prompt with indexed task prompts", () => {
+    const prompt = buildTaskExtractionPrompt("codex:one", prompts, "Return JSON.");
     expect(prompt).toContain("Return JSON.");
     expect(prompt).toContain('"sessionId": "codex:one"');
     expect(prompt).toContain('"index": 0');
@@ -55,8 +54,8 @@ describe("task extraction", () => {
     ]);
   });
 
-  test("turns extracted specs into derived task facts", () => {
-    const facts = taskFactsFromSpecs("codex:one", candidates, [
+  test("turns extracted specs into derived task facts anchored to interactions", () => {
+    const facts = taskFactsFromSpecs("codex:one", prompts, [
       { description: "Add configurable task extraction", messageIndexes: [1, 0, 20] },
     ]);
     expect(facts).toEqual([
@@ -65,16 +64,25 @@ describe("task extraction", () => {
         sourceSessionId: "codex:one",
         timestampMs: Date.parse("2026-06-11T15:00:00.000Z"),
         description: "Add configurable task extraction",
-        evidence: "message indexes: 0, 1",
+        evidence: "interactions: 0, 1",
         evidenceKind: "llm_inference",
         position: expect.objectContaining({ recordIndex: 2 }),
       }),
     ]);
   });
 
+  test("drops a spec the model couldn't anchor to any valid prompt index (#122)", () => {
+    expect(
+      taskFactsFromSpecs("codex:one", prompts, [
+        { description: "unanchored", messageIndexes: [] },
+        { description: "bogus indexes", messageIndexes: [9, -1] },
+      ]),
+    ).toEqual([]);
+  });
+
   test("emits debug logs through the configured sink", async () => {
     const logs: string[] = [];
-    const result = await extractTasksForSession("codex:one", candidates, {
+    const result = await extractTasksForSession("codex:one", prompts, {
       provider: "off",
       debugLog: (message) => logs.push(message),
     });

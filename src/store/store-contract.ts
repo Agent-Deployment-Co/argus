@@ -83,7 +83,6 @@ export type FactKind =
   | "message"
   | "invocation"
   | "tool_result"
-  | "task_candidate"
   | "relationship"
   | "task";
 
@@ -209,6 +208,12 @@ export interface PromptFact {
   /** Replay-stable identity (e.g. record uuid) for dedup across resumed-session files; falls back to
    *  position when the source has no stable id. */
   dedupKey?: string;
+  /** The human prompt's text, set ONLY for human-initiated openings that pass the task noise filter —
+   *  i.e. the interaction openings that are task starts (#122). This is the *sole* source of task
+   *  candidates: reconcile turns these into the per-session {@link TaskPrompt} list. In-memory only —
+   *  never written to the store (the stored InteractionFact stays text-free). Absent on agent/harness
+   *  openings and on filtered-out human turns (AGENTS.md / env-context / aborted / Argus-generated). */
+  text?: string;
   position: SourcePosition;
 }
 
@@ -302,13 +307,21 @@ export interface TaskFact {
   position: SourcePosition;
 }
 
-export interface TaskCandidateFact {
-  id: string;
+/**
+ * The pass-1 task-extraction input (#122): one human-initiated interaction opening that is a task
+ * start, carrying its prompt text. Reconcile derives these from the human {@link PromptFact}s that
+ * open interactions — there is no separate "task candidate" fact path; a task candidate *is* an
+ * interaction opening. In-memory only (text is never stored). Pass 1 segments these into tasks, and a
+ * task's owning interactions are the ones it references (so every task anchors to a real interaction).
+ */
+export interface TaskPrompt {
   source: AgentSource;
-  sourceSessionId: string;
-  /** Present when the source user-message record carried a valid timestamp. */
+  /** The opening interaction's seq within its session (resolved_interactions.seq). */
+  interactionSeq: number;
+  /** The interaction's opening timestamp (equals InteractionFact.timestampMs), so the task it anchors
+   *  bookmarks onto that interaction. */
   timestampMs?: number;
-  /** Filtered user-authored text made available to the task extractor. Not materialized as a task. */
+  /** The human prompt's text, fed to the segmenter. */
   text: string;
   position: SourcePosition;
 }
@@ -330,7 +343,6 @@ export interface NormalizedFacts {
   messages: UsageFact[];
   invocations: InvocationFact[];
   toolResults: ToolResultFact[];
-  taskCandidates: TaskCandidateFact[];
   tasks: TaskFact[];
   relationships: SessionRelationshipFact[];
 }
@@ -540,6 +552,9 @@ export interface MaterializeSession {
   tasks?: TaskFact[];
   /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions. */
   interactions?: InteractionFact[];
+  /** Pass-1 task-extraction input (#122): the session's human interaction openings + prompt text,
+   *  derived by reconcile. In-memory only — the Interpret stage reads it; materialize never stores it. */
+  taskPrompts?: TaskPrompt[];
 }
 
 /** Per-source freshness attestation. */
@@ -759,6 +774,10 @@ export function buildPromptFact(args: {
   /** Replay-stable id (record uuid / message id) so resumed-session replays dedupe in reconcile. */
   dedupKey?: string;
   timestampMs?: number;
+  /** The human prompt text, set by the producer only when this opening is a task start (#122) —
+   *  human-initiated and past the noise filter. Carried in-memory so reconcile can build the
+   *  per-session task-prompt list; never stored. */
+  text?: string;
 }): PromptFact {
   const prompt: PromptFact = {
     id: createFactId("prompt", args.source, args.sourceSessionId, args.position, "user_message"),
@@ -769,6 +788,7 @@ export function buildPromptFact(args: {
   };
   if (args.timestampMs != null && Number.isFinite(args.timestampMs)) prompt.timestampMs = args.timestampMs;
   if (args.dedupKey) prompt.dedupKey = args.dedupKey;
+  if (args.text) prompt.text = args.text;
   return prompt;
 }
 

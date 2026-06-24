@@ -46,7 +46,6 @@ function emptyFacts() {
     messages: [],
     invocations: [],
     toolResults: [],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -139,7 +138,6 @@ function transcriptWithFacts(id: string): ParsedFileFragment {
         position: position(3),
       },
     ],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   };

@@ -37,7 +37,7 @@ describe("cowork sidechain guard (#118)", () => {
     if (parsed.status !== "current") throw new Error("expected current Cowork transcript");
     const facts = parsed.fragment.facts;
     // Only the human prompt is a task candidate; the sidechain worker prompt is excluded.
-    expect(facts.taskCandidates.map((task) => task.text)).toEqual(["build the feature"]);
+    expect(facts.prompts!.filter((p) => p.text).map((task) => task.text)).toEqual(["build the feature"]);
     // The sidechain turn is loop content: it opens no interaction, so only the human prompt marker
     // is emitted (a single session id means we can't route it elsewhere — see #128).
     expect(facts.prompts?.map((prompt) => prompt.initiator)).toEqual(["human"]);
@@ -83,7 +83,7 @@ describe("cowork live-prompt indexing (#131)", () => {
     expect(session.userMessages).toBe(1);
     expect(session.agentMessages).toBe(1);
     expect(session.rawTurns).toBe(1);
-    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Fix the login bug"]);
+    expect(facts.prompts!.filter((p) => p.text).map((t) => t.text)).toEqual(["Fix the login bug"]);
   });
 
   test("a never-resumed session (only live prompts) still reports title, counts, tasks", () => {
@@ -98,7 +98,7 @@ describe("cowork live-prompt indexing (#131)", () => {
     expect(session.firstPrompt).toBe("Add a dark mode toggle");
     expect(session.userMessages).toBe(2);
     expect(session.agentMessages).toBe(2);
-    expect(facts.taskCandidates.map((t) => t.text)).toEqual([
+    expect(facts.prompts!.filter((p) => p.text).map((t) => t.text)).toEqual([
       "Add a dark mode toggle",
       "Also persist the preference",
     ]);
@@ -115,7 +115,7 @@ describe("cowork live-prompt indexing (#131)", () => {
     expect(session.firstPrompt).toBe("Set up the project");
     expect(session.userMessages).toBe(1);
     expect(session.agentMessages).toBe(1);
-    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Set up the project"]);
+    expect(facts.prompts!.filter((p) => p.text).map((t) => t.text)).toEqual(["Set up the project"]);
   });
 
   test("replays never count a turn even without a uuid (defensive)", () => {
@@ -129,7 +129,7 @@ describe("cowork live-prompt indexing (#131)", () => {
     ]);
     const session = facts.sessions[0]!;
     expect(session.userMessages).toBe(1);
-    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["Ship it"]);
+    expect(facts.prompts!.filter((p) => p.text).map((t) => t.text)).toEqual(["Ship it"]);
   });
 
   test("a tool_result carried only by the replayed copy is still extracted", () => {
@@ -171,7 +171,7 @@ describe("cowork live-prompt indexing (#131)", () => {
     const session = facts.sessions[0]!;
     expect(session.firstPrompt).toBe("the real prompt");
     expect(session.userMessages).toBe(1);
-    expect(facts.taskCandidates.map((t) => t.text)).toEqual(["the real prompt"]);
+    expect(facts.prompts!.filter((p) => p.text).map((t) => t.text)).toEqual(["the real prompt"]);
   });
 });
 
@@ -286,11 +286,11 @@ describe("parseCoworkTranscriptFile", () => {
       const result = parseCoworkTranscriptFile(file);
       if (result.status !== "current") throw new Error("parse failed");
       // Each prompt appears as a live event and a replayed copy sharing a uuid; dedup keeps one.
-      expect(result.fragment.facts.taskCandidates.map((task) => task.text)).toEqual([
+      expect(result.fragment.facts.prompts!.filter((p) => p.text).map((task) => task.text)).toEqual([
         "Hello",
         "Do something",
       ]);
-      expect(result.fragment.facts.taskCandidates.map((task) => task.timestampMs)).toEqual([
+      expect(result.fragment.facts.prompts!.filter((p) => p.text).map((task) => task.timestampMs)).toEqual([
         Date.parse("2026-05-23T10:00:01.000Z"),
         Date.parse("2026-05-23T10:00:11.000Z"),
       ]);

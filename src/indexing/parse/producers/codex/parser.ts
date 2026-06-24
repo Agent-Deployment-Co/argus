@@ -21,7 +21,6 @@ import {
   type ParserDiagnostic,
   type SourcePosition,
   type StableFileSnapshot,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -530,7 +529,6 @@ export function parseCodexTranscript(
   const messages: UsageFact[] = [];
   const invocations: InvocationFact[] = [];
   const prompts: PromptFact[] = [];
-  const taskCandidates: TaskCandidateFact[] = [];
   const rawTurnIds = new Set<string>();
   let rawTurnsWithoutId = 0;
   let userMessageEvents = 0;
@@ -585,29 +583,22 @@ export function parseCodexTranscript(
       // we observe — no cross-file replay, so there's no replay-stable id; reconcile dedups by
       // position. If Codex ever resumes across rollout files, a stable dedupKey would be needed here.
       if (taskText && !generatedTitle) {
+        // The prompt carries task text (#122) when this opening is a task start (past the noise
+        // filter) — the sole source of task candidates; codex has no subagents, so all openings are
+        // human-initiated. firstPrompt titles the session from the first task-eligible turn (#131).
+        const isTaskStart = !shouldSkipTaskMessage(records, recordIndex, taskText);
+        if (isTaskStart && !firstPrompt) firstPrompt = textFromCodexContent(payload.content);
         prompts.push(
           buildPromptFact({
             source: "codex",
             sourceSessionId,
             position: record.position,
             timestampMs: timestampMs(record.value.timestamp),
+            text: isTaskStart ? taskText : undefined,
           }),
         );
       }
       if (!firstPrompt && generatedTitle) firstPrompt = generatedTitle;
-      if (taskText && !shouldSkipTaskMessage(records, recordIndex, taskText)) {
-        if (!firstPrompt) firstPrompt = textFromCodexContent(payload.content);
-        const taskTimestamp = timestampMs(record.value.timestamp);
-        const task: TaskCandidateFact = {
-          id: createFactId("task_candidate", "codex", sourceSessionId, record.position, "user_message"),
-          source: "codex",
-          sourceSessionId,
-          text: taskText,
-          position: record.position,
-        };
-        if (taskTimestamp != null) task.timestampMs = taskTimestamp;
-        taskCandidates.push(task);
-      }
       continue;
     }
 
@@ -787,7 +778,6 @@ export function parseCodexTranscript(
     messages,
     invocations,
     toolResults,
-    taskCandidates,
     tasks: [],
     relationships: [],
   };

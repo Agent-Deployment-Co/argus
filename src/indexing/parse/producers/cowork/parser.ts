@@ -20,7 +20,6 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -467,7 +466,6 @@ function parseCoworkTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -564,6 +562,9 @@ function parseCoworkTranscript(
     }
     // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns.
     if (taskText && !generatedTitle && !agentInitiated) {
+      // The prompt carries task text (#122) when this opening is a task start (past the noise filter)
+      // — the sole source of task candidates; there is no separate candidate fact.
+      const isTaskStart = !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId));
       facts.prompts!.push(
         buildPromptFact({
           source: "cowork",
@@ -572,26 +573,12 @@ function parseCoworkTranscript(
           kind: sessionFact.kind,
           timestampMs: ts,
           dedupKey: uuid,
+          text: isTaskStart ? taskText : undefined,
         }),
       );
     }
     if (generatedTitle && !sessionFact.firstPrompt) {
       sessionFact.firstPrompt = generatedTitle;
-    }
-    if (
-      taskText &&
-      !agentInitiated &&
-      !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId))
-    ) {
-      const task: TaskCandidateFact = {
-        id: createFactId("task_candidate", "cowork", sourceSessionId, record.position, "user_message"),
-        source: "cowork",
-        sourceSessionId,
-        text: taskText,
-        position: record.position,
-        timestampMs: ts,
-      };
-      facts.taskCandidates.push(task);
     }
   };
 

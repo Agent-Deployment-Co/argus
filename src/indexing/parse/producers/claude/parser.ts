@@ -28,7 +28,6 @@ import {
   type ParserDiagnostic,
   type SessionFact,
   type SourcePosition,
-  type TaskCandidateFact,
   type ToolResultFact,
   type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
@@ -752,7 +751,6 @@ function parseTranscript(
     messages: [],
     invocations: [],
     toolResults: [],
-    taskCandidates: [],
     tasks: [],
     relationships: [],
   };
@@ -889,10 +887,19 @@ function parseTranscript(
       if (isCountableClaudeUserMessage(record.value)) {
         session.fact.userMessages = (session.fact.userMessages ?? 0) + 1;
         // Interaction-opening prompt marker (#117). Skip Argus's own analysis/extraction prompts —
-        // they aren't human turns and would open phantom interactions (same exclusion the
-        // task-candidate path applies). A subagent session's prompts are agent-initiated (so reconcile
-        // won't open a folded interaction for them) — derived centrally from the session kind.
+        // they aren't human turns and would open phantom interactions. A subagent session's prompts
+        // are agent-initiated (so reconcile won't open a folded interaction for them) — derived
+        // centrally from the session kind.
         if (!generatedTitle) {
+          // The prompt carries task text (#122) when this opening is a task start: human-initiated
+          // (not a subagent's agent-authored prompt — #100/#118) and past the noise filter. That text
+          // is the sole source of task candidates; there is no separate TaskCandidateFact.
+          const taskStartText =
+            taskText &&
+            !isAgentInitiated(session.fact.kind) &&
+            !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
+              ? taskText
+              : undefined;
           facts.prompts!.push(
             buildPromptFact({
               source: "claude",
@@ -901,38 +908,13 @@ function parseTranscript(
               kind: session.fact.kind,
               timestampMs: timestampMs(record.value.timestamp),
               dedupKey: typeof record.value.uuid === "string" ? record.value.uuid : undefined,
+              text: taskStartText,
             }),
           );
         }
       }
       if (generatedTitle && !session.fact.firstPrompt) {
         session.fact.firstPrompt = generatedTitle;
-      }
-      // Only human-initiated prompts become task candidates (#118). A subagent session's prompts are
-      // agent-authored (the worker instruction), not human intent — and Claude folds subagents onto
-      // the parent, so emitting them would let them resurface as phantom tasks (#100). Same
-      // agent-initiated rule the prompt-fact initiator uses (isAgentInitiated).
-      if (
-        taskText &&
-        !isAgentInitiated(session.fact.kind) &&
-        !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, parentSourceSessionId))
-      ) {
-        const taskTimestamp = timestampMs(record.value.timestamp);
-        const task: TaskCandidateFact = {
-          id: createFactId(
-            "task_candidate",
-            "claude",
-            sourceSessionId,
-            record.position,
-            "user_message",
-          ),
-          source: "claude",
-          sourceSessionId,
-          text: taskText,
-          position: record.position,
-        };
-        if (Number.isFinite(taskTimestamp)) task.timestampMs = taskTimestamp;
-        facts.taskCandidates.push(task);
       }
 
       for (const [itemIndex, part] of content.entries()) {
