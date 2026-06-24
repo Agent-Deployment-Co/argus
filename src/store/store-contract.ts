@@ -172,6 +172,10 @@ export interface UsageFact {
   attributionSkill: string | null;
   /** Assistant stop_reason — first non-null value across the message's streamed lines. */
   stopReason?: string;
+  /** The assistant turn's text (#122/#120), in-memory only — reconcile reads it onto the owning
+   *  interaction's responseText and it is never stored on this fact. For sources that split usage from
+   *  message text (codex meters on token_count events), the producer carries the turn's text here. */
+  text?: string;
   position: SourcePosition;
 }
 
@@ -209,10 +213,10 @@ export interface PromptFact {
    *  position when the source has no stable id. */
   dedupKey?: string;
   /** The human prompt's text, set ONLY for human-initiated openings that pass the task noise filter —
-   *  i.e. the interaction openings that are task starts (#122). This is the *sole* source of task
-   *  candidates: reconcile turns these into the per-session {@link TaskPrompt} list. In-memory only —
-   *  never written to the store (the stored InteractionFact stays text-free). Absent on agent/harness
-   *  openings and on filtered-out human turns (AGENTS.md / env-context / aborted / Argus-generated). */
+   *  i.e. the interaction openings that are task starts (#122). Reconcile copies it onto the opened
+   *  interaction's promptText (the sole source of task candidates). In-memory only — never written to
+   *  the store (the stored InteractionFact stays text-free). Absent on agent/harness openings and on
+   *  filtered-out human turns (AGENTS.md / env-context / aborted / Argus-generated). */
   text?: string;
   position: SourcePosition;
 }
@@ -241,6 +245,13 @@ export interface InteractionFact {
   promptPosition: SourcePosition;
   /** Position of the response slot, when the interaction produced one (absent if interrupted/incomplete). */
   responsePosition?: SourcePosition;
+  /** The opening prompt's text, for human-initiated task-start interactions (#122). In-memory only:
+   *  the Interpret stage reads it (pass-1 segmentation + pass-2 dialogue); never stored until #120's
+   *  opt-in retention. Absent on agent/harness openings and noise-filtered human turns. */
+  promptText?: string;
+  /** The response slot's text (the interaction's final own-session assistant turn), when present.
+   *  In-memory only — pass-2 dialogue projection; persisted only under #120's opt-in retention. */
+  responseText?: string;
   position: SourcePosition;
 }
 
@@ -304,25 +315,6 @@ export interface TaskFact {
   signals?: string[];
   /** One-line rationale for the outcome judgement. */
   outcomeReason?: string;
-  position: SourcePosition;
-}
-
-/**
- * The pass-1 task-extraction input (#122): one human-initiated interaction opening that is a task
- * start, carrying its prompt text. Reconcile derives these from the human {@link PromptFact}s that
- * open interactions — there is no separate "task candidate" fact path; a task candidate *is* an
- * interaction opening. In-memory only (text is never stored). Pass 1 segments these into tasks, and a
- * task's owning interactions are the ones it references (so every task anchors to a real interaction).
- */
-export interface TaskPrompt {
-  source: AgentSource;
-  /** The opening interaction's seq within its session (resolved_interactions.seq). */
-  interactionSeq: number;
-  /** The interaction's opening timestamp (equals InteractionFact.timestampMs), so the task it anchors
-   *  bookmarks onto that interaction. */
-  timestampMs?: number;
-  /** The human prompt's text, fed to the segmenter. */
-  text: string;
   position: SourcePosition;
 }
 
@@ -550,11 +542,10 @@ export interface MaterializeSession {
   meta: SessionMeta;
   messages: MessageRecord[];
   tasks?: TaskFact[];
-  /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions. */
+  /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions.
+   *  Each carries in-memory promptText/responseText (#122) the Interpret stage reads; materialize
+   *  strips that text (not stored until #120's opt-in retention). */
   interactions?: InteractionFact[];
-  /** Pass-1 task-extraction input (#122): the session's human interaction openings + prompt text,
-   *  derived by reconcile. In-memory only — the Interpret stage reads it; materialize never stores it. */
-  taskPrompts?: TaskPrompt[];
 }
 
 /** Per-source freshness attestation. */

@@ -42,7 +42,6 @@ import {
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage, type Usage } from "../../../../types.ts";
 
 export const CLAUDE_PROJECTS_ROOT_ID = "claude-projects";
@@ -499,54 +498,6 @@ export function discoverClaudeSessionTranscripts(mainTranscriptPath: string): st
   return files;
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Claude JSONL transcript (#91). Reuses the same
- * "real user turn" gate as task-candidate extraction so the user half matches, takes assistant text
- * blocks (tool_use parts contribute no text), and dedupes resumed-session replays by message id.
- */
-export function reconstructClaudeDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const turns: DialogueTurn[] = [];
-  const seenAssistant = new Set<string>();
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let value: Record<string, any>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      value = parsed;
-    } catch {
-      continue;
-    }
-    const ts = timestampMs(value.timestamp);
-    if (value.type === "user") {
-      if (!isCountableClaudeUserMessage(value)) continue;
-      const turn = dialogueTurn("user", textFromUserContent(value.message?.content), ts);
-      if (turn) turns.push(turn);
-    } else if (value.type === "assistant") {
-      // A single assistant message (one message.id) is often split across records — e.g. a tool_use
-      // record carrying no dialogue text, then the record with the answer text. Only let a NON-EMPTY
-      // turn claim the dedup slot, otherwise the leading empty/tool-only record marks the id as seen
-      // and the real answer (same id) gets dropped — which made pass-2 outcome judging conclude the
-      // assistant never responded. Dedup still drops resumed/compacted re-appends: first non-empty
-      // occurrence per id wins.
-      const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
-      if (!turn) continue;
-      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
-      if (id) {
-        if (seenAssistant.has(id)) continue;
-        seenAssistant.add(id);
-      }
-      turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 function numberOrZero(value: unknown): number {
   const number = Number(value);
@@ -727,6 +678,11 @@ function createUsageFact(
         : null,
     ...(typeof record.value.message?.stop_reason === "string"
       ? { stopReason: record.value.message.stop_reason }
+      : {}),
+    // Assistant text (#122), in-memory: reconcile reads the response-slot turn's text onto the
+    // interaction's responseText for the pass-2 dialogue projection; never stored on the usage row.
+    ...(textFromUserContent(record.value.message?.content)
+      ? { text: textFromUserContent(record.value.message?.content) }
       : {}),
     position: record.position,
   };

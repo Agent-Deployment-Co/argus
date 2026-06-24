@@ -47,7 +47,6 @@ import {
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage, totalTokens, type Usage } from "../../../../types.ts";
 
 export const GEMINI_TRANSCRIPT_ROOT_ID = "gemini-chats";
@@ -553,41 +552,6 @@ export function normalizeGeminiUsage(raw: any): Usage {
   return usage;
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Gemini transcript (#91). Reuses the producer's own
- * append-only replay (legacy .json object or JSONL with rewind/$set), then maps user/gemini records
- * to turns — so the file-format knowledge stays here, not duplicated in the dialogue consumer.
- */
-export function reconstructGeminiDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const file = createFileIdentity({
-    source: "gemini",
-    rootId: "",
-    role: "transcript",
-    relativePath: path,
-    path,
-  });
-  const { conversation } = replayGeminiConversation(raw, file);
-  if (!conversation) return [];
-  const turns: DialogueTurn[] = [];
-  for (const positioned of conversation.messages) {
-    const message = positioned.value;
-    const ts = parseTimestamp(message.timestamp);
-    if (message.type === "user") {
-      const turn = dialogueTurn("user", textFromGeminiContent(message.content, TASK_TEXT_LIMIT), ts);
-      if (turn) turns.push(turn);
-    } else if (message.type === "gemini") {
-      const turn = dialogueTurn("assistant", textFromGeminiContent(message.content, TASK_TEXT_LIMIT), ts);
-      if (turn) turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 export function textFromGeminiContent(content: unknown, limit = 500): string {
   return textFromUserContent(content, limit);
@@ -1077,6 +1041,10 @@ function factsFromConversation(
       usage,
       ...(cwd ? { cwd } : {}),
       attributionSkill: null,
+      // Assistant text (#122), in-memory: becomes the interaction's responseText for pass-2 dialogue.
+      ...(textFromGeminiContent(message.content, TASK_TEXT_LIMIT)
+        ? { text: textFromGeminiContent(message.content, TASK_TEXT_LIMIT) }
+        : {}),
       position: positioned.position,
     });
     const related = invocationFacts(positioned, sourceSessionId, messageId, timestampMs);

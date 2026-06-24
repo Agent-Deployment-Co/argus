@@ -36,7 +36,6 @@ import {
   textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
-import { dialogueTurn, type DialogueTurn } from "../../../interpret/dialogue.ts";
 import { emptyUsage } from "../../../../types.ts";
 import {
   estimateClaudeResultTokens,
@@ -117,57 +116,6 @@ function timestampMs(value: unknown): number {
   return Date.parse(value);
 }
 
-/**
- * Reconstruct the human↔assistant dialogue from a Cowork JSONL transcript (#91). Same shape as
- * Claude (message.content), but timestamps fall back to _audit_timestamp and replayed user events
- * (isReplay) are skipped so resumed sessions don't double-count.
- */
-export function reconstructCoworkDialogue(path: string): DialogueTurn[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return [];
-  }
-  const turns: DialogueTurn[] = [];
-  const seenAssistant = new Set<string>();
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let value: Record<string, any>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      value = parsed;
-    } catch {
-      continue;
-    }
-    const ts = timestampMs(value.timestamp ?? value._audit_timestamp);
-    if (value.type === "user") {
-      if (value.isReplay === true) continue;
-      const content = value.message?.content;
-      if (hasClaudeToolResultContent(content)) continue;
-      const text = textFromUserContent(content);
-      if (text && !isClaudeGeneratedContextText(text)) {
-        const turn = dialogueTurn("user", text, ts);
-        if (turn) turns.push(turn);
-      }
-    } else if (value.type === "assistant") {
-      // Same fix as the Claude parser: a single assistant message is often split across records (a
-      // tool_use record with no text, then the text record), so only let a NON-EMPTY turn claim the
-      // dedup slot — otherwise the answer record (same id) is dropped and outcome judging thinks the
-      // assistant never replied. First non-empty occurrence per id wins (re-appends still dedup).
-      const turn = dialogueTurn("assistant", textFromUserContent(value.message?.content), ts);
-      if (!turn) continue;
-      const id = typeof value.message?.id === "string" ? value.message.id : undefined;
-      if (id) {
-        if (seenAssistant.has(id)) continue;
-        seenAssistant.add(id);
-      }
-      turns.push(turn);
-    }
-  }
-  return turns;
-}
 
 function diagnostic(
   code: string,
@@ -526,9 +474,7 @@ function parseCoworkTranscript(
       });
     }
 
-    // Turn-level facts (counts, prompt marker, task candidate, firstPrompt) come from LIVE events
-    // only. reconstructCoworkDialogue (used for task interpretation) drops every replay, so taking
-    // turns from live events keeps the indexed turns and the judged dialogue in agreement, and a
+    // Turn-level facts (counts, prompt marker + text, firstPrompt) come from LIVE events only, so a
     // replayed copy can never double-count a turn regardless of whether it carries a uuid (#131).
     // A truly bare placeholder (no isReplay, no timestamp/_audit_timestamp) isn't a real turn.
     if (record.value.isReplay === true || !Number.isFinite(ts)) return;
@@ -747,6 +693,10 @@ function parseCoworkTranscript(
           : null,
       ...(typeof record.value.message?.stop_reason === "string"
         ? { stopReason: record.value.message.stop_reason }
+        : {}),
+      // Assistant text (#122), in-memory: becomes the interaction's responseText for pass-2 dialogue.
+      ...(textFromUserContent(record.value.message?.content)
+        ? { text: textFromUserContent(record.value.message?.content) }
         : {}),
       position: record.position,
     };
