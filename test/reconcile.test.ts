@@ -107,6 +107,27 @@ describe("reconcile derives interactions (#117)", () => {
   });
 });
 
+describe("codex responseText accumulates a turn's messages and doesn't leak across interactions (#122)", () => {
+  // codex-resp: turn 1's response streams as two assistant message records before the token_count
+  // flush (must accumulate, not last-win); then an unflushed "orphan" assistant message precedes the
+  // next user prompt (must NOT leak onto interaction 1's response).
+  const fragments = fragmentsFromDiscovery(
+    discoverCodexFiles(join(FIXTURES, "codex-response-text")),
+    parseCodexTranscriptPath,
+  );
+  const { interactions } = reconcileSessions({
+    caps: codexProducer.capabilities,
+    fragments,
+    auxiliaryFragments: [],
+  });
+
+  test("accumulates multi-message responses and drops orphaned text on the next prompt", () => {
+    expect(interactions.length).toBe(2);
+    expect(interactions[0]!.responseText).toBe("part one\npart two");
+    expect(interactions[1]!.responseText).toBe("answer two");
+  });
+});
+
 describe("interaction responseText captures the assistant's prose (#122)", () => {
   // resp1: one prompt; the answer streams as a same-id split — a `thinking` chunk carries the usage
   // (and wins dedup) while the `text` chunk carries "here is the answer" — and the interaction then

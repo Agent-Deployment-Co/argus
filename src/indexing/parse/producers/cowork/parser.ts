@@ -506,8 +506,17 @@ function parseCoworkTranscript(
       sessionFact.userMessages = (sessionFact.userMessages ?? 0) + 1;
       if (taskText && !sessionFact.firstPrompt) sessionFact.firstPrompt = taskText;
     }
-    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns.
-    if (taskText && !generatedTitle && !agentInitiated) {
+    // Interaction-opening prompt marker (#117). Skip Argus's own prompts and agent-authored turns,
+    // and — like the count/title path's isCountableClaudeUserMessage — tool-result deliveries and
+    // Claude-injected context blobs, so harness/tool text never opens an interaction or becomes a task
+    // candidate (its promptText would otherwise feed the judge tool noise as the user's words).
+    if (
+      taskText &&
+      !generatedTitle &&
+      !agentInitiated &&
+      !hasClaudeToolResultContent(record.value.message?.content) &&
+      !isClaudeGeneratedContextText(taskText)
+    ) {
       // The prompt carries task text (#122) when this opening is a task start (past the noise filter)
       // — the sole source of task candidates; there is no separate candidate fact.
       const isTaskStart = !shouldSkipTaskCandidateText(taskText, nextUserText(recordIndex, nativeSessionId));
