@@ -11,7 +11,8 @@
 // argus.json keys camelCase — and the names aren't mechanical transforms of each other (the enable
 // toggle is `--extract-tasks` on the CLI but `taskExtraction.enabled` in the file). So each setting
 // binds its three names explicitly via a descriptor; a generic case-converter won't do.
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
 import {
   DEFAULT_TASK_EXTRACTION_PROVIDER,
@@ -29,6 +30,12 @@ export interface ArgusConfig {
     prompt?: string;
     promptFile?: string;
     command?: string;
+  };
+  hub?: {
+    /** Argus Hub server URL, e.g. http://hub.internal:4242 */
+    url?: string;
+    /** Shared API key for Hub authentication */
+    key?: string;
   };
 }
 
@@ -127,6 +134,21 @@ function parseString(raw: unknown): string {
   return String(raw);
 }
 
+const HUB_SETTINGS = {
+  url: {
+    path: "hub.url",
+    env: "ARGUS_HUB_URL",
+    default: undefined as string | undefined,
+    parse: parseString,
+  } satisfies Setting<string | undefined>,
+  key: {
+    path: "hub.key",
+    env: "ARGUS_HUB_KEY",
+    default: undefined as string | undefined,
+    parse: parseString,
+  } satisfies Setting<string | undefined>,
+};
+
 /** The task-extraction settings, one descriptor per row of #89's setting map. */
 const TASK_SETTINGS = {
   enabled: {
@@ -172,6 +194,37 @@ const TASK_SETTINGS = {
     parse: parseString,
   } satisfies Setting<string | undefined>,
 };
+
+/** All known settings keyed by dotted argus.json path — used by `argus config get/set/list`. */
+export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries(
+  [...Object.values(TASK_SETTINGS), ...Object.values(HUB_SETTINGS)].map(
+    (s) => [s.path, s as Setting<unknown>],
+  ),
+);
+
+/**
+ * Set a nested dotted path in `obj`, creating intermediate objects as needed. Mutates in place.
+ * Typically called on the result of `loadConfig()` cast to `Record<string, unknown>`, then
+ * passed to `writeConfig`.
+ */
+export function setPath(obj: Record<string, unknown>, dotted: string, value: unknown): void {
+  const keys = dotted.split(".");
+  let cur: Record<string, unknown> = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i]!;
+    if (cur[key] == null || typeof cur[key] !== "object" || Array.isArray(cur[key])) {
+      cur[key] = {};
+    }
+    cur = cur[key] as Record<string, unknown>;
+  }
+  cur[keys[keys.length - 1]!] = value;
+}
+
+/** Write `config` to `path` (default: `CONFIG_FILE`), creating the parent directory if needed. */
+export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf8");
+}
 
 /** The opt-in toggle plus the provider settings, resolved through the uniform chain. */
 export type ResolvedTaskExtraction = TaskExtractionOptions & { enabled: boolean };
