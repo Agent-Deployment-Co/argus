@@ -11,12 +11,16 @@ import {
   type TaskOutcome,
 } from "../../store/store-contract.ts";
 
-/** One turn of the pass-2 dialogue projection: a prompt (user) or response (assistant) of one
- *  interaction. The dialogue is the projection of interactions' prompt/response text (#122), not a
- *  role-tag reconstruction; no message text is ever persisted to the store. */
-export interface DialogueTurn {
-  role: "user" | "assistant";
-  text: string;
+/** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
+ *  interactions, in order — the projection of prompts+responses the session model describes (#122),
+ *  not a role-tag reconstruction. Built straight from the interactions; never persisted. */
+function interactionTurns(interactions: InteractionFact[]): Array<{ role: "user" | "assistant"; text: string }> {
+  const turns: Array<{ role: "user" | "assistant"; text: string }> = [];
+  for (const interaction of [...interactions].sort((a, b) => a.seq - b.seq)) {
+    if (interaction.promptText) turns.push({ role: "user", text: interaction.promptText });
+    if (interaction.responseText) turns.push({ role: "assistant", text: interaction.responseText });
+  }
+  return turns;
 }
 
 const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
@@ -484,10 +488,10 @@ export interface TaskOutcomeJudgment {
 
 export function buildTaskOutcomePrompt(
   description: string,
-  dialogue: DialogueTurn[],
+  interactions: InteractionFact[],
   instructions = DEFAULT_TASK_OUTCOME_PROMPT,
 ): string {
-  const turns = dialogue.map((turn) => ({ role: turn.role, text: turn.text }));
+  const turns = interactionTurns(interactions);
   return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
 }
 
@@ -518,17 +522,19 @@ export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
   return judgment;
 }
 
-/** Judge one task's outcome from its dialogue slice. Returns undefined when it can't be determined. */
+/** Judge one task's outcome from its interactions' prompt/response dialogue. Returns no judgment when
+ *  extraction is off or the task's interactions carry no text. */
 export async function judgeTaskOutcome(
   description: string,
-  dialogue: DialogueTurn[],
+  interactions: InteractionFact[],
   options: TaskExtractionOptions | undefined,
 ): Promise<{ judgment?: TaskOutcomeJudgment; diagnostics: ParserDiagnostic[] }> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
-  if (provider === "off" || dialogue.length === 0) return { diagnostics };
+  const hasText = interactions.some((i) => i.promptText || i.responseText);
+  if (provider === "off" || !hasText) return { diagnostics };
 
-  const prompt = buildTaskOutcomePrompt(description, dialogue);
+  const prompt = buildTaskOutcomePrompt(description, interactions);
   logPromptSizeEstimate(`pass 2 (outcome) "${description.slice(0, 60)}"`, prompt); // TEMP (remove)
   const result = await runProvider(provider, prompt, options);
   if (!result.ok) {
@@ -565,19 +571,6 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
   });
   await Promise.all(workers);
   return results;
-}
-
-/** Project a task's owned interactions into the dialogue fed to outcome-judging (#122): each
- *  interaction contributes its prompt (user) then response (assistant) text, in interaction order.
- *  This *is* the projection of prompts+responses the session model describes — no reconstructed,
- *  role-tag-guessed dialogue. */
-function projectInteractionDialogue(interactions: InteractionFact[]): DialogueTurn[] {
-  const turns: DialogueTurn[] = [];
-  for (const interaction of [...interactions].sort((a, b) => a.seq - b.seq)) {
-    if (interaction.promptText) turns.push({ role: "user", text: interaction.promptText });
-    if (interaction.responseText) turns.push({ role: "assistant", text: interaction.responseText });
-  }
-  return turns;
 }
 
 /**
@@ -631,7 +624,7 @@ export async function extractTasksWithOutcome(
       const task = tasks[taskIndex]!;
       const { judgment, diagnostics: outcomeDiagnostics } = await judgeTaskOutcome(
         task.description,
-        projectInteractionDialogue(owned),
+        owned,
         options,
       );
       diagnostics.push(...outcomeDiagnostics);

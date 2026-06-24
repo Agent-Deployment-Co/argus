@@ -17,7 +17,7 @@ import {
 } from "../src/store/store-contract.ts";
 
 // Pass-1 input is the session's human interaction openings (#122) — each carrying its prompt text.
-function candidate(seq: number, promptText: string, timestampMs?: number): InteractionFact {
+function candidate(seq: number, promptText: string, timestampMs?: number, responseText?: string): InteractionFact {
   return {
     id: `i${seq}`,
     source: "codex",
@@ -30,6 +30,7 @@ function candidate(seq: number, promptText: string, timestampMs?: number): Inter
     position: { originKey: "file:codex-one", recordIndex: 2 + seq * 2, itemIndex: 0 },
     promptText,
     ...(timestampMs != null ? { timestampMs } : {}),
+    ...(responseText != null ? { responseText } : {}),
   };
 }
 const candidates: InteractionFact[] = [
@@ -134,18 +135,16 @@ describe("task outcome (pass 2)", () => {
     expect(parseTaskOutcomeOutput('{"outcome":"weird"}')).toEqual({ outcome: "unclear", frustration: "none" });
   });
 
-  test("builds a prompt carrying the task and role-tagged dialogue", () => {
-    const prompt = buildTaskOutcomePrompt("Add a facts command", [
-      { role: "user", text: "add it" },
-      { role: "assistant", text: "done" },
-    ]);
+  test("builds a prompt carrying the task and the interactions' prompt/response dialogue", () => {
+    const prompt = buildTaskOutcomePrompt("Add a facts command", [candidate(0, "add it", undefined, "done")]);
     expect(prompt).toContain("Task: Add a facts command");
     expect(prompt).toContain('"role": "user"');
     expect(prompt).toContain('"text": "done"');
   });
 
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {
-    expect(await judgeTaskOutcome("t", [{ role: "user", text: "x" }], { provider: "off" })).toEqual({
+    // Provider off short-circuits even with text; no-text interactions short-circuit even with a provider.
+    expect(await judgeTaskOutcome("t", [candidate(0, "x")], { provider: "off" })).toEqual({
       diagnostics: [],
     });
     expect(await judgeTaskOutcome("t", [], { provider: "claude" })).toEqual({ diagnostics: [] });

@@ -8,6 +8,24 @@ import {
   taskOutcomePromptTitle,
 } from "../src/indexing/interpret/task-candidates.ts";
 import { buildTaskOutcomePrompt } from "../src/indexing/interpret/task-extraction.ts";
+import type { InteractionFact } from "../src/store/store-contract.ts";
+
+/** A minimal human interaction carrying prompt + response text, for the outcome-prompt builder. */
+function interaction(promptText: string, responseText: string): InteractionFact {
+  return {
+    id: "i0",
+    source: "codex",
+    sourceSessionId: "codex:1",
+    seq: 0,
+    initiator: "human",
+    disposition: "completed",
+    compactionCount: 0,
+    promptPosition: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+    position: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+    promptText,
+    responseText,
+  };
+}
 
 describe("task candidate filtering", () => {
   test("skips Argus task extraction prompts so embedded source sessions are not re-extracted", () => {
@@ -87,8 +105,7 @@ USER: add a new session analysis mode`;
   test("recognizes the pass-2 task outcome prompt that claude -p leaves behind (#91)", () => {
     // The real generated prompt, so the detector can't drift from what task extraction emits.
     const text = buildTaskOutcomePrompt("Add a facts command", [
-      { role: "user", text: "add a facts command" },
-      { role: "assistant", text: "Done." },
+      interaction("add a facts command", "Done."),
     ]);
     expect(taskOutcomePromptTitle(text)).toBe("Task outcome run");
     expect(argusGeneratedPromptTitle(text)).toBe("Task outcome run");
