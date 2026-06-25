@@ -658,6 +658,8 @@ export interface ReadModelStore {
   resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>>;
   /** Coarse row counts for status/debug surfaces (cheap COUNT(*)s + the store schema version). */
   storeStats(): Promise<StoreStats>;
+  /** Stable per-install client id (`client-<uuid>`), generated and persisted on first call (#141). */
+  getClientId(): Promise<string>;
   /** Canonical session ids currently materialized for `owner` (present and archived). */
   resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
   /** Canonical session ids owned by some producer other than `owner`. */

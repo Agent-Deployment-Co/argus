@@ -269,6 +269,22 @@ describe("SQLite store", () => {
     await cache.close();
   });
 
+  test("getClientId persists a stable `client-<uuid>` across reopens (#141)", async () => {
+    const path = storePath();
+    const cache = await openStore({ path });
+    const id = await cache.getClientId();
+    expect(id).toMatch(/^client-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(await cache.getClientId()).toBe(id);
+    await cache.close();
+
+    const reopened = await openStore({ path });
+    try {
+      expect(await reopened.getClientId()).toBe(id);
+    } finally {
+      await reopened.close();
+    }
+  });
+
   test("keeps the last successful fragment when a transactional replace fails", async () => {
     const path = storePath();
     const cache = await openStore({ path });
