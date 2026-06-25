@@ -47,7 +47,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 16;
+export const STORE_SCHEMA_VERSION = 17;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -968,10 +968,13 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       );
     `,
   },
-  // 15 -> 16: per-Hub client-side upload cursors (#142). These cursors are operational metadata
+  // 16 -> 17: per-Hub client-side upload cursors (#142). These cursors are operational metadata
   // only; existing sessions remain upload-worthy until a Hub accepts them under the new table.
-  15: {
-    to: 16,
+  // IF NOT EXISTS is load-bearing here: a store created fresh at v16 already has this table from the
+  // base schema, and a v15 store upgraded by the buggy build that keyed this step 15 -> 16 (colliding
+  // with the claude-chat step, which won) reaches v16 without it — this step backfills both.
+  16: {
+    to: 17,
     sql: `
       CREATE TABLE IF NOT EXISTS hub_session_cursors (
         hub_url TEXT NOT NULL,
