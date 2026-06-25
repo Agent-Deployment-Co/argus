@@ -22,6 +22,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::UpdaterExt;
 
 /// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
 /// the tray menu items we update as that state changes, and a flag marking a stop as intentional
@@ -347,12 +348,69 @@ fn show_about(app: &AppHandle) {
     }
 }
 
+/// Check for a signed desktop update, install it if available, and restart to finish.
+/// Returns `Ok(true)` when an update was installed (and a restart was triggered).
+async fn install_available_update(app: AppHandle) -> Result<bool, String> {
+    let Some(update) = app
+        .updater()
+        .map_err(|e| format!("preparing updater: {e}"))?
+        .check()
+        .await
+        .map_err(|e| format!("checking for updates: {e}"))?
+    else {
+        return Ok(false);
+    };
+
+    let version = update.version.clone();
+    log::info!("installing Argus update {version}");
+    notify(
+        &app,
+        "Argus update found",
+        &format!("Installing version {version}. Argus will restart when the update is ready."),
+    );
+
+    let mut downloaded = 0u64;
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                downloaded += chunk_length as u64;
+                if let Some(content_length) = content_length {
+                    log::info!("downloaded update bytes: {downloaded}/{content_length}");
+                } else {
+                    log::info!("downloaded update bytes: {downloaded}");
+                }
+            },
+            || {
+                log::info!("update download finished");
+            },
+        )
+        .await
+        .map_err(|e| format!("installing update: {e}"))?;
+
+    stop(&app);
+    notify(&app, "Argus updated", "Restarting to finish the update.");
+    app.restart()
+}
+
+/// Check for updates once in the background at launch. Runs silently when already up to date;
+/// failures are logged but never interrupt the user (the app keeps running on the current version).
+fn check_for_updates_on_launch(app: &AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match install_available_update(handle).await {
+            Ok(true) | Ok(false) => {}
+            Err(err) => log::error!("{err}"),
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -429,6 +487,10 @@ pub fn run() {
             // Start the background work immediately so the dashboard is live by the time the user
             // clicks "Open dashboard".
             start(app.handle());
+
+            // Check for a newer signed build in the background. There's no manual "Check for
+            // updates" menu item; this launch-time check is how the app stays current.
+            check_for_updates_on_launch(app.handle());
 
             Ok(())
         })
