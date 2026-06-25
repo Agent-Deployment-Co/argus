@@ -314,10 +314,10 @@ pub fn run() {
             )?;
             let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
-            let build_id = MenuItem::with_id(
+            let version = MenuItem::with_id(
                 app,
-                "build",
-                &format!("Build {}", env!("ARGUS_BUILD_ID")),
+                "version",
+                &format!("Version {}", env!("CARGO_PKG_VERSION")),
                 false,
                 None::<&str>,
             )?;
@@ -334,7 +334,7 @@ pub fn run() {
                     &PredefinedMenuItem::separator(app)?,
                     &update,
                     &PredefinedMenuItem::separator(app)?,
-                    &build_id,
+                    &version,
                     &quit,
                 ],
             )?;
