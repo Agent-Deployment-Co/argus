@@ -11,7 +11,7 @@ use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry,
+    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_notification::NotificationExt;
@@ -210,6 +210,15 @@ fn show_about(app: &AppHandle) {
 
     match result {
         Ok(window) => {
+            let window_for_close = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Err(err) = window_for_close.hide() {
+                        log::warn!("hiding About window: {err}");
+                    }
+                }
+            });
             let _ = window.set_focus();
         }
         Err(err) => {
