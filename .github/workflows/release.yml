@@ -15,7 +15,8 @@ name: Release
 #   APPLE_SIGNING_IDENTITY                 e.g. "Developer ID Application: … (TEAMID)"
 #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
 #   WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD   Authenticode signing cert (base64 + pwd)
-#   TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD updater signing key (Phase 7; separate from OS certs)
+#   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#                                            updater signing key (separate from OS certs)
 
 on:
   push:
@@ -54,6 +55,7 @@ jobs:
     env:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      TAURI_UPDATER_ARGS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
@@ -107,9 +109,16 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Tauri updater signing. When absent, TAURI_UPDATER_ARGS stays empty and no updater
+          # artifacts are produced; the normal app/DMG build still runs.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: argus-v__VERSION__
           releaseName: Argus v__VERSION__
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          projectPath: desktop
+          tauriScript: ${{ github.workspace }}/node_modules/.bin/tauri
+          includeUpdaterJson: true
+          args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
