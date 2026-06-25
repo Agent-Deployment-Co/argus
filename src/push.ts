@@ -152,6 +152,16 @@ export interface ReadHubUploadOptions {
   onlySessionIds?: Set<string>;
 }
 
+export interface HubSessionCursorRow {
+  sessionId: string;
+  lastTs: number | null;
+}
+
+export interface HubSessionCursorSelection {
+  totalSessions: number;
+  sessions: HubSessionCursorRow[];
+}
+
 /** Read the per-install client id from argus.db's store_metadata table. Throws if the
  *  row is missing — the store creates it on first open, so absence means a malformed db. */
 export function readClientId(dbPath: string): string {
@@ -269,21 +279,99 @@ export function readSessionIds(dbPath: string): string[] {
   }
 }
 
+function shouldUploadForCursor(
+  localLastTs: number | null,
+  cursorLastTs: number | null,
+  hasCursor: boolean,
+): boolean {
+  if (!hasCursor) return true;
+  if (localLastTs === cursorLastTs) return false;
+  if (localLastTs == null || cursorLastTs == null) return true;
+  return localLastTs > cursorLastTs;
+}
+
+/** Select sessions this client has not successfully uploaded to this Hub at the current local
+ *  timestamp. Timestamp-only cursors intentionally ignore same-last_ts metadata changes; resumed
+ *  sessions with a newer last_ts are sent again in full and the Hub upsert path stays idempotent. */
+export function readChangedHubSessionIds(
+  dbPath: string,
+  hubUrl: string,
+  clientId: string,
+): HubSessionCursorSelection {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const rows = db
+      .query<{
+        session_id: string;
+        last_ts: number | null;
+        cursor_session_id: string | null;
+        cursor_last_ts: number | null;
+      }, [string, string]>(
+        `SELECT s.session_id, s.last_ts,
+                c.session_id AS cursor_session_id, c.last_ts AS cursor_last_ts
+         FROM resolved_sessions s
+         LEFT JOIN hub_session_cursors c
+           ON c.hub_url = ?
+          AND c.client_id = ?
+          AND c.session_id = s.session_id
+         ORDER BY s.last_ts, s.session_id`,
+      )
+      .all(hubUrl, clientId);
+    return {
+      totalSessions: rows.length,
+      sessions: rows
+        .filter((row) => shouldUploadForCursor(row.last_ts, row.cursor_last_ts, row.cursor_session_id != null))
+        .map((row) => ({ sessionId: row.session_id, lastTs: row.last_ts })),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/** Mark exactly the sessions accepted by the Hub. Call this only after `/api/sync` succeeds. */
+export function markHubSessionsUploaded(
+  dbPath: string,
+  hubUrl: string,
+  clientId: string,
+  sessions: HubSessionCursorRow[],
+  nowMs: number = Date.now(),
+): void {
+  if (sessions.length === 0) return;
+  const db = new Database(dbPath);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const stmt = db.query<void, [string, string, string, number | null, number]>(
+        `INSERT INTO hub_session_cursors(hub_url, client_id, session_id, last_ts, uploaded_at_ms)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(hub_url, client_id, session_id) DO UPDATE SET
+           last_ts = excluded.last_ts,
+           uploaded_at_ms = excluded.uploaded_at_ms`,
+      );
+      for (const session of sessions) {
+        stmt.run(hubUrl, clientId, session.sessionId, session.lastTs, nowMs);
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw err;
+    }
+  } finally {
+    db.close();
+  }
+}
+
 export interface PushHubOptions {
-  /** Skip the unknown-sessions probe and upload every session. */
+  /** Skip local cursor filtering and upload every session. */
   all?: boolean;
-  /** Sink for progress messages (e.g. "Hub already has N/M sessions"). */
+  /** Sink for progress messages (e.g. "Hub already has N/M sessions at the latest local timestamp"). */
   log?: (message: string) => void;
 }
 
-/** Stay well under the Hub's MAX_SESSION_IDS_PER_REQUEST (10_000). */
-const UNKNOWN_SESSIONS_PROBE_CHUNK = 5_000;
-
 /** POST session data from argus.db to a Hub ingest endpoint as JSON. The client identifies
  *  itself by its per-install `client-<uuid>` (read from argus.db's store_metadata). By default,
- *  first asks the Hub which session IDs it already has and uploads only the rest; pass
- *  `{ all: true }` to skip the probe. If the Hub returns 404 for the probe (older Hub without
- *  the endpoint), falls back to a full upload. */
+ *  local per-Hub cursors select sessions the Hub has not accepted at the current last_ts; pass
+ *  `{ all: true }` to refresh the Hub with every session. */
 export async function pushHubJson(
   hubUrl: string,
   hubKey: string,
@@ -300,42 +388,29 @@ export async function pushHubJson(
   }
 
   let onlySessionIds: Set<string> | undefined;
+  let selectedSessions: HubSessionCursorRow[] | undefined;
   if (!opts.all) {
-    let allIds: string[];
+    let selection: HubSessionCursorSelection;
     try {
-      allIds = readSessionIds(dbPath);
+      selection = readChangedHubSessionIds(dbPath, base, clientId);
     } catch (err) {
       return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
     }
-    if (allIds.length === 0) {
-      onlySessionIds = new Set();
-    } else {
-      const unknown: string[] = [];
-      let probeFailedWithFallback = false;
-      for (let i = 0; i < allIds.length; i += UNKNOWN_SESSIONS_PROBE_CHUNK) {
-        const slice = allIds.slice(i, i + UNKNOWN_SESSIONS_PROBE_CHUNK);
-        const r = await fetchUnknownSessionIds(base, hubKey, clientId, slice);
-        if (!r.ok) {
-          if (r.status === 404) {
-            opts.log?.("Hub does not support the unknown-sessions probe; uploading all sessions.");
-            probeFailedWithFallback = true;
-            break;
-          }
-          return { ok: false, status: r.status, body: r.body };
-        }
-        unknown.push(...r.unknownSessionIds!);
-      }
-      if (!probeFailedWithFallback) {
-        onlySessionIds = new Set(unknown);
-        const known = allIds.length - onlySessionIds.size;
-        opts.log?.(`Hub already has ${known}/${allIds.length} sessions; uploading ${onlySessionIds.size}.`);
-      }
-    }
+    selectedSessions = selection.sessions;
+    onlySessionIds = new Set(selectedSessions.map((session) => session.sessionId));
+    const known = selection.totalSessions - selectedSessions.length;
+    opts.log?.(`Hub already has ${known}/${selection.totalSessions} sessions at the latest local timestamp; uploading ${selectedSessions.length}.`);
   }
 
+  let uploadedSessions: HubSessionCursorRow[];
   let body: string;
   try {
     const payload = readHubUploadPayload(dbPath, onlySessionIds ? { onlySessionIds } : {});
+    uploadedSessions = payload.rows.sessions.map((session) => ({
+      sessionId: session.session_id,
+      lastTs: session.last_ts,
+    }));
+    if (opts.all) opts.log?.(`Uploading all ${uploadedSessions.length} sessions and refreshing Hub cursors.`);
     body = JSON.stringify(payload);
   } catch (err) {
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
@@ -351,6 +426,13 @@ export async function pushHubJson(
       body,
     });
     const text = await res.text();
+    if (res.ok) {
+      try {
+        markHubSessionsUploaded(dbPath, base, clientId, uploadedSessions);
+      } catch (err) {
+        return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+      }
+    }
     return { ok: res.ok, status: res.status, body: text };
   } catch (err) {
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
