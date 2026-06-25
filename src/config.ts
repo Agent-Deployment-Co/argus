@@ -254,3 +254,22 @@ export function resolveTaskExtraction(
   if (debugLog) resolved.debugLog = debugLog;
   return resolved;
 }
+
+export interface ResolvedHubConfig {
+  url: string;
+  key: string;
+}
+
+/**
+ * Resolve Hub connection settings from env > argus.json. Returns the config only when both
+ * `hub.url` and `hub.key` are present; undefined otherwise.
+ */
+export function resolveHubConfig(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): ResolvedHubConfig | undefined {
+  const url = resolveSetting(HUB_SETTINGS.url, flags, file);
+  const key = resolveSetting(HUB_SETTINGS.key, flags, file);
+  if (url && key) return { url, key };
+  return undefined;
+}
