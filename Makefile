@@ -1,4 +1,4 @@
-.PHONY: build test typecheck publish clean dmg help
+.PHONY: build test typecheck publish clean desktop dmg help
 
 .DEFAULT_GOAL := help
 
@@ -9,6 +9,7 @@ help:
 	@echo "  typecheck  Run TypeScript type checking"
 	@echo "  publish    Build and publish to npm"
 	@echo "  clean      Remove dist/"
+	@echo "  desktop    Build the desktop app"
 	@echo "  dmg        Build a macOS DMG (requires APPLE_ID and APPLE_PASSWORD)"
 
 build:
@@ -25,6 +26,9 @@ publish: build
 
 clean:
 	rm -rf dist/
+
+desktop:
+	bun run desktop:build
 
 dmg:
 ifndef APPLE_ID
