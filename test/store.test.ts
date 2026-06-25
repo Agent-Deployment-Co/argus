@@ -252,10 +252,17 @@ describe("SQLite store", () => {
           "SELECT COUNT(*) AS count FROM index_dependencies WHERE file_id = 'claude:one'",
         )
       )?.count,
+      hubCursorTable: (
+        await rawGet<{ count: number }>(
+          db,
+          "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'hub_session_cursors'",
+        )
+      )?.count,
     }));
     expect(schema.applicationId).toBe(STORE_APPLICATION_ID);
     expect(schema.userVersion).toBe(STORE_SCHEMA_VERSION);
     expect(schema.dependencies).toBe(1);
+    expect(schema.hubCursorTable).toBe(1);
 
     if (process.platform !== "win32") {
       expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);

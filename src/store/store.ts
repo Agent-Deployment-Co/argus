@@ -384,6 +384,19 @@ const CREATE_SCHEMA_SQL = `
     ts_ms INTEGER NOT NULL,
     PRIMARY KEY (key, ts_ms)
   );
+
+  -- Per-Hub upload cursors. A row means this client got a successful response from that Hub after
+  -- sending the session at the recorded local last_ts.
+  CREATE TABLE hub_session_cursors (
+    hub_url TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_ts INTEGER,
+    uploaded_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (hub_url, client_id, session_id)
+  );
+  CREATE INDEX hub_session_cursors_hub_uploaded
+    ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
 `;
 
 /** Fact tables in the order their rows are cleared when a fragment is re-materialized. */
@@ -955,6 +968,23 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       );
     `,
   },
+  // 15 -> 16: per-Hub client-side upload cursors (#142). These cursors are operational metadata
+  // only; existing sessions remain upload-worthy until a Hub accepts them under the new table.
+  15: {
+    to: 16,
+    sql: `
+      CREATE TABLE IF NOT EXISTS hub_session_cursors (
+        hub_url TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_ts INTEGER,
+        uploaded_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (hub_url, client_id, session_id)
+      );
+      CREATE INDEX IF NOT EXISTS hub_session_cursors_hub_uploaded
+        ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
+    `,
+  },
   // 13 -> 14: per-install client id (#141). Add a generic key/value bag for store-wide metadata;
   // the client_id row is lazily generated on first open via ensureClientIdRow(), so no backfill here.
   // IF NOT EXISTS is defensive: a store created at v14 and then downgraded for a migration test
@@ -1089,6 +1119,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
     await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
+    await get(db, "SELECT hub_url, client_id, session_id, last_ts FROM hub_session_cursors LIMIT 1");
   } catch (error) {
     if (!(error instanceof SQLiteError)) throw error;
     // Busy/corrupt errors propagate so asStoreError can classify them; anything else

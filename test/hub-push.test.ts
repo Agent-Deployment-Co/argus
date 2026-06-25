@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { fetchUnknownSessionIds, pushHubJson, readClientId, readHubUploadPayload, readSessionIds } from "../src/push.ts";
+import { fetchUnknownSessionIds, pushHubJson, readChangedHubSessionIds, readClientId, readHubUploadPayload, readSessionIds } from "../src/push.ts";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "../src/store/store.ts";
 
 const TEST_CLIENT_ID = `client-${randomUUID()}`;
@@ -22,8 +22,9 @@ function tempDir(): string {
 }
 
 /** Build a minimal argus.db with one session + one usage row and return its path. */
-function buildArgusDb(opts: { sessionId?: string; version?: number; appId?: number; clientId?: string; fingerprint?: Array<{ key: string; value: string; tsMs: number }> } = {}): string {
+function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; version?: number; appId?: number; clientId?: string; fingerprint?: Array<{ key: string; value: string; tsMs: number }> } = {}): string {
   const sessionId = opts.sessionId ?? "sess-1";
+  const lastTs = opts.lastTs === undefined ? null : opts.lastTs;
   const version = opts.version ?? STORE_SCHEMA_VERSION;
   const appId = opts.appId ?? STORE_APPLICATION_ID;
   const clientId = opts.clientId ?? TEST_CLIENT_ID;
@@ -35,6 +36,7 @@ function buildArgusDb(opts: { sessionId?: string; version?: number; appId?: numb
   db.run("CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
   db.query("INSERT INTO store_metadata(key, value) VALUES ('client_id', ?)").run(clientId);
   db.run("CREATE TABLE client_fingerprint (key TEXT NOT NULL, value TEXT NOT NULL, ts_ms INTEGER NOT NULL, PRIMARY KEY (key, ts_ms))");
+  db.run("CREATE TABLE hub_session_cursors (hub_url TEXT NOT NULL, client_id TEXT NOT NULL, session_id TEXT NOT NULL, last_ts INTEGER, uploaded_at_ms INTEGER NOT NULL, PRIMARY KEY (hub_url, client_id, session_id))");
   for (const fp of opts.fingerprint ?? []) {
     db.query("INSERT INTO client_fingerprint(key, value, ts_ms) VALUES (?, ?, ?)").run(fp.key, fp.value, fp.tsMs);
   }
@@ -62,9 +64,9 @@ function buildArgusDb(opts: { sessionId?: string; version?: number; appId?: numb
   db.run("CREATE TABLE resolved_interactions (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, initiator TEXT, disposition TEXT, compaction_count INTEGER, task_seq INTEGER, interaction_json TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_invocations (session_id TEXT, seq INTEGER, source TEXT, interaction_seq INTEGER, tool TEXT, category TEXT, mcp_server TEXT, mcp_tool TEXT, skill TEXT, file_path TEXT, date TEXT, cwd TEXT, args TEXT, approx_result_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_id, seq))");
   db.query(
-    `INSERT INTO resolved_sessions(session_id, source, project, cwd, message_count, meta_json)
-     VALUES (?, 'claude', '/p', '/p', 1, ?)`,
-  ).run(sessionId, JSON.stringify({ sessionId, source: "claude", project: "/p", cwd: "/p" }));
+    `INSERT INTO resolved_sessions(session_id, source, project, cwd, first_ts, last_ts, message_count, meta_json)
+     VALUES (?, 'claude', '/p', '/p', 1000000, ?, 1, ?)`,
+  ).run(sessionId, lastTs, JSON.stringify({ sessionId, source: "claude", project: "/p", cwd: "/p" }));
   db.query(
     `INSERT INTO resolved_usage(session_id, seq, source, ts, date, cwd, project, record_json,
        input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h, model)
@@ -72,6 +74,19 @@ function buildArgusDb(opts: { sessionId?: string; version?: number; appId?: numb
   ).run(sessionId, JSON.stringify({ sessionId, ts: 1_000_000 }));
   db.close();
   return path;
+}
+
+function cursorRows(path: string): Array<{ hub_url: string; client_id: string; session_id: string; last_ts: number | null }> {
+  const db = new Database(path, { readonly: true });
+  try {
+    return db
+      .query<{ hub_url: string; client_id: string; session_id: string; last_ts: number | null }, []>(
+        "SELECT hub_url, client_id, session_id, last_ts FROM hub_session_cursors ORDER BY hub_url, session_id",
+      )
+      .all();
+  } finally {
+    db.close();
+  }
 }
 
 // ---- readHubUploadPayload --------------------------------------------------------------
@@ -268,13 +283,12 @@ describe("fetchUnknownSessionIds", () => {
   });
 });
 
-// ---- pushHubJson + probe optimization --------------------------------------------------
+// ---- pushHubJson + cursor optimization -------------------------------------------------
 
 interface CapturedRequest { url: string; body: any }
 
-/** Mock fetch that routes by URL: probe returns the given unknown list; sync captures the body. */
+/** Mock fetch that captures each sync body. */
 function routedFetch(
-  unknownFor: (sessionIds: string[]) => string[] | { status: number; body: string },
   syncResponse: { ok: boolean; status: number; body: string } = { ok: true, status: 200, body: '{"sessionsUpserted":0,"usersKnown":1}' },
 ): { fetch: typeof fetch; calls: CapturedRequest[] } {
   const calls: CapturedRequest[] = [];
@@ -282,83 +296,117 @@ function routedFetch(
     const u = String(url);
     const body = options?.body ? JSON.parse(String(options.body)) : undefined;
     calls.push({ url: u, body });
-    if (u.endsWith("/api/sync/unknown-sessions")) {
-      const r = unknownFor(body.sessionIds ?? []);
-      if (Array.isArray(r)) return { ok: true, status: 200, text: async () => JSON.stringify({ unknownSessionIds: r }) } as Response;
-      return { ok: false, status: r.status, text: async () => r.body } as Response;
-    }
     return { ok: syncResponse.ok, status: syncResponse.status, text: async () => syncResponse.body } as Response;
   }) as any;
   return { fetch: fn, calls };
 }
 
-describe("pushHubJson with unknown-sessions probe", () => {
-  test("probes the Hub and uploads only sessions the Hub does not have", async () => {
-    const path = buildArgusDb({ sessionId: "sess-only" });
+describe("pushHubJson with client-side Hub cursors", () => {
+  test("first sync uploads every session and records a cursor after success", async () => {
+    const path = buildArgusDb({ sessionId: "sess-only", lastTs: 1_000_000 });
     const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = routedFetch((ids) => ids); // hub knows nothing → uploads all
+    const { fetch: mockFetch, calls } = routedFetch();
     globalThis.fetch = mockFetch;
     try {
       const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(true);
-      expect(calls).toHaveLength(2);
-      expect(calls[0]!.url).toBe("http://hub.test/api/sync/unknown-sessions");
-      expect(calls[0]!.body).toEqual({ sessionIds: ["sess-only"] });
-      expect(calls[1]!.url).toBe("http://hub.test/api/sync");
-      expect(calls[1]!.body.rows.sessions).toHaveLength(1);
-      expect(calls[1]!.body.rows.usage).toHaveLength(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe("http://hub.test/api/sync");
+      expect(calls[0]!.body.rows.sessions).toHaveLength(1);
+      expect(calls[0]!.body.rows.usage).toHaveLength(1);
+      expect(cursorRows(path)).toEqual([
+        { hub_url: "http://hub.test", client_id: TEST_CLIENT_ID, session_id: "sess-only", last_ts: 1_000_000 },
+      ]);
+      expect(readChangedHubSessionIds(path, "http://hub.test", TEST_CLIENT_ID).sessions).toEqual([]);
     } finally { globalThis.fetch = originalFetch; }
   });
 
-  test("filters out sessions the Hub already has from the upload payload", async () => {
-    const path = buildArgusDb({ sessionId: "sess-known" });
+  test("second sync to the same Hub uploads zero unchanged session rows", async () => {
+    const path = buildArgusDb({ sessionId: "sess-known", lastTs: 2_000_000 });
     const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = routedFetch(() => []); // hub has them all
+    const { fetch: mockFetch, calls } = routedFetch();
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", path);
-      expect(res.ok).toBe(true);
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
       expect(calls).toHaveLength(2);
       expect(calls[1]!.body.rows.sessions).toEqual([]);
       expect(calls[1]!.body.rows.usage).toEqual([]);
     } finally { globalThis.fetch = originalFetch; }
   });
 
-  test("falls back to a full upload when the probe returns 404 (older Hub)", async () => {
-    const path = buildArgusDb({ sessionId: "sess-1" });
+  test("sync to a different Hub URL uploads the same session again", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 3_000_000 });
     const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = routedFetch(() => ({ status: 404, body: "Not Found" }));
+    const { fetch: mockFetch, calls } = routedFetch();
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", path);
-      expect(res.ok).toBe(true);
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect((await pushHubJson("http://other-hub.test", "k", path)).ok).toBe(true);
       expect(calls[1]!.body.rows.sessions).toHaveLength(1);
+      expect(cursorRows(path).map((row) => row.hub_url)).toEqual(["http://hub.test", "http://other-hub.test"]);
     } finally { globalThis.fetch = originalFetch; }
   });
 
-  test("propagates a non-404 probe failure without attempting the upload", async () => {
-    const path = buildArgusDb({ sessionId: "sess-1" });
+  test("advancing last_ts causes the session to upload again", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 4_000_000 });
     const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = routedFetch(() => ({ status: 401, body: "no" }));
+    const { fetch: mockFetch, calls } = routedFetch();
+    globalThis.fetch = mockFetch;
+    try {
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      const db = new Database(path);
+      db.query("UPDATE resolved_sessions SET last_ts = ? WHERE session_id = ?").run(4_000_100, "sess-1");
+      db.close();
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect(calls[1]!.body.rows.sessions).toHaveLength(1);
+      expect(cursorRows(path)[0]!.last_ts).toBe(4_000_100);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("failed sync does not advance cursors", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 5_000_000 });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch({ ok: false, status: 500, body: "no" });
     globalThis.fetch = mockFetch;
     try {
       const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(false);
-      expect(res.status).toBe(401);
-      expect(calls).toHaveLength(1); // probe only — no sync POST
+      expect(res.status).toBe(500);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe("http://hub.test/api/sync");
+      expect(cursorRows(path)).toEqual([]);
+      expect(readChangedHubSessionIds(path, "http://hub.test", TEST_CLIENT_ID).sessions).toEqual([
+        { sessionId: "sess-1", lastTs: 5_000_000 },
+      ]);
     } finally { globalThis.fetch = originalFetch; }
   });
 
-  test("opts.all skips the probe entirely", async () => {
-    const path = buildArgusDb({ sessionId: "sess-1" });
+  test("opts.all uploads every session and refreshes cursors", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 6_000_000 });
     const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = routedFetch(() => { throw new Error("probe should not be called"); });
+    const { fetch: mockFetch, calls } = routedFetch();
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", path, { all: true });
-      expect(res.ok).toBe(true);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.url).toBe("http://hub.test/api/sync");
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect((await pushHubJson("http://hub.test", "k", path, { all: true })).ok).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]!.body.rows.sessions).toHaveLength(1);
+      expect(cursorRows(path)[0]!.last_ts).toBe(6_000_000);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("NULL last_ts uploads once, then skips while unchanged", async () => {
+    const path = buildArgusDb({ sessionId: "sess-null", lastTs: null });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch();
+    globalThis.fetch = mockFetch;
+    try {
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect(calls[0]!.body.rows.sessions).toHaveLength(1);
+      expect(calls[1]!.body.rows.sessions).toEqual([]);
+      expect(cursorRows(path)[0]!.last_ts).toBeNull();
     } finally { globalThis.fetch = originalFetch; }
   });
 });
