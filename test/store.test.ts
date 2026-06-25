@@ -269,6 +269,38 @@ describe("SQLite store", () => {
     await cache.close();
   });
 
+  test("client_fingerprint logs changes only and lists in time order (#141)", async () => {
+    const path = storePath();
+    const cache = await openStore({ path });
+    await cache.recordClientFingerprint("git.user.name", "Alice", 1000);
+    // Same value at a later time is suppressed — the log records changes, not heartbeat ticks.
+    await cache.recordClientFingerprint("git.user.name", "Alice", 2000);
+    await cache.recordClientFingerprint("git.user.name", "Bob", 3000);
+    await cache.recordClientFingerprint("env.shell", "zsh", 2500);
+    expect(await cache.listClientFingerprint()).toEqual([
+      { key: "git.user.name", value: "Alice", tsMs: 1000 },
+      { key: "env.shell", value: "zsh", tsMs: 2500 },
+      { key: "git.user.name", value: "Bob", tsMs: 3000 },
+    ]);
+    await cache.close();
+  });
+
+  test("getClientId persists a stable `client-<uuid>` across reopens (#141)", async () => {
+    const path = storePath();
+    const cache = await openStore({ path });
+    const id = await cache.getClientId();
+    expect(id).toMatch(/^client-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(await cache.getClientId()).toBe(id);
+    await cache.close();
+
+    const reopened = await openStore({ path });
+    try {
+      expect(await reopened.getClientId()).toBe(id);
+    } finally {
+      await reopened.close();
+    }
+  });
+
   test("keeps the last successful fragment when a transactional replace fails", async () => {
     const path = storePath();
     const cache = await openStore({ path });

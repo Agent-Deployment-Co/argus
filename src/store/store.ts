@@ -15,6 +15,7 @@ import type {
   StoredFragment,
   InvalidationReason,
   FragmentMetadata,
+  ClientFingerprintEntry,
   CompleteDiscovery,
   DashboardAggregates,
   Store,
@@ -46,7 +47,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 13;
+export const STORE_SCHEMA_VERSION = 15;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -365,6 +366,23 @@ const CREATE_SCHEMA_SQL = `
   CREATE TABLE session_ownership (
     session_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL
+  );
+
+  -- Single-row key/value bag for store-wide metadata (e.g. the per-install client_id).
+  -- Intentionally generic so future scalars don't each need their own table + migration.
+  CREATE TABLE store_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  -- Append-only log of client-fingerprint observations (#141 follow-up). Each row is one (key,
+  -- value, ts) tuple; a repeat write of the same value for a key is suppressed in the writer so
+  -- only changes accumulate. Used later to register clients with the dashboard backend.
+  CREATE TABLE client_fingerprint (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    ts_ms INTEGER NOT NULL,
+    PRIMARY KEY (key, ts_ms)
   );
 `;
 
@@ -923,6 +941,33 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ALTER TABLE resolved_usage DROP COLUMN task_seq;
     `,
   },
+  // 14 -> 15: client-fingerprint observation log (#141 follow-up). Append-only (key, value, ts)
+  // tuples used later to register a client. IF NOT EXISTS matches the v13 -> v14 step's pattern so
+  // a fresh-then-downgraded test store doesn't collide with the schema's own copy of the table.
+  14: {
+    to: 15,
+    sql: `
+      CREATE TABLE IF NOT EXISTS client_fingerprint (
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        ts_ms INTEGER NOT NULL,
+        PRIMARY KEY (key, ts_ms)
+      );
+    `,
+  },
+  // 13 -> 14: per-install client id (#141). Add a generic key/value bag for store-wide metadata;
+  // the client_id row is lazily generated on first open via ensureClientIdRow(), so no backfill here.
+  // IF NOT EXISTS is defensive: a store created at v14 and then downgraded for a migration test
+  // already has this table, and a real v13 store never does.
+  13: {
+    to: 14,
+    sql: `
+      CREATE TABLE IF NOT EXISTS store_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -944,6 +989,26 @@ async function migrateSchema(db: Database, path: string, fromVersion: number): P
     });
     version = step.to;
   }
+}
+
+/**
+ * Read the per-install client id, generating and persisting it the first time. The id is a stable
+ * `client-<uuid>` string scoped to this argus.db; an INSERT OR IGNORE means a concurrent open won't
+ * race two distinct ids in (only one row survives the unique key constraint).
+ */
+async function ensureClientIdRow(db: Database): Promise<string> {
+  const existing = await get<{ value: string }>(
+    db,
+    "SELECT value FROM store_metadata WHERE key = 'client_id'",
+  );
+  if (existing) return existing.value;
+  const id = `client-${crypto.randomUUID()}`;
+  await run(db, "INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('client_id', ?)", [id]);
+  const row = await get<{ value: string }>(
+    db,
+    "SELECT value FROM store_metadata WHERE key = 'client_id'",
+  );
+  return row?.value ?? id;
 }
 
 async function initializeDatabase(db: Database, path: string): Promise<void> {
@@ -984,6 +1049,8 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
     await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
+    await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
+    await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
   } catch (error) {
     if (!(error instanceof SQLiteError)) throw error;
     // Busy/corrupt errors propagate so asStoreError can classify them; anything else
@@ -998,6 +1065,9 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     );
   }
   secureSqliteFiles(path);
+  // Ensure the per-install client id exists from the first successful open (#141), so callers
+  // can rely on getClientId() without worrying about the bootstrap order.
+  await ensureClientIdRow(db);
 }
 
 function fragmentStorage(fragment: StoredFragment): FragmentStorage {
@@ -2178,6 +2248,40 @@ export class SqliteStore implements Store {
          FROM resolved_sessions GROUP BY owner ORDER BY owner`,
       );
       return rows.map((row) => ({ owner: row.owner, present: row.present, archived: row.archived }));
+    });
+  }
+
+  getClientId(): Promise<string> {
+    return this.schedule(() => ensureClientIdRow(this.db));
+  }
+
+  recordClientFingerprint(key: string, value: string, tsMs: number): Promise<void> {
+    return this.schedule(async () => {
+      // Suppress repeat-of-same-value: read the latest value for this key, and only insert when it
+      // actually changed. Keeps the log a record of CHANGES rather than a tick per call.
+      const latest = await get<{ value: string }>(
+        this.db,
+        "SELECT value FROM client_fingerprint WHERE key = ? ORDER BY ts_ms DESC LIMIT 1",
+        [key],
+      );
+      if (latest && latest.value === value) return;
+      // INSERT OR IGNORE on (key, ts_ms) protects against an exact-millisecond duplicate write —
+      // unlikely in practice, but cheaper than synthesizing a unique timestamp.
+      await run(
+        this.db,
+        "INSERT OR IGNORE INTO client_fingerprint (key, value, ts_ms) VALUES (?, ?, ?)",
+        [key, value, tsMs],
+      );
+    });
+  }
+
+  listClientFingerprint(): Promise<ClientFingerprintEntry[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ key: string; value: string; ts_ms: number }>(
+        this.db,
+        "SELECT key, value, ts_ms FROM client_fingerprint ORDER BY ts_ms, key",
+      );
+      return rows.map((row) => ({ key: row.key, value: row.value, tsMs: row.ts_ms }));
     });
   }
 
