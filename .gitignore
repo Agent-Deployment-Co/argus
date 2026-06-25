@@ -21,3 +21,7 @@ desktop/src-tauri/web/
 desktop/src-tauri/gen/
 # Keep the tray app's placeholder UI (its frontendDist); the *.html rule above would hide it.
 !desktop/ui/index.html
+
+# vitepress build artifacts
+docs/.vitepress/dist/
+docs/.vitepress/cache/
