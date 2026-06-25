@@ -4,8 +4,14 @@
 // local port and exposes a tray menu whose items map onto the CLI's command surface. "Open
 // dashboard" opens the user's default browser at the served URL; the only embedded webview is the
 // bundled About screen.
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int, c_void};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Mutex,
+};
 
 use tauri::{
     image::Image,
@@ -36,6 +42,60 @@ struct AppState {
 }
 
 const ABOUT_WINDOW_LABEL: &str = "about";
+
+type Sqlite3 = c_void;
+type Sqlite3Stmt = c_void;
+
+const SQLITE_OK: c_int = 0;
+const SQLITE_ROW: c_int = 100;
+const SQLITE_DONE: c_int = 101;
+const SQLITE_OPEN_READONLY: c_int = 0x0000_0001;
+
+#[link(name = "sqlite3")]
+extern "C" {
+    fn sqlite3_open_v2(
+        filename: *const c_char,
+        pp_db: *mut *mut Sqlite3,
+        flags: c_int,
+        z_vfs: *const c_char,
+    ) -> c_int;
+    fn sqlite3_close(db: *mut Sqlite3) -> c_int;
+    fn sqlite3_errmsg(db: *mut Sqlite3) -> *const c_char;
+    fn sqlite3_prepare_v2(
+        db: *mut Sqlite3,
+        z_sql: *const c_char,
+        n_byte: c_int,
+        pp_stmt: *mut *mut Sqlite3Stmt,
+        pz_tail: *mut *const c_char,
+    ) -> c_int;
+    fn sqlite3_step(stmt: *mut Sqlite3Stmt) -> c_int;
+    fn sqlite3_column_text(stmt: *mut Sqlite3Stmt, i_col: c_int) -> *const c_char;
+    fn sqlite3_finalize(stmt: *mut Sqlite3Stmt) -> c_int;
+}
+
+struct SqliteConnection {
+    raw: *mut Sqlite3,
+}
+
+impl Drop for SqliteConnection {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = sqlite3_close(self.raw);
+        }
+    }
+}
+
+struct SqliteStatement {
+    raw: *mut Sqlite3Stmt,
+}
+
+impl Drop for SqliteStatement {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = sqlite3_finalize(self.raw);
+        }
+    }
+}
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -177,20 +237,191 @@ fn open_dashboard(app: &AppHandle) {
     }
 }
 
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn home_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        non_empty_env("USERPROFILE").map(PathBuf::from).or_else(|| {
+            let drive = non_empty_env("HOMEDRIVE")?;
+            let path = non_empty_env("HOMEPATH")?;
+            Some(PathBuf::from(format!("{drive}{path}")))
+        })
+    } else {
+        non_empty_env("HOME").map(PathBuf::from)
+    }
+}
+
+fn argus_data_dir() -> Option<PathBuf> {
+    if let Some(path) = non_empty_env("ARGUS_DATA_DIR") {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(path) = non_empty_env("ARGUS_HOME") {
+        return Some(PathBuf::from(path).join("data"));
+    }
+    if let Some(path) = non_empty_env("XDG_DATA_HOME") {
+        return Some(PathBuf::from(path).join("argus"));
+    }
+    if cfg!(target_os = "macos") {
+        return home_dir().map(|dir| dir.join("Library/Application Support/argus"));
+    }
+    if cfg!(windows) {
+        if let Some(path) = non_empty_env("LOCALAPPDATA") {
+            return Some(PathBuf::from(path).join("Argus").join("Data"));
+        }
+    }
+    home_dir().map(|dir| dir.join(".local").join("share").join("argus"))
+}
+
+fn argus_store_file() -> Option<PathBuf> {
+    argus_data_dir().map(|dir| dir.join("argus.db"))
+}
+
+fn sqlite_message(db: *mut Sqlite3) -> String {
+    if db.is_null() {
+        return "unknown SQLite error".to_string();
+    }
+    unsafe {
+        let message = sqlite3_errmsg(db);
+        if message.is_null() {
+            "unknown SQLite error".to_string()
+        } else {
+            CStr::from_ptr(message).to_string_lossy().into_owned()
+        }
+    }
+}
+
+fn open_sqlite_readonly(path: &Path) -> Result<SqliteConnection, String> {
+    let path = path.to_string_lossy().into_owned();
+    let path = CString::new(path).map_err(|_| "store path contains a NUL byte".to_string())?;
+    let mut raw: *mut Sqlite3 = std::ptr::null_mut();
+    let rc = unsafe {
+        sqlite3_open_v2(
+            path.as_ptr(),
+            &mut raw,
+            SQLITE_OPEN_READONLY,
+            std::ptr::null(),
+        )
+    };
+    if rc == SQLITE_OK {
+        Ok(SqliteConnection { raw })
+    } else {
+        let message = sqlite_message(raw);
+        if !raw.is_null() {
+            unsafe {
+                let _ = sqlite3_close(raw);
+            }
+        }
+        Err(message)
+    }
+}
+
+fn read_store_client_id(path: &Path) -> Result<Option<String>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let db = open_sqlite_readonly(path)?;
+    let sql = CString::new("SELECT value FROM store_metadata WHERE key = 'client_id' LIMIT 1")
+        .expect("static SQL has no NUL bytes");
+    let mut raw_stmt: *mut Sqlite3Stmt = std::ptr::null_mut();
+    let rc = unsafe {
+        sqlite3_prepare_v2(
+            db.raw,
+            sql.as_ptr(),
+            -1,
+            &mut raw_stmt,
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != SQLITE_OK {
+        return Err(sqlite_message(db.raw));
+    }
+    let stmt = SqliteStatement { raw: raw_stmt };
+    match unsafe { sqlite3_step(stmt.raw) } {
+        SQLITE_ROW => {
+            let text = unsafe { sqlite3_column_text(stmt.raw, 0) };
+            if text.is_null() {
+                Ok(None)
+            } else {
+                let value = unsafe { CStr::from_ptr(text) }
+                    .to_string_lossy()
+                    .into_owned();
+                Ok(Some(value))
+            }
+        }
+        SQLITE_DONE => Ok(None),
+        _ => Err(sqlite_message(db.raw)),
+    }
+}
+
+fn local_client_id() -> Option<String> {
+    let path = argus_store_file()?;
+    match read_store_client_id(&path) {
+        Ok(client_id) => client_id,
+        Err(err) => {
+            log::debug!("reading the Argus client id from {}: {err}", path.display());
+            None
+        }
+    }
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn os_username() -> Option<String> {
+    non_empty_env("USER").or_else(|| non_empty_env("USERNAME"))
+}
+
+fn os_hostname() -> Option<String> {
+    non_empty_env("HOSTNAME").or_else(|| command_stdout("hostname", &[]))
+}
+
+fn sync_user_id() -> String {
+    if let Some(email) = command_stdout("git", &["config", "user.email"]) {
+        return email;
+    }
+    if let (Some(username), Some(hostname)) = (os_username(), os_hostname()) {
+        return format!("{username}@{hostname}");
+    }
+    os_username().unwrap_or_else(|| "unknown".to_string())
+}
+
+fn about_info(port: u16) -> serde_json::Value {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "buildNumber": env!("ARGUS_BUILD_ID"),
+        "dashboardUrl": format!("http://localhost:{port}"),
+        "clientId": local_client_id(),
+        "syncUserId": sync_user_id(),
+    })
+}
+
 /// Open or focus the bundled About screen. The screen is static HTML; this initialization script
 /// only supplies runtime metadata, so the webview does not need any Tauri command permissions.
 fn show_about(app: &AppHandle) {
+    let port = app.state::<AppState>().port;
     if let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) {
+        let info = about_info(port);
+        let _ = window.eval(format!(
+            "window.__ARGUS_ABOUT__ = {info}; window.__ARGUS_SET_ABOUT__?.({info});"
+        ));
         let _ = window.show();
         let _ = window.set_focus();
         return;
     }
 
-    let port = app.state::<AppState>().port;
-    let info = serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "dashboardUrl": format!("http://localhost:{port}"),
-    });
+    let info = about_info(port);
     let init_script = format!("window.__ARGUS_ABOUT__ = {info};");
 
     let result = WebviewWindowBuilder::new(
