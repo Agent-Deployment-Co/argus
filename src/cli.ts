@@ -228,7 +228,7 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
 
   const res = await pushSnapshotForOpts(opts, credentials, log);
   if (res.skipped) {
-    // pushSnapshotForOpts already logged why; nothing was uploaded, and that's not an error.
+    log(res.body); // nothing was uploaded (e.g. a local-only source); not an error
   } else if (res.ok) {
     log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
   } else if (res.isAccessChallenge) {
