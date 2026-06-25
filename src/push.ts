@@ -132,14 +132,39 @@ export interface HubUploadRows {
   invocations: HubUploadInvocation[];
 }
 
+export interface HubFingerprintEntry {
+  key: string;
+  value: string;
+  tsMs: number;
+}
+
 export interface HubUploadPayload {
   schemaVersion: number;
   rows: HubUploadRows;
+  /** Client-fingerprint observations the hub uses to attribute this client to a user.
+   *  Already changes-only (the local store dedupes repeat-same-value writes), so we send
+   *  the full log every time. */
+  fingerprint: HubFingerprintEntry[];
 }
 
 export interface ReadHubUploadOptions {
   /** If set, include only sessions whose IDs are in this set (and their child rows). */
   onlySessionIds?: Set<string>;
+}
+
+/** Read the per-install client id from argus.db's store_metadata table. Throws if the
+ *  row is missing — the store creates it on first open, so absence means a malformed db. */
+export function readClientId(dbPath: string): string {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db
+      .query<{ value: string }, []>("SELECT value FROM store_metadata WHERE key = 'client_id'")
+      .get();
+    if (!row?.value) throw new Error(`${dbPath} is missing the per-install client_id row.`);
+    return row.value;
+  } finally {
+    db.close();
+  }
 }
 
 /** Open argus.db read-only, read all resolved_* rows, return them as plain JS objects.
@@ -199,11 +224,19 @@ export function readHubUploadPayload(
       )
       .all();
 
+    const fingerprint = db
+      .query<{ key: string; value: string; ts_ms: number }, []>(
+        "SELECT key, value, ts_ms FROM client_fingerprint ORDER BY ts_ms, key",
+      )
+      .all()
+      .map((r) => ({ key: r.key, value: r.value, tsMs: r.ts_ms }));
+
     const filter = opts.onlySessionIds;
     if (!filter) {
       return {
         schemaVersion,
         rows: { sessions: allSessions, usage: allUsage, tasks: allTasks, interactions: allInteractions, invocations: allInvocations },
+        fingerprint,
       };
     }
     const keep = (sid: string) => filter.has(sid);
@@ -216,6 +249,7 @@ export function readHubUploadPayload(
         interactions: allInteractions.filter((i) => keep(i.session_id)),
         invocations: allInvocations.filter((v) => keep(v.session_id)),
       },
+      fingerprint,
     };
   } finally {
     db.close();
@@ -245,18 +279,25 @@ export interface PushHubOptions {
 /** Stay well under the Hub's MAX_SESSION_IDS_PER_REQUEST (10_000). */
 const UNKNOWN_SESSIONS_PROBE_CHUNK = 5_000;
 
-/** POST session data from argus.db to a Hub ingest endpoint as JSON. By default, first asks the
- *  Hub which session IDs it already has and uploads only the rest; pass `{ all: true }` to skip
- *  the probe. If the Hub returns 404 for the probe (older Hub without the endpoint), falls back
- *  to a full upload. */
+/** POST session data from argus.db to a Hub ingest endpoint as JSON. The client identifies
+ *  itself by its per-install `client-<uuid>` (read from argus.db's store_metadata). By default,
+ *  first asks the Hub which session IDs it already has and uploads only the rest; pass
+ *  `{ all: true }` to skip the probe. If the Hub returns 404 for the probe (older Hub without
+ *  the endpoint), falls back to a full upload. */
 export async function pushHubJson(
   hubUrl: string,
   hubKey: string,
-  userId: string,
   dbPath: string,
   opts: PushHubOptions = {},
 ): Promise<PushResult> {
   const base = hubUrl.replace(/\/+$/, "");
+
+  let clientId: string;
+  try {
+    clientId = readClientId(dbPath);
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
 
   let onlySessionIds: Set<string> | undefined;
   if (!opts.all) {
@@ -273,7 +314,7 @@ export async function pushHubJson(
       let probeFailedWithFallback = false;
       for (let i = 0; i < allIds.length; i += UNKNOWN_SESSIONS_PROBE_CHUNK) {
         const slice = allIds.slice(i, i + UNKNOWN_SESSIONS_PROBE_CHUNK);
-        const r = await fetchUnknownSessionIds(base, hubKey, userId, slice);
+        const r = await fetchUnknownSessionIds(base, hubKey, clientId, slice);
         if (!r.ok) {
           if (r.status === 404) {
             opts.log?.("Hub does not support the unknown-sessions probe; uploading all sessions.");
@@ -305,7 +346,7 @@ export async function pushHubJson(
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${hubKey}`,
-        "x-argus-user": userId,
+        "x-argus-client": clientId,
       },
       body,
     });
@@ -323,13 +364,13 @@ export interface UnknownSessionsResult {
   unknownSessionIds?: string[];
 }
 
-/** Ask the Hub which of `sessionIds` it does NOT already have for `userId`. Returns the parsed
- *  list on success, or a non-ok result describing the failure (network error, non-2xx, or a
- *  malformed body). */
+/** Ask the Hub which of `sessionIds` it does NOT already have for this client. Returns the
+ *  parsed list on success, or a non-ok result describing the failure (network error, non-2xx,
+ *  or a malformed body). */
 export async function fetchUnknownSessionIds(
   hubBaseUrl: string,
   hubKey: string,
-  userId: string,
+  clientId: string,
   sessionIds: string[],
 ): Promise<UnknownSessionsResult> {
   const url = hubBaseUrl.replace(/\/+$/, "") + "/api/sync/unknown-sessions";
@@ -340,7 +381,7 @@ export async function fetchUnknownSessionIds(
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${hubKey}`,
-        "x-argus-user": userId,
+        "x-argus-client": clientId,
       },
       body: JSON.stringify({ sessionIds }),
     });

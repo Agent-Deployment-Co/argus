@@ -113,9 +113,8 @@ export async function resolveCredentials(endpoint: string, log: Log): Promise<Pu
 export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: PushCredentials, log: Log): Promise<PushResult> {
   const hubCfg = resolveHubConfig();
   if (hubCfg) {
-    const userId = detectUser(opts.user);
-    log(`Uploading to Hub as "${userId}" → ${hubCfg.url}`);
-    return pushHubJson(hubCfg.url, hubCfg.key, userId, STORE_FILE, { all: opts.all, log });
+    log(`Uploading to Hub → ${hubCfg.url}`);
+    return pushHubJson(hubCfg.url, hubCfg.key, STORE_FILE, { all: opts.all, log });
   }
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);

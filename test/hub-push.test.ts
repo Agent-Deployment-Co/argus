@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { fetchUnknownSessionIds, pushHubJson, readHubUploadPayload, readSessionIds } from "../src/push.ts";
+import { fetchUnknownSessionIds, pushHubJson, readClientId, readHubUploadPayload, readSessionIds } from "../src/push.ts";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "../src/store/store.ts";
+
+const TEST_CLIENT_ID = `client-${randomUUID()}`;
 
 // ---- Temp dir management ---------------------------------------------------------------
 
@@ -19,15 +22,22 @@ function tempDir(): string {
 }
 
 /** Build a minimal argus.db with one session + one usage row and return its path. */
-function buildArgusDb(opts: { sessionId?: string; version?: number; appId?: number } = {}): string {
+function buildArgusDb(opts: { sessionId?: string; version?: number; appId?: number; clientId?: string; fingerprint?: Array<{ key: string; value: string; tsMs: number }> } = {}): string {
   const sessionId = opts.sessionId ?? "sess-1";
   const version = opts.version ?? STORE_SCHEMA_VERSION;
   const appId = opts.appId ?? STORE_APPLICATION_ID;
+  const clientId = opts.clientId ?? TEST_CLIENT_ID;
 
   const path = join(tempDir(), "argus.db");
   const db = new Database(path);
   db.run(`PRAGMA application_id = ${appId}`);
   db.run(`PRAGMA user_version = ${version}`);
+  db.run("CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  db.query("INSERT INTO store_metadata(key, value) VALUES ('client_id', ?)").run(clientId);
+  db.run("CREATE TABLE client_fingerprint (key TEXT NOT NULL, value TEXT NOT NULL, ts_ms INTEGER NOT NULL, PRIMARY KEY (key, ts_ms))");
+  for (const fp of opts.fingerprint ?? []) {
+    db.query("INSERT INTO client_fingerprint(key, value, ts_ms) VALUES (?, ?, ?)").run(fp.key, fp.value, fp.tsMs);
+  }
   db.run(`
     CREATE TABLE resolved_sessions (
       session_id TEXT PRIMARY KEY, source TEXT, project TEXT, cwd TEXT,
@@ -83,6 +93,27 @@ describe("readHubUploadPayload", () => {
     const path = buildArgusDb({ appId: 0 });
     expect(() => readHubUploadPayload(path)).toThrow(/not an Argus store/);
   });
+
+  test("includes the client_fingerprint log in the payload", () => {
+    const path = buildArgusDb({
+      fingerprint: [
+        { key: "claude.oauth.email", value: "alice@example.com", tsMs: 1_000 },
+        { key: "git.user.name", value: "Alice", tsMs: 2_000 },
+      ],
+    });
+    const payload = readHubUploadPayload(path);
+    expect(payload.fingerprint).toEqual([
+      { key: "claude.oauth.email", value: "alice@example.com", tsMs: 1_000 },
+      { key: "git.user.name", value: "Alice", tsMs: 2_000 },
+    ]);
+  });
+});
+
+describe("readClientId", () => {
+  test("returns the per-install client id", () => {
+    const path = buildArgusDb({ clientId: "client-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" });
+    expect(readClientId(path)).toBe("client-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+  });
 });
 
 // ---- pushHubJson ------------------------------------------------------------------------
@@ -107,17 +138,18 @@ describe("pushHubJson", () => {
     }) as any;
 
     try {
-      const res = await pushHubJson("http://hub.test:4242", "hub-test-key", "user@example.com", path, { all: true });
+      const res = await pushHubJson("http://hub.test:4242", "hub-test-key", path, { all: true });
 
       expect(res.ok).toBe(true);
       expect(res.status).toBe(200);
       expect(capturedUrl).toBe("http://hub.test:4242/api/sync");
       expect(capturedHeaders["content-type"]).toBe("application/json");
       expect(capturedHeaders["authorization"]).toBe("Bearer hub-test-key");
-      expect(capturedHeaders["x-argus-user"]).toBe("user@example.com");
-      const parsed = JSON.parse(capturedBody) as { schemaVersion: number; rows: { sessions: unknown[] } };
+      expect(capturedHeaders["x-argus-client"]).toBe(TEST_CLIENT_ID);
+      const parsed = JSON.parse(capturedBody) as { schemaVersion: number; rows: { sessions: unknown[] }; fingerprint: unknown[] };
       expect(parsed.schemaVersion).toBe(STORE_SCHEMA_VERSION);
       expect(parsed.rows.sessions).toHaveLength(1);
+      expect(parsed.fingerprint).toEqual([]);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -134,7 +166,7 @@ describe("pushHubJson", () => {
     }) as any;
 
     try {
-      await pushHubJson("http://hub.test:4242/", "key", "user@example.com", path, { all: true });
+      await pushHubJson("http://hub.test:4242/", "key", path, { all: true });
       expect(capturedUrl).toBe("http://hub.test:4242/api/sync");
     } finally {
       globalThis.fetch = originalFetch;
@@ -146,7 +178,7 @@ describe("pushHubJson", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => ({ ok: false, status: 401, text: async () => "Unauthorized" }) as Response) as any;
     try {
-      const res = await pushHubJson("http://hub.test", "bad-key", "user@example.com", path, { all: true });
+      const res = await pushHubJson("http://hub.test", "bad-key", path, { all: true });
       expect(res.ok).toBe(false);
       expect(res.status).toBe(401);
     } finally {
@@ -159,7 +191,7 @@ describe("pushHubJson", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as any;
     try {
-      const res = await pushHubJson("http://hub.test", "hub-key", "user@example.com", path, { all: true });
+      const res = await pushHubJson("http://hub.test", "hub-key", path, { all: true });
       expect(res.ok).toBe(false);
       expect(res.status).toBe(0);
       expect(res.body).toContain("ECONNREFUSED");
@@ -169,7 +201,7 @@ describe("pushHubJson", () => {
   });
 
   test("returns ok:false and status:0 when db file does not exist", async () => {
-    const res = await pushHubJson("http://hub.test", "hub-key", "user@example.com", "/nonexistent/path/argus.db", { all: true });
+    const res = await pushHubJson("http://hub.test", "hub-key", "/nonexistent/path/argus.db", { all: true });
     expect(res.ok).toBe(false);
     expect(res.status).toBe(0);
   });
@@ -199,12 +231,12 @@ describe("fetchUnknownSessionIds", () => {
       return { ok: true, status: 200, text: async () => JSON.stringify({ unknownSessionIds: ["c"] }) } as Response;
     }) as any;
     try {
-      const res = await fetchUnknownSessionIds("http://hub.test/", "k", "u@x", ["a", "b", "c"]);
+      const res = await fetchUnknownSessionIds("http://hub.test/", "k", TEST_CLIENT_ID, ["a", "b", "c"]);
       expect(res.ok).toBe(true);
       expect(res.unknownSessionIds).toEqual(["c"]);
       expect(capturedUrl).toBe("http://hub.test/api/sync/unknown-sessions");
       expect(capturedHeaders["authorization"]).toBe("Bearer k");
-      expect(capturedHeaders["x-argus-user"]).toBe("u@x");
+      expect(capturedHeaders["x-argus-client"]).toBe(TEST_CLIENT_ID);
       expect(JSON.parse(capturedBody)).toEqual({ sessionIds: ["a", "b", "c"] });
     } finally {
       globalThis.fetch = originalFetch;
@@ -215,7 +247,7 @@ describe("fetchUnknownSessionIds", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => ({ ok: false, status: 401, text: async () => "no" }) as Response) as any;
     try {
-      const res = await fetchUnknownSessionIds("http://hub.test", "k", "u@x", ["a"]);
+      const res = await fetchUnknownSessionIds("http://hub.test", "k", TEST_CLIENT_ID, ["a"]);
       expect(res.ok).toBe(false);
       expect(res.status).toBe(401);
     } finally {
@@ -227,7 +259,7 @@ describe("fetchUnknownSessionIds", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ unknownSessionIds: [1, 2] }) }) as Response) as any;
     try {
-      const res = await fetchUnknownSessionIds("http://hub.test", "k", "u@x", ["a"]);
+      const res = await fetchUnknownSessionIds("http://hub.test", "k", TEST_CLIENT_ID, ["a"]);
       expect(res.ok).toBe(false);
       expect(res.body).toMatch(/Malformed/);
     } finally {
@@ -267,7 +299,7 @@ describe("pushHubJson with unknown-sessions probe", () => {
     const { fetch: mockFetch, calls } = routedFetch((ids) => ids); // hub knows nothing → uploads all
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(true);
       expect(calls).toHaveLength(2);
       expect(calls[0]!.url).toBe("http://hub.test/api/sync/unknown-sessions");
@@ -284,7 +316,7 @@ describe("pushHubJson with unknown-sessions probe", () => {
     const { fetch: mockFetch, calls } = routedFetch(() => []); // hub has them all
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(true);
       expect(calls).toHaveLength(2);
       expect(calls[1]!.body.rows.sessions).toEqual([]);
@@ -298,7 +330,7 @@ describe("pushHubJson with unknown-sessions probe", () => {
     const { fetch: mockFetch, calls } = routedFetch(() => ({ status: 404, body: "Not Found" }));
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(true);
       expect(calls[1]!.body.rows.sessions).toHaveLength(1);
     } finally { globalThis.fetch = originalFetch; }
@@ -310,7 +342,7 @@ describe("pushHubJson with unknown-sessions probe", () => {
     const { fetch: mockFetch, calls } = routedFetch(() => ({ status: 401, body: "no" }));
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(false);
       expect(res.status).toBe(401);
       expect(calls).toHaveLength(1); // probe only — no sync POST
@@ -323,7 +355,7 @@ describe("pushHubJson with unknown-sessions probe", () => {
     const { fetch: mockFetch, calls } = routedFetch(() => { throw new Error("probe should not be called"); });
     globalThis.fetch = mockFetch;
     try {
-      const res = await pushHubJson("http://hub.test", "k", "u@x", path, { all: true });
+      const res = await pushHubJson("http://hub.test", "k", path, { all: true });
       expect(res.ok).toBe(true);
       expect(calls).toHaveLength(1);
       expect(calls[0]!.url).toBe("http://hub.test/api/sync");
