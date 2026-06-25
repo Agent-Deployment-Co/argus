@@ -122,3 +122,18 @@ jobs:
           tauriScript: ${{ github.workspace }}/node_modules/.bin/tauri
           includeUpdaterJson: true
           args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
+
+      - name: Verify updater artifacts
+        if: ${{ env.TAURI_UPDATER_ARGS != '' }}
+        run: |
+          set -euo pipefail
+          archive_count="$(find desktop/src-tauri/target -path '*/bundle/macos/*.app.tar.gz' -type f | wc -l | tr -d '[:space:]')"
+          signature_count="$(find desktop/src-tauri/target -path '*/bundle/macos/*.app.tar.gz.sig' -type f | wc -l | tr -d '[:space:]')"
+          if [ "$archive_count" -eq 0 ]; then
+            echo "No macOS updater archive (*.app.tar.gz) was produced." >&2
+            exit 1
+          fi
+          if [ "$signature_count" -eq 0 ]; then
+            echo "No macOS updater signature (*.app.tar.gz.sig) was produced." >&2
+            exit 1
+          fi
