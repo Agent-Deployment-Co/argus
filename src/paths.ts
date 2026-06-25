@@ -49,6 +49,9 @@ export const PRICING_OVERRIDE_FILE = join(ARGUS_CONFIG_DIR, "pricing.json");
 // The app-owned settings file (the config peer of argus.db). Holds general settings — not secrets
 // (token.json) or hand-authored price tables (pricing.json), which stay as their own files.
 export const CONFIG_FILE = join(ARGUS_CONFIG_DIR, "argus.json");
+// BYO LLM API keys (#132). On macOS the OS keychain is the store and this file is unused; on Windows
+// it holds DPAPI-encrypted blobs; on Linux it's a chmod-600 plaintext JSON map. Never a wire artifact.
+export const SECRETS_FILE = join(ARGUS_CONFIG_DIR, "secrets.json");
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
 export const COWORK_SESSIONS_DIR: string | undefined =
   platform === "darwin"
