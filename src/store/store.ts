@@ -46,7 +46,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 13;
+export const STORE_SCHEMA_VERSION = 14;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -365,6 +365,13 @@ const CREATE_SCHEMA_SQL = `
   CREATE TABLE session_ownership (
     session_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL
+  );
+
+  -- Single-row key/value bag for store-wide metadata (e.g. the per-install client_id).
+  -- Intentionally generic so future scalars don't each need their own table + migration.
+  CREATE TABLE store_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
   );
 `;
 
@@ -923,6 +930,19 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ALTER TABLE resolved_usage DROP COLUMN task_seq;
     `,
   },
+  // 13 -> 14: per-install client id (#141). Add a generic key/value bag for store-wide metadata;
+  // the client_id row is lazily generated on first open via ensureClientIdRow(), so no backfill here.
+  // IF NOT EXISTS is defensive: a store created at v14 and then downgraded for a migration test
+  // already has this table, and a real v13 store never does.
+  13: {
+    to: 14,
+    sql: `
+      CREATE TABLE IF NOT EXISTS store_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -944,6 +964,26 @@ async function migrateSchema(db: Database, path: string, fromVersion: number): P
     });
     version = step.to;
   }
+}
+
+/**
+ * Read the per-install client id, generating and persisting it the first time. The id is a stable
+ * `client-<uuid>` string scoped to this argus.db; an INSERT OR IGNORE means a concurrent open won't
+ * race two distinct ids in (only one row survives the unique key constraint).
+ */
+async function ensureClientIdRow(db: Database): Promise<string> {
+  const existing = await get<{ value: string }>(
+    db,
+    "SELECT value FROM store_metadata WHERE key = 'client_id'",
+  );
+  if (existing) return existing.value;
+  const id = `client-${crypto.randomUUID()}`;
+  await run(db, "INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('client_id', ?)", [id]);
+  const row = await get<{ value: string }>(
+    db,
+    "SELECT value FROM store_metadata WHERE key = 'client_id'",
+  );
+  return row?.value ?? id;
 }
 
 async function initializeDatabase(db: Database, path: string): Promise<void> {
@@ -984,6 +1024,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
     await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
+    await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
   } catch (error) {
     if (!(error instanceof SQLiteError)) throw error;
     // Busy/corrupt errors propagate so asStoreError can classify them; anything else
@@ -998,6 +1039,9 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     );
   }
   secureSqliteFiles(path);
+  // Ensure the per-install client id exists from the first successful open (#141), so callers
+  // can rely on getClientId() without worrying about the bootstrap order.
+  await ensureClientIdRow(db);
 }
 
 function fragmentStorage(fragment: StoredFragment): FragmentStorage {
@@ -2179,6 +2223,10 @@ export class SqliteStore implements Store {
       );
       return rows.map((row) => ({ owner: row.owner, present: row.present, archived: row.archived }));
     });
+  }
+
+  getClientId(): Promise<string> {
+    return this.schedule(() => ensureClientIdRow(this.db));
   }
 
   storeStats(): Promise<StoreStats> {
