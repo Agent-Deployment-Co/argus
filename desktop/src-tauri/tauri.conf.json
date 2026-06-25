@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Argus",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "identifier": "co.agentdeployment.argus",
   "build": {
     "frontendDist": "../ui"
@@ -11,14 +11,6 @@
     "windows": [],
     "security": {
       "csp": null
-    }
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4MjdBRDIwQkFGMjczNUMKUldSY2MvSzZJSzBuU0R2WDhNWnJCRTB6OXBhL2FFZDJTTVRGdTVpd0hSMXVMSlJMRzF6SjdGUGsK",
-      "endpoints": [
-        "https://github.com/Agent-Deployment-Co/argus/releases/latest/download/latest.json"
-      ]
     }
   },
   "bundle": {
