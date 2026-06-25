@@ -10,7 +10,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dashboard } from "../reporting/aggregate.ts";
-import { buildSnapshot, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
+import { ALL_SOURCES, buildSnapshot, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
   buildSessionDetail,
@@ -187,7 +187,7 @@ function rejectCrossSite(c: Context): Response | null {
   return null;
 }
 
-const SNAPSHOT_SOURCES = new Set<string>(["all", "claude", "codex", "gemini", "cowork"]);
+const SNAPSHOT_SOURCES = new Set<string>(["all", ...ALL_SOURCES]);
 
 /** Parse the /api/snapshot filter query params, or return an error message string for a 400.
  *  Dates are passed through as YYYY-MM-DD strings (the store compares them lexically); only

@@ -6,7 +6,7 @@ import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
 import { scanStore } from "./indexing/pipeline.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
-import { type Log, type BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
+import { ALL_SOURCES, type Log, type BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
 import { startServer } from "./api/serve.ts";
 import { openStore } from "./store/store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
@@ -248,7 +248,7 @@ async function runStatus(log: Log): Promise<void> {
   }
   let scans;
   try {
-    scans = await scanStore({ sources: ["claude", "codex", "gemini", "cowork"] });
+    scans = await scanStore({ sources: ALL_SOURCES });
   } catch (err) {
     log(`Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`);
     log("Run `argus index rebuild --force` to rebuild it from your transcripts.");
@@ -312,8 +312,8 @@ const sourceArg = {
   source: {
     type: "string",
     default: "all",
-    description: "Transcript source: claude, codex, gemini, cowork, or all",
-    valueHint: "claude|codex|gemini|cowork|all",
+    description: "Transcript source: claude, codex, gemini, cowork, claude-chat, or all",
+    valueHint: "claude|codex|gemini|cowork|claude-chat|all",
   },
 } as const;
 

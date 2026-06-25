@@ -47,7 +47,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 15;
+export const STORE_SCHEMA_VERSION = 16;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -194,7 +194,7 @@ const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('transcript', 'auxiliary', 'external')),
-    source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini', 'cowork')),
+    source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini', 'cowork', 'claude-chat')),
     file_identity TEXT,
     root_id TEXT,
     role TEXT,
@@ -966,6 +966,44 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+    `,
+  },
+  // 15 -> 16: claude-chat source (#94). Recreate index_files with a CHECK constraint that includes
+  // 'claude-chat' — same table-rebuild pattern as the 5 -> 6 (cowork) migration. DROP TABLE doesn't
+  // fire ON DELETE CASCADE (FK enforcement only fires on DML), so child-table rows survive the rename.
+  15: {
+    to: 16,
+    sql: `
+      CREATE TABLE index_files_v16 (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('transcript', 'auxiliary', 'external')),
+        source TEXT CHECK (source IS NULL OR source IN ('claude', 'codex', 'gemini', 'cowork', 'claude-chat')),
+        file_identity TEXT,
+        root_id TEXT,
+        role TEXT,
+        relative_path TEXT,
+        observed_path TEXT,
+        size_bytes TEXT,
+        mtime_ns TEXT,
+        ctime_ns TEXT,
+        physical_id_scheme TEXT,
+        physical_id_value TEXT,
+        contract_version INTEGER NOT NULL,
+        parser_name TEXT,
+        parser_version TEXT,
+        status TEXT NOT NULL CHECK (status IN ('success', 'failed', 'unstable')),
+        invalidation_reason TEXT,
+        diagnostics_json TEXT NOT NULL,
+        import_provenance_json TEXT,
+        envelope_json TEXT,
+        last_success_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO index_files_v16 SELECT * FROM index_files;
+      DROP TABLE index_files;
+      ALTER TABLE index_files_v16 RENAME TO index_files;
+      CREATE INDEX index_files_source_root ON index_files(source, root_id);
+      CREATE INDEX index_files_identity ON index_files(file_identity);
     `,
   },
 };
