@@ -607,7 +607,7 @@ function openDatabase(path: string, busyTimeoutMs: number): Database {
 }
 
 function rebuildHint(_path: string): string {
-  return "Run `argus reindex --force` to rebuild the local store from your transcripts.";
+  return "Run `argus index rebuild` to rebuild the local store from your transcripts.";
 }
 
 function asStoreError(
@@ -1048,7 +1048,7 @@ async function migrateSchema(db: Database, path: string, fromVersion: number): P
         "incompatible_schema",
         path,
         `Argus can't upgrade the local store from this older version. ` +
-          `Run \`argus reindex --force\` to rebuild it from your transcripts (this drops sessions no longer on disk).`,
+          `Run \`argus index rebuild\` to rebuild it from your transcripts (this drops sessions no longer on disk).`,
       );
     }
     await transaction(db, async () => {
