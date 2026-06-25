@@ -13,11 +13,12 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, Wry,
 };
-use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::UpdaterExt;
 
 /// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
 /// the tray menu items we update as that state changes, and a flag marking a stop as intentional
@@ -30,6 +31,8 @@ struct AppState {
     open_item: MenuItem<Wry>,
     start_item: MenuItem<Wry>,
     stop_item: MenuItem<Wry>,
+    update_item: MenuItem<Wry>,
+    updating: AtomicBool,
 }
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
@@ -61,9 +64,11 @@ fn web_root(app: &AppHandle) -> Option<String> {
 fn refresh_status(app: &AppHandle) {
     let state = app.state::<AppState>();
     let running = state.child.lock().unwrap().is_some();
-    let _ = state
-        .status_item
-        .set_text(if running { "Argus is running" } else { "Argus is stopped" });
+    let _ = state.status_item.set_text(if running {
+        "Argus is running"
+    } else {
+        "Argus is stopped"
+    });
     let _ = state.open_item.set_enabled(running);
     let _ = state.start_item.set_enabled(!running);
     let _ = state.stop_item.set_enabled(running);
@@ -170,12 +175,96 @@ fn open_dashboard(app: &AppHandle) {
     }
 }
 
+/// Check for a signed desktop update, install it if available, and restart to finish.
+async fn install_available_update(app: AppHandle) -> Result<bool, String> {
+    let Some(update) = app
+        .updater()
+        .map_err(|e| format!("preparing updater: {e}"))?
+        .check()
+        .await
+        .map_err(|e| format!("checking for updates: {e}"))?
+    else {
+        return Ok(false);
+    };
+
+    let version = update.version.clone();
+    log::info!("installing Argus update {version}");
+    notify(
+        &app,
+        "Argus update found",
+        &format!("Installing version {version}. Argus will restart when the update is ready."),
+    );
+
+    let mut downloaded = 0u64;
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                downloaded += chunk_length as u64;
+                if let Some(content_length) = content_length {
+                    log::info!("downloaded update bytes: {downloaded}/{content_length}");
+                } else {
+                    log::info!("downloaded update bytes: {downloaded}");
+                }
+            },
+            || {
+                log::info!("update download finished");
+            },
+        )
+        .await
+        .map_err(|e| format!("installing update: {e}"))?;
+
+    stop(&app);
+    notify(&app, "Argus updated", "Restarting to finish the update.");
+    app.restart()
+}
+
+/// Run a manual update check from the tray menu. Multiple clicks collapse to one in-flight check.
+fn check_for_updates(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if state.updating.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = state.update_item.set_enabled(false);
+    let _ = state.update_item.set_text("Checking for updates...");
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = install_available_update(handle.clone()).await;
+        let state = handle.state::<AppState>();
+        state.updating.store(false, Ordering::SeqCst);
+        let _ = state.update_item.set_text("Check for updates");
+        let _ = state.update_item.set_enabled(true);
+
+        match result {
+            Ok(true) => {}
+            Ok(false) => {
+                notify(
+                    &handle,
+                    "Argus is up to date",
+                    "You're on the latest version.",
+                );
+            }
+            Err(err) => {
+                log::error!("{err}");
+                notify(
+                    &handle,
+                    "Couldn't check for updates",
+                    "The update check failed. Check Console for details.",
+                );
+            }
+        }
+    });
+}
 
 /// Toggle launch-at-login and return the new state so the menu checkmark can follow.
 fn toggle_autostart(app: &AppHandle) -> bool {
     let manager = app.autolaunch();
     let enabled = manager.is_enabled().unwrap_or(false);
-    let result = if enabled { manager.disable() } else { manager.enable() };
+    let result = if enabled {
+        manager.disable()
+    } else {
+        manager.enable()
+    };
     match result {
         Ok(()) => !enabled,
         Err(err) => {
@@ -191,7 +280,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -205,7 +298,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let status = MenuItem::with_id(app, "status", "Argus is starting…", false, None::<&str>)?;
+            let status =
+                MenuItem::with_id(app, "status", "Argus is starting…", false, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
@@ -218,11 +312,12 @@ pub fn run() {
                 autostart_on,
                 None::<&str>,
             )?;
+            let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
-            let build_id = MenuItem::with_id(
+            let version = MenuItem::with_id(
                 app,
-                "build",
-                &format!("Build {}", env!("ARGUS_BUILD_ID")),
+                "version",
+                &format!("Version {}", env!("CARGO_PKG_VERSION")),
                 false,
                 None::<&str>,
             )?;
@@ -237,7 +332,9 @@ pub fn run() {
                     &PredefinedMenuItem::separator(app)?,
                     &autostart,
                     &PredefinedMenuItem::separator(app)?,
-                    &build_id,
+                    &update,
+                    &PredefinedMenuItem::separator(app)?,
+                    &version,
                     &quit,
                 ],
             )?;
@@ -250,6 +347,8 @@ pub fn run() {
                 open_item: open,
                 start_item,
                 stop_item,
+                update_item: update,
+                updating: AtomicBool::new(false),
             });
 
             let tray_icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
@@ -264,6 +363,7 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
+                    "update" => check_for_updates(app),
                     "autostart" => {
                         let _ = toggle_autostart(app);
                     }
