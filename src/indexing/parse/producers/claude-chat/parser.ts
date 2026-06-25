@@ -57,8 +57,12 @@ export const CLAUDE_CHAT_ROOT_ID = "claude-chat-cache";
 export const CLAUDE_CHAT_AUXILIARY_ROOT_ID = "claude-chat-projects";
 // v1: initial claude.ai desktop-cache producer (sessions, prompts, estimated usage, tool calls).
 // v2: capture project_uuid so claude.ai-project conversations resolve to their project name.
-export const CLAUDE_CHAT_TRANSCRIPT_PARSER_VERSION = "2";
-export const CLAUDE_CHAT_AUXILIARY_PARSER_VERSION = "1";
+// v3: re-materialize so sessions pick up the "claude.ai/{project}" / "claude.ai" project labels
+//     (a reconcile-derived change, so the bump is what forces existing stores to re-derive it).
+export const CLAUDE_CHAT_TRANSCRIPT_PARSER_VERSION = "3";
+// v1: initial projects inventory (project_uuid → name).
+// v2: project-root cwd now "claude.ai/{name}" so the session labels as "claude.ai/{Project Name}".
+export const CLAUDE_CHAT_AUXILIARY_PARSER_VERSION = "2";
 
 export const CLAUDE_CHAT_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-chat-cache",
@@ -523,7 +527,7 @@ function factsFromConversation(conversation: ChatConversation, file: FileIdentit
   }
 
   // The conversation's claude.ai Project (when started in one); reconcile resolves this selector to the
-  // project name via the projects auxiliary, then labels the session by it (else "claude.ai chat").
+  // project name via the projects auxiliary, then labels the session "claude.ai/{name}" (else "claude.ai").
   const projectUuid =
     typeof conversation.project_uuid === "string" && conversation.project_uuid ? conversation.project_uuid : undefined;
   const session: SessionFact = {
@@ -707,7 +711,9 @@ export function parseClaudeChatProjectsFile(file: DiscoveredFile, options: Claud
       kind: "project_root",
       source: "claude-chat",
       selector: uuid,
-      cwd: name,
+      // reconcile labels the session by projectLabel(cwd) (last two "/"-segments), so prefixing with
+      // "claude.ai/" surfaces "claude.ai/{Project Name}" in the UI.
+      cwd: `claude.ai/${name}`,
       position: sourcePosition(file.file, 0, index),
     });
   });

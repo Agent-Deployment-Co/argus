@@ -189,7 +189,8 @@ describe("claude-chat producer", () => {
       expect(parsed.sessions.size).toBe(1);
       const session = [...parsed.sessions.values()][0]!;
       expect(session.source).toBe("claude-chat");
-      expect(session.project).toBe("claude.ai chat");
+      // No claude.ai Project on this conversation → the plain "claude.ai" label.
+      expect(session.project).toBe("claude.ai");
       expect(parsed.messages.length).toBe(1);
       expect(parsed.messages[0]!.source).toBe("claude-chat");
       expect(parsed.messages[0]!.model).toBe("claude-opus-4-8");
@@ -248,7 +249,7 @@ describe("claude-chat producer", () => {
       expect(auxResult.status).toBe("current");
       if (auxResult.status === "current") {
         expect(auxResult.fragment.facts).toEqual([
-          expect.objectContaining({ kind: "project_root", source: "claude-chat", selector: PROJECT_UUID, cwd: "Test Project" }),
+          expect.objectContaining({ kind: "project_root", source: "claude-chat", selector: PROJECT_UUID, cwd: "claude.ai/Test Project" }),
         ]);
       }
 
@@ -256,8 +257,8 @@ describe("claude-chat producer", () => {
       const parsed = await parseFixtures({ sources: ["claude-chat"], claudeChatCacheDir: dir });
       const projSession = parsed.sessions.get("claude-chat:conv-proj");
       const looseSession = parsed.sessions.get("claude-chat:conv-loose");
-      expect(projSession?.project).toBe("Test Project");
-      expect(looseSession?.project).toBe("claude.ai chat");
+      expect(projSession?.project).toBe("claude.ai/Test Project");
+      expect(looseSession?.project).toBe("claude.ai");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
