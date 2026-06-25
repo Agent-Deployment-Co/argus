@@ -272,6 +272,7 @@ function producerContext(opts: IncrementalParseOptions): ProducerContext {
     codexSessionsDir: opts.codexSessionsDir,
     geminiDir: opts.geminiDir,
     coworkSessionsDir: opts.coworkSessionsDir,
+    claudeChatCacheDir: opts.claudeChatCacheDir,
   };
 }
 

@@ -40,6 +40,9 @@ export interface PushResult {
   status: number;
   body: string;
   isAccessChallenge?: boolean;
+  /** No upload was attempted because there was nothing eligible to send (e.g. the requested source is
+   *  local-only). Distinct from a successful upload so callers don't report "Uploaded". */
+  skipped?: boolean;
 }
 
 /** POST a per-user snapshot to the Worker ingest endpoint using Cloudflare Access. */

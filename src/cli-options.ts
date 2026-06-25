@@ -28,8 +28,17 @@ export interface RefreshOptions extends SyncOptions {
 
 /** Narrow a raw `--source` value to the accepted set, exiting with a clear message otherwise. */
 export function toSource(value: string): Source {
-  if (value === "all" || value === "claude" || value === "codex" || value === "gemini" || value === "cowork") return value;
-  console.error(`Invalid --source: ${value} (expected claude, codex, gemini, cowork, or all)`);
+  if (
+    value === "all" ||
+    value === "claude" ||
+    value === "codex" ||
+    value === "gemini" ||
+    value === "cowork" ||
+    value === "claude-chat"
+  ) {
+    return value;
+  }
+  console.error(`Invalid --source: ${value} (expected claude, codex, gemini, cowork, claude-chat, or all)`);
   process.exit(2);
 }
 

@@ -76,6 +76,25 @@ describe("watchSync", () => {
     expect(lines.filter((l) => l.includes("Not logged in")).length).toBe(1);
   });
 
+  test("a skipped push (local-only source) is not reported as an upload", async () => {
+    const ac = new AbortController();
+    const lines: string[] = [];
+    let pushed = 0;
+    const p = watchSync(syncOpts({ onUnauthenticated: "fail" }), (s) => lines.push(s), ac.signal, {
+      resolveCredentials: async () => ({ bearerToken: "tok" }),
+      push: async () => {
+        pushed++;
+        return { ok: true, skipped: true, status: 0, body: "Nothing to upload: \"claude-chat\" is a local-only source, not synced to the team dashboard." };
+      },
+    });
+    while (!lines.some((l) => l.includes("Nothing to upload"))) await sleep(10);
+    ac.abort();
+    await p;
+    expect(pushed).toBeGreaterThanOrEqual(1);
+    // The skipped result must NOT fall into the "✓ Uploaded" arm.
+    expect(lines.some((l) => l.includes("Uploaded"))).toBe(false);
+  });
+
   test("a transient upload failure backs off, then a success is reported", async () => {
     const ac = new AbortController();
     const lines: string[] = [];

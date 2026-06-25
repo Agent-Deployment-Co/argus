@@ -27,10 +27,24 @@ export interface BuildDashboardOptions {
   /** Include the full per-session row array in the dashboard. Default true (sync needs it on the
    *  wire); the web server sets false and serves sessions from the paginated /api/sessions instead. */
   includeSessions?: boolean;
+  /** Build for the team sync wire: drop local-only sources (claude.ai chat is personal usage with
+   *  estimated, not metered, tokens — it stays in the local web app/reports only). Set by the sync
+   *  upload path; left false for serve/index/reports, which show every source. */
+  forWire?: boolean;
 }
 
-export function sourcesFor(source: "all" | TranscriptSource): TranscriptSource[] {
-  return source === "all" ? ["claude", "codex", "gemini", "cowork"] : [source];
+/** Every source Argus can index, in display order. */
+export const ALL_SOURCES: TranscriptSource[] = ["claude", "codex", "gemini", "cowork", "claude-chat"];
+
+/** Sources kept local-only — indexed and shown locally, but never uploaded by `sync`. */
+export const LOCAL_ONLY_SOURCES: ReadonlySet<TranscriptSource> = new Set<TranscriptSource>(["claude-chat"]);
+
+export function sourcesFor(
+  source: "all" | TranscriptSource,
+  opts: { forWire?: boolean } = {},
+): TranscriptSource[] {
+  const base = source === "all" ? ALL_SOURCES : [source];
+  return opts.forWire ? base.filter((s) => !LOCAL_ONLY_SOURCES.has(s)) : base;
 }
 
 /** One-line totals for a built dashboard, shared by the sync upload path. */
@@ -70,7 +84,7 @@ function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
 export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
   log("Reading transcripts…");
   const store = openSessionStore({
-    sources: sourcesFor(opts.source),
+    sources: sourcesFor(opts.source, { forWire: opts.forWire }),
   });
   // CQS: read-only legs (serve/upload of `argus run`, where the index leg writes) do a pure read;
   // otherwise (e.g. one-shot `argus sync`) bring the store current first, then read.
@@ -115,7 +129,7 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
 export async function buildSnapshot(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
   log("Reading transcripts…");
   const { aggregates, stats, diagnostics } = await readSnapshotAggregates({
-    sources: sourcesFor(opts.source),
+    sources: sourcesFor(opts.source, { forWire: opts.forWire }),
     query: { since: opts.since, until: opts.until, projectSubstring: opts.project },
   });
   if (stats.fallback) log(`  ${syncStatsSummary(stats)}`);

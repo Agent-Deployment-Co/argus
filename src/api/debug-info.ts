@@ -7,6 +7,7 @@ import { scanStore, type SourceScan } from "../indexing/pipeline.ts";
 import {
   ARGUS_CONFIG_DIR,
   ARGUS_DATA_DIR,
+  CLAUDE_CHAT_CACHE_DIR,
   CLAUDE_DIR,
   CODEX_DIR,
   CODEX_SESSIONS_DIR,
@@ -18,6 +19,7 @@ import {
   SETTINGS_FILE,
   STORE_FILE,
 } from "../paths.ts";
+import { ALL_SOURCES } from "../reporting/dashboard-builder.ts";
 import { openStore, STORE_SCHEMA_VERSION } from "../store/store.ts";
 import pkg from "../../package.json" with { type: "json" };
 
@@ -75,6 +77,7 @@ const ENV_VARS = [
   "CODEX_HOME",
   "CODEX_CONFIG_DIR",
   "GEMINI_CLI_HOME",
+  "CLAUDE_DESKTOP_CACHE_DIR",
   "ARGUS_HOME",
   "ARGUS_DATA_DIR",
   "ARGUS_CONFIG_DIR",
@@ -130,7 +133,7 @@ export async function collectDebugInfo(opts: { serveReadOnly: boolean }): Promis
       store.tasks = stats.tasks;
       store.messagesWithTask = stats.messagesWithTask;
       store.sessionCounts = await handle.resolvedSessionCounts();
-      store.sources = await scanStore({ store: handle, sources: ["claude", "codex", "gemini", "cowork"] });
+      store.sources = await scanStore({ store: handle, sources: ALL_SOURCES });
     } finally {
       await handle.close();
     }
@@ -163,6 +166,7 @@ export async function collectDebugInfo(opts: { serveReadOnly: boolean }): Promis
       pathEntry("Codex sessions", CODEX_SESSIONS_DIR),
       pathEntry("GEMINI_DIR", GEMINI_DIR),
       pathEntry("Cowork sessions", COWORK_SESSIONS_DIR),
+      pathEntry("Claude chat cache", CLAUDE_CHAT_CACHE_DIR),
     ],
     env: ENV_VARS.map((name) => ({ name, value: process.env[name] ?? null })),
     config,
