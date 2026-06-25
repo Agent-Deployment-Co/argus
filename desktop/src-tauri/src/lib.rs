@@ -4,8 +4,6 @@
 // local port and exposes a tray menu whose items map onto the CLI's command surface. "Open
 // dashboard" opens the user's default browser at the served URL; the only embedded webview is the
 // bundled About screen.
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{
@@ -13,6 +11,7 @@ use std::{
     sync::Mutex,
 };
 
+use rusqlite::OptionalExtension;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -38,60 +37,6 @@ struct AppState {
 }
 
 const ABOUT_WINDOW_LABEL: &str = "about";
-
-type Sqlite3 = c_void;
-type Sqlite3Stmt = c_void;
-
-const SQLITE_OK: c_int = 0;
-const SQLITE_ROW: c_int = 100;
-const SQLITE_DONE: c_int = 101;
-const SQLITE_OPEN_READONLY: c_int = 0x0000_0001;
-
-#[link(name = "sqlite3")]
-extern "C" {
-    fn sqlite3_open_v2(
-        filename: *const c_char,
-        pp_db: *mut *mut Sqlite3,
-        flags: c_int,
-        z_vfs: *const c_char,
-    ) -> c_int;
-    fn sqlite3_close(db: *mut Sqlite3) -> c_int;
-    fn sqlite3_errmsg(db: *mut Sqlite3) -> *const c_char;
-    fn sqlite3_prepare_v2(
-        db: *mut Sqlite3,
-        z_sql: *const c_char,
-        n_byte: c_int,
-        pp_stmt: *mut *mut Sqlite3Stmt,
-        pz_tail: *mut *const c_char,
-    ) -> c_int;
-    fn sqlite3_step(stmt: *mut Sqlite3Stmt) -> c_int;
-    fn sqlite3_column_text(stmt: *mut Sqlite3Stmt, i_col: c_int) -> *const c_char;
-    fn sqlite3_finalize(stmt: *mut Sqlite3Stmt) -> c_int;
-}
-
-struct SqliteConnection {
-    raw: *mut Sqlite3,
-}
-
-impl Drop for SqliteConnection {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = sqlite3_close(self.raw);
-        }
-    }
-}
-
-struct SqliteStatement {
-    raw: *mut Sqlite3Stmt,
-}
-
-impl Drop for SqliteStatement {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = sqlite3_finalize(self.raw);
-        }
-    }
-}
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -274,81 +219,24 @@ fn argus_store_file() -> Option<PathBuf> {
     argus_data_dir().map(|dir| dir.join("argus.db"))
 }
 
-fn sqlite_message(db: *mut Sqlite3) -> String {
-    if db.is_null() {
-        return "unknown SQLite error".to_string();
-    }
-    unsafe {
-        let message = sqlite3_errmsg(db);
-        if message.is_null() {
-            "unknown SQLite error".to_string()
-        } else {
-            CStr::from_ptr(message).to_string_lossy().into_owned()
-        }
-    }
-}
-
-fn open_sqlite_readonly(path: &Path) -> Result<SqliteConnection, String> {
-    let path = path.to_string_lossy().into_owned();
-    let path = CString::new(path).map_err(|_| "store path contains a NUL byte".to_string())?;
-    let mut raw: *mut Sqlite3 = std::ptr::null_mut();
-    let rc = unsafe {
-        sqlite3_open_v2(
-            path.as_ptr(),
-            &mut raw,
-            SQLITE_OPEN_READONLY,
-            std::ptr::null(),
-        )
-    };
-    if rc == SQLITE_OK {
-        Ok(SqliteConnection { raw })
-    } else {
-        let message = sqlite_message(raw);
-        if !raw.is_null() {
-            unsafe {
-                let _ = sqlite3_close(raw);
-            }
-        }
-        Err(message)
-    }
-}
-
+/// Read the per-install client id out of the store's `store_metadata` bag. Opens `argus.db`
+/// read-only via the bundled SQLite (statically linked, so no system libsqlite3 is required on any
+/// platform) and tolerates a concurrent writer — the running sidecar keeps the store in WAL mode.
 fn read_store_client_id(path: &Path) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let db = open_sqlite_readonly(path)?;
-    let sql = CString::new("SELECT value FROM store_metadata WHERE key = 'client_id' LIMIT 1")
-        .expect("static SQL has no NUL bytes");
-    let mut raw_stmt: *mut Sqlite3Stmt = std::ptr::null_mut();
-    let rc = unsafe {
-        sqlite3_prepare_v2(
-            db.raw,
-            sql.as_ptr(),
-            -1,
-            &mut raw_stmt,
-            std::ptr::null_mut(),
-        )
-    };
-    if rc != SQLITE_OK {
-        return Err(sqlite_message(db.raw));
-    }
-    let stmt = SqliteStatement { raw: raw_stmt };
-    match unsafe { sqlite3_step(stmt.raw) } {
-        SQLITE_ROW => {
-            let text = unsafe { sqlite3_column_text(stmt.raw, 0) };
-            if text.is_null() {
-                Ok(None)
-            } else {
-                let value = unsafe { CStr::from_ptr(text) }
-                    .to_string_lossy()
-                    .into_owned();
-                Ok(Some(value))
-            }
-        }
-        SQLITE_DONE => Ok(None),
-        _ => Err(sqlite_message(db.raw)),
-    }
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT value FROM store_metadata WHERE key = 'client_id' LIMIT 1",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|value| value.flatten())
+    .map_err(|e| e.to_string())
 }
 
 fn local_client_id() -> Option<String> {
