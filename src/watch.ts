@@ -113,8 +113,14 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
   // ENTIRELY local-only, there's nothing to upload — bail rather than fall through to the store's
   // empty-sources default (which is "claude"), which would silently upload Claude Code data instead.
   if (sourcesFor(opts.source, { forWire: true }).length === 0) {
-    log(`Nothing to upload: "${opts.source}" is a local-only source, not synced to the team dashboard.`);
-    return { ok: true, skipped: true, status: 0, body: "skipped: local-only source" };
+    // The message rides on `body` (not logged here) so each caller surfaces it appropriately: the
+    // one-shot logs it once; the --watch leg routes it through its collapser to avoid per-interval spam.
+    return {
+      ok: true,
+      skipped: true,
+      status: 0,
+      body: `Nothing to upload: "${opts.source}" is a local-only source, not synced to the team dashboard.`,
+    };
   }
   const dash = await buildDashboard({ ...opts, forWire: true }, log);
   log(`Uploading snapshot for "${user}" (org: ${org ?? "from token"}) → ${opts.endpoint}`);
@@ -213,7 +219,13 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           await sleep(backoff.next(), sig);
           continue;
         }
-        if (res.ok) {
+        if (res.skipped) {
+          // Nothing eligible to upload (e.g. an all-local-only --source). Not an error: idle a normal
+          // interval. Routed through the collapser so the same line doesn't repeat every cycle.
+          collapser.note(res.body);
+          backoff.reset();
+          await sleep(intervalMs, sig);
+        } else if (res.ok) {
           collapser.flush();
           log(`✓ Uploaded (${res.status}).`);
           backoff.reset();
