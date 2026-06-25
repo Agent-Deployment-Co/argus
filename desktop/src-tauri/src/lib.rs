@@ -1,9 +1,9 @@
 // Argus tray app: a thin native shell around the `argus` sidecar.
 //
-// It creates no window. On launch it starts `argus run` (index + serve + sync, supervised in one
-// process) on a free local port and exposes a tray menu whose items map onto the CLI's command
-// surface. "Open dashboard" opens the user's default browser at the served URL — the dashboard is
-// the existing web app, not an embedded webview.
+// On launch it starts `argus run` (index + serve + sync, supervised in one process) on a free
+// local port and exposes a tray menu whose items map onto the CLI's command surface. "Open
+// dashboard" opens the user's default browser at the served URL; the only embedded webview is the
+// bundled About screen.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -11,7 +11,7 @@ use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Wry,
+    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_notification::NotificationExt;
@@ -34,6 +34,8 @@ struct AppState {
     update_item: MenuItem<Wry>,
     updating: AtomicBool,
 }
+
+const ABOUT_WINDOW_LABEL: &str = "about";
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -175,6 +177,52 @@ fn open_dashboard(app: &AppHandle) {
     }
 }
 
+/// Open or focus the bundled About screen. The screen is static HTML; this initialization script
+/// only supplies runtime metadata, so the webview does not need any Tauri command permissions.
+fn show_about(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let port = app.state::<AppState>().port;
+    let info = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "dashboardUrl": format!("http://localhost:{port}"),
+    });
+    let init_script = format!("window.__ARGUS_ABOUT__ = {info};");
+
+    let result = WebviewWindowBuilder::new(
+        app,
+        ABOUT_WINDOW_LABEL,
+        WebviewUrl::App("about.html".into()),
+    )
+    .title("About Argus")
+    .inner_size(460.0, 520.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .focused(true)
+    .initialization_script(init_script)
+    .build();
+
+    match result {
+        Ok(window) => {
+            let _ = window.set_focus();
+        }
+        Err(err) => {
+            log::error!("opening About window: {err}");
+            notify(
+                app,
+                "Couldn't open About",
+                "The About window failed to open. Check Console for details.",
+            );
+        }
+    }
+}
+
 /// Check for a signed desktop update, install it if available, and restart to finish.
 async fn install_available_update(app: AppHandle) -> Result<bool, String> {
     let Some(update) = app
@@ -303,6 +351,7 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "About Argus", true, None::<&str>)?;
             let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
             let autostart = CheckMenuItem::with_id(
                 app,
@@ -329,6 +378,7 @@ pub fn run() {
                     &open,
                     &start_item,
                     &stop_item,
+                    &about,
                     &PredefinedMenuItem::separator(app)?,
                     &autostart,
                     &PredefinedMenuItem::separator(app)?,
@@ -363,6 +413,7 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
+                    "about" => show_about(app),
                     "update" => check_for_updates(app),
                     "autostart" => {
                         let _ = toggle_autostart(app);
