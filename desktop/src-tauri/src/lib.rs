@@ -1,24 +1,27 @@
 // Argus tray app: a thin native shell around the `argus` sidecar.
 //
-// It creates no window. On launch it starts `argus run` (index + serve + sync, supervised in one
-// process) on a free local port and exposes a tray menu whose items map onto the CLI's command
-// surface. "Open dashboard" opens the user's default browser at the served URL — the dashboard is
-// the existing web app, not an embedded webview.
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+// On launch it starts `argus run` (index + serve + sync, supervised in one process) on a free
+// local port and exposes a tray menu whose items map onto the CLI's command surface. "Open
+// dashboard" opens the user's default browser at the served URL; the only embedded webview is the
+// bundled About screen.
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Mutex,
+};
 
+use rusqlite::OptionalExtension;
 use tauri::{
     image::Image,
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Wry,
+    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry,
 };
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_updater::UpdaterExt;
 
 /// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
 /// the tray menu items we update as that state changes, and a flag marking a stop as intentional
@@ -31,9 +34,9 @@ struct AppState {
     open_item: MenuItem<Wry>,
     start_item: MenuItem<Wry>,
     stop_item: MenuItem<Wry>,
-    update_item: MenuItem<Wry>,
-    updating: AtomicBool,
 }
+
+const ABOUT_WINDOW_LABEL: &str = "about";
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -175,101 +178,171 @@ fn open_dashboard(app: &AppHandle) {
     }
 }
 
-/// Check for a signed desktop update, install it if available, and restart to finish.
-async fn install_available_update(app: AppHandle) -> Result<bool, String> {
-    let Some(update) = app
-        .updater()
-        .map_err(|e| format!("preparing updater: {e}"))?
-        .check()
-        .await
-        .map_err(|e| format!("checking for updates: {e}"))?
-    else {
-        return Ok(false);
-    };
-
-    let version = update.version.clone();
-    log::info!("installing Argus update {version}");
-    notify(
-        &app,
-        "Argus update found",
-        &format!("Installing version {version}. Argus will restart when the update is ready."),
-    );
-
-    let mut downloaded = 0u64;
-    update
-        .download_and_install(
-            |chunk_length, content_length| {
-                downloaded += chunk_length as u64;
-                if let Some(content_length) = content_length {
-                    log::info!("downloaded update bytes: {downloaded}/{content_length}");
-                } else {
-                    log::info!("downloaded update bytes: {downloaded}");
-                }
-            },
-            || {
-                log::info!("update download finished");
-            },
-        )
-        .await
-        .map_err(|e| format!("installing update: {e}"))?;
-
-    stop(&app);
-    notify(&app, "Argus updated", "Restarting to finish the update.");
-    app.restart()
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-/// Run a manual update check from the tray menu. Multiple clicks collapse to one in-flight check.
-fn check_for_updates(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    if state.updating.swap(true, Ordering::SeqCst) {
+fn home_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        non_empty_env("USERPROFILE").map(PathBuf::from).or_else(|| {
+            let drive = non_empty_env("HOMEDRIVE")?;
+            let path = non_empty_env("HOMEPATH")?;
+            Some(PathBuf::from(format!("{drive}{path}")))
+        })
+    } else {
+        non_empty_env("HOME").map(PathBuf::from)
+    }
+}
+
+fn argus_data_dir() -> Option<PathBuf> {
+    if let Some(path) = non_empty_env("ARGUS_DATA_DIR") {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(path) = non_empty_env("ARGUS_HOME") {
+        return Some(PathBuf::from(path).join("data"));
+    }
+    if let Some(path) = non_empty_env("XDG_DATA_HOME") {
+        return Some(PathBuf::from(path).join("argus"));
+    }
+    if cfg!(target_os = "macos") {
+        return home_dir().map(|dir| dir.join("Library/Application Support/argus"));
+    }
+    if cfg!(windows) {
+        if let Some(path) = non_empty_env("LOCALAPPDATA") {
+            return Some(PathBuf::from(path).join("Argus").join("Data"));
+        }
+    }
+    home_dir().map(|dir| dir.join(".local").join("share").join("argus"))
+}
+
+fn argus_store_file() -> Option<PathBuf> {
+    argus_data_dir().map(|dir| dir.join("argus.db"))
+}
+
+/// Read the per-install client id out of the store's `store_metadata` bag. Opens `argus.db`
+/// read-only via the bundled SQLite (statically linked, so no system libsqlite3 is required on any
+/// platform) and tolerates a concurrent writer — the running sidecar keeps the store in WAL mode.
+fn read_store_client_id(path: &Path) -> Result<Option<String>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT value FROM store_metadata WHERE key = 'client_id' LIMIT 1",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|value| value.flatten())
+    .map_err(|e| e.to_string())
+}
+
+fn local_client_id() -> Option<String> {
+    let path = argus_store_file()?;
+    match read_store_client_id(&path) {
+        Ok(client_id) => client_id,
+        Err(err) => {
+            log::debug!("reading the Argus client id from {}: {err}", path.display());
+            None
+        }
+    }
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn os_username() -> Option<String> {
+    non_empty_env("USER").or_else(|| non_empty_env("USERNAME"))
+}
+
+fn os_hostname() -> Option<String> {
+    non_empty_env("HOSTNAME").or_else(|| command_stdout("hostname", &[]))
+}
+
+fn sync_user_id() -> String {
+    if let Some(email) = command_stdout("git", &["config", "user.email"]) {
+        return email;
+    }
+    if let (Some(username), Some(hostname)) = (os_username(), os_hostname()) {
+        return format!("{username}@{hostname}");
+    }
+    os_username().unwrap_or_else(|| "unknown".to_string())
+}
+
+fn about_info(port: u16) -> serde_json::Value {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "buildNumber": env!("ARGUS_BUILD_ID"),
+        "dashboardUrl": format!("http://localhost:{port}"),
+        "clientId": local_client_id(),
+        "syncUserId": sync_user_id(),
+    })
+}
+
+/// Open or focus the bundled About screen. The screen is static HTML; this initialization script
+/// only supplies runtime metadata, so the webview does not need any Tauri command permissions.
+fn show_about(app: &AppHandle) {
+    let port = app.state::<AppState>().port;
+    if let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) {
+        let info = about_info(port);
+        let _ = window.eval(format!(
+            "window.__ARGUS_ABOUT__ = {info}; window.__ARGUS_SET_ABOUT__?.({info});"
+        ));
+        let _ = window.show();
+        let _ = window.set_focus();
         return;
     }
-    let _ = state.update_item.set_enabled(false);
-    let _ = state.update_item.set_text("Checking for updates...");
 
-    let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let result = install_available_update(handle.clone()).await;
-        let state = handle.state::<AppState>();
-        state.updating.store(false, Ordering::SeqCst);
-        let _ = state.update_item.set_text("Check for updates");
-        let _ = state.update_item.set_enabled(true);
+    let info = about_info(port);
+    let init_script = format!("window.__ARGUS_ABOUT__ = {info};");
 
-        match result {
-            Ok(true) => {}
-            Ok(false) => {
-                notify(
-                    &handle,
-                    "Argus is up to date",
-                    "You're on the latest version.",
-                );
-            }
-            Err(err) => {
-                log::error!("{err}");
-                notify(
-                    &handle,
-                    "Couldn't check for updates",
-                    "The update check failed. Check Console for details.",
-                );
-            }
-        }
-    });
-}
+    let result = WebviewWindowBuilder::new(
+        app,
+        ABOUT_WINDOW_LABEL,
+        WebviewUrl::App("about.html".into()),
+    )
+    .title("About Argus")
+    .inner_size(460.0, 520.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .focused(true)
+    .initialization_script(init_script)
+    .build();
 
-/// Toggle launch-at-login and return the new state so the menu checkmark can follow.
-fn toggle_autostart(app: &AppHandle) -> bool {
-    let manager = app.autolaunch();
-    let enabled = manager.is_enabled().unwrap_or(false);
-    let result = if enabled {
-        manager.disable()
-    } else {
-        manager.enable()
-    };
     match result {
-        Ok(()) => !enabled,
+        Ok(window) => {
+            let window_for_close = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Err(err) = window_for_close.hide() {
+                        log::warn!("hiding About window: {err}");
+                    }
+                }
+            });
+            let _ = window.set_focus();
+        }
         Err(err) => {
-            log::error!("toggling open-at-login: {err}");
-            enabled
+            log::error!("opening About window: {err}");
+            notify(
+                app,
+                "Couldn't open About",
+                "The About window failed to open. Check Console for details.",
+            );
         }
     }
 }
@@ -280,11 +353,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            None,
-        ))
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -303,16 +371,7 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
-            let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
-            let autostart = CheckMenuItem::with_id(
-                app,
-                "autostart",
-                "Open at login",
-                true,
-                autostart_on,
-                None::<&str>,
-            )?;
-            let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "About Argus", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
             let version = MenuItem::with_id(
                 app,
@@ -329,10 +388,7 @@ pub fn run() {
                     &open,
                     &start_item,
                     &stop_item,
-                    &PredefinedMenuItem::separator(app)?,
-                    &autostart,
-                    &PredefinedMenuItem::separator(app)?,
-                    &update,
+                    &about,
                     &PredefinedMenuItem::separator(app)?,
                     &version,
                     &quit,
@@ -347,8 +403,6 @@ pub fn run() {
                 open_item: open,
                 start_item,
                 stop_item,
-                update_item: update,
-                updating: AtomicBool::new(false),
             });
 
             let tray_icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
@@ -363,10 +417,7 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
-                    "update" => check_for_updates(app),
-                    "autostart" => {
-                        let _ = toggle_autostart(app);
-                    }
+                    "about" => show_about(app),
                     "quit" => {
                         stop(app);
                         app.exit(0);

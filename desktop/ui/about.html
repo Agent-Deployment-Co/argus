@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>About Argus</title>
+        <style>
+            :root {
+                color-scheme: light dark;
+                --coffee-bean: #1c1105;
+                --dark-coffee: #341f09;
+                --tiger-orange: #ef8920;
+                --racing-red: #e2302c;
+                --cornflower-ocean: #286992;
+                --sky-surge: #5dbcdf;
+                --soft-apricot: #f3d7ba;
+                --antique-white: #f9ebdc;
+                --porcelain: #fefaf5;
+                --bg: var(--coffee-bean);
+                --surface: var(--dark-coffee);
+                --text: var(--antique-white);
+                --heading: var(--porcelain);
+                --muted: var(--soft-apricot);
+                --line: rgba(243, 215, 186, 0.18);
+                --accent: var(--tiger-orange);
+                --code-bg: rgba(249, 235, 220, 0.07);
+            }
+
+            @media (prefers-color-scheme: light) {
+                :root {
+                    --bg: var(--antique-white);
+                    --surface: var(--porcelain);
+                    --text: var(--dark-coffee);
+                    --heading: var(--coffee-bean);
+                    --muted: color-mix(
+                        in srgb,
+                        var(--dark-coffee) 68%,
+                        var(--antique-white)
+                    );
+                    --line: rgba(52, 31, 9, 0.16);
+                    --code-bg: rgba(52, 31, 9, 0.06);
+                }
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                min-height: 100vh;
+                background: var(--bg);
+                color: var(--text);
+                font:
+                    14px/1.5 ui-serif,
+                    Georgia,
+                    serif;
+                -webkit-font-smoothing: antialiased;
+            }
+
+            main {
+                min-height: 100vh;
+                padding: 28px 32px 30px;
+                display: flex;
+                flex-direction: column;
+                gap: 22px;
+            }
+
+            header {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+            }
+
+            .brand-mark {
+                width: 74px;
+                height: auto;
+                flex: 0 0 auto;
+            }
+
+            h1 {
+                margin: 0;
+                color: var(--heading);
+                font:
+                    700 34px/1 ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    "Segoe UI",
+                    sans-serif;
+                letter-spacing: 0;
+            }
+
+            .version {
+                margin-top: 5px;
+                color: var(--accent);
+                font:
+                    600 12px/1.4 ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    "Segoe UI",
+                    sans-serif;
+            }
+
+            .summary {
+                margin: 0;
+                color: var(--text);
+                font-size: 16px;
+                line-height: 1.45;
+            }
+
+            .meta {
+                display: grid;
+                gap: 0;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                overflow: hidden;
+                background: var(--surface);
+            }
+
+            .row {
+                display: grid;
+                grid-template-columns: 110px 1fr;
+                gap: 14px;
+                padding: 10px 12px;
+            }
+
+            .row + .row {
+                border-top: 1px solid var(--line);
+            }
+
+            .label {
+                color: var(--muted);
+                font:
+                    600 11px/1.4 ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    "Segoe UI",
+                    sans-serif;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+            }
+
+            .value {
+                min-width: 0;
+                color: var(--heading);
+                overflow-wrap: anywhere;
+            }
+
+            code {
+                padding: 2px 5px;
+                border-radius: 5px;
+                background: var(--code-bg);
+                color: var(--heading);
+                font:
+                    12px/1.4 ui-monospace,
+                    SFMono-Regular,
+                    Menlo,
+                    Consolas,
+                    monospace;
+            }
+
+            section {
+                display: grid;
+                gap: 8px;
+            }
+
+            h2 {
+                margin: 0;
+                color: var(--accent);
+                font:
+                    600 12px/1.3 ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    "Segoe UI",
+                    sans-serif;
+                text-transform: uppercase;
+                letter-spacing: 0.12em;
+            }
+
+            p {
+                margin: 0;
+            }
+
+            footer {
+                margin-top: auto;
+                color: var(--muted);
+                font-size: 12px;
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <header>
+                <svg
+                    class="brand-mark"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="6 0 128 100"
+                    role="img"
+                    aria-label="The Agent Deployment Co. chevron"
+                >
+                    <path
+                        d="M6 0 L30 0 L62 50 L30 100 L6 100 L38 50 Z"
+                        fill="#e2302c"
+                    ></path>
+                    <path
+                        d="M30 0 L54 0 L86 50 L54 100 L30 100 L62 50 Z"
+                        fill="#ef8920"
+                    ></path>
+                    <path
+                        d="M54 0 L78 0 L110 50 L78 100 L54 100 L86 50 Z"
+                        fill="#5dbcdf"
+                    ></path>
+                    <path
+                        d="M78 0 L102 0 L134 50 L102 100 L78 100 L110 50 Z"
+                        fill="#286992"
+                    ></path>
+                </svg>
+                <div>
+                    <h1>Argus</h1>
+                    <div class="version">
+                        Version <span id="version">unknown</span>
+                    </div>
+                </div>
+            </header>
+
+            <p class="summary">
+                Local usage visibility for Claude Code, Codex, Gemini CLI, and
+                Claude Cowork sessions.
+            </p>
+
+            <div class="meta" aria-label="Application details">
+                <div class="row">
+                    <div class="label">Dashboard</div>
+                    <div class="value">
+                        <code id="dashboard-url">local server</code>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="label">Build</div>
+                    <div class="value">
+                        <code id="build-number">dev</code>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="label">Client ID</div>
+                    <div class="value">
+                        <code id="client-id">unavailable</code>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="label">Sync user</div>
+                    <div class="value">
+                        <code id="sync-user-id">unavailable</code>
+                    </div>
+                </div>
+            </div>
+
+            <footer>Copyright (c) Agent Deployment Co.</footer>
+        </main>
+
+        <script>
+            function renderAbout(info) {
+                document.getElementById("version").textContent =
+                    info.version || "unknown";
+                document.getElementById("build-number").textContent =
+                    info.buildNumber || "dev";
+                document.getElementById("client-id").textContent =
+                    info.clientId || "unavailable";
+                document.getElementById("sync-user-id").textContent =
+                    info.syncUserId || "unavailable";
+                document.getElementById("dashboard-url").textContent =
+                    info.dashboardUrl || "local server";
+            }
+
+            window.__ARGUS_SET_ABOUT__ = renderAbout;
+            renderAbout(window.__ARGUS_ABOUT__ || {});
+        </script>
+    </body>
+</html>

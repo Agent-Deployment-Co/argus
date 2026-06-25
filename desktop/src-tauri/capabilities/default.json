@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Tray-only app: no webview invokes Tauri commands, so only core defaults are needed. The sidecar and browser are driven from Rust, which does not go through the capability/permission layer.",
-  "windows": [],
+  "description": "Desktop shell: the static About webview invokes no Tauri commands. The sidecar and browser are driven from Rust, which does not go through the capability/permission layer.",
+  "windows": ["about"],
   "permissions": ["core:default"]
 }
