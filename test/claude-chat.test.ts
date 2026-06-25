@@ -152,17 +152,28 @@ describe("claude-chat producer", () => {
       expect(facts.toolResults[0]!.resolvedInvocationFactId).toBe(facts.invocations[0]!.id);
       expect(facts.toolResults[0]!.approxTokens).toBeGreaterThan(0);
 
-      // AlternateRepresentation keyed by uuid with preference = message count.
+      // AlternateRepresentation keyed by uuid; recency (updatedAtMs) is the selector, preference constant.
       expect(result.fragment.alternateRepresentation?.logicalId).toBe("claude-chat:conv-1");
-      expect(result.fragment.alternateRepresentation?.preference).toBe(2);
+      expect(result.fragment.alternateRepresentation?.preference).toBe(0);
+      expect(result.fragment.alternateRepresentation?.updatedAtMs).toBe(Date.parse("2026-06-01T10:05:00.000Z"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("dedupes snapshots of one conversation, keeping the richest copy", () => {
-    const dir = seedCache();
+  test("dedupes snapshots of one conversation, preferring the most recent (not the most messages)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-claude-chat-dedup-"));
     try {
+      // Older snapshot with MORE messages (e.g. a tree with superseded branch nodes) ...
+      writeFileSync(
+        join(dir, "old-more_0"),
+        buildCacheEntry(transcriptUrl("conv-x"), conversation("conv-x", [HUMAN, ASSISTANT], { updated_at: "2026-06-01T09:00:00.000Z" })),
+      );
+      // ... vs a NEWER snapshot with FEWER messages — recency must win over raw count.
+      writeFileSync(
+        join(dir, "new-fewer_0"),
+        buildCacheEntry(transcriptUrl("conv-x"), conversation("conv-x", [HUMAN], { updated_at: "2026-06-01T12:00:00.000Z" })),
+      );
       const discovery = discoverClaudeChatTranscripts(dir);
       const adapter = createClaudeChatTranscriptParserAdapter();
       const fragments = discovery.files
@@ -173,9 +184,9 @@ describe("claude-chat producer", () => {
 
       const selected = selectAlternateRepresentations(fragments);
       expect(selected).toHaveLength(1);
-      // The richer snapshot (2 messages, preference 2) wins over the thinner one.
-      expect(selected[0]!.alternateRepresentation?.preference).toBe(2);
-      expect(selected[0]!.facts.messages).toHaveLength(1);
+      // The newer snapshot wins even though it lists fewer messages (no assistant turn).
+      expect(selected[0]!.alternateRepresentation?.updatedAtMs).toBe(Date.parse("2026-06-01T12:00:00.000Z"));
+      expect(selected[0]!.facts.messages).toHaveLength(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -259,6 +270,25 @@ describe("claude-chat producer", () => {
       const looseSession = parsed.sessions.get("claude-chat:conv-loose");
       expect(projSession?.project).toBe("claude.ai/Test Project");
       expect(looseSession?.project).toBe("claude.ai");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("collapses slashes in a project name so the claude.ai namespace prefix survives", () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-claude-chat-slash-"));
+    try {
+      writeFileSync(
+        join(dir, "projects_0"),
+        buildCacheEntry(projectsUrl(), JSON.stringify([{ uuid: "proj-slash", name: "Q3/Roadmap" }])),
+      );
+      const aux = discoverClaudeChatProjects(dir);
+      const result = parseClaudeChatProjectsFile(aux.files[0]!);
+      expect(result.status).toBe("current");
+      if (result.status === "current") {
+        // "Q3/Roadmap" → "claude.ai/Q3 Roadmap" so projectLabel keeps the claude.ai segment.
+        expect(result.fragment.facts[0]).toMatchObject({ cwd: "claude.ai/Q3 Roadmap" });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
