@@ -14,7 +14,7 @@ import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type Pu
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { type TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
-import { loadConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS } from "./config.ts";
+import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS } from "./config.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -220,9 +220,25 @@ async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
 
 /** One-shot upload of the current snapshot to the team dashboard (the bare `argus sync`). */
 async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
+  const hubCfg = resolveHubConfig();
+  if (hubCfg) {
+    const res = await pushSnapshotForOpts(opts, {}, log);
+    if (res.ok) {
+      log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
+    } else if (res.status === 422) {
+      log(`✗ Hub rejected upload (422): schema version mismatch — upgrade Argus to match the Hub version.`);
+      process.exit(1);
+    } else {
+      log(`✗ Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   const credentials = await resolveCredentials(opts.endpoint, log);
   if (!credentials) {
     log("Not logged in. Run `argus login` first to upload to the team dashboard.");
+    log("  If your team runs Argus Hub, set ARGUS_HUB_URL and ARGUS_HUB_KEY instead — no login required.");
     process.exit(1);
   }
 
@@ -525,7 +541,7 @@ const status = defineCommand({
 });
 
 const login = defineCommand({
-  meta: { name: "login", description: "login via Cloudflare Access SSO in your browser" },
+  meta: { name: "login", description: "login via Cloudflare Access SSO in your browser (not needed when using Argus Hub — set ARGUS_HUB_URL and ARGUS_HUB_KEY instead)" },
   args: {
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for login (env ARGUS_ENDPOINT)", valueHint: "url" },
   },
@@ -533,7 +549,7 @@ const login = defineCommand({
 });
 
 const sync = defineCommand({
-  meta: { name: "sync", description: "upload your usage snapshot to a team dashboard" },
+  meta: { name: "sync", description: "upload usage data to a team dashboard or Hub" },
   args: {
     ...buildArgs,
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
