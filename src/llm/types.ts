@@ -1,0 +1,75 @@
+// Shared types for the general LLM access layer (#132). Kept dependency-free so `index.ts`,
+// `http.ts`, the providers, and `config.ts` can all import them without an import cycle.
+
+/** The set of LLM providers Argus can route a completion through.
+ *  - `off`     — no LLM available; the client returns `ok: false` with a clear reason.
+ *  - `claude`  — the local `claude -p` CLI (no API key; uses the user's Claude login).
+ *  - `command` — an arbitrary local command: prompt on stdin, completion text on stdout.
+ *  - `anthropic`/`openai`/`gemini` — direct HTTP providers (BYO API key).
+ *  - `hub`     — reserved extension point for a future org-managed key proxy (not implemented). */
+export type LlmProvider = "off" | "claude" | "command" | "anthropic" | "openai" | "gemini" | "hub";
+
+/** A consumer-agnostic completion request. `system` carries instructions, `prompt` carries the data;
+ *  the single-blob callers map everything to `prompt` with no `system`. */
+export interface LlmRequest {
+  system?: string;
+  prompt: string;
+  /** Overrides `config.model` for this call. */
+  model?: string;
+  /** Overrides `config.maxTokens` for this call. */
+  maxTokens?: number;
+  /** Aborts the in-flight request (and kills a local subprocess). */
+  signal?: AbortSignal;
+}
+
+/** A completion result. `text` is the raw completion only — JSON parsing stays in the consumer.
+ *  `off`/auth/network failures come back as `ok: false` with a diagnostic; the client never throws. */
+export interface LlmResult {
+  ok: boolean;
+  text: string;
+  error?: string;
+  /** HTTP status (HTTP providers) or subprocess exit code (local providers); absent for transport errors. */
+  status?: number | null;
+}
+
+/** The resolved LLM settings a consumer passes to `complete()`. Produced by `config.ts` from the
+ *  `llm.*` block (with per-consumer overrides) plus a resolved `apiKey` for the HTTP providers. */
+export interface ResolvedLlmConfig {
+  provider: LlmProvider;
+  /** Model id; falls back to each provider's built-in default when unset. */
+  model?: string;
+  /** OpenAI-compatible / self-hosted base URL (openai provider only). */
+  baseUrl?: string;
+  /** Per-request output cap for the HTTP providers. */
+  maxTokens?: number;
+  /** Command line for the `command` provider. */
+  command?: string;
+  /** The resolved API key for an HTTP provider. The layer owns the transport, not the key store:
+   *  consumers resolve this (env var → secret store) and pass it in. Absent → a "no key" diagnostic. */
+  apiKey?: string;
+  /** Name of the env var the key is expected under — used only to phrase the "no key" diagnostic. */
+  apiKeyEnv?: string;
+}
+
+/** The resolved per-call context an HTTP provider operates on. */
+export interface HttpProviderContext {
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+  baseUrl?: string;
+  system?: string;
+  prompt: string;
+  fetch: typeof fetch;
+  signal?: AbortSignal;
+}
+
+/** The resolved per-call context a local (subprocess) provider operates on. */
+export interface LocalProviderContext {
+  system?: string;
+  prompt: string;
+  /** Model passed to the `claude` CLI's `--model`. */
+  model?: string;
+  /** Command line for the `command` provider. */
+  command?: string;
+  signal?: AbortSignal;
+}
