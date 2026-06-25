@@ -137,8 +137,18 @@ export interface HubUploadPayload {
   rows: HubUploadRows;
 }
 
-/** Open argus.db read-only, read all resolved_* rows, return them as plain JS objects. */
-export function readHubUploadPayload(dbPath: string): HubUploadPayload {
+export interface ReadHubUploadOptions {
+  /** If set, include only sessions whose IDs are in this set (and their child rows). */
+  onlySessionIds?: Set<string>;
+}
+
+/** Open argus.db read-only, read all resolved_* rows, return them as plain JS objects.
+ *  When `onlySessionIds` is provided, the result is filtered to those sessions and any rows
+ *  referencing them — used by `sync`'s "only send what the Hub doesn't already have" path. */
+export function readHubUploadPayload(
+  dbPath: string,
+  opts: ReadHubUploadOptions = {},
+): HubUploadPayload {
   const db = new Database(dbPath, { readonly: true });
   try {
     const appId = db.query<{ application_id: number }, []>("PRAGMA application_id").get();
@@ -148,7 +158,7 @@ export function readHubUploadPayload(dbPath: string): HubUploadPayload {
     const ver = db.query<{ user_version: number }, []>("PRAGMA user_version").get();
     const schemaVersion = ver?.user_version ?? 0;
 
-    const sessions = db
+    const allSessions = db
       .query<HubUploadSession, []>(
         `SELECT session_id, source, project, cwd, first_ts, last_ts, message_count,
                 first_prompt, archived, friction_interruptions, friction_rejections,
@@ -157,7 +167,7 @@ export function readHubUploadPayload(dbPath: string): HubUploadPayload {
       )
       .all();
 
-    const usage = db
+    const allUsage = db
       .query<HubUploadUsage, []>(
         `SELECT session_id, seq, source, ts, date, cwd, project, record_json,
                 input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h,
@@ -166,13 +176,13 @@ export function readHubUploadPayload(dbPath: string): HubUploadPayload {
       )
       .all();
 
-    const tasks = db
+    const allTasks = db
       .query<HubUploadTask, []>(
         "SELECT session_id, seq, source, ts, task_json FROM resolved_tasks",
       )
       .all();
 
-    const interactions = db
+    const allInteractions = db
       .query<HubUploadInteraction, []>(
         `SELECT session_id, seq, source, ts, initiator, disposition,
                 compaction_count, task_seq, interaction_json
@@ -180,7 +190,7 @@ export function readHubUploadPayload(dbPath: string): HubUploadPayload {
       )
       .all();
 
-    const invocations = db
+    const allInvocations = db
       .query<HubUploadInvocation, []>(
         `SELECT session_id, seq, source, interaction_seq, tool, category,
                 mcp_server, mcp_tool, skill, file_path, date, cwd, args,
@@ -189,24 +199,108 @@ export function readHubUploadPayload(dbPath: string): HubUploadPayload {
       )
       .all();
 
-    return { schemaVersion, rows: { sessions, usage, tasks, interactions, invocations } };
+    const filter = opts.onlySessionIds;
+    if (!filter) {
+      return {
+        schemaVersion,
+        rows: { sessions: allSessions, usage: allUsage, tasks: allTasks, interactions: allInteractions, invocations: allInvocations },
+      };
+    }
+    const keep = (sid: string) => filter.has(sid);
+    return {
+      schemaVersion,
+      rows: {
+        sessions: allSessions.filter((s) => keep(s.session_id)),
+        usage: allUsage.filter((u) => keep(u.session_id)),
+        tasks: allTasks.filter((t) => keep(t.session_id)),
+        interactions: allInteractions.filter((i) => keep(i.session_id)),
+        invocations: allInvocations.filter((v) => keep(v.session_id)),
+      },
+    };
   } finally {
     db.close();
   }
 }
 
-/** POST session data from argus.db to a Hub ingest endpoint as JSON. */
-export async function pushHubJson(hubUrl: string, hubKey: string, userId: string, dbPath: string): Promise<PushResult> {
-  const url = hubUrl.replace(/\/+$/, "") + "/api/sync";
+/** Read just the session IDs from argus.db. Used to ask the Hub which ones it already has. */
+export function readSessionIds(dbPath: string): string[] {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db
+      .query<{ session_id: string }, []>("SELECT session_id FROM resolved_sessions")
+      .all()
+      .map((r) => r.session_id);
+  } finally {
+    db.close();
+  }
+}
+
+export interface PushHubOptions {
+  /** Skip the unknown-sessions probe and upload every session. */
+  all?: boolean;
+  /** Sink for progress messages (e.g. "Hub already has N/M sessions"). */
+  log?: (message: string) => void;
+}
+
+/** Stay well under the Hub's MAX_SESSION_IDS_PER_REQUEST (10_000). */
+const UNKNOWN_SESSIONS_PROBE_CHUNK = 5_000;
+
+/** POST session data from argus.db to a Hub ingest endpoint as JSON. By default, first asks the
+ *  Hub which session IDs it already has and uploads only the rest; pass `{ all: true }` to skip
+ *  the probe. If the Hub returns 404 for the probe (older Hub without the endpoint), falls back
+ *  to a full upload. */
+export async function pushHubJson(
+  hubUrl: string,
+  hubKey: string,
+  userId: string,
+  dbPath: string,
+  opts: PushHubOptions = {},
+): Promise<PushResult> {
+  const base = hubUrl.replace(/\/+$/, "");
+
+  let onlySessionIds: Set<string> | undefined;
+  if (!opts.all) {
+    let allIds: string[];
+    try {
+      allIds = readSessionIds(dbPath);
+    } catch (err) {
+      return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+    }
+    if (allIds.length === 0) {
+      onlySessionIds = new Set();
+    } else {
+      const unknown: string[] = [];
+      let probeFailedWithFallback = false;
+      for (let i = 0; i < allIds.length; i += UNKNOWN_SESSIONS_PROBE_CHUNK) {
+        const slice = allIds.slice(i, i + UNKNOWN_SESSIONS_PROBE_CHUNK);
+        const r = await fetchUnknownSessionIds(base, hubKey, userId, slice);
+        if (!r.ok) {
+          if (r.status === 404) {
+            opts.log?.("Hub does not support the unknown-sessions probe; uploading all sessions.");
+            probeFailedWithFallback = true;
+            break;
+          }
+          return { ok: false, status: r.status, body: r.body };
+        }
+        unknown.push(...r.unknownSessionIds!);
+      }
+      if (!probeFailedWithFallback) {
+        onlySessionIds = new Set(unknown);
+        const known = allIds.length - onlySessionIds.size;
+        opts.log?.(`Hub already has ${known}/${allIds.length} sessions; uploading ${onlySessionIds.size}.`);
+      }
+    }
+  }
+
   let body: string;
   try {
-    const payload = readHubUploadPayload(dbPath);
+    const payload = readHubUploadPayload(dbPath, onlySessionIds ? { onlySessionIds } : {});
     body = JSON.stringify(payload);
   } catch (err) {
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
   }
   try {
-    const res = await fetch(url, {
+    const res = await fetch(base + "/api/sync", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -220,6 +314,50 @@ export async function pushHubJson(hubUrl: string, hubKey: string, userId: string
   } catch (err) {
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
   }
+}
+
+export interface UnknownSessionsResult {
+  ok: boolean;
+  status: number;
+  body: string;
+  unknownSessionIds?: string[];
+}
+
+/** Ask the Hub which of `sessionIds` it does NOT already have for `userId`. Returns the parsed
+ *  list on success, or a non-ok result describing the failure (network error, non-2xx, or a
+ *  malformed body). */
+export async function fetchUnknownSessionIds(
+  hubBaseUrl: string,
+  hubKey: string,
+  userId: string,
+  sessionIds: string[],
+): Promise<UnknownSessionsResult> {
+  const url = hubBaseUrl.replace(/\/+$/, "") + "/api/sync/unknown-sessions";
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${hubKey}`,
+        "x-argus-user": userId,
+      },
+      body: JSON.stringify({ sessionIds }),
+    });
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+  const text = await res.text();
+  if (!res.ok) return { ok: false, status: res.status, body: text };
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch (err) {
+    return { ok: false, status: 0, body: `Malformed JSON from Hub: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const ids = (parsed as { unknownSessionIds?: unknown })?.unknownSessionIds;
+  if (!Array.isArray(ids) || !ids.every((v) => typeof v === "string")) {
+    return { ok: false, status: 0, body: "Malformed unknown-sessions response from Hub." };
+  }
+  return { ok: true, status: res.status, body: text, unknownSessionIds: ids as string[] };
 }
 
 export { STORE_SCHEMA_VERSION };

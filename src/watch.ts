@@ -58,6 +58,8 @@ export interface PushLoopOptions extends BuildDashboardOptions {
   endpoint: string;
   user?: string;
   org?: string;
+  /** Hub mode only: skip the unknown-sessions probe and re-upload every session. */
+  all?: boolean;
 }
 
 export type OnUnauthenticated = "fail" | "dormant";
@@ -113,7 +115,7 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
   if (hubCfg) {
     const userId = detectUser(opts.user);
     log(`Uploading to Hub as "${userId}" → ${hubCfg.url}`);
-    return pushHubJson(hubCfg.url, hubCfg.key, userId, STORE_FILE);
+    return pushHubJson(hubCfg.url, hubCfg.key, userId, STORE_FILE, { all: opts.all, log });
   }
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);
