@@ -38,6 +38,7 @@ struct AppState {
 }
 
 const ABOUT_WINDOW_LABEL: &str = "about";
+const SETTINGS_WINDOW_LABEL: &str = "settings";
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -177,6 +178,55 @@ fn open_dashboard(app: &AppHandle) {
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
         log::error!("opening the dashboard: {err}");
     }
+}
+
+/// Read every setting currently in `argus.json` as a flat `{ "dotted.key": value }` object by
+/// running the bundled CLI one-shot (`argus config list --json`). This deliberately goes through
+/// the CLI rather than reading the file in Rust: the CLI owns where `argus.json` lives (the
+/// per-platform config-dir chain) and how each value is shaped, so the settings window never needs
+/// to duplicate that. Works whether or not the `argus run` background service is up — it's its own
+/// short-lived process. The CLI prints its banner to stderr, so stdout is clean JSON.
+#[tauri::command]
+async fn read_settings(app: AppHandle) -> Result<serde_json::Value, String> {
+    let output = app
+        .shell()
+        .sidecar("argus")
+        .map_err(|e| format!("locating the argus sidecar: {e}"))?
+        .args(["config", "list", "--json"])
+        .output()
+        .await
+        .map_err(|e| format!("reading settings: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "reading settings failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(stdout.trim()).map_err(|e| format!("parsing settings: {e}"))
+}
+
+/// Write one setting to `argus.json` via the bundled CLI (`argus config set <key> <value>`). The
+/// CLI validates the value against the setting's parser and rejects unknown keys, so any bad input
+/// surfaces here as an error string for the window to show. A non-empty store change is picked up
+/// the next time the background service runs; restart it (Stop then Start) to apply immediately.
+#[tauri::command]
+async fn write_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    let output = app
+        .shell()
+        .sidecar("argus")
+        .map_err(|e| format!("locating the argus sidecar: {e}"))?
+        .args(["config", "set", &key, &value])
+        .output()
+        .await
+        .map_err(|e| format!("saving {key}: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "saving {key} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -348,6 +398,55 @@ fn show_about(app: &AppHandle) {
     }
 }
 
+/// Open or focus the settings window. The page is bundled static HTML that talks to the
+/// `read_settings`/`write_setting` commands over Tauri IPC — no sidecar HTTP server is involved, so
+/// it works whether or not the background service is running. The window is reused (hidden on close)
+/// like the About window.
+fn show_settings(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(SETTINGS_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let result = WebviewWindowBuilder::new(
+        app,
+        SETTINGS_WINDOW_LABEL,
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("Argus Settings")
+    .inner_size(520.0, 600.0)
+    .resizable(true)
+    .maximizable(false)
+    .minimizable(false)
+    .center()
+    .focused(true)
+    .build();
+
+    match result {
+        Ok(window) => {
+            let window_for_close = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Err(err) = window_for_close.hide() {
+                        log::warn!("hiding Settings window: {err}");
+                    }
+                }
+            });
+            let _ = window.set_focus();
+        }
+        Err(err) => {
+            log::error!("opening Settings window: {err}");
+            notify(
+                app,
+                "Couldn't open Settings",
+                "The Settings window failed to open. Check Console for details.",
+            );
+        }
+    }
+}
+
 /// Check for a signed desktop update, install it if available, and restart to finish.
 /// Returns `Ok(true)` when an update was installed (and a restart was triggered).
 async fn install_available_update(app: AppHandle) -> Result<bool, String> {
@@ -411,6 +510,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![read_settings, write_setting])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -429,6 +529,8 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let about = MenuItem::with_id(app, "about", "About Argus", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
             let version = MenuItem::with_id(
@@ -446,6 +548,7 @@ pub fn run() {
                     &open,
                     &start_item,
                     &stop_item,
+                    &settings_item,
                     &about,
                     &PredefinedMenuItem::separator(app)?,
                     &version,
@@ -475,6 +578,7 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
+                    "settings" => show_settings(app),
                     "about" => show_about(app),
                     "quit" => {
                         stop(app);
