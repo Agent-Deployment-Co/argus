@@ -4,12 +4,17 @@ import { KNOWN_SOURCES } from "../lib/snapshot";
 import { daysAgo, type RootSearch } from "../router";
 
 const SOURCE_LABELS: Record<string, string> = {
-  claude: "Claude",
+  claude: "Claude Code",
+  "claude-chat": "Claude Chat",
+  cowork: "Claude Cowork",
   codex: "Codex",
-  gemini: "Gemini",
-  cowork: "Cowork",
-  "claude-chat": "Claude chat",
+  gemini: "Gemini"
 };
+
+const sourceLabel = (s: string): string => SOURCE_LABELS[s] ?? s;
+
+// Source options ordered by display name, ascending alpha.
+const SORTED_SOURCES = [...KNOWN_SOURCES].sort((a, b) => sourceLabel(a).localeCompare(sourceLabel(b)));
 
 /** Global dashboard filters (date range + source) shown above every view. Edits the root search
  *  params; `retainSearchParams` keeps them in the URL as the user moves between tabs, and the
@@ -72,9 +77,9 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
           onChange={(e) => set({ source: e.target.value || undefined })}
         >
           <option value="">All sources</option>
-          {KNOWN_SOURCES.map((s) => (
+          {SORTED_SOURCES.map((s) => (
             <option key={s} value={s}>
-              {SOURCE_LABELS[s] ?? s}
+              {sourceLabel(s)}
             </option>
           ))}
         </select>
