@@ -13,7 +13,7 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
-import { buildDashboard, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
+import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE } from "./paths.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
@@ -109,7 +109,13 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);
   // forWire: drop local-only sources (claude.ai chat) from the uploaded snapshot — it's personal
-  // usage with estimated tokens, surfaced in the local web app only.
+  // usage with estimated tokens, surfaced in the local web app only. If the requested source is
+  // ENTIRELY local-only, there's nothing to upload — bail rather than fall through to the store's
+  // empty-sources default (which is "claude"), which would silently upload Claude Code data instead.
+  if (sourcesFor(opts.source, { forWire: true }).length === 0) {
+    log(`Nothing to upload: "${opts.source}" is a local-only source, not synced to the team dashboard.`);
+    return { ok: true, skipped: true, status: 0, body: "skipped: local-only source" };
+  }
   const dash = await buildDashboard({ ...opts, forWire: true }, log);
   log(`Uploading snapshot for "${user}" (org: ${org ?? "from token"}) → ${opts.endpoint}`);
   log(`  ${summaryLine(dash)}`);

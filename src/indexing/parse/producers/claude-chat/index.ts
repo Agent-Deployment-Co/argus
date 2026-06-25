@@ -1,9 +1,8 @@
 import {
   createClaudeChatAuxiliaryParserAdapter,
-  createClaudeChatDiscoveryAdapter,
   createClaudeChatTranscriptParserAdapter,
-  discoverClaudeChatProjects,
   parseClaudeChatTranscriptPath,
+  scanClaudeChatForContext,
 } from "./parser.ts";
 import type { NativeProducer, ProducerContext } from "../../../producer.ts";
 
@@ -23,10 +22,11 @@ export const claudeChatProducer: NativeProducer = {
     observesFriction: false,
     unknownProjectLabel: () => "claude.ai",
   },
-  discoverTranscripts: (ctx: ProducerContext) =>
-    createClaudeChatDiscoveryAdapter(ctx.claudeChatCacheDir).discover(),
+  // Both discovery methods read from one memoized walk per index run (same ctx), so the cache tree is
+  // scanned once, not once per method.
+  discoverTranscripts: (ctx: ProducerContext) => scanClaudeChatForContext(ctx).transcripts,
   transcriptParser: () => createClaudeChatTranscriptParserAdapter(),
   parseTranscriptPath: parseClaudeChatTranscriptPath,
-  discoverAuxiliary: (ctx: ProducerContext) => discoverClaudeChatProjects(ctx.claudeChatCacheDir),
+  discoverAuxiliary: (ctx: ProducerContext) => scanClaudeChatForContext(ctx).projects,
   auxiliaryParser: () => createClaudeChatAuxiliaryParserAdapter(),
 };

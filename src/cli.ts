@@ -227,7 +227,9 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
   }
 
   const res = await pushSnapshotForOpts(opts, credentials, log);
-  if (res.ok) {
+  if (res.skipped) {
+    // pushSnapshotForOpts already logged why; nothing was uploaded, and that's not an error.
+  } else if (res.ok) {
     log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
   } else if (res.isAccessChallenge) {
     log(`✗ Upload failed (${res.status}): you're signed out or your session expired.`);

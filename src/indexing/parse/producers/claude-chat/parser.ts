@@ -17,7 +17,6 @@ import {
   buildPromptFact,
   createFactId,
   createFileIdentity,
-  isAgentInitiated,
   sameFileFingerprint,
   stableId,
   type AuxiliaryParseResult,
@@ -38,16 +37,15 @@ import {
   type SessionFact,
   type SourcePosition,
   type ToolResultFact,
-  type TranscriptDiscoveryAdapter,
   type TranscriptParserAdapter,
   type UsageFact,
 } from "../../../../store/store-contract.ts";
 import { CLAUDE_CHAT_CACHE_DIR } from "../../../../paths.ts";
+import type { ProducerContext } from "../../../producer.ts";
 import {
   TASK_TEXT_LIMIT,
   argusGeneratedPromptTitle,
   shouldSkipTaskCandidateText,
-  textFromUserContent,
 } from "../../../interpret/task-candidates.ts";
 import { parseMcpTool } from "../../../../tool-categories.ts";
 import { emptyUsage, type Usage } from "../../../../types.ts";
@@ -59,10 +57,13 @@ export const CLAUDE_CHAT_AUXILIARY_ROOT_ID = "claude-chat-projects";
 // v2: capture project_uuid so claude.ai-project conversations resolve to their project name.
 // v3: re-materialize so sessions pick up the "claude.ai/{project}" / "claude.ai" project labels
 //     (a reconcile-derived change, so the bump is what forces existing stores to re-derive it).
-export const CLAUDE_CHAT_TRANSCRIPT_PARSER_VERSION = "3";
+// v4: estimate input tokens from untruncated text; fall back to the conversation timestamp instead of
+//     epoch 0; dedup snapshots by recency rather than message count.
+export const CLAUDE_CHAT_TRANSCRIPT_PARSER_VERSION = "4";
 // v1: initial projects inventory (project_uuid → name).
 // v2: project-root cwd now "claude.ai/{name}" so the session labels as "claude.ai/{Project Name}".
-export const CLAUDE_CHAT_AUXILIARY_PARSER_VERSION = "2";
+// v3: collapse "/" in project names so the "claude.ai" namespace prefix always survives projectLabel.
+export const CLAUDE_CHAT_AUXILIARY_PARSER_VERSION = "3";
 
 export const CLAUDE_CHAT_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "claude-chat-cache",
@@ -193,26 +194,31 @@ function discoveredFile(
   };
 }
 
+/** One classified walk of the cache: a DiscoveryResult per role from a single directory scan. */
+export interface ClaudeChatScan {
+  transcripts: DiscoveryResult;
+  projects: DiscoveryResult;
+}
+
 /**
- * Walk the desktop app's Chromium Simple Cache, inspect each entry's URL key, and keep the entries
- * whose key matches `keep`. Shared by transcript discovery and the projects-inventory discovery.
+ * Walk the desktop app's Chromium Simple Cache ONCE and partition entries by URL key into the two
+ * roles we care about: full chat transcripts (`tree=True`) and the projects inventory
+ * (`/projects`, `/projects_v2`). A real Simple Cache holds thousands of entries, so one shared walk
+ * avoids opening + probing every file twice (once per discovery method).
  */
-function discoverCacheEntries(
-  cacheDir: string,
-  rootId: string,
-  role: "transcript" | "project_registry",
-  keep: (key: string) => boolean,
-): DiscoveryResult {
+export function scanClaudeChatCache(cacheDir = CLAUDE_CHAT_CACHE_DIR): ClaudeChatScan {
   const rootPath = resolve(cacheDir);
   const status = rootStatus(rootPath);
-  if (status === "missing") {
-    return discoveryFailure(rootPath, rootId, "missing", "missing_root", `Claude desktop cache does not exist: ${rootPath}`);
-  }
-  if (status === "unreadable") {
-    return discoveryFailure(rootPath, rootId, "unreadable", "unreadable_root", `Claude desktop cache is not readable: ${rootPath}`);
+  if (status !== "directory") {
+    const failStatus = status === "missing" ? "missing" : "unreadable";
+    const reason = status === "missing" ? "does not exist" : "is not readable";
+    const fail = (rootId: string): DiscoveryResult =>
+      discoveryFailure(rootPath, rootId, failStatus, `${failStatus}_root`, `Claude desktop cache ${reason}: ${rootPath}`);
+    return { transcripts: fail(CLAUDE_CHAT_ROOT_ID), projects: fail(CLAUDE_CHAT_AUXILIARY_ROOT_ID) };
   }
 
-  const files: DiscoveredFile[] = [];
+  const transcripts: DiscoveredFile[] = [];
+  const projects: DiscoveredFile[] = [];
   const diagnostics: ParserDiagnostic[] = [];
   let partial = false;
 
@@ -237,9 +243,14 @@ function discoverCacheEntries(
       const probe = readKeyProbe(path);
       if (!probe) continue;
       const header = parseSimpleCacheHeader(probe);
-      if (!header || !keep(header.key)) continue;
+      if (!header) continue;
+      const isTranscript = isChatTranscriptKey(header.key);
+      const isProjects = !isTranscript && isProjectsKey(header.key);
+      if (!isTranscript && !isProjects) continue;
       try {
-        files.push(discoveredFile(path, relative(rootPath, path).split("\\").join("/"), rootId, role));
+        const relativePath = relative(rootPath, path).split("\\").join("/");
+        if (isTranscript) transcripts.push(discoveredFile(path, relativePath, CLAUDE_CHAT_ROOT_ID, "transcript"));
+        else projects.push(discoveredFile(path, relativePath, CLAUDE_CHAT_AUXILIARY_ROOT_ID, "project_registry"));
       } catch (error) {
         partial = true;
         diagnostics.push(
@@ -250,18 +261,44 @@ function discoverCacheEntries(
   };
   walk(rootPath);
 
-  files.sort((a, b) => compareText(a.file.relativePath, b.file.relativePath));
-  return { status: partial ? "partial" : "complete", source: "claude-chat", rootId, rootPath, files, diagnostics };
+  const byPath = (a: DiscoveredFile, b: DiscoveredFile) => compareText(a.file.relativePath, b.file.relativePath);
+  transcripts.sort(byPath);
+  projects.sort(byPath);
+  const result = (rootId: string, files: DiscoveredFile[]): DiscoveryResult => ({
+    status: partial ? "partial" : "complete",
+    source: "claude-chat",
+    rootId,
+    rootPath,
+    files,
+    diagnostics,
+  });
+  return {
+    transcripts: result(CLAUDE_CHAT_ROOT_ID, transcripts),
+    projects: result(CLAUDE_CHAT_AUXILIARY_ROOT_ID, projects),
+  };
+}
+
+// discoverTranscripts and discoverAuxiliary are called with the SAME ProducerContext within one index
+// run, so memoizing the classified scan by that context (a fresh object per run) walks the cache once
+// per run instead of once per method. The WeakMap entry is collected with the context, so it can't go
+// stale across runs (a later run gets a new context → a fresh walk with fresh fingerprints).
+const scanByContext = new WeakMap<ProducerContext, ClaudeChatScan>();
+export function scanClaudeChatForContext(ctx: ProducerContext): ClaudeChatScan {
+  const cached = scanByContext.get(ctx);
+  if (cached) return cached;
+  const scan = scanClaudeChatCache(ctx.claudeChatCacheDir);
+  scanByContext.set(ctx, scan);
+  return scan;
 }
 
 /** Discover claude.ai full chat-transcript entries (`tree=True`) in the desktop app's cache. */
 export function discoverClaudeChatTranscripts(cacheDir = CLAUDE_CHAT_CACHE_DIR): DiscoveryResult {
-  return discoverCacheEntries(cacheDir, CLAUDE_CHAT_ROOT_ID, "transcript", isChatTranscriptKey);
+  return scanClaudeChatCache(cacheDir).transcripts;
 }
 
 /** Discover the claude.ai Projects inventory entries (`/projects`, `/projects_v2`) — the uuid→name map. */
 export function discoverClaudeChatProjects(cacheDir = CLAUDE_CHAT_CACHE_DIR): DiscoveryResult {
-  return discoverCacheEntries(cacheDir, CLAUDE_CHAT_AUXILIARY_ROOT_ID, "project_registry", isProjectsKey);
+  return scanClaudeChatCache(cacheDir).projects;
 }
 
 interface StableRead {
@@ -407,6 +444,9 @@ function factsFromConversation(conversation: ChatConversation, file: FileIdentit
   const sourceSessionId = `claude-chat:${uuid}`;
   const model = typeof conversation.model === "string" && conversation.model ? conversation.model : "(unknown)";
   const chatMessages = Array.isArray(conversation.chat_messages) ? conversation.chat_messages : [];
+  // Fallback timestamp for a message that lacks a parseable one, so its estimated usage buckets to the
+  // conversation's day rather than epoch 0 (1970). claude.ai always stamps the conversation.
+  const conversationTimestampMs = parseTimestamp(conversation.updated_at ?? conversation.created_at);
 
   const conversationPosition = sourcePosition(file, 0, 0);
   const firstPrompt = chatMessages
@@ -433,7 +473,9 @@ function factsFromConversation(conversation: ChatConversation, file: FileIdentit
     if (message.sender === "human") {
       userMessages++;
       const taskText = messageText(message);
-      lastHumanTokens = estimateTokens(taskText);
+      // Estimate input from the UNtruncated text (the assistant/output side also uses full text), so a
+      // long prompt isn't capped at TASK_TEXT_LIMIT; taskText stays truncated for the task-candidate text.
+      lastHumanTokens = estimateTokens(messageText(message, Number.MAX_SAFE_INTEGER));
       if (taskText && !argusGeneratedPromptTitle(taskText)) {
         const nextText = chatMessages[recordIndex + 1]?.sender === "human" ? messageText(chatMessages[recordIndex + 1]!) : undefined;
         // claude.ai chat is never a subagent session, so a human turn is human-initiated; carry task
@@ -455,6 +497,11 @@ function factsFromConversation(conversation: ChatConversation, file: FileIdentit
     }
 
     if (message.sender !== "assistant") continue;
+    const messageTimestampMs = Number.isNaN(timestampMs) ? conversationTimestampMs : timestampMs;
+    if (Number.isNaN(messageTimestampMs)) {
+      lastHumanTokens = 0; // no usable timestamp anywhere — skip rather than bucket usage into epoch 0
+      continue;
+    }
     agentMessages++;
 
     const outputText = messageText(message, Number.MAX_SAFE_INTEGER);
@@ -470,7 +517,7 @@ function factsFromConversation(conversation: ChatConversation, file: FileIdentit
       source: "claude-chat",
       sourceSessionId,
       ...(providerMessageId ? { providerMessageId } : {}),
-      timestampMs: Number.isNaN(timestampMs) ? 0 : timestampMs,
+      timestampMs: messageTimestampMs,
       model,
       usage,
       attributionSkill: null,
@@ -595,12 +642,15 @@ export function parseClaudeChatTranscriptFile(file: DiscoveredFile, options: Cla
     contractVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
     parser: CLAUDE_CHAT_TRANSCRIPT_PARSER,
     snapshot: { file: file.file, fingerprint: stable.fingerprint, attempts: stable.attempts },
-    // The cache can hold several snapshots of one conversation; keep the richest (most messages),
-    // newest as the tie-breaker. reconcile.selectAlternateRepresentations does the picking.
+    // The cache can hold several snapshots of one conversation; keep the most recent. We deliberately
+    // do NOT rank by chat_messages.length: a `tree=True` response includes superseded branch nodes
+    // (regenerations/edits), so a staler snapshot can list MORE entries than the current one. With a
+    // constant preference, reconcile.selectAlternateRepresentations falls through to updatedAtMs
+    // (newest wins), then the stable fragment id.
     alternateRepresentation: {
       logicalId: `claude-chat:${conversation.uuid}`,
       representation: "cache",
-      preference: conversation.chat_messages.length,
+      preference: 0,
       ...(Number.isNaN(updatedAtMs) ? {} : { updatedAtMs }),
     },
     facts: factsFromConversation(conversation, file.file),
@@ -640,10 +690,6 @@ export function parseClaudeChatTranscriptPath(path: string): FileParseResult {
     };
   }
   return parseClaudeChatTranscriptFile({ file, fingerprint });
-}
-
-export function createClaudeChatDiscoveryAdapter(cacheDir = CLAUDE_CHAT_CACHE_DIR): TranscriptDiscoveryAdapter {
-  return { source: "claude-chat", discover: () => discoverClaudeChatTranscripts(cacheDir) };
 }
 
 export function createClaudeChatTranscriptParserAdapter(options: ClaudeChatParseOptions = {}): TranscriptParserAdapter {
@@ -701,18 +747,21 @@ export function parseClaudeChatProjectsFile(file: DiscoveredFile, options: Claud
   }
   projectEntries(parsed).forEach((entry, index) => {
     const uuid = typeof entry.uuid === "string" ? entry.uuid : undefined;
-    const name = typeof entry.name === "string" ? entry.name.trim() : "";
-    if (!uuid || !name) {
+    const rawName = typeof entry.name === "string" ? entry.name.trim() : "";
+    if (!uuid || !rawName) {
       diagnostics.push(diagnostic("invalid_project_entry", "parse", "Skipped a projects entry without a uuid and name", "warning"));
       return;
     }
+    // reconcile labels the session by projectLabel(cwd) — the last two "/"-segments — so we encode
+    // "claude.ai/{name}". claude.ai project names are free text and may contain "/" (e.g. "Q3/Roadmap"),
+    // which would push the "claude.ai" segment out of the last two; collapse slashes in the name first
+    // so the namespace prefix always survives.
+    const name = rawName.replace(/\s*\/\s*/g, " ").replace(/\s+/g, " ").trim();
     facts.push({
       id: stableId("fact:project_root", [file.file.id, uuid, name]),
       kind: "project_root",
       source: "claude-chat",
       selector: uuid,
-      // reconcile labels the session by projectLabel(cwd) (last two "/"-segments), so prefixing with
-      // "claude.ai/" surfaces "claude.ai/{Project Name}" in the UI.
       cwd: `claude.ai/${name}`,
       position: sourcePosition(file.file, 0, index),
     });
