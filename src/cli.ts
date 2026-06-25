@@ -337,8 +337,12 @@ function flattenObject(obj: unknown, prefix = ""): [string, unknown][] {
   return result;
 }
 
-async function runConfigGet(key: string, log: Log): Promise<void> {
+async function runConfigGet(key: string, log: Log, json = false): Promise<void> {
   const value = getPath(loadConfig(), key);
+  if (json) {
+    process.stdout.write(JSON.stringify(value ?? null) + "\n");
+    return;
+  }
   if (value === undefined) {
     log("(not set)");
   } else {
@@ -358,8 +362,14 @@ async function runConfigSet(key: string, rawValue: string, log: Log): Promise<vo
   log(`${key} = ${JSON.stringify(parsed)}`);
 }
 
-async function runConfigList(log: Log): Promise<void> {
+async function runConfigList(log: Log, json = false): Promise<void> {
   const pairs = flattenObject(loadConfig());
+  if (json) {
+    // A flat dotted-key → value object: the keys are exactly the ones `config set`/`get` take,
+    // so a consumer (e.g. the desktop settings window) can round-trip them directly.
+    process.stdout.write(JSON.stringify(Object.fromEntries(pairs)) + "\n");
+    return;
+  }
   if (pairs.length === 0) {
     log("(no settings in argus.json)");
     return;
@@ -605,10 +615,11 @@ const configGet = defineCommand({
   meta: { name: "get", description: "print a setting from argus.json" },
   args: {
     key: { type: "positional", required: true, description: "dotted key, e.g. taskExtraction.enabled" },
+    json: { type: "boolean", default: false, description: "print the value as JSON (null when unset)" },
   },
   run: handler((args) => {
     if (args._.length !== 1) failArg("Usage: argus config get <key>");
-    return runConfigGet(args._[0]!, log);
+    return runConfigGet(args._[0]!, log, args.json);
   }),
 });
 
@@ -625,7 +636,10 @@ const configSet = defineCommand({
 
 const configList = defineCommand({
   meta: { name: "list", description: "list all settings currently in argus.json" },
-  run: handler(() => runConfigList(log)),
+  args: {
+    json: { type: "boolean", default: false, description: "print all settings as a flat JSON object" },
+  },
+  run: handler((args) => runConfigList(log, args.json)),
 });
 
 const config = defineCommand({
