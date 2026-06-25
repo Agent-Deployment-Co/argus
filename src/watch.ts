@@ -13,7 +13,7 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
-import { buildDashboard, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
+import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE } from "./paths.ts";
 import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
@@ -108,7 +108,21 @@ export async function resolveCredentials(endpoint: string, log: Log): Promise<Pu
 export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: PushCredentials, log: Log): Promise<PushResult> {
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);
-  const dash = await buildDashboard(opts, log);
+  // forWire: drop local-only sources (claude.ai chat) from the uploaded snapshot — it's personal
+  // usage with estimated tokens, surfaced in the local web app only. If the requested source is
+  // ENTIRELY local-only, there's nothing to upload — bail rather than fall through to the store's
+  // empty-sources default (which is "claude"), which would silently upload Claude Code data instead.
+  if (sourcesFor(opts.source, { forWire: true }).length === 0) {
+    // The message rides on `body` (not logged here) so each caller surfaces it appropriately: the
+    // one-shot logs it once; the --watch leg routes it through its collapser to avoid per-interval spam.
+    return {
+      ok: true,
+      skipped: true,
+      status: 0,
+      body: `Nothing to upload: "${opts.source}" is a local-only source, not synced to the team dashboard.`,
+    };
+  }
+  const dash = await buildDashboard({ ...opts, forWire: true }, log);
   log(`Uploading snapshot for "${user}" (org: ${org ?? "from token"}) → ${opts.endpoint}`);
   log(`  ${summaryLine(dash)}`);
   return pushSnapshot(opts.endpoint, credentials, {
@@ -205,7 +219,13 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           await sleep(backoff.next(), sig);
           continue;
         }
-        if (res.ok) {
+        if (res.skipped) {
+          // Nothing eligible to upload (e.g. an all-local-only --source). Not an error: idle a normal
+          // interval. Routed through the collapser so the same line doesn't repeat every cycle.
+          collapser.note(res.body);
+          backoff.reset();
+          await sleep(intervalMs, sig);
+        } else if (res.ok) {
           collapser.flush();
           log(`✓ Uploaded (${res.status}).`);
           backoff.reset();

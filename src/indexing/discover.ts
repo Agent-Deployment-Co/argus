@@ -10,6 +10,7 @@ export interface ParseOptions {
   codexSessionsDir?: string;
   geminiDir?: string;
   coworkSessionsDir?: string;
+  claudeChatCacheDir?: string;
   sources?: TranscriptSource[];
 }
 

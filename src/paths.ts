@@ -54,3 +54,19 @@ export const COWORK_SESSIONS_DIR: string | undefined =
   platform === "darwin"
     ? join(homedir(), "Library", "Application Support", "Claude", "local-agent-mode-sessions")
     : undefined;
+
+// The Claude desktop app's Chromium HTTP cache, which holds cached claude.ai chat transcripts (#94).
+// Identical entry format across platforms; only the base directory differs. `CLAUDE_DESKTOP_CACHE_DIR`
+// overrides it (e.g. a non-default install or a fixture dir in tests).
+function defaultClaudeChatCacheDir(): string {
+  if (process.env.CLAUDE_DESKTOP_CACHE_DIR) return process.env.CLAUDE_DESKTOP_CACHE_DIR;
+  if (platform === "darwin") {
+    return join(homedir(), "Library", "Application Support", "Claude", "Cache", "Cache_Data");
+  }
+  if (platform === "win32") {
+    const base = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+    return join(base, "Claude", "Cache", "Cache_Data");
+  }
+  return join(homedir(), ".config", "Claude", "Cache", "Cache_Data");
+}
+export const CLAUDE_CHAT_CACHE_DIR = defaultClaudeChatCacheDir();

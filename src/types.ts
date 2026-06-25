@@ -18,7 +18,7 @@ export type {
 } from "@agentdeploymentco/argus-schema";
 export type { ToolCategory } from "./tool-categories.ts";
 
-export type AgentSource = "claude" | "codex" | "gemini" | "cowork";
+export type AgentSource = "claude" | "codex" | "gemini" | "cowork" | "claude-chat";
 
 /** The set of agent sources Argus can index. Alias of AgentSource, used where a value names a
  *  transcript source to collect (CLI flags, discovery options). */

@@ -4,7 +4,7 @@ import { DataTable } from "../components/DataTable";
 import { Recommendations } from "../components/Recommendations";
 import { StatCards, type Stat } from "../components/StatCards";
 import { namedUsageColumns } from "../components/tables";
-import { fmt, modelFamilyColor, SERIES, usd } from "../lib/format";
+import { fmt, modelFamilyColor, SERIES, SKILL_PALETTE, usd } from "../lib/format";
 import { useSnapshot } from "../lib/snapshot";
 
 const fmtTick = (v: number | string) => fmt(Number(v));
@@ -94,7 +94,9 @@ export function Activity() {
               height={220}
               data={{
                 labels: d.bySource.map((s) => s.name),
-                datasets: [{ data: d.bySource.map((s) => s.total), backgroundColor: [SERIES.input, SERIES.output, SERIES.cacheRead, SERIES.cacheWrite] }],
+                // One color per source by position so the palette scales to however many sources exist
+                // (a fixed 4-color array left the 5th+ slice uncolored once claude-chat was added).
+                datasets: [{ data: d.bySource.map((s) => s.total), backgroundColor: d.bySource.map((_, i) => SKILL_PALETTE[i % SKILL_PALETTE.length]) }],
               }}
               options={{
                 plugins: {
