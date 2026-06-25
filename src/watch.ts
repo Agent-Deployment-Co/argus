@@ -18,6 +18,7 @@ import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { detectOrg, detectUser, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
 import { resolveHubConfig } from "./config.ts";
+import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
 
 const MIN_INTERVAL_MIN = 1;
@@ -58,7 +59,7 @@ export interface PushLoopOptions extends BuildDashboardOptions {
   endpoint: string;
   user?: string;
   org?: string;
-  /** Hub mode only: skip the unknown-sessions probe and re-upload every session. */
+  /** Hub mode only: skip local cursor filtering and re-upload every session. */
   all?: boolean;
 }
 
@@ -114,6 +115,8 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
   const hubCfg = resolveHubConfig();
   if (hubCfg) {
     log(`Uploading to Hub → ${hubCfg.url}`);
+    const store = await openStore({ path: STORE_FILE });
+    await store.close();
     return pushHubJson(hubCfg.url, hubCfg.key, STORE_FILE, { all: opts.all, log });
   }
   const user = detectUser(opts.user);
