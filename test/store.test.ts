@@ -482,6 +482,51 @@ describe("SQLite store", () => {
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 
+  test("repairs a v16 store the colliding migration left without hub_session_cursors", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:keep-me",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+      },
+    ]);
+    await initial.close();
+
+    // Reproduce the store the shipped-buggy build produced: two migrations were keyed 15 -> 16, so
+    // the object literal kept only the claude-chat rebuild and dropped the hub_session_cursors step.
+    // A store upgraded by that build reaches v16 without the table. Drop it and stamp v16.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS hub_session_cursors");
+      await rawExec(db, "PRAGMA user_version = 16");
+    });
+
+    // Reopening must REPAIR (16 -> 17 recreates the table) rather than reject as incompatible — the
+    // schema verification step queries hub_session_cursors, so a successful open proves it's back.
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:keep-me")).toBe(true);
+    } finally {
+      await migrated.close();
+    }
+
+    const [tableBack, version] = await withRawDatabase(path, async (db) => [
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hub_session_cursors'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(tableBack?.name).toBe("hub_session_cursors");
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
   test("rejects an older schema with no migration path instead of silently rebuilding", async () => {
     const path = storePath();
     const initial = await openStore({ path });
