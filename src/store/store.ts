@@ -15,6 +15,7 @@ import type {
   StoredFragment,
   InvalidationReason,
   FragmentMetadata,
+  ClientFingerprintEntry,
   CompleteDiscovery,
   DashboardAggregates,
   Store,
@@ -46,7 +47,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 14;
+export const STORE_SCHEMA_VERSION = 15;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -372,6 +373,16 @@ const CREATE_SCHEMA_SQL = `
   CREATE TABLE store_metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+
+  -- Append-only log of client-fingerprint observations (#141 follow-up). Each row is one (key,
+  -- value, ts) tuple; a repeat write of the same value for a key is suppressed in the writer so
+  -- only changes accumulate. Used later to register clients with the dashboard backend.
+  CREATE TABLE client_fingerprint (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    ts_ms INTEGER NOT NULL,
+    PRIMARY KEY (key, ts_ms)
   );
 `;
 
@@ -930,6 +941,20 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ALTER TABLE resolved_usage DROP COLUMN task_seq;
     `,
   },
+  // 14 -> 15: client-fingerprint observation log (#141 follow-up). Append-only (key, value, ts)
+  // tuples used later to register a client. IF NOT EXISTS matches the v13 -> v14 step's pattern so
+  // a fresh-then-downgraded test store doesn't collide with the schema's own copy of the table.
+  14: {
+    to: 15,
+    sql: `
+      CREATE TABLE IF NOT EXISTS client_fingerprint (
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        ts_ms INTEGER NOT NULL,
+        PRIMARY KEY (key, ts_ms)
+      );
+    `,
+  },
   // 13 -> 14: per-install client id (#141). Add a generic key/value bag for store-wide metadata;
   // the client_id row is lazily generated on first open via ensureClientIdRow(), so no backfill here.
   // IF NOT EXISTS is defensive: a store created at v14 and then downgraded for a migration test
@@ -1025,6 +1050,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
+    await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
   } catch (error) {
     if (!(error instanceof SQLiteError)) throw error;
     // Busy/corrupt errors propagate so asStoreError can classify them; anything else
@@ -2227,6 +2253,36 @@ export class SqliteStore implements Store {
 
   getClientId(): Promise<string> {
     return this.schedule(() => ensureClientIdRow(this.db));
+  }
+
+  recordClientFingerprint(key: string, value: string, tsMs: number): Promise<void> {
+    return this.schedule(async () => {
+      // Suppress repeat-of-same-value: read the latest value for this key, and only insert when it
+      // actually changed. Keeps the log a record of CHANGES rather than a tick per call.
+      const latest = await get<{ value: string }>(
+        this.db,
+        "SELECT value FROM client_fingerprint WHERE key = ? ORDER BY ts_ms DESC LIMIT 1",
+        [key],
+      );
+      if (latest && latest.value === value) return;
+      // INSERT OR IGNORE on (key, ts_ms) protects against an exact-millisecond duplicate write —
+      // unlikely in practice, but cheaper than synthesizing a unique timestamp.
+      await run(
+        this.db,
+        "INSERT OR IGNORE INTO client_fingerprint (key, value, ts_ms) VALUES (?, ?, ?)",
+        [key, value, tsMs],
+      );
+    });
+  }
+
+  listClientFingerprint(): Promise<ClientFingerprintEntry[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ key: string; value: string; ts_ms: number }>(
+        this.db,
+        "SELECT key, value, ts_ms FROM client_fingerprint ORDER BY ts_ms, key",
+      );
+      return rows.map((row) => ({ key: row.key, value: row.value, tsMs: row.ts_ms }));
+    });
   }
 
   storeStats(): Promise<StoreStats> {
