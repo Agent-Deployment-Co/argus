@@ -574,6 +574,13 @@ export interface TranscriptIndex {
   relationships: Array<{ child: string; parent: string }>;
 }
 
+/** One observation in the client-fingerprint log: a key/value pair stamped with when it was seen. */
+export interface ClientFingerprintEntry {
+  key: string;
+  value: string;
+  tsMs: number;
+}
+
 /** Coarse store-wide counts for status/debug surfaces. */
 export interface StoreStats {
   /** The store's on-disk schema version (PRAGMA user_version). */
@@ -658,6 +665,14 @@ export interface ReadModelStore {
   resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>>;
   /** Coarse row counts for status/debug surfaces (cheap COUNT(*)s + the store schema version). */
   storeStats(): Promise<StoreStats>;
+  /** Stable per-install client id (`client-<uuid>`), generated and persisted on first call (#141). */
+  getClientId(): Promise<string>;
+  /** Append-only log of client fingerprint observations (key/value/timestamp tuples). Used to
+   *  attribute snapshots to their originating client at registration. A repeat write of the SAME
+   *  value for a key is a no-op (only changes accumulate, so the log stays bounded). */
+  recordClientFingerprint(key: string, value: string, tsMs: number): Promise<void>;
+  /** All client-fingerprint observations, oldest first. */
+  listClientFingerprint(): Promise<ClientFingerprintEntry[]>;
   /** Canonical session ids currently materialized for `owner` (present and archived). */
   resolvedSessionIdsForOwner(owner: string): Promise<string[]>;
   /** Canonical session ids owned by some producer other than `owner`. */

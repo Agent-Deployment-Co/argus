@@ -22,6 +22,7 @@ import {
   type DashboardAggregates,
 } from "../store/store-contract.ts";
 import { openStore, rebuildStore } from "../store/store.ts";
+import { collectClientFingerprint } from "../client-fingerprint.ts";
 import { type ParseOptions } from "./discover.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
@@ -560,7 +561,12 @@ async function runPipeline<T>(
         : await openStore({ path: opts.storePath });
       ownsStore = true;
     }
-    if (sync) await syncStore(opts, store, stats, diagnostics);
+    if (sync) {
+      await syncStore(opts, store, stats, diagnostics);
+      // Refresh client-fingerprint observations on the same cadence as indexing. The writer is a
+      // no-op when nothing changed, so this stays cheap on a steady environment.
+      await collectClientFingerprint(store);
+    }
     return { result: await read(store, resolvedQuery(opts)), stats, diagnostics };
   } catch (error) {
     if (!degradeOnError) throw error; // index: fail loud rather than write to a discarded temp store.
