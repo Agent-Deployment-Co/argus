@@ -372,8 +372,12 @@ export interface SessionFirstPromptFact {
 export interface ProjectRootFact {
   id: string;
   kind: "project_root";
-  source: "gemini";
+  // Gemini resolves a project hash/slug → cwd; claude-chat resolves a claude.ai project uuid → its
+  // name. reconcile's project_root handling is source-agnostic (it only reads selector + cwd).
+  source: "gemini" | "claude-chat";
   selector: string;
+  /** The resolved value reconcile uses as the session's cwd, then labels via projectLabel. For
+   *  gemini this is a filesystem path; for claude-chat (no filesystem) it is the project name. */
   cwd: string;
   position: SourcePosition;
 }
@@ -707,6 +711,7 @@ const SOURCE_ORDER: Record<AgentSource, number> = {
   codex: 1,
   gemini: 2,
   cowork: 3,
+  "claude-chat": 4,
 };
 
 function compareText(a: string, b: string): number {

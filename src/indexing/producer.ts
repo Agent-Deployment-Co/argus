@@ -18,6 +18,7 @@ export interface ProducerContext {
   codexSessionsDir?: string;
   geminiDir?: string;
   coworkSessionsDir?: string;
+  claudeChatCacheDir?: string;
 }
 
 /** A native producer: discovers and parses local transcripts (+ optional auxiliary inputs). */

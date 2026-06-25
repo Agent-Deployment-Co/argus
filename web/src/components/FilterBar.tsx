@@ -8,6 +8,7 @@ const SOURCE_LABELS: Record<string, string> = {
   codex: "Codex",
   gemini: "Gemini",
   cowork: "Cowork",
+  "claude-chat": "Claude chat",
 };
 
 /** Global dashboard filters (date range + source) shown above every view. Edits the root search

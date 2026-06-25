@@ -108,7 +108,9 @@ export async function resolveCredentials(endpoint: string, log: Log): Promise<Pu
 export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: PushCredentials, log: Log): Promise<PushResult> {
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);
-  const dash = await buildDashboard(opts, log);
+  // forWire: drop local-only sources (claude.ai chat) from the uploaded snapshot — it's personal
+  // usage with estimated tokens, surfaced in the local web app only.
+  const dash = await buildDashboard({ ...opts, forWire: true }, log);
   log(`Uploading snapshot for "${user}" (org: ${org ?? "from token"}) → ${opts.endpoint}`);
   log(`  ${summaryLine(dash)}`);
   return pushSnapshot(opts.endpoint, credentials, {

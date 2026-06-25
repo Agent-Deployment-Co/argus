@@ -11,7 +11,7 @@ export interface SnapshotFilters {
   source?: string;
 }
 
-export const KNOWN_SOURCES = ["claude", "codex", "gemini", "cowork"] as const;
+export const KNOWN_SOURCES = ["claude", "codex", "gemini", "cowork", "claude-chat"] as const;
 
 /** Stable cache key for a filter set — also gates which values are actually sent to the server. */
 function snapshotQueryKey(filters: SnapshotFilters) {
