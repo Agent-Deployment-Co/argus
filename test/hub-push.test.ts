@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { pushHubJson, readHubUploadPayload } from "../src/push.ts";
+import { fetchUnknownSessionIds, pushHubJson, readHubUploadPayload, readSessionIds } from "../src/push.ts";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "../src/store/store.ts";
 
 // ---- Temp dir management ---------------------------------------------------------------
@@ -107,7 +107,7 @@ describe("pushHubJson", () => {
     }) as any;
 
     try {
-      const res = await pushHubJson("http://hub.test:4242", "hub-test-key", "user@example.com", path);
+      const res = await pushHubJson("http://hub.test:4242", "hub-test-key", "user@example.com", path, { all: true });
 
       expect(res.ok).toBe(true);
       expect(res.status).toBe(200);
@@ -134,7 +134,7 @@ describe("pushHubJson", () => {
     }) as any;
 
     try {
-      await pushHubJson("http://hub.test:4242/", "key", "user@example.com", path);
+      await pushHubJson("http://hub.test:4242/", "key", "user@example.com", path, { all: true });
       expect(capturedUrl).toBe("http://hub.test:4242/api/sync");
     } finally {
       globalThis.fetch = originalFetch;
@@ -146,7 +146,7 @@ describe("pushHubJson", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => ({ ok: false, status: 401, text: async () => "Unauthorized" }) as Response) as any;
     try {
-      const res = await pushHubJson("http://hub.test", "bad-key", "user@example.com", path);
+      const res = await pushHubJson("http://hub.test", "bad-key", "user@example.com", path, { all: true });
       expect(res.ok).toBe(false);
       expect(res.status).toBe(401);
     } finally {
@@ -159,7 +159,7 @@ describe("pushHubJson", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as any;
     try {
-      const res = await pushHubJson("http://hub.test", "hub-key", "user@example.com", path);
+      const res = await pushHubJson("http://hub.test", "hub-key", "user@example.com", path, { all: true });
       expect(res.ok).toBe(false);
       expect(res.status).toBe(0);
       expect(res.body).toContain("ECONNREFUSED");
@@ -169,8 +169,164 @@ describe("pushHubJson", () => {
   });
 
   test("returns ok:false and status:0 when db file does not exist", async () => {
-    const res = await pushHubJson("http://hub.test", "hub-key", "user@example.com", "/nonexistent/path/argus.db");
+    const res = await pushHubJson("http://hub.test", "hub-key", "user@example.com", "/nonexistent/path/argus.db", { all: true });
     expect(res.ok).toBe(false);
     expect(res.status).toBe(0);
+  });
+});
+
+// ---- readSessionIds --------------------------------------------------------------------
+
+describe("readSessionIds", () => {
+  test("returns every session_id in resolved_sessions", () => {
+    const path = buildArgusDb({ sessionId: "only-1" });
+    expect(readSessionIds(path)).toEqual(["only-1"]);
+  });
+});
+
+// ---- fetchUnknownSessionIds ------------------------------------------------------------
+
+describe("fetchUnknownSessionIds", () => {
+  test("POSTs sessionIds and returns the parsed unknown list", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody = "";
+    globalThis.fetch = (async (url: any, options: any) => {
+      capturedUrl = String(url);
+      capturedHeaders = (options?.headers as Record<string, string>) ?? {};
+      capturedBody = String(options?.body ?? "");
+      return { ok: true, status: 200, text: async () => JSON.stringify({ unknownSessionIds: ["c"] }) } as Response;
+    }) as any;
+    try {
+      const res = await fetchUnknownSessionIds("http://hub.test/", "k", "u@x", ["a", "b", "c"]);
+      expect(res.ok).toBe(true);
+      expect(res.unknownSessionIds).toEqual(["c"]);
+      expect(capturedUrl).toBe("http://hub.test/api/sync/unknown-sessions");
+      expect(capturedHeaders["authorization"]).toBe("Bearer k");
+      expect(capturedHeaders["x-argus-user"]).toBe("u@x");
+      expect(JSON.parse(capturedBody)).toEqual({ sessionIds: ["a", "b", "c"] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns ok:false on a non-2xx response", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({ ok: false, status: 401, text: async () => "no" }) as Response) as any;
+    try {
+      const res = await fetchUnknownSessionIds("http://hub.test", "k", "u@x", ["a"]);
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe(401);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects a malformed body", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ unknownSessionIds: [1, 2] }) }) as Response) as any;
+    try {
+      const res = await fetchUnknownSessionIds("http://hub.test", "k", "u@x", ["a"]);
+      expect(res.ok).toBe(false);
+      expect(res.body).toMatch(/Malformed/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---- pushHubJson + probe optimization --------------------------------------------------
+
+interface CapturedRequest { url: string; body: any }
+
+/** Mock fetch that routes by URL: probe returns the given unknown list; sync captures the body. */
+function routedFetch(
+  unknownFor: (sessionIds: string[]) => string[] | { status: number; body: string },
+  syncResponse: { ok: boolean; status: number; body: string } = { ok: true, status: 200, body: '{"sessionsUpserted":0,"usersKnown":1}' },
+): { fetch: typeof fetch; calls: CapturedRequest[] } {
+  const calls: CapturedRequest[] = [];
+  const fn = (async (url: any, options: any) => {
+    const u = String(url);
+    const body = options?.body ? JSON.parse(String(options.body)) : undefined;
+    calls.push({ url: u, body });
+    if (u.endsWith("/api/sync/unknown-sessions")) {
+      const r = unknownFor(body.sessionIds ?? []);
+      if (Array.isArray(r)) return { ok: true, status: 200, text: async () => JSON.stringify({ unknownSessionIds: r }) } as Response;
+      return { ok: false, status: r.status, text: async () => r.body } as Response;
+    }
+    return { ok: syncResponse.ok, status: syncResponse.status, text: async () => syncResponse.body } as Response;
+  }) as any;
+  return { fetch: fn, calls };
+}
+
+describe("pushHubJson with unknown-sessions probe", () => {
+  test("probes the Hub and uploads only sessions the Hub does not have", async () => {
+    const path = buildArgusDb({ sessionId: "sess-only" });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch((ids) => ids); // hub knows nothing → uploads all
+    globalThis.fetch = mockFetch;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      expect(res.ok).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]!.url).toBe("http://hub.test/api/sync/unknown-sessions");
+      expect(calls[0]!.body).toEqual({ sessionIds: ["sess-only"] });
+      expect(calls[1]!.url).toBe("http://hub.test/api/sync");
+      expect(calls[1]!.body.rows.sessions).toHaveLength(1);
+      expect(calls[1]!.body.rows.usage).toHaveLength(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("filters out sessions the Hub already has from the upload payload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-known" });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch(() => []); // hub has them all
+    globalThis.fetch = mockFetch;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      expect(res.ok).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]!.body.rows.sessions).toEqual([]);
+      expect(calls[1]!.body.rows.usage).toEqual([]);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("falls back to a full upload when the probe returns 404 (older Hub)", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1" });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch(() => ({ status: 404, body: "Not Found" }));
+    globalThis.fetch = mockFetch;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      expect(res.ok).toBe(true);
+      expect(calls[1]!.body.rows.sessions).toHaveLength(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("propagates a non-404 probe failure without attempting the upload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1" });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch(() => ({ status: 401, body: "no" }));
+    globalThis.fetch = mockFetch;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", "u@x", path);
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe(401);
+      expect(calls).toHaveLength(1); // probe only — no sync POST
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("opts.all skips the probe entirely", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1" });
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch(() => { throw new Error("probe should not be called"); });
+    globalThis.fetch = mockFetch;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", "u@x", path, { all: true });
+      expect(res.ok).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe("http://hub.test/api/sync");
+    } finally { globalThis.fetch = originalFetch; }
   });
 });

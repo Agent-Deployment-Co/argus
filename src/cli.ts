@@ -557,9 +557,10 @@ const sync = defineCommand({
     org: { type: "string", default: process.env.ARGUS_ORG, description: "Override the org (env ARGUS_ORG)", valueHint: "id" },
     watch: { type: "boolean", default: false, description: "Keep uploading on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between uploads (with --watch)", valueHint: "N" },
+    all: { type: "boolean", default: false, description: "Hub mode: re-upload every session, skipping the unknown-sessions probe" },
   },
   run: handler(async (args) => {
-    const base: PushLoopOptions = { ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org };
+    const base: PushLoopOptions = { ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org, all: !!args.all };
     if (args.watch) {
       const ac = abortOnSignals();
       await watchSync({ ...base, intervalMin: Number(args.interval) || 5, onUnauthenticated: "fail" }, log, ac.signal);
