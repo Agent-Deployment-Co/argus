@@ -6,6 +6,7 @@ import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
+import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
 /** Global dashboard filters live on the root so every view reflects them, and `retainSearchParams`
@@ -64,6 +65,11 @@ const routeTree = rootRoute.addChildren([
   ]),
   createRoute({ getParentRoute: () => rootRoute, path: "/tools", component: Tools }),
   createRoute({ getParentRoute: () => rootRoute, path: "/health", component: Health }),
+  // The settings take-over surface (#154). Deep-linkable per category (/settings/$category); bare
+  // /settings defaults to the first category. The Layout root renders the surface full-screen for
+  // these paths (outside the snapshot gate), so the route components here are placeholders.
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
   // Hidden diagnostics page — no rail link; reachable by typing /debug.
   createRoute({ getParentRoute: () => rootRoute, path: "/debug", component: Debug }),
 ]);

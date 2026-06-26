@@ -96,8 +96,10 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .rail-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rail-icon { flex: 0 0 auto; }
 
-.rail-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--line); }
-.rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.rail-footer { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--line); }
+/* Settings + theme cluster on the left; the collapse toggle is pushed to the right. */
+.rail-footer .rail-toggle { margin-left: auto; }
+.rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; text-decoration: none; }
 .rail-icon-btn:hover { color: var(--heading); border-color: var(--muted); }
 .rail-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -111,7 +113,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .rail-collapsed .rail-wordmark, .rail-collapsed .rail-label { display: none; }
 .rail-collapsed .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
 .rail-collapsed .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
-.rail-collapsed .rail-footer { flex-direction: column-reverse; }
+/* Stacked top-to-bottom: settings, theme, expand (DOM order). */
+.rail-collapsed .rail-footer { flex-direction: column; align-items: center; }
+.rail-collapsed .rail-footer .rail-toggle { margin-left: 0; }
 
 main { padding: 30px 32px 64px; }
 
@@ -302,7 +306,62 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .app-shell { --rail-w: 60px; }
   .rail-wordmark, .rail-label { display: none; }
   .rail-brand, .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
-  .rail-footer { flex-direction: column-reverse; }
+  .rail-footer { flex-direction: column; align-items: center; }
+  .rail-footer .rail-toggle { margin-left: 0; }
   main { padding-left: 18px; padding-right: 18px; }
   .filter-bar { padding-left: 18px; padding-right: 18px; gap: 12px; }
+}
+
+/* ── Settings surface (#154) ───────────────────────────────────────────────────
+   A full take-over: a left category nav + a right pane of sectioned settings. */
+.settings-surface { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-columns: 248px 1fr; background: var(--bg); }
+.settings-nav { display: flex; flex-direction: column; gap: 4px; padding: 18px 14px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
+.settings-back { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 6px 8px; margin-bottom: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: 600 13px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.settings-back:hover { background: var(--hover); color: var(--heading); }
+.settings-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-title { margin: 4px 8px 14px; color: var(--heading); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.04em; }
+.settings-categories { display: flex; flex-direction: column; gap: 2px; }
+.settings-group-heading { margin: 6px 8px 4px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.settings-cat-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px "Poppins", "Avenir Next", Arial, sans-serif; }
+.settings-cat-link:hover { background: var(--hover); color: var(--heading); }
+.settings-cat-link[aria-current="page"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.settings-cat-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.settings-pane { overflow-y: auto; padding: 40px 48px 80px; }
+.settings-content { max-width: 760px; margin: 0 auto; }
+.settings-pane-head h2 { color: var(--heading); font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
+.settings-empty { color: var(--muted); padding: 24px 0; }
+.settings-section { margin-top: 28px; }
+.settings-section-head { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.settings-rows { display: flex; flex-direction: column; }
+
+.setting-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+.setting-label { display: flex; flex-direction: column; gap: 3px; max-width: 60%; }
+.setting-name { color: var(--heading); font-weight: 600; font-size: 14px; }
+.setting-desc { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.setting-override { color: var(--accent); font-size: 12px; line-height: 1.45; margin-top: 2px; }
+.setting-control { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 220px; }
+.setting-input { width: 220px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.setting-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.setting-textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.setting-toggle { position: relative; width: 42px; height: 24px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; background: var(--hover); cursor: pointer; transition: background .15s; }
+.setting-toggle[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.setting-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.setting-toggle-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--porcelain); transition: transform .15s; }
+.setting-toggle[aria-checked="true"] .setting-toggle-knob { transform: translateX(18px); }
+
+.setting-status { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); min-height: 16px; }
+.setting-status.saved { color: var(--sky-surge); }
+.setting-status.error { color: var(--racing-red); text-align: right; }
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .settings-surface { grid-template-columns: 1fr; }
+  .settings-nav { display: none; }
+  .setting-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .setting-label { max-width: 100%; }
+  .setting-control { align-items: stretch; }
+  .setting-input { width: 100%; }
 }

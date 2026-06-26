@@ -23,9 +23,10 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
+import { loadConfig, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, type SecretStatus, type SecretStore } from "../secrets.ts";
+import { applySetting, describeSettings, type SettingsResponse } from "./settings.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
 export interface ServeOptions {
@@ -116,6 +117,9 @@ interface AppOptions {
   debugInfo?: DebugInfoReader;
   /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
   secrets?: SecretStore;
+  /** Override the `argus.json` path the settings endpoints read/write. Defaults to CONFIG_FILE;
+   *  injected by tests so they never touch the real config. */
+  configPath?: string;
 }
 
 const MIME: Record<string, string> = {
@@ -346,6 +350,30 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
   app.get("/api/debug", async (c) => {
     if (!opts.debugInfo) return c.json({ error: "Debug info is unavailable in this process." }, 503);
     return c.json(await opts.debugInfo());
+  });
+
+  // Settings surface (#154): the registry-driven view of everything in `argus.json`, plus a
+  // validated, atomic single-setting write. Read is open (like /api/debug — it exposes no secret
+  // values; the surfaced settings carry none). The write is mutating and persists to disk, so it
+  // gets the same hardening as the secret endpoints: CSRF (rejectCrossSite) + DNS-rebinding
+  // (rejectUnsafeHost).
+  app.get("/api/settings", (c) =>
+    c.json(describeSettings(opts.configPath ? loadConfig(opts.configPath) : undefined) satisfies SettingsResponse),
+  );
+
+  app.put("/api/settings/:path", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const path = c.req.param("path");
+    let value: unknown;
+    try {
+      value = (await c.req.json())?.value;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a "value".' }, 400);
+    }
+    const result = applySetting(path, value, opts.configPath);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ setting: result.setting });
   });
 
   // BYO LLM API keys (#132). Both routes are guarded against CSRF (rejectCrossSite) and

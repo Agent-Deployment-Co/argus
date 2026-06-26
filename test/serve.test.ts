@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
@@ -351,5 +351,69 @@ describe("secret settings endpoints (#132)", () => {
     const app = appWithSecrets();
     const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("   "));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("settings endpoints (#154)", () => {
+  // A temp argus.json so the test never touches the real config.
+  function appWithConfig(contents = "{}") {
+    const dir = mkdtempSync(join(tmpdir(), "argus-serve-settings-"));
+    const configPath = join(dir, "argus.json");
+    writeFileSync(configPath, contents, "utf8");
+    return { app: createApp(async () => fixtureSnapshot(), null, { configPath }), configPath };
+  }
+  const put = (value: unknown) => ({
+    method: "PUT",
+    headers: { "X-Argus-App": "1", Host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+
+  test("GET returns the registry-driven categories", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { categories: { id: string }[] };
+    expect(body.categories.map((c) => c.id)).toEqual(["general", "tasks", "llm"]);
+  });
+
+  test("PUT validates and writes a setting", async () => {
+    const { app, configPath } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", put("openai"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { setting: { fileValue: unknown } };
+    expect(body.setting.fileValue).toBe("openai");
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({ llm: { provider: "openai" } });
+  });
+
+  test("PUT rejects an invalid value with 400", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", put("nonsense"));
+    expect(res.status).toBe(400);
+  });
+
+  test("PUT rejects a non-editable setting with 404", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/hub.key", put("secret"));
+    expect(res.status).toBe(404);
+  });
+
+  test("PUT requires the same-origin app header (CSRF)", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", {
+      method: "PUT",
+      headers: { Host: "localhost", "content-type": "application/json" },
+      body: JSON.stringify({ value: "openai" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("PUT rejects a non-loopback Host (DNS rebinding)", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", {
+      method: "PUT",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com", "content-type": "application/json" },
+      body: JSON.stringify({ value: "openai" }),
+    });
+    expect(res.status).toBe(403);
   });
 });
