@@ -13,7 +13,7 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { hubErrorMessage } from "./push.ts";
-import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
+import { syncOptions, toSource } from "./cli-options.ts";
 import { type TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
 import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS } from "./config.ts";
 import pkg from "../package.json" with { type: "json" };
@@ -385,7 +385,7 @@ async function runConfigList(log: Log, json = false): Promise<void> {
 // to that subcommand automatically and flag types flow into the run handlers.
 // ---------------------------------------------------------------------------
 
-/** Source selection — shared by serve, sync, run, and the `index` commands.
+/** Source selection — shared by `run` and the `index` commands.
  *  Declared as a string (not enum) so citty's flag inference stays intact; the value set is
  *  validated by `toSource`. */
 const sourceArg = {
@@ -395,13 +395,6 @@ const sourceArg = {
     description: "Transcript source: claude, codex, gemini, cowork, claude-chat, or all",
     valueHint: "claude|codex|gemini|cowork|claude-chat|all",
   },
-} as const;
-
-/** Date/project filters — shared by serve and sync. */
-const filterArgs = {
-  since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
-  until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
-  project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
 } as const;
 
 // Task extraction options for web/session-screen extraction. Flags carry no env-var defaults: an
@@ -443,12 +436,6 @@ const extractTasksArg = {
     description: "Extract tasks this run: true|false (overrides argus.json). Omit to use the config setting.",
     valueHint: "true|false",
   },
-} as const;
-
-/** Inputs shared by serve and sync (everything `buildDashboard` reads). */
-const buildArgs = {
-  ...sourceArg,
-  ...filterArgs,
 } as const;
 
 /** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
@@ -562,7 +549,6 @@ const login = defineCommand({
 const sync = defineCommand({
   meta: { name: "sync", description: "upload usage data to a team dashboard or Hub" },
   args: {
-    ...buildArgs,
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
     user: { type: "string", description: "Override the user id (default: git email, else $USER@host)", valueHint: "id" },
     org: { type: "string", default: process.env.ARGUS_ORG, description: "Override the org (env ARGUS_ORG)", valueHint: "id" },
@@ -571,7 +557,7 @@ const sync = defineCommand({
     all: { type: "boolean", default: false, description: "Hub mode: re-upload every session, skipping local cursor filtering" },
   },
   run: handler(async (args) => {
-    const base: PushLoopOptions = { ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org, all: !!args.all };
+    const base: PushLoopOptions = { source: "all", endpoint: args.endpoint, user: args.user, org: args.org, all: !!args.all };
     if (args.watch) {
       const ac = abortOnSignals();
       await watchSync({ ...base, intervalMin: Number(args.interval) || 5, onUnauthenticated: "fail" }, log, ac.signal);
