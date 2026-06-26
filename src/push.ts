@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { hostname, userInfo } from "node:os";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "./store/store.ts";
+import { PARSED_FRAGMENT_CONTRACT_VERSION } from "./store/store-contract.ts";
 // Wire contract from the shared schema package (single source of truth). SCHEMA_VERSION comes
 // from the zod-free entry so the CLI doesn't pull zod into its runtime.
 import { SCHEMA_VERSION } from "@agentdeploymentco/argus-schema/version";
@@ -209,11 +211,18 @@ function buildSessionWhere(filters: HubUploadFilters): { where: string; params: 
 export interface HubSessionCursorRow {
   sessionId: string;
   lastTs: number | null;
+  /** SHA-256 hex of key session fields at upload time — used to detect reindexed data. */
+  contentDigest: string;
+  /** PARSED_FRAGMENT_CONTRACT_VERSION at upload time — bump triggers full re-upload. */
+  parserVersion: number;
 }
 
 export interface HubSessionCursorSelection {
   totalSessions: number;
   sessions: HubSessionCursorRow[];
+  /** Digest info for ALL filtered sessions, not just the changed subset — used when probe-recovered
+   *  sessions need to be included in the upload with accurate cursor data. */
+  allSessionData: Map<string, HubSessionCursorRow>;
 }
 
 /** Read the per-install client id from argus.db's store_metadata table. Throws if the
@@ -347,20 +356,42 @@ export function readSessionIds(dbPath: string, filters: HubUploadFilters = {}): 
   }
 }
 
+/** Compute a stable digest from session fields that can change without advancing last_ts:
+ *  archive state, message count, task count, and first_prompt. */
+function computeSessionDigest(
+  sessionId: string,
+  archived: number,
+  messageCount: number,
+  taskCount: number,
+  firstPrompt: string | null,
+): string {
+  return createHash("sha256")
+    .update(`${sessionId}|${archived}|${messageCount}|${taskCount}|${firstPrompt ?? ""}`)
+    .digest("hex");
+}
+
 function shouldUploadForCursor(
   localLastTs: number | null,
   cursorLastTs: number | null,
   hasCursor: boolean,
+  localDigest: string,
+  cursorDigest: string | null,
+  localParserVersion: number,
+  cursorParserVersion: number | null,
 ): boolean {
   if (!hasCursor) return true;
+  // Pre-v17 cursor has no digest/parserVersion; treat as upload-worthy to refresh with new cursor data.
+  if (cursorDigest == null || cursorParserVersion == null) return true;
+  if (localParserVersion !== cursorParserVersion) return true; // parser upgraded
+  if (localDigest !== cursorDigest) return true; // content changed (tasks, archive state, etc.)
   if (localLastTs === cursorLastTs) return false;
   if (localLastTs == null || cursorLastTs == null) return true;
   return localLastTs > cursorLastTs;
 }
 
 /** Select sessions this client has not successfully uploaded to this Hub at the current local
- *  timestamp. Timestamp-only cursors intentionally ignore same-last_ts metadata changes; resumed
- *  sessions with a newer last_ts are sent again in full and the Hub upsert path stays idempotent.
+ *  timestamp/digest/parserVersion. Also returns digest info for ALL filtered sessions so the
+ *  caller can populate cursor data for probe-recovered sessions.
  *  Source/project/since/until filters restrict the candidate set the same way `pushHubJson` does. */
 export function readChangedHubSessionIds(
   dbPath: string,
@@ -376,25 +407,62 @@ export function readChangedHubSessionIds(
       .query<{
         session_id: string;
         last_ts: number | null;
+        archived: number;
+        message_count: number;
+        first_prompt: string | null;
+        task_count: number;
         cursor_session_id: string | null;
         cursor_last_ts: number | null;
+        cursor_digest: string | null;
+        cursor_parser_version: number | null;
       }, any[]>(
-        `SELECT s.session_id, s.last_ts,
-                c.session_id AS cursor_session_id, c.last_ts AS cursor_last_ts
+        `SELECT s.session_id, s.last_ts, s.archived, s.message_count, s.first_prompt,
+                COUNT(t.seq) AS task_count,
+                c.session_id AS cursor_session_id,
+                c.last_ts AS cursor_last_ts,
+                c.content_digest AS cursor_digest,
+                c.parser_version AS cursor_parser_version
          FROM resolved_sessions s
+         LEFT JOIN resolved_tasks t ON t.session_id = s.session_id
          LEFT JOIN hub_session_cursors c
            ON c.hub_url = ?
           AND c.client_id = ?
           AND c.session_id = s.session_id${filterWhere}
+         GROUP BY s.session_id
          ORDER BY s.last_ts, s.session_id`,
       )
       .all(hubUrl, clientId, ...filterParams);
-    return {
-      totalSessions: rows.length,
-      sessions: rows
-        .filter((row) => shouldUploadForCursor(row.last_ts, row.cursor_last_ts, row.cursor_session_id != null))
-        .map((row) => ({ sessionId: row.session_id, lastTs: row.last_ts })),
-    };
+
+    const allSessionData = new Map<string, HubSessionCursorRow>();
+    const changed: HubSessionCursorRow[] = [];
+    for (const row of rows) {
+      const localDigest = computeSessionDigest(
+        row.session_id,
+        row.archived,
+        row.message_count,
+        row.task_count,
+        row.first_prompt,
+      );
+      const cursorRow: HubSessionCursorRow = {
+        sessionId: row.session_id,
+        lastTs: row.last_ts,
+        contentDigest: localDigest,
+        parserVersion: PARSED_FRAGMENT_CONTRACT_VERSION,
+      };
+      allSessionData.set(row.session_id, cursorRow);
+      if (shouldUploadForCursor(
+        row.last_ts,
+        row.cursor_last_ts,
+        row.cursor_session_id != null,
+        localDigest,
+        row.cursor_digest,
+        PARSED_FRAGMENT_CONTRACT_VERSION,
+        row.cursor_parser_version,
+      )) {
+        changed.push(cursorRow);
+      }
+    }
+    return { totalSessions: rows.length, sessions: changed, allSessionData };
   } finally {
     db.close();
   }
@@ -413,15 +481,17 @@ export function markHubSessionsUploaded(
   try {
     db.exec("BEGIN IMMEDIATE");
     try {
-      const stmt = db.query<void, [string, string, string, number | null, number]>(
-        `INSERT INTO hub_session_cursors(hub_url, client_id, session_id, last_ts, uploaded_at_ms)
-         VALUES (?, ?, ?, ?, ?)
+      const stmt = db.query<void, [string, string, string, number | null, string, number, number]>(
+        `INSERT INTO hub_session_cursors(hub_url, client_id, session_id, last_ts, content_digest, parser_version, uploaded_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(hub_url, client_id, session_id) DO UPDATE SET
            last_ts = excluded.last_ts,
+           content_digest = excluded.content_digest,
+           parser_version = excluded.parser_version,
            uploaded_at_ms = excluded.uploaded_at_ms`,
       );
       for (const session of sessions) {
-        stmt.run(hubUrl, clientId, session.sessionId, session.lastTs, nowMs);
+        stmt.run(hubUrl, clientId, session.sessionId, session.lastTs, session.contentDigest, session.parserVersion, nowMs);
       }
       db.exec("COMMIT");
     } catch (err) {
@@ -461,8 +531,10 @@ export async function pushHubJson(
 
   const filters: HubUploadFilters = { source: opts.source, since: opts.since, until: opts.until, project: opts.project };
 
+  // allSessionData maps session_id → current HubSessionCursorRow with digest info;
+  // populated by readChangedHubSessionIds for the non-all path, or computed inline for --all.
+  let allSessionData: Map<string, HubSessionCursorRow> | undefined;
   let onlySessionIds: Set<string> | undefined;
-  let selectedSessions: HubSessionCursorRow[] | undefined;
   if (!opts.all) {
     let selection: HubSessionCursorSelection;
     try {
@@ -470,8 +542,8 @@ export async function pushHubJson(
     } catch (err) {
       return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
     }
-    selectedSessions = selection.sessions;
-    onlySessionIds = new Set(selectedSessions.map((session) => session.sessionId));
+    allSessionData = selection.allSessionData;
+    onlySessionIds = new Set(selection.sessions.map((session) => session.sessionId));
 
     // Probe the Hub for sessions it doesn't know about. A restored/wiped Hub DB returns sessions
     // the local cursor already marked as uploaded — the probe catches them and adds them back.
@@ -516,11 +588,21 @@ export async function pushHubJson(
   let body: string;
   try {
     const payload = readHubUploadPayload(dbPath, onlySessionIds ? { ...filters, onlySessionIds } : filters);
-    uploadedSessions = payload.rows.sessions.map((session) => ({
-      sessionId: session.session_id,
-      lastTs: session.last_ts,
-    }));
-    if (opts.all) opts.log?.(`Uploading all ${uploadedSessions.length} sessions and refreshing Hub cursors.`);
+    if (opts.all) {
+      // --all path: compute digests for all sessions being uploaded
+      const digestSelection = readChangedHubSessionIds(dbPath, base, clientId, filters);
+      allSessionData = digestSelection.allSessionData;
+      opts.log?.(`Uploading all ${payload.rows.sessions.length} sessions and refreshing Hub cursors.`);
+    }
+    uploadedSessions = payload.rows.sessions.map((session) => {
+      const cursor = allSessionData?.get(session.session_id);
+      return {
+        sessionId: session.session_id,
+        lastTs: session.last_ts,
+        contentDigest: cursor?.contentDigest ?? computeSessionDigest(session.session_id, session.archived, session.message_count, 0, session.first_prompt),
+        parserVersion: cursor?.parserVersion ?? PARSED_FRAGMENT_CONTRACT_VERSION,
+      };
+    });
     body = JSON.stringify(payload);
   } catch (err) {
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
