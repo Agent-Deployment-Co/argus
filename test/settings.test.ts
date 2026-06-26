@@ -17,18 +17,24 @@ afterEach(() => {
   for (const key of TOUCHED_ENV) delete process.env[key];
 });
 
+/** Find a described setting by its dotted path across every category/section. */
+function findSetting(file: Parameters<typeof describeSettings>[0], path: string) {
+  return describeSettings(file)
+    .categories.flatMap((c) => c.sections)
+    .flatMap((s) => s.settings)
+    .find((s) => s.path === path)!;
+}
+
 describe("describeSettings", () => {
-  test("groups the registry into General / Tasks / LLM categories", () => {
+  test("groups the registry into General + Session Interpretation categories", () => {
     const { categories } = describeSettings({});
-    expect(categories.map((c) => c.id)).toEqual(["general", "tasks", "llm"]);
+    expect(categories.map((c) => c.id)).toEqual(["general", "interpretation"]);
     // General is intentionally empty for now (#154).
     expect(categories[0]!.sections).toHaveLength(0);
   });
 
   test("each setting carries its UI metadata, file value, and effective value", () => {
-    const { categories } = describeSettings({ llm: { provider: "openai" } });
-    const llm = categories.find((c) => c.id === "llm")!;
-    const provider = llm.sections[0]!.settings.find((s) => s.path === "llm.provider")!;
+    const provider = findSetting({ llm: { provider: "openai" } }, "llm.provider");
     expect(provider.ui.control).toBe("select");
     const values = (provider.ui.options ?? [])
       .filter((o): o is { value: string; label: string } => o !== "separator")
@@ -40,10 +46,7 @@ describe("describeSettings", () => {
   });
 
   test("provider options: pinned default + off, a separator, then alpha providers without off", () => {
-    const provider = describeSettings({})
-      .categories.find((c) => c.id === "llm")!
-      .sections[0]!.settings.find((s) => s.path === "llm.provider")!;
-    const opts = provider.ui.options ?? [];
+    const opts = findSetting({}, "llm.provider").ui.options ?? [];
     // First two are the pinned default (unset) and an explicit Off.
     expect(opts[0]).toEqual({ value: "", label: "Default (claude-cli)" });
     expect(opts[1]).toEqual({ value: "off", label: "Off" });
@@ -58,10 +61,7 @@ describe("describeSettings", () => {
 
   test("flags an env var that overrides the file layer", () => {
     process.env.ARGUS_LLM_PROVIDER = "gemini";
-    const { categories } = describeSettings({ llm: { provider: "openai" } });
-    const provider = categories
-      .find((c) => c.id === "llm")!
-      .sections[0]!.settings.find((s) => s.path === "llm.provider")!;
+    const provider = findSetting({ llm: { provider: "openai" } }, "llm.provider");
     expect(provider.fileValue).toBe("openai"); // the file still says openai
     expect(provider.effectiveValue).toBe("gemini"); // but the env var wins
     expect(provider.override).toEqual({ layer: "env", name: "ARGUS_LLM_PROVIDER" });
