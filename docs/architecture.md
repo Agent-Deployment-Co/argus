@@ -156,8 +156,8 @@ Consumers go through `SessionStore` (`src/store/session-store.ts`), which separa
 read (**CQS**): `index(query?)` brings the store current (reconcile + materialize — the only writer),
 and `read(query?)` is a **pure** SQL read of `resolved_*` that never writes. Reads return the reconciled
 `ParseResult` straight from the read model — **no reconciling, no re-parsing, no in-memory filtering.**
-Query filters (`--since` / `--until` / `--project` / `--source`) are pushed down to SQL. Archived
-sessions are included, so reporting survives transcript retention.
+Query filters (date/project/source inputs used by API and reporting consumers) are pushed down to
+SQL. Archived sessions are included, so reporting survives transcript retention.
 
 When the real store can't be opened (missing, corrupt, incompatible schema) the two operations differ:
 a **`read()` degrades** — it indexes the on-disk transcripts into a throwaway temp store and reads
@@ -166,7 +166,7 @@ archived ones are absent), while an **`index()` fails loud** — the error propa
 silently writing to a temp store it then discards (which would report success having persisted
 nothing, and would mask a corrupt store the user should `reindex --force`).
 
-- `sync` — `index()` to bring the store current → `aggregate.ts` builds the dashboard → upload the snapshot.
+- `sync` — `index()` to bring the store current → build the full syncable snapshot → upload it.
 - `serve` — a pure `read()` → `aggregate.ts` path, exposed as a JSON API and an interactive web app
   (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
@@ -185,7 +185,7 @@ transcripts are gone.
 | `index rebuild` | rebuilds store | Rebuild from scratch; **drops sessions no longer on disk** (confirm, or `--force`). |
 | `index delete` | deletes      | Permanently remove sessions (`<id>…` or `--archived`). |
 | `serve`  | reads only        | Serve the dashboard as an interactive local web app (JSON API + SPA). Reads the already-materialized store without reconciling (the `index`/`run` legs are the sole writers). |
-| `sync`   | reads (+ indexes) | Build a snapshot and upload it to the team Worker. `--watch` uploads on an interval. |
+| `sync`   | reads (+ indexes) | Build the full syncable snapshot and upload it to the team Worker or Hub. `--watch` uploads on an interval. |
 | `status` | reads             | Show per-source counts, freshness, and archived totals. |
 | `run`    | writes + reads    | One long-running process: `index --watch` + `serve` + `sync --watch` against one store, under one shutdown handler, each leg supervised. |
 
