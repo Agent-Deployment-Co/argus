@@ -15,7 +15,6 @@ import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { loadConfig, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
 import { defaultSecretStore, isSecretName, SECRET_NAMES } from "./secrets.ts";
-import { createInterface } from "node:readline";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -536,30 +535,72 @@ const runCmd = defineCommand({
 
 // --- `argus secret`: manage stored LLM API keys (#132) ---
 
-/** Read a secret value without exposing it in argv: piped stdin verbatim, or a hidden TTY prompt. */
+/** Human-readable labels for the prompt; falls back to the env-var name itself. */
+const SECRET_LABELS: Record<string, string> = {
+  ANTHROPIC_API_KEY: "Anthropic API key",
+  OPENAI_API_KEY: "OpenAI API key",
+  GEMINI_API_KEY: "Gemini API key",
+  OPENROUTER_API_KEY: "OpenRouter API key",
+};
+
+/** Prompt for a secret on the terminal with the input hidden (no echo). Raw-mode, so the value never
+ *  reaches the screen or shell history; supports backspace and Ctrl-C. Pressing Enter on an empty line
+ *  returns "" (the caller treats that as "skip"). The prompt is written to stderr. */
+function promptSecret(name: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const input = process.stdin;
+    const label = SECRET_LABELS[name] ?? name;
+    process.stderr.write(`Enter ${label} (${name}) [Enter to skip]: 🔒 `);
+    let value = "";
+    const cleanup = () => {
+      input.off("data", onData);
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
+    };
+    const onData = (buf: Buffer) => {
+      for (const ch of buf.toString("utf8")) {
+        const code = ch.charCodeAt(0);
+        if (ch === "\n" || ch === "\r") {
+          cleanup();
+          process.stderr.write("\n");
+          resolve(value);
+          return;
+        }
+        if (code === 3) {
+          // Ctrl-C
+          cleanup();
+          process.stderr.write("\n");
+          reject(new Error("Cancelled."));
+          return;
+        }
+        if (code === 127 || code === 8) {
+          // Backspace / DEL — drop the last char (nothing was echoed, so no visual change needed).
+          value = value.slice(0, -1);
+        } else if (code >= 32) {
+          // Printable — accumulate, but never echo.
+          value += ch;
+        }
+        // Other control chars are ignored.
+      }
+    };
+    if (input.isTTY) input.setRawMode(true);
+    input.resume();
+    input.on("data", onData);
+  });
+}
+
+/** Read a secret value without exposing it in argv: piped stdin verbatim, or — when nothing is piped
+ *  (stdin is a TTY) — a hidden interactive prompt. Returns "" when the user skips / pipes nothing. */
 async function readSecretValue(name: string): Promise<string> {
   let value: string;
   if (process.stdin.isTTY) {
-    value = await new Promise<string>((resolve, reject) => {
-      process.stderr.write(`Paste the value for ${name} (input hidden): `);
-      const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-      // Suppress the terminal echo of the typed characters.
-      (rl as unknown as { _writeToOutput: (s: string) => void })._writeToOutput = () => {};
-      rl.question("", (answer) => {
-        rl.close();
-        process.stderr.write("\n");
-        resolve(answer);
-      });
-      rl.on("error", reject);
-    });
+    value = await promptSecret(name);
   } else {
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
     value = Buffer.concat(chunks).toString("utf8");
   }
-  value = value.replace(/\r?\n$/, "");
-  if (!value.trim()) throw new Error("No value provided.");
-  return value;
+  return value.replace(/\r?\n$/, "");
 }
 
 function requireSecretName(args: Record<string, unknown>): string {
@@ -576,6 +617,11 @@ const secretSet = defineCommand({
   run: handler(async (args) => {
     const name = requireSecretName(args);
     const value = await readSecretValue(name);
+    if (!value.trim()) {
+      // Empty input (pressed Enter / piped nothing) means skip — leave any existing value untouched.
+      log(`Skipped ${name} — nothing entered.`);
+      return;
+    }
     const store = defaultSecretStore();
     await store.set(name, value);
     const status = await store.describe(name);
