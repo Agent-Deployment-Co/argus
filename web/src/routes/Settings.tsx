@@ -5,9 +5,10 @@ import {
   Check,
   Loader2,
   SlidersHorizontal,
+  TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { saveSetting, useSettingsQuery } from "../lib/settings";
 import { Select } from "../components/Select";
 import type { SettingDescriptor, SettingsCategory } from "../types";
@@ -18,6 +19,87 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
   interpretation: Brain,
 };
+
+/** Serializes setting writes (auto-save) into one queue: one request in flight at a time, so the
+ *  server's read-modify-write of argus.json can't race, and the surface shows a single save state
+ *  instead of per-field status. Repeated edits to the same setting collapse to the latest value. */
+interface SaveQueue {
+  saving: boolean;
+  error: string | null;
+  justSaved: boolean;
+  enqueue: (path: string, value: unknown) => void;
+}
+
+function useSaveQueue(): SaveQueue {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+  const queue = useRef(new Map<string, unknown>());
+  const running = useRef(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const run = useCallback(async () => {
+    if (running.current) return;
+    running.current = true;
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    setSaving(true);
+    setJustSaved(false);
+    setError(null);
+    let hadError = false;
+    while (queue.current.size) {
+      const [path, value] = queue.current.entries().next().value as [string, unknown];
+      queue.current.delete(path);
+      try {
+        await saveSetting(path, value);
+      } catch (err) {
+        hadError = true;
+        setError((err as Error).message);
+      }
+    }
+    running.current = false;
+    setSaving(false);
+    if (!hadError) {
+      setJustSaved(true);
+      savedTimer.current = setTimeout(() => setJustSaved(false), 1800);
+    }
+  }, []);
+
+  const enqueue = useCallback(
+    (path: string, value: unknown) => {
+      queue.current.set(path, value); // latest value per path wins
+      void run();
+    },
+    [run],
+  );
+
+  return { saving, error, justSaved, enqueue };
+}
+
+/** The single, global save indicator shown in the top-right of the surface. */
+function SaveIndicator({ saving, error, justSaved }: SaveQueue) {
+  if (saving) {
+    return (
+      <div className="save-indicator">
+        <Loader2 size={14} className="spin" aria-hidden /> Saving…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="save-indicator error" title={error}>
+        <TriangleAlert size={14} aria-hidden /> Couldn't save
+      </div>
+    );
+  }
+  if (justSaved) {
+    return (
+      <div className="save-indicator saved">
+        <Check size={14} aria-hidden /> Saved
+      </div>
+    );
+  }
+  return null;
+}
 
 /** The full settings surface (#154): a Codex-style take-over with a left category nav and a right
  *  pane of sectioned settings. Reached at /settings/$category and deep-linkable. `backTo` is the app
@@ -30,9 +112,11 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
   const categories = query.data?.categories ?? [];
   const activeId = category ?? categories[0]?.id ?? "general";
   const active = categories.find((c) => c.id === activeId);
+  const save = useSaveQueue();
 
   return (
     <div className="settings-surface">
+      <SaveIndicator {...save} />
       <aside className="settings-nav">
         <button
           type="button"
@@ -70,7 +154,7 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
         ) : !active ? (
           <div className="center-state">Unknown settings category.</div>
         ) : (
-          <SettingsCategoryPane key={active.id} category={active} />
+          <SettingsCategoryPane key={active.id} category={active} enqueue={save.enqueue} />
         )}
       </main>
     </div>
@@ -84,7 +168,13 @@ function seedValue(s: SettingDescriptor): unknown {
   return s.fileValue != null ? String(s.fileValue) : "";
 }
 
-function SettingsCategoryPane({ category }: { category: SettingsCategory }) {
+function SettingsCategoryPane({
+  category,
+  enqueue,
+}: {
+  category: SettingsCategory;
+  enqueue: SaveQueue["enqueue"];
+}) {
   const sections = category.sections.filter((s) => s.settings.length > 0);
   const all = sections.flatMap((s) => s.settings);
   const byPath = new Map(all.map((s) => [s.path, s]));
@@ -129,6 +219,7 @@ function SettingsCategoryPane({ category }: { category: SettingsCategory }) {
                     value={values[s.path]}
                     disabled={!isActive(s)}
                     onChange={(v) => setValue(s.path, v)}
+                    enqueue={enqueue}
                   />
                 ))}
               </div>
@@ -140,46 +231,35 @@ function SettingsCategoryPane({ category }: { category: SettingsCategory }) {
   );
 }
 
-type SaveState = { kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "error"; message: string };
-
 /** One setting: name + description on the left, its control on the right (#154). The value is owned by
- *  the pane (so conditions can see it); this row drives the control and its own save status. Text-like
- *  controls save on blur; toggles/selects save immediately. `disabled` greys the control out (e.g. the
- *  LLM fields until task extraction is on). When an env var overrides the value, the row says so. */
+ *  the pane (so conditions can see it); edits are pushed onto the shared save queue via `enqueue`.
+ *  Text-like controls save on blur; toggles/selects save immediately. `disabled` greys the control out
+ *  (e.g. the LLM fields until task extraction is on). When an env var overrides the value, the row says so. */
 function SettingRow({
   descriptor,
   value,
   disabled,
   onChange,
+  enqueue,
 }: {
   descriptor: SettingDescriptor;
   value: unknown;
   disabled: boolean;
   onChange: (v: unknown) => void;
+  enqueue: SaveQueue["enqueue"];
 }) {
   const { ui, fileValue, effectiveValue, override } = descriptor;
-  const [state, setState] = useState<SaveState>({ kind: "idle" });
-  // The last value persisted to the server, so a blur with no real change doesn't re-save.
+  // The last value queued for save, so a blur with no real change doesn't re-queue.
   const savedRef = useRef(fileValue != null ? String(fileValue) : "");
 
   const text = value == null ? "" : String(value);
   const checked = Boolean(value);
   const placeholder = effectiveValue != null ? String(effectiveValue) : "Default";
 
-  async function save(v: unknown) {
-    setState({ kind: "saving" });
-    try {
-      await saveSetting(descriptor.path, v);
-      setState({ kind: "saved" });
-    } catch (err) {
-      setState({ kind: "error", message: (err as Error).message });
-      throw err;
-    }
-  }
   const saveText = () => {
     if (text === savedRef.current) return;
     savedRef.current = text;
-    void save(text).catch(() => {});
+    enqueue(descriptor.path, text);
   };
 
   const control = (() => {
@@ -194,8 +274,8 @@ function SettingRow({
             disabled={disabled}
             onClick={() => {
               const next = !checked;
-              onChange(next); // optimistic; update the pane so conditions react
-              save(next).catch(() => onChange(!next)); // revert on failure
+              onChange(next); // update the pane so conditions react
+              enqueue(descriptor.path, next);
             }}
           >
             <span className="setting-toggle-knob" />
@@ -210,7 +290,7 @@ function SettingRow({
             onChange={(e) => {
               onChange(e.target.value);
               savedRef.current = e.target.value;
-              void save(e.target.value).catch(() => {});
+              enqueue(descriptor.path, e.target.value);
             }}
           >
             {(ui.options ?? []).map((opt, i) =>
@@ -275,31 +355,7 @@ function SettingRow({
           </span>
         )}
       </div>
-      <div className="setting-control">
-        {control}
-        {!disabled && <SaveStatus state={state} />}
-      </div>
+      <div className="setting-control">{control}</div>
     </div>
   );
-}
-
-function SaveStatus({ state }: { state: SaveState }) {
-  if (state.kind === "saving") {
-    return (
-      <span className="setting-status">
-        <Loader2 size={13} className="spin" aria-hidden /> Saving…
-      </span>
-    );
-  }
-  if (state.kind === "saved") {
-    return (
-      <span className="setting-status saved">
-        <Check size={13} aria-hidden /> Saved
-      </span>
-    );
-  }
-  if (state.kind === "error") {
-    return <span className="setting-status error">{state.message}</span>;
-  }
-  return null;
 }

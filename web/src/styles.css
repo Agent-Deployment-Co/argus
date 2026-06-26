@@ -370,9 +370,10 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-row-disabled .setting-name, .setting-row-disabled .setting-desc { opacity: .5; }
 .setting-input:disabled, .select__control:disabled, .setting-toggle:disabled { opacity: .45; cursor: not-allowed; }
 
-.setting-status { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); min-height: 16px; }
-.setting-status.saved { color: var(--sky-surge); }
-.setting-status.error { color: var(--racing-red); text-align: right; }
+/* The single global save indicator, pinned to the top-right of the surface. */
+.save-indicator { position: absolute; top: 18px; right: 24px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; color: var(--muted); }
+.save-indicator.saved { color: var(--sky-surge); }
+.save-indicator.error { color: var(--racing-red); }
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
