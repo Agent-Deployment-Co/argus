@@ -17,7 +17,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
-import { isLlmProvider } from "./llm/index.ts";
+import { getProvider, isLlmProvider } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
 /** The task-extraction provider default, preserved from before the generalization: enabling task
@@ -177,12 +177,9 @@ function parseProvider(raw: unknown): LlmProvider | undefined {
   return undefined;
 }
 
-/** The standard env var (and secret-store key) for a provider's API key. */
+/** The standard env var (and secret-store key) for a provider's API key — from the provider registry. */
 function defaultApiKeyEnv(provider: LlmProvider): string | undefined {
-  if (provider === "anthropic") return "ANTHROPIC_API_KEY";
-  if (provider === "openai") return "OPENAI_API_KEY";
-  if (provider === "gemini") return "GEMINI_API_KEY";
-  return undefined;
+  return getProvider(provider)?.apiKeyEnv;
 }
 
 type OptionalString = string | undefined;

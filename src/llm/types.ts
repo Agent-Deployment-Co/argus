@@ -51,16 +51,37 @@ export interface ResolvedLlmConfig {
   apiKeyEnv?: string;
 }
 
-/** The resolved per-call context an HTTP provider operates on. */
-export interface HttpProviderContext {
-  apiKey: string;
+/** The fully-resolved per-call context the client hands to a provider's `complete`. The client has
+ *  already resolved `model`/`maxTokens` (request → config → provider default) and, for providers that
+ *  declare `requiresApiKey`, guaranteed `apiKey` is present. Optional fields a given provider ignores
+ *  (e.g. `command` for HTTP providers, `apiKey`/`baseUrl` for local ones) are simply unused. */
+export interface ProviderCall {
+  system?: string;
+  prompt: string;
   model: string;
   maxTokens: number;
   baseUrl?: string;
-  system?: string;
-  prompt: string;
+  apiKey?: string;
+  command?: string;
   fetch: typeof fetch;
   signal?: AbortSignal;
+}
+
+/**
+ * One provider, self-contained. Adding a provider is adding one descriptor (its key env var, default
+ * model, and how to run a completion) and registering it — the client, the config's per-provider
+ * apiKeyEnv default, and the secret allowlist all derive from the registry, with no per-provider
+ * branching anywhere else.
+ */
+export interface ProviderDescriptor {
+  name: LlmProvider;
+  /** Standard env var (and secret-store key) for this provider's API key; absent → no key. */
+  apiKeyEnv?: string;
+  /** Built-in default model, used when neither the request nor the config sets one. */
+  defaultModel?: string;
+  /** When true, the client short-circuits with a clear "no key" diagnostic if `apiKey` is missing. */
+  requiresApiKey?: boolean;
+  complete(call: ProviderCall): Promise<LlmResult>;
 }
 
 /** The resolved per-call context a local (subprocess) provider operates on. */

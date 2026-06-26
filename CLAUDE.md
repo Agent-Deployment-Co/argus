@@ -139,12 +139,14 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
   Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `$ARGUS_CONFIG_DIR/pricing.json`.
 
-- **`src/llm/`** — The shared LLM access layer (#132; design in `docs/llm-providers.md`): a provider
-  registry + one client, `complete(request, config)`. `index.ts` routes to `providers/*`
-  (`local.ts` = `claude`/`command`; `anthropic.ts`/`openai.ts`/`gemini.ts` = direct HTTP over `http.ts`,
-  which owns 429/5xx retry + a size cap). Never throws — `off`/no-key/network/bad-shape → `ok:false`.
-  Pure of secret access (the consumer fills `config.apiKey`) so it's testable against an injected
-  `fetch`. Task extraction is the first consumer; the layer is not task-specific.
+- **`src/llm/`** — The shared LLM access layer (#132; design in `docs/llm-providers.md`). `registry.ts`
+  is the single source of truth: a list of `ProviderDescriptor`s (`providers/*` — `local.ts` =
+  `claude`/`command`; `anthropic`/`openai`/`gemini` = direct HTTP over `http.ts`, which owns 429/5xx
+  retry + a size cap). `index.ts`'s `complete(request, config)` dispatches through the registry with
+  **no per-provider branching**; `config.ts`'s apiKeyEnv default and `secrets.ts`'s allowlist derive
+  from it too, so adding a provider is one descriptor + one registry entry. Never throws —
+  `off`/no-key/network/bad-shape → `ok:false`. Pure of secret access (the consumer fills
+  `config.apiKey`), so it's testable against an injected `fetch`. Task extraction is the first consumer.
 
 - **`secrets.ts`** — BYO API-key storage: a `SecretStore` with platform backends (macOS keychain via
   `/usr/bin/security`, Windows DPAPI via PowerShell, Linux chmod-600 file), behind an injectable

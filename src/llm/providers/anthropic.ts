@@ -2,7 +2,7 @@
 // is a single user turn (optionally with a system prompt), and the completion is the concatenation of
 // the response's text blocks.
 import { httpComplete } from "../http.ts";
-import type { HttpProviderContext, LlmResult } from "../types.ts";
+import type { ProviderCall, ProviderDescriptor } from "../types.ts";
 
 export const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -18,26 +18,32 @@ function extractText(body: unknown): string {
     .join("");
 }
 
-export function runAnthropicProvider(ctx: HttpProviderContext): Promise<LlmResult> {
-  return httpComplete(
-    () => ({
-      url: ANTHROPIC_API_URL,
-      init: {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": ctx.apiKey,
-          "anthropic-version": ANTHROPIC_VERSION,
+export const anthropicProvider: ProviderDescriptor = {
+  name: "anthropic",
+  apiKeyEnv: "ANTHROPIC_API_KEY",
+  defaultModel: DEFAULT_ANTHROPIC_MODEL,
+  requiresApiKey: true,
+  complete(call: ProviderCall) {
+    return httpComplete(
+      () => ({
+        url: ANTHROPIC_API_URL,
+        init: {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": call.apiKey!,
+            "anthropic-version": ANTHROPIC_VERSION,
+          },
+          body: JSON.stringify({
+            model: call.model,
+            max_tokens: call.maxTokens,
+            ...(call.system ? { system: call.system } : {}),
+            messages: [{ role: "user", content: call.prompt }],
+          }),
         },
-        body: JSON.stringify({
-          model: ctx.model,
-          max_tokens: ctx.maxTokens,
-          ...(ctx.system ? { system: ctx.system } : {}),
-          messages: [{ role: "user", content: ctx.prompt }],
-        }),
-      },
-    }),
-    extractText,
-    { fetch: ctx.fetch, signal: ctx.signal },
-  );
-}
+      }),
+      extractText,
+      { fetch: call.fetch, signal: call.signal },
+    );
+  },
+};

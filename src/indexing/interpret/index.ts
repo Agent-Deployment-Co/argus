@@ -7,7 +7,6 @@
 // response text — there is no separate candidate list or reconstructed dialogue.
 import type { MaterializeSession, ParserDiagnostic } from "../../store/store-contract.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
-import { isHttpProvider } from "../../llm/index.ts";
 import { resolveApiKey } from "../../secrets.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
 
@@ -16,13 +15,14 @@ export function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | un
   return !!taskExtraction?.enabled && taskExtraction.llm.provider !== "off";
 }
 
-/** Fill in the API key for an HTTP provider once per run (env var → secret store). The LLM client is
- *  kept pure of secret access, so the key is resolved here and handed down on `llm.apiKey`. */
+/** Fill in the API key once per run (env var → secret store). Only providers that declare a key env
+ *  var get one — config sets `apiKeyEnv` only for those. The LLM client is kept pure of secret access,
+ *  so the key is resolved here and handed down on `llm.apiKey`. */
 async function withResolvedApiKey(
   taskExtraction: ResolvedTaskExtraction,
 ): Promise<ResolvedTaskExtraction> {
   const { llm } = taskExtraction;
-  if (!isHttpProvider(llm.provider) || llm.apiKey) return taskExtraction;
+  if (!llm.apiKeyEnv || llm.apiKey) return taskExtraction;
   const apiKey = await resolveApiKey(llm.apiKeyEnv);
   return { ...taskExtraction, llm: { ...llm, apiKey } };
 }
