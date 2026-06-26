@@ -25,6 +25,7 @@ import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
+import { defaultSecretStore, isSecretName, type SecretStatus, type SecretStore } from "../secrets.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
 export interface ServeOptions {
@@ -113,6 +114,8 @@ interface AppOptions {
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
   debugInfo?: DebugInfoReader;
+  /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
+  secrets?: SecretStore;
 }
 
 const MIME: Record<string, string> = {
@@ -182,6 +185,33 @@ function rejectCrossSite(c: Context): Response | null {
   // Primary defense for any client: the same-origin-only custom header.
   if (c.req.header(APP_HEADER) !== "1") {
     return c.json({ error: "This endpoint only accepts same-origin requests from the Argus web app." }, 403);
+  }
+  return null;
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/** Extra guard for the secret endpoints: require the request to be addressed to loopback. A
+ *  DNS-rebinding attack points an attacker-controlled hostname at 127.0.0.1, so the request reaches
+ *  this server but carries the attacker's hostname in `Host` (and `Origin`). Rejecting any non-loopback
+ *  Host/Origin closes that hole — on top of `rejectCrossSite`'s CSRF defense — so a stored API key can
+ *  never be written or its (masked) status read by a remote page. Returns a 403 Response, or null. */
+function rejectUnsafeHost(c: Context): Response | null {
+  const host = (c.req.header("host") ?? "").replace(/:\d+$/, "");
+  if (!LOOPBACK_HOSTS.has(host)) {
+    return c.json({ error: "This endpoint is only reachable on localhost." }, 403);
+  }
+  const origin = c.req.header("origin");
+  if (origin) {
+    let hostname: string;
+    try {
+      hostname = new URL(origin).hostname;
+    } catch {
+      return c.json({ error: "Invalid Origin." }, 403);
+    }
+    if (!LOOPBACK_HOSTS.has(hostname)) {
+      return c.json({ error: "Cross-origin requests are not allowed." }, 403);
+    }
   }
   return null;
 }
@@ -307,6 +337,43 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json(await opts.debugInfo());
   });
 
+  // BYO LLM API keys (#132). Both routes are guarded against CSRF (rejectCrossSite) and
+  // DNS-rebinding (rejectUnsafeHost), accept only allowlisted secret names, and NEVER return or log
+  // the raw value — GET reports masked status only, POST echoes back masked status after writing.
+  const secretStore = (): SecretStore => opts.secrets ?? defaultSecretStore();
+
+  app.get("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+    return c.json(await secretStore().describe(name) satisfies SecretStatus);
+  });
+
+  app.post("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+
+    let value: unknown;
+    try {
+      value = (await c.req.json())?.value;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a string "value".' }, 400);
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      return c.json({ error: 'Missing "value".' }, 400);
+    }
+    try {
+      await secretStore().set(name, value);
+    } catch {
+      // Deliberately generic — never surface the value or a provider error that might echo it.
+      return c.json({ error: "Couldn't save the secret." }, 500);
+    }
+    return c.json(await secretStore().describe(name) satisfies SecretStatus);
+  });
+
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
   // back to index.html so client-side routes resolve on a hard refresh.
   app.get("*", (c) => {
@@ -430,6 +497,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionList,
     sessionDetail,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
+    secrets: defaultSecretStore(),
   });
 
   let resolveClosed!: () => void;
