@@ -14,7 +14,8 @@ import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type Pu
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { loadConfig, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
-import { defaultSecretStore, isSecretName, SECRET_NAMES } from "./secrets.ts";
+import { defaultSecretStore, isSecretName, resolveApiKey, SECRET_NAMES } from "./secrets.ts";
+import { complete } from "./llm/index.ts"; // TEMP (argus llm)
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -668,6 +669,26 @@ const secret = defineCommand({
   },
 });
 
+// TEMP (do not merge): one-off completion through the configured LLM provider, for testing setup.
+//   argus llm "say hello"   — uses the `llm` block from argus.json (provider/model/apiKeyEnv).
+const llmCmd = defineCommand({
+  meta: { name: "llm", description: "TEMP: run a one-off completion through the configured provider" },
+  args: { text: { type: "positional", required: true, description: "prompt text (quote multi-word)" } },
+  run: handler(async (args) => {
+    const parts = Array.isArray(args._) ? (args._ as string[]) : [];
+    const text = (parts.length ? parts.join(" ") : String(args.text ?? "")).trim();
+    if (!text) throw new Error("Provide some prompt text, e.g. `argus llm \"say hello\"`.");
+    const { llm } = resolveTaskExtraction();
+    const apiKey = llm.apiKey ?? (await resolveApiKey(llm.apiKeyEnv));
+    log(`provider=${llm.provider}${llm.model ? ` model=${llm.model}` : ""}${llm.apiKeyEnv ? ` key=${llm.apiKeyEnv}${apiKey ? "(set)" : "(missing)"}` : ""}`);
+    const res = await complete({ prompt: text }, { ...llm, apiKey });
+    if (!res.ok) {
+      throw new Error(`LLM call failed${res.status != null ? ` (status ${res.status})` : ""}: ${res.error ?? "no output"}`);
+    }
+    process.stdout.write(res.text + "\n");
+  }),
+});
+
 const main = defineCommand({
   meta: {
     name: "argus",
@@ -677,7 +698,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, login, secret },
+  subCommands: { serve, index, sync, run: runCmd, status, login, secret, llm: llmCmd /* TEMP */ },
 });
 
 async function run() {
@@ -691,7 +712,7 @@ async function run() {
   }
   // The `argus secret` commands are utilitarian (and `secret set` reads a key from stdin), so skip
   // the banner there — it's just noise.
-  if (argv[0] !== "secret") printBanner();
+  if (argv[0] !== "secret" && argv[0] !== "llm" /* TEMP */) printBanner();
   // A bare `argus` (no subcommand) shows the usage/help with a success exit code; citty's own
   // "no command specified" path would treat the same input as an error. `argus <command>` and
   // `argus --help` flow through citty normally.
