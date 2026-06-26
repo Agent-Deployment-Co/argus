@@ -19,7 +19,10 @@
     "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
     "desktop:dev": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri dev",
     "desktop:build": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles app",
-    "desktop:dmg": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles dmg"
+    "desktop:dmg": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles dmg",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
@@ -43,7 +46,8 @@
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.7",
     "typescript": "^5.9.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitepress": "^2.0.0-alpha.17"
   },
   "repository": {
     "type": "git",
