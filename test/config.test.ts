@@ -6,6 +6,8 @@ import {
   ALL_SETTINGS,
   getPath,
   loadConfig,
+  resolveAutoUpdateCheckIntervalMinutes,
+  resolveAutoUpdateEnabled,
   resolveSetting,
   resolveTaskExtraction,
   type Setting,
@@ -18,7 +20,9 @@ function tmpConfig(contents: string): string {
   return path;
 }
 
-const TASK_ENV = [
+const CONFIG_ENV = [
+  "ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES",
+  "ARGUS_AUTO_UPDATE_ENABLED",
   "ARGUS_TASK_ENABLED",
   "ARGUS_TASK_PROVIDER",
   "ARGUS_TASK_MODEL",
@@ -28,7 +32,7 @@ const TASK_ENV = [
 ];
 
 afterEach(() => {
-  for (const key of TASK_ENV) delete process.env[key];
+  for (const key of CONFIG_ENV) delete process.env[key];
 });
 
 describe("loadConfig", () => {
@@ -190,6 +194,11 @@ describe("resolveTaskExtraction", () => {
 });
 
 describe("Setting secret flag", () => {
+  test("auto-update settings are known and not secret", () => {
+    expect(ALL_SETTINGS["autoUpdate.enabled"]?.secret).toBeFalsy();
+    expect(ALL_SETTINGS["autoUpdate.checkIntervalMinutes"]?.secret).toBeFalsy();
+  });
+
   test("hub.key is marked secret", () => {
     expect(ALL_SETTINGS["hub.key"]?.secret).toBe(true);
   });
@@ -205,6 +214,45 @@ describe("Setting secret flag", () => {
   });
 });
 
+describe("resolveAutoUpdateEnabled", () => {
+  test("defaults to enabled", () => {
+    expect(resolveAutoUpdateEnabled({}, {})).toBe(true);
+  });
+
+  test("argus.json can disable automatic updates", () => {
+    expect(resolveAutoUpdateEnabled({}, { autoUpdate: { enabled: false } })).toBe(false);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_AUTO_UPDATE_ENABLED = "yes";
+    expect(resolveAutoUpdateEnabled({}, { autoUpdate: { enabled: false } })).toBe(true);
+  });
+});
+
+describe("resolveAutoUpdateCheckIntervalMinutes", () => {
+  test("defaults to 60 minutes", () => {
+    expect(resolveAutoUpdateCheckIntervalMinutes({}, {})).toBe(60);
+  });
+
+  test("argus.json can set the update check interval", () => {
+    expect(
+      resolveAutoUpdateCheckIntervalMinutes({}, { autoUpdate: { checkIntervalMinutes: 15 } }),
+    ).toBe(15);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = "30";
+    expect(
+      resolveAutoUpdateCheckIntervalMinutes({}, { autoUpdate: { checkIntervalMinutes: 15 } }),
+    ).toBe(30);
+  });
+
+  test("invalid values fall back to the default", () => {
+    expect(
+      resolveAutoUpdateCheckIntervalMinutes({}, { autoUpdate: { checkIntervalMinutes: 0 } }),
+    ).toBe(60);
+  });
+});
 
 describe("llm block (#132)", () => {
   afterEach(() => {

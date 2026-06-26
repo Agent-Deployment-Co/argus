@@ -10,6 +10,7 @@ use std::process::Command;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::OptionalExtension;
@@ -24,7 +25,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
 /// the tray menu items we update as that state changes, and a flag marking a stop as intentional
@@ -37,9 +38,19 @@ struct AppState {
     open_item: MenuItem<Wry>,
     start_item: MenuItem<Wry>,
     stop_item: MenuItem<Wry>,
+    update_item: MenuItem<Wry>,
+    update_available: AtomicBool,
+    checking_update: AtomicBool,
+    last_update_check_ms: Mutex<Option<u64>>,
+    latest_version: Mutex<Option<String>>,
 }
 
 const ABOUT_WINDOW_LABEL: &str = "about";
+const CHECK_FOR_UPDATES_LABEL: &str = "Check for updates";
+const INSTALL_UPDATE_LABEL: &str = "Install Update";
+const CHECKING_FOR_UPDATES_LABEL: &str = "Checking for updates...";
+const INSTALLING_UPDATE_LABEL: &str = "Installing Update...";
+const DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES: u64 = 60;
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -258,6 +269,71 @@ fn argus_config_dir() -> Option<PathBuf> {
     home_dir().map(|dir| dir.join(".config").join("argus"))
 }
 
+fn read_argus_config_json() -> Option<serde_json::Value> {
+    let dir = argus_config_dir()?;
+    let text = std::fs::read_to_string(dir.join("argus.json")).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text).ok()
+}
+
+fn parse_bool_setting(value: &str) -> Option<bool> {
+    match value.trim().to_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn json_bool_setting(value: Option<&serde_json::Value>) -> Option<bool> {
+    match value? {
+        serde_json::Value::Bool(value) => Some(*value),
+        serde_json::Value::String(value) => parse_bool_setting(value),
+        serde_json::Value::Number(value) => value.as_i64().and_then(|n| match n {
+            1 => Some(true),
+            0 => Some(false),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+fn parse_minutes_setting(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok().filter(|value| *value > 0)
+}
+
+fn json_minutes_setting(value: Option<&serde_json::Value>) -> Option<u64> {
+    match value? {
+        serde_json::Value::Number(value) => value.as_u64().filter(|value| *value > 0),
+        serde_json::Value::String(value) => parse_minutes_setting(value),
+        _ => None,
+    }
+}
+
+/// Whether the desktop shell should install signed updates automatically. Defaults to true, matching
+/// the shared `autoUpdate.enabled` setting in `argus.json`.
+fn auto_update_enabled() -> bool {
+    if let Some(value) = non_empty_env("ARGUS_AUTO_UPDATE_ENABLED") {
+        return parse_bool_setting(&value).unwrap_or(true);
+    }
+    read_argus_config_json()
+        .and_then(|json| json_bool_setting(json.get("autoUpdate").and_then(|v| v.get("enabled"))))
+        .unwrap_or(true)
+}
+
+/// Minutes between background desktop update checks. Defaults to 60.
+fn auto_update_check_interval_minutes() -> u64 {
+    if let Some(value) = non_empty_env("ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES") {
+        return parse_minutes_setting(&value).unwrap_or(DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES);
+    }
+    read_argus_config_json()
+        .and_then(|json| {
+            json_minutes_setting(
+                json.get("autoUpdate")
+                    .and_then(|v| v.get("checkIntervalMinutes")),
+            )
+        })
+        .unwrap_or(DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES)
+}
+
 /// True when both `hub.url` and `hub.key` are configured (env or `argus.json`), the same condition
 /// the CLI's `resolveHubConfig` uses to switch on Hub uploads. When true the tray runs `argus run`
 /// with sync on (no `--no-sync`). Tolerant: a missing or malformed config simply reads as "not
@@ -266,13 +342,7 @@ fn hub_configured() -> bool {
     if non_empty_env("ARGUS_HUB_URL").is_some() && non_empty_env("ARGUS_HUB_KEY").is_some() {
         return true;
     }
-    let Some(dir) = argus_config_dir() else {
-        return false;
-    };
-    let Ok(text) = std::fs::read_to_string(dir.join("argus.json")) else {
-        return false;
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Some(json) = read_argus_config_json() else {
         return false;
     };
     let non_empty = |value: Option<&serde_json::Value>| {
@@ -347,22 +417,66 @@ fn sync_user_id() -> String {
     os_username().unwrap_or_else(|| "unknown".to_string())
 }
 
-fn about_info(port: u16) -> serde_json::Value {
+fn now_ms() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as u64)
+}
+
+fn about_info(app: &AppHandle) -> serde_json::Value {
+    let state = app.state::<AppState>();
+    let latest_version = state
+        .latest_version
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    let last_update_check_ms = *state.last_update_check_ms.lock().unwrap();
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "latestVersion": latest_version,
+        "lastUpdateCheckMs": last_update_check_ms,
         "buildNumber": env!("ARGUS_BUILD_ID"),
-        "dashboardUrl": format!("http://localhost:{port}"),
+        "dashboardUrl": format!("http://localhost:{}", state.port),
         "clientId": local_client_id(),
         "syncUserId": sync_user_id(),
     })
 }
 
+fn refresh_about_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) else {
+        return;
+    };
+    let info = about_info(app);
+    let _ = window.eval(format!(
+        "window.__ARGUS_ABOUT__ = {info}; window.__ARGUS_SET_ABOUT__?.({info});"
+    ));
+}
+
+fn record_update_check_attempt(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if let Some(checked_at) = now_ms() {
+        *state.last_update_check_ms.lock().unwrap() = Some(checked_at);
+    }
+    refresh_about_window(app);
+}
+
+fn record_update_check(app: &AppHandle, latest_version: Option<String>) {
+    let state = app.state::<AppState>();
+    if let Some(checked_at) = now_ms() {
+        *state.last_update_check_ms.lock().unwrap() = Some(checked_at);
+    }
+    *state.latest_version.lock().unwrap() =
+        Some(latest_version.unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()));
+    refresh_about_window(app);
+}
+
 /// Open or focus the bundled About screen. The screen is static HTML; this initialization script
 /// only supplies runtime metadata, so the webview does not need any Tauri command permissions.
 fn show_about(app: &AppHandle) {
-    let port = app.state::<AppState>().port;
     if let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) {
-        let info = about_info(port);
+        let info = about_info(app);
         let _ = window.eval(format!(
             "window.__ARGUS_ABOUT__ = {info}; window.__ARGUS_SET_ABOUT__?.({info});"
         ));
@@ -371,7 +485,7 @@ fn show_about(app: &AppHandle) {
         return;
     }
 
-    let info = about_info(port);
+    let info = about_info(app);
     let init_script = format!("window.__ARGUS_ABOUT__ = {info};");
 
     let result = WebviewWindowBuilder::new(
@@ -413,19 +527,19 @@ fn show_about(app: &AppHandle) {
     }
 }
 
-/// Check for a signed desktop update, install it if available, and restart to finish.
-/// Returns `Ok(true)` when an update was installed (and a restart was triggered).
-async fn install_available_update(app: AppHandle) -> Result<bool, String> {
-    let Some(update) = app
+async fn check_available_update(app: &AppHandle) -> Result<Option<Update>, String> {
+    record_update_check_attempt(app);
+    let update = app
         .updater()
         .map_err(|e| format!("preparing updater: {e}"))?
         .check()
         .await
-        .map_err(|e| format!("checking for updates: {e}"))?
-    else {
-        return Ok(false);
-    };
+        .map_err(|e| format!("checking for updates: {e}"))?;
+    record_update_check(app, update.as_ref().map(|update| update.version.clone()));
+    Ok(update)
+}
 
+async fn install_update(app: AppHandle, update: Update) -> Result<bool, String> {
     let version = update.version.clone();
     log::info!("installing Argus update {version}");
     notify(
@@ -457,14 +571,154 @@ async fn install_available_update(app: AppHandle) -> Result<bool, String> {
     app.restart()
 }
 
-/// Check for updates once in the background at launch. Runs silently when already up to date;
-/// failures are logged but never interrupt the user (the app keeps running on the current version).
-fn check_for_updates_on_launch(app: &AppHandle) {
+enum ManualUpdateResult {
+    Installing,
+    Available(String),
+    Current,
+}
+
+fn set_update_menu(app: &AppHandle, label: &str, enabled: bool) {
+    let state = app.state::<AppState>();
+    let _ = state.update_item.set_text(label);
+    let _ = state.update_item.set_enabled(enabled);
+}
+
+fn reset_update_menu(app: &AppHandle, available: bool) {
+    let state = app.state::<AppState>();
+    state.update_available.store(available, Ordering::SeqCst);
+    set_update_menu(
+        app,
+        if available {
+            INSTALL_UPDATE_LABEL
+        } else {
+            CHECK_FOR_UPDATES_LABEL
+        },
+        true,
+    );
+}
+
+async fn check_for_updates_from_menu_inner(
+    app: AppHandle,
+    install_known_update: bool,
+) -> Result<ManualUpdateResult, String> {
+    let Some(update) = check_available_update(&app).await? else {
+        return Ok(ManualUpdateResult::Current);
+    };
+
+    let version = update.version.clone();
+    if install_known_update || auto_update_enabled() {
+        install_update(app, update).await?;
+        Ok(ManualUpdateResult::Installing)
+    } else {
+        Ok(ManualUpdateResult::Available(version))
+    }
+}
+
+fn check_for_updates_from_menu(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if state.checking_update.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let install_known_update = state.update_available.load(Ordering::SeqCst);
+    let _ = state.update_item.set_text(if install_known_update {
+        INSTALLING_UPDATE_LABEL
+    } else {
+        CHECKING_FOR_UPDATES_LABEL
+    });
+    let _ = state.update_item.set_enabled(false);
+
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        match install_available_update(handle).await {
-            Ok(true) | Ok(false) => {}
-            Err(err) => log::error!("{err}"),
+        let result = check_for_updates_from_menu_inner(handle.clone(), install_known_update).await;
+        let state = handle.state::<AppState>();
+        state.checking_update.store(false, Ordering::SeqCst);
+
+        match result {
+            Ok(ManualUpdateResult::Installing) => {}
+            Ok(ManualUpdateResult::Available(version)) => {
+                reset_update_menu(&handle, true);
+                notify(
+                    &handle,
+                    "Argus update available",
+                    &format!("Version {version} is ready to install."),
+                );
+            }
+            Ok(ManualUpdateResult::Current) => {
+                reset_update_menu(&handle, false);
+                notify(&handle, "Argus is up to date", "No update is available.");
+            }
+            Err(err) => {
+                log::error!("{err}");
+                reset_update_menu(&handle, install_known_update);
+                notify(
+                    &handle,
+                    "Couldn't check for updates",
+                    "The update check failed. Check Console for details.",
+                );
+            }
+        }
+    });
+}
+
+async fn sleep_update_interval() {
+    let minutes = auto_update_check_interval_minutes();
+    let seconds = minutes.saturating_mul(60);
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_secs(seconds));
+    })
+    .await;
+}
+
+async fn check_for_updates_in_background(app: AppHandle) -> Result<(), String> {
+    let Some(update) = check_available_update(&app).await? else {
+        reset_update_menu(&app, false);
+        return Ok(());
+    };
+
+    let version = update.version.clone();
+    if auto_update_enabled() {
+        install_update(app, update).await?;
+    } else {
+        let was_available = app
+            .state::<AppState>()
+            .update_available
+            .swap(true, Ordering::SeqCst);
+        set_update_menu(&app, INSTALL_UPDATE_LABEL, true);
+        if !was_available {
+            notify(
+                &app,
+                "Argus update available",
+                &format!("Version {version} is ready to install."),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn run_background_update_check(app: AppHandle) {
+    if app
+        .state::<AppState>()
+        .checking_update
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    let result = check_for_updates_in_background(app.clone()).await;
+    app.state::<AppState>()
+        .checking_update
+        .store(false, Ordering::SeqCst);
+    if let Err(err) = result {
+        log::error!("{err}");
+    }
+}
+
+/// Check for updates immediately, then repeat using `autoUpdate.checkIntervalMinutes`.
+fn start_update_check_loop(app: &AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            run_background_update_check(handle.clone()).await;
+            sleep_update_interval().await;
         }
     });
 }
@@ -501,6 +755,8 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open Argus", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
+            let update_item =
+                MenuItem::with_id(app, "updates", CHECK_FOR_UPDATES_LABEL, true, None::<&str>)?;
             let about = MenuItem::with_id(app, "about", "About Argus", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
             let menu = Menu::with_items(
@@ -511,6 +767,7 @@ pub fn run() {
                     &open,
                     &start_item,
                     &stop_item,
+                    &update_item,
                     &about,
                     &PredefinedMenuItem::separator(app)?,
                     &quit,
@@ -525,6 +782,11 @@ pub fn run() {
                 open_item: open,
                 start_item,
                 stop_item,
+                update_item,
+                update_available: AtomicBool::new(false),
+                checking_update: AtomicBool::new(false),
+                last_update_check_ms: Mutex::new(None),
+                latest_version: Mutex::new(None),
             });
 
             let tray_icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
@@ -539,6 +801,7 @@ pub fn run() {
                     "open" => open_dashboard(app),
                     "start" => start(app),
                     "stop" => stop(app),
+                    "updates" => check_for_updates_from_menu(app),
                     "about" => show_about(app),
                     "quit" => {
                         stop(app);
@@ -552,9 +815,9 @@ pub fn run() {
             // clicks "Open Argus".
             start(app.handle());
 
-            // Check for a newer signed build in the background. There's no manual "Check for
-            // updates" menu item; this launch-time check is how the app stays current.
-            check_for_updates_on_launch(app.handle());
+            // Check for a newer signed build in the background; the menu item lets the user ask for
+            // the same check immediately.
+            start_update_check_loop(app.handle());
 
             Ok(())
         })
