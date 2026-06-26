@@ -84,6 +84,29 @@ function describeFrom(value: string | undefined): SecretStatus {
   return value ? { configured: true, hint: maskSecret(value) } : { configured: false };
 }
 
+// --- shared on-disk secrets.json map (DPAPI blobs on Windows, plaintext elsewhere) ---
+// Both file-backed stores persist a flat `{ name: value }` JSON object at `secrets.json`; the only
+// difference is whether the value is a DPAPI blob or the raw secret. Keeping the load/store, the
+// object guard, and the file mode here means the on-disk shape can't drift between them.
+
+function readSecretMap(path: string): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSecretMap(path: string, map: Record<string, string>): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(map, null, 2), { mode: 0o600 });
+  // `mode` only applies when the file is created, so re-tighten an already-existing file to 0600.
+  chmodSync(path, 0o600);
+}
+
 // --- macOS: login keychain via /usr/bin/security ---
 
 /** Keychain service (the `(service, account)` pair is the item's identity). A reverse-DNS name —
@@ -167,19 +190,11 @@ export class DpapiSecretStore implements SecretStore {
   ) {}
 
   private readBlobs(): Record<string, string> {
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(this.path, "utf8"));
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, string>)
-        : {};
-    } catch {
-      return {};
-    }
+    return readSecretMap(this.path);
   }
 
   private writeBlobs(blobs: Record<string, string>): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    writeFileSync(this.path, JSON.stringify(blobs, null, 2), { mode: 0o600 });
+    writeSecretMap(this.path, blobs);
   }
 
   private ps(command: string, env: Record<string, string>): Promise<CommandResult> {
@@ -223,20 +238,11 @@ export class FileSecretStore implements SecretStore {
   constructor(private readonly path: string = SECRETS_FILE) {}
 
   private read(): Record<string, string> {
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(this.path, "utf8"));
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, string>)
-        : {};
-    } catch {
-      return {};
-    }
+    return readSecretMap(this.path);
   }
 
   private write(map: Record<string, string>): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    writeFileSync(this.path, JSON.stringify(map, null, 2), { mode: 0o600 });
-    chmodSync(this.path, 0o600);
+    writeSecretMap(this.path, map);
   }
 
   async get(name: string): Promise<string | undefined> {
