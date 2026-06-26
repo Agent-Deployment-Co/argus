@@ -363,20 +363,29 @@ async function runConfigSet(key: string, rawValue: string, log: Log): Promise<vo
   log(`${key} = ${JSON.stringify(parsed)}`);
 }
 
-async function runConfigList(log: Log, json = false): Promise<void> {
-  const pairs = flattenObject(loadConfig());
-  if (json) {
-    // A flat dotted-key → value object: the keys are exactly the ones `config set`/`get` take,
-    // so a consumer (e.g. the desktop settings window) can round-trip them directly.
-    process.stdout.write(JSON.stringify(Object.fromEntries(pairs)) + "\n");
+async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, log: Log): Promise<void> {
+  const cfg = loadConfig();
+  if (opts.asJson) {
+    process.stdout.write(JSON.stringify(cfg, null, 2) + "\n");
     return;
   }
+  const pairs = flattenObject(cfg);
   if (pairs.length === 0) {
     log("(no settings in argus.json)");
     return;
   }
+  let hasRedacted = false;
   for (const [k, v] of pairs) {
-    process.stdout.write(`${k}=${JSON.stringify(v)}\n`);
+    const isSecret = ALL_SETTINGS[k]?.secret === true;
+    if (isSecret && !opts.showSecrets) {
+      process.stdout.write(`${k}=<redacted>\n`);
+      hasRedacted = true;
+    } else {
+      process.stdout.write(`${k}=${JSON.stringify(v)}\n`);
+    }
+  }
+  if (hasRedacted) {
+    process.stderr.write("(use --show-secrets to reveal secret values, or --json for machine-readable output)\n");
   }
 }
 
@@ -624,9 +633,10 @@ const configSet = defineCommand({
 const configList = defineCommand({
   meta: { name: "list", description: "list all settings currently in argus.json" },
   args: {
-    json: { type: "boolean", default: false, description: "print all settings as a flat JSON object" },
+    "show-secrets": { type: "boolean", default: false, description: "Print secret values (e.g. hub.key) in plain text" },
+    json: { type: "boolean", default: false, description: "Output settings as JSON (unredacted; for programmatic use)" },
   },
-  run: handler((args) => runConfigList(log, args.json)),
+  run: handler((args) => runConfigList({ showSecrets: !!args["show-secrets"], asJson: !!args.json }, log)),
 });
 
 const config = defineCommand({

@@ -84,6 +84,8 @@ export interface Setting<T> {
   /** citty flag, kebab-case — e.g. "task-provider". */
   flag?: string;
   default: T;
+  /** When true, `argus config list` redacts the value in human output to avoid leaking secrets. */
+  secret?: boolean;
   /** Coerce a raw value (string from env/flag, typed from file) to T, validating as needed. */
   parse(raw: unknown): T;
 }
@@ -145,6 +147,7 @@ const HUB_SETTINGS = {
     path: "hub.key",
     env: "ARGUS_HUB_KEY",
     default: undefined as string | undefined,
+    secret: true,
     parse: parseString,
   } satisfies Setting<string | undefined>,
 };
