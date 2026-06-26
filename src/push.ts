@@ -161,9 +161,49 @@ export interface HubUploadPayload {
   fingerprint: HubFingerprintEntry[];
 }
 
-export interface ReadHubUploadOptions {
+export interface HubUploadFilters {
+  /** Restrict to a specific transcript source (e.g. "claude", "codex"). Omit or "all" for all sources. */
+  source?: string;
+  /** Only sessions with activity on or after this YYYY-MM-DD date. */
+  since?: string;
+  /** Only sessions with activity on or before this YYYY-MM-DD date. */
+  until?: string;
+  /** Only sessions whose project path contains this substring. */
+  project?: string;
+}
+
+export interface ReadHubUploadOptions extends HubUploadFilters {
   /** If set, include only sessions whose IDs are in this set (and their child rows). */
   onlySessionIds?: Set<string>;
+}
+
+/** Build a SQL WHERE clause fragment (with leading space + AND if needed) and its parameter list
+ *  from the upload filters. The session table must be aliased as `s` in the outer query. */
+function buildSessionWhere(filters: HubUploadFilters): { where: string; params: (string | number)[] } {
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (filters.source && filters.source !== "all") {
+    clauses.push("s.source = ?");
+    params.push(filters.source);
+  }
+  if (filters.project) {
+    clauses.push("(s.project LIKE ? OR s.cwd LIKE ?)");
+    params.push(`%${filters.project}%`, `%${filters.project}%`);
+  }
+  if (filters.since) {
+    const sinceMs = new Date(`${filters.since}T00:00:00Z`).getTime();
+    clauses.push("(s.last_ts IS NULL OR s.last_ts >= ?)");
+    params.push(sinceMs);
+  }
+  if (filters.until) {
+    const untilMs = new Date(`${filters.until}T23:59:59.999Z`).getTime();
+    clauses.push("(s.first_ts IS NULL OR s.first_ts <= ?)");
+    params.push(untilMs);
+  }
+  return {
+    where: clauses.length > 0 ? " WHERE " + clauses.join(" AND ") : "",
+    params,
+  };
 }
 
 export interface HubSessionCursorRow {
@@ -192,8 +232,8 @@ export function readClientId(dbPath: string): string {
 }
 
 /** Open argus.db read-only, read all resolved_* rows, return them as plain JS objects.
- *  When `onlySessionIds` is provided, the result is filtered to those sessions and any rows
- *  referencing them — used by `sync`'s "only send what the Hub doesn't already have" path. */
+ *  Source/project/since/until filters narrow which sessions are selected; `onlySessionIds`
+ *  further restricts to a specific set (used by the cursor-based "only changed" path). */
 export function readHubUploadPayload(
   dbPath: string,
   opts: ReadHubUploadOptions = {},
@@ -207,14 +247,42 @@ export function readHubUploadPayload(
     const ver = db.query<{ user_version: number }, []>("PRAGMA user_version").get();
     const schemaVersion = ver?.user_version ?? 0;
 
+    const { where: sessionWhere, params: sessionParams } = buildSessionWhere(opts);
     const allSessions = db
-      .query<HubUploadSession, []>(
-        `SELECT session_id, source, project, cwd, first_ts, last_ts, message_count,
-                first_prompt, archived, friction_interruptions, friction_rejections,
-                friction_compactions, friction_turns, last_interruption_ms, meta_json
-         FROM resolved_sessions`,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .query<HubUploadSession, any[]>(
+        `SELECT s.session_id, s.source, s.project, s.cwd, s.first_ts, s.last_ts, s.message_count,
+                s.first_prompt, s.archived, s.friction_interruptions, s.friction_rejections,
+                s.friction_compactions, s.friction_turns, s.last_interruption_ms, s.meta_json
+         FROM resolved_sessions s${sessionWhere}`,
       )
-      .all();
+      .all(...sessionParams);
+
+    const fingerprint = db
+      .query<{ key: string; value: string; ts_ms: number }, []>(
+        "SELECT key, value, ts_ms FROM client_fingerprint ORDER BY ts_ms, key",
+      )
+      .all()
+      .map((r) => ({ key: r.key, value: r.value, tsMs: r.ts_ms }));
+
+    // Build the set of session IDs to include, applying onlySessionIds restriction on top of filters.
+    const filterIds = opts.onlySessionIds;
+    const keep = new Set(
+      filterIds
+        ? allSessions.filter((s) => filterIds.has(s.session_id)).map((s) => s.session_id)
+        : allSessions.map((s) => s.session_id),
+    );
+
+    if (keep.size === 0) {
+      return {
+        schemaVersion,
+        rows: { sessions: [], usage: [], tasks: [], interactions: [], invocations: [] },
+        fingerprint,
+      };
+    }
+
+    const keepFn = (sid: string) => keep.has(sid);
+    const sessions = allSessions.filter((s) => keep.has(s.session_id));
 
     const allUsage = db
       .query<HubUploadUsage, []>(
@@ -248,30 +316,14 @@ export function readHubUploadPayload(
       )
       .all();
 
-    const fingerprint = db
-      .query<{ key: string; value: string; ts_ms: number }, []>(
-        "SELECT key, value, ts_ms FROM client_fingerprint ORDER BY ts_ms, key",
-      )
-      .all()
-      .map((r) => ({ key: r.key, value: r.value, tsMs: r.ts_ms }));
-
-    const filter = opts.onlySessionIds;
-    if (!filter) {
-      return {
-        schemaVersion,
-        rows: { sessions: allSessions, usage: allUsage, tasks: allTasks, interactions: allInteractions, invocations: allInvocations },
-        fingerprint,
-      };
-    }
-    const keep = (sid: string) => filter.has(sid);
     return {
       schemaVersion,
       rows: {
-        sessions: allSessions.filter((s) => keep(s.session_id)),
-        usage: allUsage.filter((u) => keep(u.session_id)),
-        tasks: allTasks.filter((t) => keep(t.session_id)),
-        interactions: allInteractions.filter((i) => keep(i.session_id)),
-        invocations: allInvocations.filter((v) => keep(v.session_id)),
+        sessions,
+        usage: allUsage.filter((u) => keepFn(u.session_id)),
+        tasks: allTasks.filter((t) => keepFn(t.session_id)),
+        interactions: allInteractions.filter((i) => keepFn(i.session_id)),
+        invocations: allInvocations.filter((v) => keepFn(v.session_id)),
       },
       fingerprint,
     };
@@ -280,13 +332,15 @@ export function readHubUploadPayload(
   }
 }
 
-/** Read just the session IDs from argus.db. Used to ask the Hub which ones it already has. */
-export function readSessionIds(dbPath: string): string[] {
+/** Read session IDs from argus.db, optionally filtered. Used to ask the Hub which ones it already has. */
+export function readSessionIds(dbPath: string, filters: HubUploadFilters = {}): string[] {
   const db = new Database(dbPath, { readonly: true });
   try {
+    const { where, params } = buildSessionWhere(filters);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return db
-      .query<{ session_id: string }, []>("SELECT session_id FROM resolved_sessions")
-      .all()
+      .query<{ session_id: string }, any[]>(`SELECT s.session_id FROM resolved_sessions s${where}`)
+      .all(...params)
       .map((r) => r.session_id);
   } finally {
     db.close();
@@ -306,31 +360,35 @@ function shouldUploadForCursor(
 
 /** Select sessions this client has not successfully uploaded to this Hub at the current local
  *  timestamp. Timestamp-only cursors intentionally ignore same-last_ts metadata changes; resumed
- *  sessions with a newer last_ts are sent again in full and the Hub upsert path stays idempotent. */
+ *  sessions with a newer last_ts are sent again in full and the Hub upsert path stays idempotent.
+ *  Source/project/since/until filters restrict the candidate set the same way `pushHubJson` does. */
 export function readChangedHubSessionIds(
   dbPath: string,
   hubUrl: string,
   clientId: string,
+  filters: HubUploadFilters = {},
 ): HubSessionCursorSelection {
   const db = new Database(dbPath, { readonly: true });
   try {
+    const { where: filterWhere, params: filterParams } = buildSessionWhere(filters);
     const rows = db
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .query<{
         session_id: string;
         last_ts: number | null;
         cursor_session_id: string | null;
         cursor_last_ts: number | null;
-      }, [string, string]>(
+      }, any[]>(
         `SELECT s.session_id, s.last_ts,
                 c.session_id AS cursor_session_id, c.last_ts AS cursor_last_ts
          FROM resolved_sessions s
          LEFT JOIN hub_session_cursors c
            ON c.hub_url = ?
           AND c.client_id = ?
-          AND c.session_id = s.session_id
+          AND c.session_id = s.session_id${filterWhere}
          ORDER BY s.last_ts, s.session_id`,
       )
-      .all(hubUrl, clientId);
+      .all(hubUrl, clientId, ...filterParams);
     return {
       totalSessions: rows.length,
       sessions: rows
@@ -375,7 +433,7 @@ export function markHubSessionsUploaded(
   }
 }
 
-export interface PushHubOptions {
+export interface PushHubOptions extends HubUploadFilters {
   /** Skip local cursor filtering and upload every session. */
   all?: boolean;
   /** Sink for progress messages (e.g. "Hub already has N/M sessions at the latest local timestamp"). */
@@ -401,12 +459,14 @@ export async function pushHubJson(
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
   }
 
+  const filters: HubUploadFilters = { source: opts.source, since: opts.since, until: opts.until, project: opts.project };
+
   let onlySessionIds: Set<string> | undefined;
   let selectedSessions: HubSessionCursorRow[] | undefined;
   if (!opts.all) {
     let selection: HubSessionCursorSelection;
     try {
-      selection = readChangedHubSessionIds(dbPath, base, clientId);
+      selection = readChangedHubSessionIds(dbPath, base, clientId, filters);
     } catch (err) {
       return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
     }
@@ -419,7 +479,7 @@ export async function pushHubJson(
   let uploadedSessions: HubSessionCursorRow[];
   let body: string;
   try {
-    const payload = readHubUploadPayload(dbPath, onlySessionIds ? { onlySessionIds } : {});
+    const payload = readHubUploadPayload(dbPath, onlySessionIds ? { ...filters, onlySessionIds } : filters);
     uploadedSessions = payload.rows.sessions.map((session) => ({
       sessionId: session.session_id,
       lastTs: session.last_ts,
