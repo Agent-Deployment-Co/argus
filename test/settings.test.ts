@@ -30,10 +30,30 @@ describe("describeSettings", () => {
     const llm = categories.find((c) => c.id === "llm")!;
     const provider = llm.sections[0]!.settings.find((s) => s.path === "llm.provider")!;
     expect(provider.ui.control).toBe("select");
-    expect(provider.ui.options).toContain("openai");
+    const values = (provider.ui.options ?? [])
+      .filter((o): o is { value: string; label: string } => o !== "separator")
+      .map((o) => o.value);
+    expect(values).toContain("openai");
     expect(provider.fileValue).toBe("openai");
     expect(provider.effectiveValue).toBe("openai");
     expect(provider.override).toBeUndefined();
+  });
+
+  test("provider options: pinned default + off, a separator, then alpha providers without off", () => {
+    const provider = describeSettings({})
+      .categories.find((c) => c.id === "llm")!
+      .sections[0]!.settings.find((s) => s.path === "llm.provider")!;
+    const opts = provider.ui.options ?? [];
+    // First two are the pinned default (unset) and an explicit Off.
+    expect(opts[0]).toEqual({ value: "", label: "Default (claude-cli)" });
+    expect(opts[1]).toEqual({ value: "off", label: "Off" });
+    expect(opts[2]).toBe("separator");
+    // The rest are real providers, alpha ascending, and never the special "off".
+    const rest = opts.slice(3).filter((o): o is { value: string; label: string } => o !== "separator");
+    const values = rest.map((o) => o.value);
+    expect(values).not.toContain("off");
+    expect(values).toContain("claude-cli");
+    expect(values).toEqual([...values].sort());
   });
 
   test("flags an env var that overrides the file layer", () => {
