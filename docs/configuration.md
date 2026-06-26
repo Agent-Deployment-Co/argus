@@ -59,6 +59,64 @@ Example `argus.json`:
 }
 ```
 
+## The `llm` block (shared LLM access)
+
+LLM access is a top-level `llm` block, shared by any model-driven feature (today: task
+interpretation). It resolves through the same flag > env > file > default chain. Full design in
+[llm-providers.md](./llm-providers.md).
+
+| Setting | `argus.json` | env | CLI flag |
+|---|---|---|---|
+| provider | `llm.provider` | `ARGUS_LLM_PROVIDER` | `--llm-provider` |
+| model | `llm.model` | `ARGUS_LLM_MODEL` | `--llm-model` |
+| base URL (openai-compatible) | `llm.baseUrl` | `ARGUS_LLM_BASE_URL` | `--llm-base-url` |
+| API-key env var | `llm.apiKeyEnv` | `ARGUS_LLM_API_KEY_ENV` | `--llm-api-key-env` |
+| max output tokens | `llm.maxTokens` | `ARGUS_LLM_MAX_TOKENS` | `--llm-max-tokens` |
+| command (command provider) | `llm.command` | `ARGUS_LLM_COMMAND` | `--llm-command` |
+
+Providers: `off` (default — no LLM), `claude` (local `claude -p`), `command` (local command),
+`anthropic` / `openai` / `gemini` (direct HTTP, BYO key), and `hub` (reserved). `apiKeyEnv` defaults to
+the provider's standard env var (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`).
+
+```jsonc
+{
+  "llm": { "provider": "anthropic", "model": "claude-haiku-4-5" },
+  "taskExtraction": { "enabled": true }
+}
+```
+
+**Per-consumer overrides (deprecated).** `taskExtraction.provider` / `taskExtraction.model` /
+`taskExtraction.command` still work as a per-consumer override of the shared `llm.*` values, for
+back-compat — prefer the `llm` block. Resolution is **consumer override > shared `llm.*` > default**.
+
+## Secrets (BYO API keys)
+
+API keys are **not** stored in `argus.json` (it's settings only). They live in a secret store, set via
+the web API or the CLI, and are resolved at call time as **`apiKeyEnv` env var → secret store → none**.
+
+```bash
+argus secret set ANTHROPIC_API_KEY    # reads the value from stdin or a hidden prompt
+argus secret status                   # masked: which keys are stored
+argus secret rm ANTHROPIC_API_KEY
+```
+
+The backend is chosen by platform — same posture everywhere (encrypted at rest where the OS allows,
+scoped to your user, no per-app prompt, no extra dependencies):
+
+| OS | Store | Encrypted at rest |
+|---|---|---|
+| macOS | login keychain (via the system `security` tool) | yes |
+| Windows | DPAPI-encrypted file (via built-in PowerShell) | yes |
+| Linux | chmod-600 file in `$ARGUS_CONFIG_DIR/secrets.json` | no (plaintext) |
+
+None of these protects a key from the machine owner — that's intrinsic to a local BYO key. The win
+over a plaintext file is at-rest encryption on macOS/Windows. Secrets are **never** uploaded by `sync`.
+
+> **Privacy.** The default provider is `off` — nothing is sent off-machine. Selecting an API provider
+> (`anthropic`/`openai`/`gemini`) transmits the reconstructed session prompt/response text to that
+> third party. The reconstructed dialogue stays an in-memory intermediate (never stored on disk), but
+> it does leave your machine when an API provider is used.
+
 ## Filesystem locations
 
 Argus keeps two kinds of files on disk, and deliberately separates them:
