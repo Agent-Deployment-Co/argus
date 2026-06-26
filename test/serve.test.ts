@@ -278,13 +278,13 @@ describe("secret settings endpoints (#132)", () => {
 
   test("write then masked read; the value never comes back", async () => {
     const app = appWithSecrets();
-    const write = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("sk-supersecret-WXYZ"));
+    const write = await app.request("/api/settings/secrets/CLAUDE_API_KEY", post("sk-supersecret-WXYZ"));
     expect(write.status).toBe(200);
     const writeBody = await write.json();
     expect(writeBody).toEqual({ configured: true, hint: "…WXYZ" });
     expect(JSON.stringify(writeBody)).not.toContain("supersecret");
 
-    const read = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", getHeaders);
+    const read = await app.request("/api/settings/secrets/CLAUDE_API_KEY", getHeaders);
     expect(await read.json()).toEqual({ configured: true, hint: "…WXYZ" });
   });
 
@@ -302,7 +302,7 @@ describe("secret settings endpoints (#132)", () => {
 
   test("rejects a write missing the same-origin app header (CSRF)", async () => {
     const app = appWithSecrets();
-    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+    const res = await app.request("/api/settings/secrets/CLAUDE_API_KEY", {
       method: "POST",
       headers: { Host: "localhost", "content-type": "application/json" },
       body: JSON.stringify({ value: "x" }),
@@ -312,7 +312,7 @@ describe("secret settings endpoints (#132)", () => {
 
   test("rejects a non-loopback Host (DNS rebinding)", async () => {
     const app = appWithSecrets();
-    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+    const res = await app.request("/api/settings/secrets/CLAUDE_API_KEY", {
       method: "POST",
       headers: { "X-Argus-App": "1", Host: "evil.example.com", "content-type": "application/json" },
       body: JSON.stringify({ value: "x" }),
@@ -322,7 +322,7 @@ describe("secret settings endpoints (#132)", () => {
 
   test("rejects a cross-origin Origin", async () => {
     const app = appWithSecrets();
-    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+    const res = await app.request("/api/settings/secrets/CLAUDE_API_KEY", {
       method: "POST",
       headers: {
         "X-Argus-App": "1",
@@ -337,7 +337,7 @@ describe("secret settings endpoints (#132)", () => {
 
   test("rejects an empty value", async () => {
     const app = appWithSecrets();
-    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("   "));
+    const res = await app.request("/api/settings/secrets/CLAUDE_API_KEY", post("   "));
     expect(res.status).toBe(400);
   });
 });
