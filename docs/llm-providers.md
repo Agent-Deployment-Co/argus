@@ -24,24 +24,29 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
 - **`http.ts`** — shared transport for the HTTP providers: retry on `429`/`5xx` honoring `retry-after`
   (reuses `src/backoff.ts`), a 32 MB response-size cap, and uniform error→`LlmResult` mapping.
 - **`providers/`**
-  - `local.ts` — `claude` (`claude -p --no-session-persistence --model haiku -`) and `command` (an
+  - `local.ts` — `claude-cli` (`claude -p --no-session-persistence --model haiku -`) and `command` (an
     arbitrary local command: prompt on stdin, completion on stdout). No API key.
-  - `anthropic.ts` — `POST /v1/messages`, `x-api-key` + `anthropic-version`; default `claude-haiku-4-5`.
+  - `anthropic.ts` — the `claude-api` provider: `POST /v1/messages`, `x-api-key` + `anthropic-version`;
+    default `claude-haiku-4-5`.
   - `openai.ts` — `POST {baseUrl}/chat/completions`, Bearer key; `baseUrl` defaults to the OpenAI API
-    but also covers OpenAI-compatible / local endpoints (Ollama, LM Studio, vLLM, OpenRouter).
+    but also covers OpenAI-compatible / local endpoints (Ollama, LM Studio, vLLM).
   - `gemini.ts` — `POST .../models/{model}:generateContent`, `x-goog-api-key`.
+  - `openrouter.ts` — a thin preset over the OpenAI transport with OpenRouter's base URL baked in.
 
 ### Providers
 
 | Provider | Transport | Key | Notes |
 |---|---|---|---|
 | `off` | — | — | Default. `ok: false` "no provider"; consumers treat it as "no LLM". |
-| `claude` | local `claude -p` | none | Uses your Claude login; the historical task-extraction default. |
+| `claude-cli` | local `claude -p` | none | Uses your Claude login; the historical task-extraction default. |
 | `command` | local subprocess | none | Prompt on stdin, JSON on stdout. |
-| `anthropic` | HTTP | `ANTHROPIC_API_KEY` | Default model `claude-haiku-4-5`. |
+| `claude-api` | HTTP | `ANTHROPIC_API_KEY` | Anthropic's API. Default model `claude-haiku-4-5`. |
 | `openai` | HTTP | `OPENAI_API_KEY` | `baseUrl` for compatible/self-hosted endpoints. |
 | `gemini` | HTTP | `GEMINI_API_KEY` | |
+| `openrouter` | HTTP | `OPENROUTER_API_KEY` | OpenRouter gateway → many upstream models (OpenAI-compatible). No default model (ids are namespaced). |
 | `hub` | — | — | Reserved for a future org-managed-key proxy; returns "not implemented". |
+
+The legacy provider value `claude` is accepted as an alias for `claude-cli` (existing configs keep working).
 
 Config lives in the `llm` block — see [configuration.md](./configuration.md). The layer is pure of
 secret access: the consumer resolves the API key (env var → secret store) and passes it on
@@ -69,8 +74,8 @@ the future `hub` provider, where Argus would post the request to an org proxy th
 
 ## Privacy
 
-The default is `off`: no session text leaves the machine. `claude`/`command` send the dialogue to a
-local process. The `anthropic`/`openai`/`gemini` providers send the reconstructed session
+The default is `off`: no session text leaves the machine. `claude-cli`/`command` send the dialogue to
+a local process. The `claude-api`/`openai`/`gemini`/`openrouter` providers send the reconstructed session
 prompt/response text to that **third-party cloud API** — a meaningful change from Argus's
 otherwise-local processing. The reconstructed dialogue is an in-memory intermediate (never written to
 disk), but it does leave the machine when an API provider is selected. This is surfaced in

@@ -42,7 +42,7 @@ describe("provider registry (single source of truth)", () => {
   test("every provider name resolves to its descriptor; unknown → undefined", () => {
     for (const name of LLM_PROVIDERS) expect(getProvider(name)?.name).toBe(name);
     expect(getProvider("nope")).toBeUndefined();
-    expect(isLlmProvider("anthropic")).toBe(true);
+    expect(isLlmProvider("claude-api")).toBe(true);
     expect(isLlmProvider("nope")).toBe(false);
   });
 
@@ -51,9 +51,10 @@ describe("provider registry (single source of truth)", () => {
       "ANTHROPIC_API_KEY",
       "GEMINI_API_KEY",
       "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
     ]);
-    expect(getProvider("anthropic")?.requiresApiKey).toBe(true);
-    expect(getProvider("claude")?.requiresApiKey).toBeUndefined();
+    expect(getProvider("claude-api")?.requiresApiKey).toBe(true);
+    expect(getProvider("claude-cli")?.requiresApiKey).toBeUndefined();
   });
 
   test("an unknown provider → ok:false, never throws", async () => {
@@ -81,7 +82,7 @@ describe("llm client routing", () => {
   test("http provider with no key → diagnostic naming the env var", async () => {
     const res = await complete(
       { prompt: "hi" },
-      { provider: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY" },
+      { provider: "claude-api", apiKeyEnv: "ANTHROPIC_API_KEY" },
     );
     expect(res.ok).toBe(false);
     expect(res.error).toContain("ANTHROPIC_API_KEY");
@@ -93,7 +94,7 @@ describe("anthropic provider", () => {
     const { fetch, calls } = fakeFetch([json({ content: [{ type: "text", text: "hello world" }] })]);
     const res = await complete(
       { prompt: "the data", system: "be brief", maxTokens: 99 },
-      cfg({ provider: "anthropic", model: "claude-haiku-4-5" }),
+      cfg({ provider: "claude-api", model: "claude-haiku-4-5" }),
       { fetch },
     );
     expect(res.ok).toBe(true);
@@ -113,7 +114,7 @@ describe("anthropic provider", () => {
 
   test("uses the default model when unset", async () => {
     const { fetch, calls } = fakeFetch([json({ content: [{ type: "text", text: "x" }] })]);
-    await complete({ prompt: "p" }, cfg({ provider: "anthropic" }), { fetch });
+    await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(JSON.parse(calls[0]!.init.body as string).model).toBe("claude-haiku-4-5");
   });
 });
@@ -140,6 +141,21 @@ describe("openai provider", () => {
   });
 });
 
+describe("openrouter provider", () => {
+  test("reuses the OpenAI transport against OpenRouter's base url", async () => {
+    const { fetch, calls } = fakeFetch([json({ choices: [{ message: { content: "via openrouter" } }] })]);
+    const res = await complete(
+      { prompt: "p" },
+      cfg({ provider: "openrouter", model: "anthropic/claude-haiku-4.5" }),
+      { fetch },
+    );
+    expect(res.text).toBe("via openrouter");
+    expect(calls[0]!.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer test-key");
+    expect(JSON.parse(calls[0]!.init.body as string).model).toBe("anthropic/claude-haiku-4.5");
+  });
+});
+
 describe("gemini provider", () => {
   test("model in the path, x-goog-api-key, parts extraction", async () => {
     const { fetch, calls } = fakeFetch([
@@ -160,7 +176,7 @@ describe("error and retry paths", () => {
       () => new Response("rate limited", { status: 429, headers: { "retry-after": "0" } }),
       () => json({ content: [{ type: "text", text: "after retry" }] }),
     ]);
-    const res = await complete({ prompt: "p" }, cfg({ provider: "anthropic" }), { fetch });
+    const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(res.ok).toBe(true);
     expect(res.text).toBe("after retry");
     expect(calls).toHaveLength(2);
@@ -170,7 +186,7 @@ describe("error and retry paths", () => {
     const { fetch, calls } = fakeFetch([
       () => new Response("boom", { status: 503, headers: { "retry-after": "0" } }),
     ]);
-    const res = await complete({ prompt: "p" }, cfg({ provider: "anthropic" }), { fetch });
+    const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(res.ok).toBe(false);
     expect(res.status).toBe(503);
     expect(calls.length).toBe(3); // maxAttempts
@@ -178,7 +194,7 @@ describe("error and retry paths", () => {
 
   test("does not retry a 401", async () => {
     const { fetch, calls } = fakeFetch([() => new Response("nope", { status: 401 })]);
-    const res = await complete({ prompt: "p" }, cfg({ provider: "anthropic" }), { fetch });
+    const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(res.ok).toBe(false);
     expect(res.status).toBe(401);
     expect(calls).toHaveLength(1);
@@ -188,7 +204,7 @@ describe("error and retry paths", () => {
     const { fetch } = fakeFetch([
       () => new Response("not json", { status: 200, headers: { "content-type": "application/json" } }),
     ]);
-    const res = await complete({ prompt: "p" }, cfg({ provider: "anthropic" }), { fetch });
+    const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(res.ok).toBe(false);
     expect(res.error).toContain("invalid JSON");
   });
@@ -201,7 +217,7 @@ describe("error and retry paths", () => {
           { headers: { "content-type": "application/json", "content-length": String(40 * 1024 * 1024) } },
         ),
     ]);
-    const res = await complete({ prompt: "p" }, cfg({ provider: "anthropic" }), { fetch });
+    const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(res.ok).toBe(false);
     expect(res.error).toContain("size limit");
   });

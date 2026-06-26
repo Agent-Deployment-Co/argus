@@ -2,12 +2,23 @@
 // `http.ts`, the providers, and `config.ts` can all import them without an import cycle.
 
 /** The set of LLM providers Argus can route a completion through.
- *  - `off`     — no LLM available; the client returns `ok: false` with a clear reason.
- *  - `claude`  — the local `claude -p` CLI (no API key; uses the user's Claude login).
- *  - `command` — an arbitrary local command: prompt on stdin, completion text on stdout.
- *  - `anthropic`/`openai`/`gemini` — direct HTTP providers (BYO API key).
- *  - `hub`     — reserved extension point for a future org-managed key proxy (not implemented). */
-export type LlmProvider = "off" | "claude" | "command" | "anthropic" | "openai" | "gemini" | "hub";
+ *  - `off`        — no LLM available; the client returns `ok: false` with a clear reason.
+ *  - `claude-cli` — the local `claude -p` CLI (no API key; uses the user's Claude login).
+ *  - `command`    — an arbitrary local command: prompt on stdin, completion text on stdout.
+ *  - `claude-api` — Anthropic's API (BYO key).
+ *  - `openai`     — OpenAI / OpenAI-compatible (BYO key; `baseUrl` for self-hosted endpoints).
+ *  - `gemini`     — Google Gemini API (BYO key).
+ *  - `openrouter` — the OpenRouter gateway: one key, many upstream models (OpenAI-compatible).
+ *  - `hub`        — reserved extension point for a future org-managed key proxy (not implemented). */
+export type LlmProvider =
+  | "off"
+  | "claude-cli"
+  | "command"
+  | "claude-api"
+  | "openai"
+  | "gemini"
+  | "openrouter"
+  | "hub";
 
 /** A consumer-agnostic completion request. `system` carries instructions, `prompt` carries the data;
  *  the single-blob callers map everything to `prompt` with no `system`. */

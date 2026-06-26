@@ -18,8 +18,8 @@ function extractText(body: unknown): string {
     .join("");
 }
 
-export const anthropicProvider: ProviderDescriptor = {
-  name: "anthropic",
+export const claudeApiProvider: ProviderDescriptor = {
+  name: "claude-api",
   apiKeyEnv: "ANTHROPIC_API_KEY",
   defaultModel: DEFAULT_ANTHROPIC_MODEL,
   requiresApiKey: true,
