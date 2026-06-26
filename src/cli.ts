@@ -14,6 +14,8 @@ import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type Pu
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { loadConfig, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
+import { defaultSecretStore, isSecretName, SECRET_NAMES } from "./secrets.ts";
+import { createInterface } from "node:readline";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -532,6 +534,85 @@ const runCmd = defineCommand({
   }),
 });
 
+// --- `argus secret`: manage stored LLM API keys (#132) ---
+
+/** Read a secret value without exposing it in argv: piped stdin verbatim, or a hidden TTY prompt. */
+async function readSecretValue(name: string): Promise<string> {
+  let value: string;
+  if (process.stdin.isTTY) {
+    value = await new Promise<string>((resolve, reject) => {
+      process.stderr.write(`Paste the value for ${name} (input hidden): `);
+      const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+      // Suppress the terminal echo of the typed characters.
+      (rl as unknown as { _writeToOutput: (s: string) => void })._writeToOutput = () => {};
+      rl.question("", (answer) => {
+        rl.close();
+        process.stderr.write("\n");
+        resolve(answer);
+      });
+      rl.on("error", reject);
+    });
+  } else {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    value = Buffer.concat(chunks).toString("utf8");
+  }
+  value = value.replace(/\r?\n$/, "");
+  if (!value.trim()) throw new Error("No value provided.");
+  return value;
+}
+
+function requireSecretName(args: Record<string, unknown>): string {
+  const name = String(args.name ?? (Array.isArray(args._) ? args._[0] : "") ?? "");
+  if (!isSecretName(name)) {
+    throw new Error(`Unknown secret "${name}". Known secrets: ${SECRET_NAMES.join(", ")}.`);
+  }
+  return name;
+}
+
+const secretSet = defineCommand({
+  meta: { name: "set", description: "store an API key (read from stdin, or prompted if interactive)" },
+  args: { name: { type: "positional", required: true, description: "secret name (e.g. ANTHROPIC_API_KEY)" } },
+  run: handler(async (args) => {
+    const name = requireSecretName(args);
+    const value = await readSecretValue(name);
+    const store = defaultSecretStore();
+    await store.set(name, value);
+    const status = await store.describe(name);
+    log(`Saved ${name} (${status.hint ?? "set"}).`);
+  }),
+});
+
+const secretRm = defineCommand({
+  meta: { name: "rm", description: "remove a stored API key" },
+  args: { name: { type: "positional", required: true, description: "secret name to remove" } },
+  run: handler(async (args) => {
+    const name = requireSecretName(args);
+    const removed = await defaultSecretStore().delete(name);
+    log(removed ? `Removed ${name}.` : `${name} was not set.`);
+  }),
+});
+
+const secretStatus = defineCommand({
+  meta: { name: "status", description: "show which API keys are stored (masked)" },
+  run: handler(async () => {
+    const store = defaultSecretStore();
+    for (const name of SECRET_NAMES) {
+      const status = await store.describe(name);
+      log(`  ${name}: ${status.configured ? (status.hint ?? "set") : "not set"}`);
+    }
+  }),
+});
+
+const secret = defineCommand({
+  meta: { name: "secret", description: "manage stored LLM API keys (kept in your OS keychain where available)" },
+  subCommands: { set: secretSet, rm: secretRm, status: secretStatus },
+  run: (ctx) => {
+    if (dispatchedSubcommand(ctx) !== undefined) return Promise.resolve();
+    return showUsage(ctx.cmd).then(() => {});
+  },
+});
+
 const main = defineCommand({
   meta: {
     name: "argus",
@@ -541,7 +622,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, login },
+  subCommands: { serve, index, sync, run: runCmd, status, login, secret },
 });
 
 async function run() {
