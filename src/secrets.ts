@@ -15,14 +15,15 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { SECRETS_FILE } from "./paths.ts";
+import { PROVIDER_API_KEY_ENVS } from "./llm/index.ts";
 
-/** The secret names Argus stores, keyed to the standard provider env-var names so the value resolves
- *  through `apiKeyEnv` and (on the desktop) needs no argus.json parsing on the native side. */
-export const SECRET_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"] as const;
-export type SecretName = (typeof SECRET_NAMES)[number];
+/** The secret names Argus stores: the providers' standard API-key env vars, derived from the provider
+ *  registry so a new provider's key is automatically storable. Keyed to the env-var names so the value
+ *  resolves through `apiKeyEnv` and (on the desktop) needs no argus.json parsing on the native side. */
+export const SECRET_NAMES: readonly string[] = PROVIDER_API_KEY_ENVS;
 
-export function isSecretName(name: string): name is SecretName {
-  return (SECRET_NAMES as readonly string[]).includes(name);
+export function isSecretName(name: string): boolean {
+  return SECRET_NAMES.includes(name);
 }
 
 /** A masked, never-raw description of a stored secret. */
