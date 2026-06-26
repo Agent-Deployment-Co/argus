@@ -14,7 +14,8 @@
 // LLM access (#132) is a top-level `llm` block consumed by any model-driven feature. Task extraction
 // is the first consumer: it references `llm.*` and may override `provider`/`model`/`command` under its
 // own `taskExtraction.*` block (the historical keys, kept working with a deprecation note).
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
 import { getProvider, isLlmProvider, LLM_PROVIDERS } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
@@ -52,6 +53,12 @@ export interface ArgusConfig {
     model?: string;
     /** @deprecated Per-consumer override of `llm.command`. Prefer `llm.command`. */
     command?: string;
+  };
+  hub?: {
+    /** Argus Hub server URL, e.g. http://hub.internal:4242 */
+    url?: string;
+    /** Shared API key for Hub authentication */
+    key?: string;
   };
 }
 
@@ -100,6 +107,8 @@ export interface Setting<T> {
   /** citty flag, kebab-case — e.g. "llm-provider". */
   flag?: string;
   default: T;
+  /** When true, `argus config list` redacts the value in human output to avoid leaking secrets. */
+  secret?: boolean;
   /** Coerce a raw value (string from env/flag, typed from file) to T, validating as needed. */
   parse(raw: unknown): T;
 }
@@ -138,6 +147,23 @@ function parseBool(raw: unknown): boolean {
 function parseString(raw: unknown): string {
   return String(raw);
 }
+
+const HUB_SETTINGS = {
+  url: {
+    path: "hub.url",
+    env: "ARGUS_HUB_URL",
+    default: undefined as string | undefined,
+    parse: parseString,
+  } satisfies Setting<string | undefined>,
+  key: {
+    path: "hub.key",
+    env: "ARGUS_HUB_KEY",
+    default: undefined as string | undefined,
+    secret: true,
+    parse: parseString,
+  } satisfies Setting<string | undefined>,
+};
+
 
 function parseNumber(raw: unknown): number | undefined {
   const n = Number(raw);
@@ -259,6 +285,38 @@ const TASK_SETTINGS = {
   } satisfies Setting<OptionalString>,
 };
 
+/** All known settings keyed by dotted argus.json path — used by `argus config get/set/list`. */
+export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries(
+  [...Object.values(TASK_SETTINGS), ...Object.values(HUB_SETTINGS)].map(
+    (s) => [s.path, s as Setting<unknown>],
+  ),
+);
+
+/**
+ * Set a nested dotted path in `obj`, creating intermediate objects as needed. Mutates in place.
+ * Typically called on the result of `loadConfig()` cast to `Record<string, unknown>`, then
+ * passed to `writeConfig`.
+ */
+export function setPath(obj: Record<string, unknown>, dotted: string, value: unknown): void {
+  const keys = dotted.split(".");
+  let cur: Record<string, unknown> = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i]!;
+    if (cur[key] == null || typeof cur[key] !== "object" || Array.isArray(cur[key])) {
+      cur[key] = {};
+    }
+    cur = cur[key] as Record<string, unknown>;
+  }
+  cur[keys[keys.length - 1]!] = value;
+}
+
+/** Write `config` to `path` (default: `CONFIG_FILE`), creating the parent directory if needed. */
+export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf8");
+}
+
+
 /**
  * Resolve the shared `llm.*` block into a `ResolvedLlmConfig`. `overrides` carries a consumer's own
  * provider/model/command (the per-consumer override layer): each wins over the shared `llm.*` value,
@@ -329,4 +387,23 @@ export function resolveTaskExtraction(
   if (promptFile) resolved.promptFile = promptFile;
   if (debugLog) resolved.debugLog = debugLog;
   return resolved;
+}
+
+export interface ResolvedHubConfig {
+  url: string;
+  key: string;
+}
+
+/**
+ * Resolve Hub connection settings from env > argus.json. Returns the config only when both
+ * `hub.url` and `hub.key` are present; undefined otherwise.
+ */
+export function resolveHubConfig(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): ResolvedHubConfig | undefined {
+  const url = resolveSetting(HUB_SETTINGS.url, flags, file);
+  const key = resolveSetting(HUB_SETTINGS.key, flags, file);
+  if (url && key) return { url, key };
+  return undefined;
 }

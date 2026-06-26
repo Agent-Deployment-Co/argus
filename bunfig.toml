@@ -1,0 +1,6 @@
+[test]
+# Run before any test file is loaded so module-load-time env captures (e.g. paths.ts's
+# ARGUS_CONFIG_DIR constant) see an isolated temp dir instead of the developer's real
+# ~/.config/argus / Library/Application Support/argus — otherwise watch.test.ts hangs when a
+# local hub.url + hub.key flips watchSync into hub mode.
+preload = ["./test/helpers/isolated-config.ts"]

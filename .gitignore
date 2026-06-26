@@ -24,6 +24,7 @@ desktop/src-tauri/gen/
 # Keep the tray app's bundled UI files (its frontendDist); the *.html rule above would hide them.
 !desktop/ui/index.html
 !desktop/ui/about.html
+!desktop/ui/settings.html
 
 # vitepress build artifacts
 docs/.vitepress/dist/

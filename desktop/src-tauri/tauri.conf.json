@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Argus",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "identifier": "co.agentdeployment.argus",
   "build": {
     "frontendDist": "../ui"
   },
   "app": {
-    "withGlobalTauri": false,
+    "withGlobalTauri": true,
     "windows": [],
     "security": {
       "csp": null

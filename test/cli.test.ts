@@ -92,10 +92,18 @@ describe("cli argument validation", () => {
   });
 
   test("a value-less string flag does not eat the following flag", () => {
-    // `--since` has no value, so citty would otherwise parse since="--org" and drop the real --org.
-    const { status, stderr } = runCli(["sync", "--since", "--org", "acme"]);
+    // `--endpoint` has no value, so citty would otherwise parse endpoint="--org" and drop the real --org.
+    const { status, stderr } = runCli(["sync", "--endpoint", "--org", "acme"]);
     expect(status).toBe(2);
-    expect(stderr).toContain("Missing value for --since");
+    expect(stderr).toContain("Missing value for --endpoint");
+  });
+
+  test("sync rejects removed source/date/project filters", () => {
+    for (const flag of ["--source", "--since", "--until", "--project"]) {
+      const { status, stderr } = runCli(["sync", flag, "claude"]);
+      expect(status).toBe(2);
+      expect(stderr).toContain(`Unknown option: ${flag}`);
+    }
   });
 
   test("a command that takes no positionals rejects a stray argument", () => {
