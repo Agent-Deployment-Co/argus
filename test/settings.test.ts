@@ -59,6 +59,27 @@ describe("describeSettings", () => {
     expect(values).toEqual([...values].sort());
   });
 
+  test("LLM fields are gated on task extraction and shown per selected provider", () => {
+    const provider = findSetting({}, "llm.provider");
+    expect(provider.ui.label).toBe("LLM Provider");
+    expect(provider.ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    expect(provider.ui.effectiveDefault).toBe("claude-cli");
+
+    // Every llm.* field is inactive until task extraction is on.
+    for (const path of ["llm.model", "llm.baseUrl", "llm.apiKeyEnv", "llm.maxTokens", "llm.command"]) {
+      expect(findSetting({}, path).ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    }
+
+    // Field relevance comes from the provider registry: base URL is OpenAI-only, command is the
+    // command provider only, the API key var is the BYO-key HTTP providers, model spans most.
+    const visible = (path: string) => findSetting({}, path).ui.visibleWhen!;
+    expect(visible("llm.baseUrl")).toEqual({ path: "llm.provider", in: ["openai"] });
+    expect(visible("llm.command")).toEqual({ path: "llm.provider", in: ["command"] });
+    expect(visible("llm.apiKeyEnv").in).toEqual(["claude-api", "openai", "gemini", "openrouter"]);
+    expect(visible("llm.model").in).toContain("claude-cli");
+    expect(visible("llm.model").in).not.toContain("off");
+  });
+
   test("flags an env var that overrides the file layer", () => {
     process.env.ARGUS_LLM_PROVIDER = "gemini";
     const provider = findSetting({ llm: { provider: "openai" } }, "llm.provider");

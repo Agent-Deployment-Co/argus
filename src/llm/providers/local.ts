@@ -131,12 +131,14 @@ export async function runCommandProvider(ctx: LocalProviderContext): Promise<Llm
 export const claudeCliProvider: ProviderDescriptor = {
   name: "claude-cli",
   defaultModel: DEFAULT_CLAUDE_PROVIDER_MODEL,
+  configFields: ["model"],
   complete: (call: ProviderCall) =>
     runClaudeProvider({ system: call.system, prompt: call.prompt, model: call.model, signal: call.signal }),
 };
 
 export const commandProvider: ProviderDescriptor = {
   name: "command",
+  configFields: ["command"],
   complete: (call: ProviderCall) =>
     runCommandProvider({ system: call.system, prompt: call.prompt, command: call.command, signal: call.signal }),
 };

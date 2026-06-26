@@ -366,6 +366,10 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-toggle-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--porcelain); transition: transform .15s; }
 .setting-toggle[aria-checked="true"] .setting-toggle-knob { transform: translateX(18px); }
 
+/* Inactive controls (e.g. the LLM fields until task extraction is on): greyed and non-interactive. */
+.setting-row-disabled .setting-name, .setting-row-disabled .setting-desc { opacity: .5; }
+.setting-input:disabled, .select__control:disabled, .setting-toggle:disabled { opacity: .45; cursor: not-allowed; }
+
 .setting-status { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); min-height: 16px; }
 .setting-status.saved { color: var(--sky-surge); }
 .setting-status.error { color: var(--racing-red); text-align: right; }
