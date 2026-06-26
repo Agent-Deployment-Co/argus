@@ -92,6 +92,10 @@ export interface ProviderDescriptor {
   defaultModel?: string;
   /** When true, the client short-circuits with a clear "no key" diagnostic if `apiKey` is missing. */
   requiresApiKey?: boolean;
+  /** Registered for forward-compatibility but not a real, user-selectable provider (e.g. `hub`, a
+   *  reserved extension point that isn't implemented). Such providers still validate so an existing
+   *  config value doesn't error, but they're excluded from user-facing choices like the settings UI. */
+  reserved?: boolean;
   complete(call: ProviderCall): Promise<LlmResult>;
 }
 

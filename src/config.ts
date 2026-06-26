@@ -17,7 +17,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
-import { getProvider, isLlmProvider, LLM_PROVIDERS } from "./llm/index.ts";
+import { getProvider, isLlmProvider, LLM_PROVIDERS, SELECTABLE_PROVIDERS } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
 /** The task-extraction provider default, preserved from before the generalization: enabling task
@@ -258,7 +258,7 @@ export const LLM_SETTINGS = {
       label: "Provider",
       description: "Which model backend Argus's AI features use.",
       control: "select",
-      options: LLM_PROVIDERS,
+      options: SELECTABLE_PROVIDERS,
     },
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,
