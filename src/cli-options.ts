@@ -22,6 +22,8 @@ export interface DeleteOptions {
 export interface RefreshOptions extends SyncOptions {
   ids: string[];
   extractTasks?: boolean;
+  /** Print the full task-extraction debug stream to stdout (`--debug`). */
+  debug?: boolean;
   /** Test seam: override the store path for targeted refresh (the CLI uses the default store). */
   storePath?: string;
 }
