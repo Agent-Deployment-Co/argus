@@ -16,7 +16,7 @@ import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
 import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
-import { detectOrg, detectUser, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
+import { detectOrg, detectUser, hubErrorMessage, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
 import { resolveHubConfig } from "./config.ts";
 import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
@@ -247,8 +247,9 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           backoff.reset();
           await sleep(intervalMs, sig);
         } else if (res.status === 422) {
-          // Schema version mismatch: permanent until the client is upgraded. Stop retrying.
-          log(`✗ Hub rejected upload (422): schema version mismatch — upgrade Argus to match the Hub version.`);
+          // Schema version mismatch: permanent until one side is upgraded. The Hub's body states
+          // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
+          log(`✗ Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
           await sleep(Number.MAX_SAFE_INTEGER, sig);
         } else if (res.isAccessChallenge) {
           // Token went stale: the next pass re-reads the cache and tries a refresh. Back off meanwhile.

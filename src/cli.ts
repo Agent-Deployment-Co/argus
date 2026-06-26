@@ -12,6 +12,7 @@ import { openStore } from "./store/store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
+import { hubErrorMessage } from "./push.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { type TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
 import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS } from "./config.ts";
@@ -226,7 +227,7 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
     if (res.ok) {
       log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
     } else if (res.status === 422) {
-      log(`✗ Hub rejected upload (422): schema version mismatch — upgrade Argus to match the Hub version.`);
+      log(`✗ Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
       process.exit(1);
     } else {
       log(`✗ Upload failed (${res.status}): ${res.body.slice(0, 400)}`);

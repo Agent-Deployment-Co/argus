@@ -192,6 +192,31 @@
                 cursor: default;
             }
 
+            button.secondary {
+                justify-self: start;
+                padding: 6px 12px;
+                background: transparent;
+                color: var(--accent);
+                border: 1px solid var(--accent);
+                font-weight: 600;
+            }
+
+            .log-path {
+                display: block;
+                padding: 7px 9px;
+                border-radius: 6px;
+                background: var(--field-bg);
+                color: var(--heading);
+                font:
+                    12px/1.4 ui-monospace,
+                    SFMono-Regular,
+                    Menlo,
+                    Consolas,
+                    monospace;
+                word-break: break-all;
+                user-select: text;
+            }
+
             #status {
                 font-size: 13px;
                 min-height: 18px;
@@ -236,6 +261,22 @@
                         <label for="hub.key">Hub key</label>
                         <div class="hint">The bearer token paired with the Hub URL.</div>
                         <input type="password" id="hub.key" placeholder="hub-…" />
+                    </div>
+                    <div class="field">
+                        <label>Log file</label>
+                        <div class="hint" id="log-hint">
+                            Set the Hub URL and key to turn on sync. Sync activity
+                            is then written to a log file shown here.
+                        </div>
+                        <code id="log-path" class="log-path" hidden></code>
+                        <button
+                            type="button"
+                            id="reveal-log"
+                            class="secondary"
+                            hidden
+                        >
+                            Reveal log file
+                        </button>
                     </div>
                 </fieldset>
 
@@ -307,9 +348,36 @@
             const invoke = window.__TAURI__.core.invoke;
             const statusEl = document.getElementById("status");
             const saveBtn = document.getElementById("save");
+            const logHint = document.getElementById("log-hint");
+            const logPathEl = document.getElementById("log-path");
+            const revealBtn = document.getElementById("reveal-log");
 
             // The values as last read/saved, so Save only writes fields the user changed.
             let original = {};
+
+            // The resolved log-file path from the Rust side (null if it couldn't be resolved).
+            let logPath = null;
+
+            // Sync runs when both Hub fields are set; reflect the saved values, since that's what the
+            // next start of the background service reads.
+            function syncEnabled() {
+                return !!(original["hub.url"] && original["hub.key"]);
+            }
+
+            // Show the log path once sync is configured; otherwise explain how to turn it on.
+            function refreshLogSection() {
+                if (syncEnabled() && logPath) {
+                    logHint.textContent = "Sync is on. Activity is written to:";
+                    logPathEl.textContent = logPath;
+                    logPathEl.hidden = false;
+                    revealBtn.hidden = false;
+                } else {
+                    logHint.textContent =
+                        "Set the Hub URL and key to turn on sync. Sync activity is then written to a log file shown here.";
+                    logPathEl.hidden = true;
+                    revealBtn.hidden = true;
+                }
+            }
 
             function fieldValue(field) {
                 const el = document.getElementById(field.key);
@@ -345,6 +413,12 @@
                 } catch (err) {
                     setStatus(String(err), "error");
                 }
+                try {
+                    logPath = await invoke("log_file_path");
+                } catch {
+                    logPath = null;
+                }
+                refreshLogSection();
             }
 
             async function save(event) {
@@ -366,12 +440,21 @@
                             : "No changes to save.",
                         "ok",
                     );
+                    refreshLogSection();
                 } catch (err) {
                     setStatus(String(err), "error");
                 } finally {
                     saveBtn.disabled = false;
                 }
             }
+
+            revealBtn.addEventListener("click", async () => {
+                try {
+                    await invoke("reveal_log_file");
+                } catch (err) {
+                    setStatus(String(err), "error");
+                }
+            });
 
             document
                 .getElementById("settings-form")
