@@ -25,7 +25,7 @@ import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
-import { defaultSecretStore, isSecretName, type SecretStatus, type SecretStore } from "../secrets.ts";
+import { defaultSecretStore, isSecretName, maskSecret, type SecretStatus, type SecretStore } from "../secrets.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
 export interface ServeOptions {
@@ -191,13 +191,24 @@ function rejectCrossSite(c: Context): Response | null {
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
+/** Strip the `:port` suffix from a `Host` header to get the bare host. Handles bracketed IPv6
+ *  (`[::1]:4242` → `[::1]`) and leaves a bare IPv6 literal (`::1`, which has no port) untouched —
+ *  a naive `/:\d+$/` would mangle `::1` into `:`. */
+function hostWithoutPort(host: string): string {
+  const bracketed = host.match(/^(\[[^\]]+\])(?::\d+)?$/);
+  if (bracketed) return bracketed[1]!;
+  // A bare IPv6 literal contains multiple colons and carries no port — leave it as-is.
+  if (host.indexOf(":") !== host.lastIndexOf(":")) return host;
+  return host.replace(/:\d+$/, "");
+}
+
 /** Extra guard for the secret endpoints: require the request to be addressed to loopback. A
  *  DNS-rebinding attack points an attacker-controlled hostname at 127.0.0.1, so the request reaches
  *  this server but carries the attacker's hostname in `Host` (and `Origin`). Rejecting any non-loopback
  *  Host/Origin closes that hole — on top of `rejectCrossSite`'s CSRF defense — so a stored API key can
  *  never be written or its (masked) status read by a remote page. Returns a 403 Response, or null. */
 function rejectUnsafeHost(c: Context): Response | null {
-  const host = (c.req.header("host") ?? "").replace(/:\d+$/, "");
+  const host = hostWithoutPort(c.req.header("host") ?? "");
   if (!LOOPBACK_HOSTS.has(host)) {
     return c.json({ error: "This endpoint is only reachable on localhost." }, 403);
   }
@@ -371,7 +382,9 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
       // Deliberately generic — never surface the value or a provider error that might echo it.
       return c.json({ error: "Couldn't save the secret." }, 500);
     }
-    return c.json(await secretStore().describe(name) satisfies SecretStatus);
+    // Derive the masked status from the value we just wrote rather than reading it back, which on
+    // macOS/Windows would launch a second `security`/PowerShell subprocess.
+    return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
   });
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
