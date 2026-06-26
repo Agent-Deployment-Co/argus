@@ -149,7 +149,7 @@ describe("task outcome (pass 2)", () => {
     expect(await judgeTaskOutcome("t", [candidate(0, "x")], te({ llm: { provider: "off" } }))).toEqual({
       diagnostics: [],
     });
-    expect(await judgeTaskOutcome("t", [], te({ llm: { provider: "claude" } }))).toEqual({ diagnostics: [] });
+    expect(await judgeTaskOutcome("t", [], te({ llm: { provider: "claude-cli" } }))).toEqual({ diagnostics: [] });
   });
 });
 

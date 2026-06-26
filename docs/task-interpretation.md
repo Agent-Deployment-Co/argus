@@ -72,8 +72,8 @@ prompt stay under `taskExtraction`:
 ```jsonc
 {
   "llm": {
-    "provider": "claude",    // off | claude | command | anthropic | openai | gemini | hub
-    "model": "..."           // optional; the claude provider defaults to haiku
+    "provider": "claude-cli", // off | claude-cli | command | claude-api | openai | gemini | openrouter | hub
+    "model": "..."           // optional; the claude-cli provider defaults to haiku
   },
   "taskExtraction": {
     "enabled": false,        // opt-in index-time extraction
@@ -86,14 +86,14 @@ prompt stay under `taskExtraction`:
 For back-compat, the older `taskExtraction.provider` / `taskExtraction.model` / `taskExtraction.command`
 keys still work as a per-consumer override of the shared `llm.*` values (deprecated — prefer `llm`).
 
-The **claude provider** invokes `claude -p --no-session-persistence --model haiku -`:
+The **claude-cli provider** invokes `claude -p --no-session-persistence --model haiku -`:
 `--no-session-persistence` keeps each interpret call from leaving its own transcript on disk (which
 indexing would otherwise pick up as a bogus session), and haiku keeps the per-session calls cheap. A
 configured `model` overrides the default. (`--bare` is intentionally not used — in `-p` mode it fails
 "Not logged in".)
 
 The **command provider** runs an arbitrary command that reads the prompt on stdin and writes the task
-JSON to stdout. The **anthropic/openai/gemini providers** call a third-party API directly with a
+JSON to stdout. The **claude-api/openai/gemini/openrouter providers** call a third-party API directly with a
 BYO key (`argus secret set …`); note this transmits the reconstructed dialogue off-machine — see the
 privacy note in [llm-providers.md](./llm-providers.md).
 
