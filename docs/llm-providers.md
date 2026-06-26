@@ -28,10 +28,14 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
     arbitrary local command: prompt on stdin, completion on stdout). No API key.
   - `anthropic.ts` — the `claude-api` provider: `POST /v1/messages`, `x-api-key` + `anthropic-version`;
     default `claude-haiku-4-5`.
-  - `openai.ts` — `POST {baseUrl}/chat/completions`, Bearer key; `baseUrl` defaults to the OpenAI API
-    but also covers OpenAI-compatible / local endpoints (Ollama, LM Studio, vLLM).
+  - `openai-compatible.ts` — the shared OpenAI Chat Completions transport: base URL + which token
+    field to send (`max_completion_tokens` vs `max_tokens`). Both providers below build on it, so
+    neither needs to know about the other.
+  - `openai.ts` — native OpenAI over that transport, using `max_completion_tokens` (gpt-5 / o-series
+    require it). `baseUrl` can point at an OpenAI-compatible proxy that uses the same modern field.
   - `gemini.ts` — `POST .../models/{model}:generateContent`, `x-goog-api-key`.
-  - `openrouter.ts` — a thin preset over the OpenAI transport with OpenRouter's base URL baked in.
+  - `openrouter.ts` — the OpenRouter gateway over the shared transport: its base URL + classic
+    `max_tokens`. Independent of the openai provider.
 
 ### Providers
 
@@ -41,7 +45,7 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
 | `claude-cli` | local `claude -p` | none | Uses your Claude login; the historical task-extraction default. |
 | `command` | local subprocess | none | Prompt on stdin, JSON on stdout. |
 | `claude-api` | HTTP | `ANTHROPIC_API_KEY` | Anthropic's API. Default model `claude-haiku-4-5`. |
-| `openai` | HTTP | `OPENAI_API_KEY` | `baseUrl` for compatible/self-hosted endpoints. |
+| `openai` | HTTP | `OPENAI_API_KEY` | Native OpenAI (`max_completion_tokens`); `baseUrl` for OpenAI-compatible proxies using the modern field. |
 | `gemini` | HTTP | `GEMINI_API_KEY` | |
 | `openrouter` | HTTP | `OPENROUTER_API_KEY` | OpenRouter gateway → many upstream models (OpenAI-compatible). No default model (ids are namespaced). |
 | `hub` | — | — | Reserved for a future org-managed-key proxy; returns "not implemented". |

@@ -1,10 +1,10 @@
-// OpenRouter provider: a gateway that exposes an OpenAI-compatible API and routes to many upstream
-// models behind namespaced ids (e.g. "anthropic/claude-haiku-4.5", "google/gemini-2.5-flash"). One
-// OpenRouter key reaches them all. It speaks the OpenAI wire format, so this is a thin preset over the
-// OpenAI transport with OpenRouter's base URL baked in.
+// OpenRouter provider: a gateway that exposes an OpenAI-compatible Chat Completions API and routes to
+// many upstream models behind namespaced ids (e.g. "anthropic/claude-haiku-4.5"). One OpenRouter key
+// reaches them all. It builds on the shared OpenAI-compatible transport with its own base URL and the
+// classic `max_tokens` field (what OpenRouter expects) — independent of the native `openai` provider.
 //
 // Privacy: requests go to OpenRouter and then on to the chosen upstream — a third party in the path.
-import { openaiProvider } from "./openai.ts";
+import { openaiCompatibleComplete } from "./openai-compatible.ts";
 import type { ProviderCall, ProviderDescriptor } from "../types.ts";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -15,5 +15,5 @@ export const openrouterProvider: ProviderDescriptor = {
   requiresApiKey: true,
   // No default model — OpenRouter ids are namespaced and the catalog changes, so the user picks one.
   complete: (call: ProviderCall) =>
-    openaiProvider.complete({ ...call, baseUrl: OPENROUTER_BASE_URL }),
+    openaiCompatibleComplete(call, { baseUrl: OPENROUTER_BASE_URL, tokenParam: "max_tokens" }),
 };
