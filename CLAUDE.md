@@ -141,8 +141,9 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 
 - **`src/llm/`** — The shared LLM access layer (#132; design in `docs/llm-providers.md`). `registry.ts`
   is the single source of truth: a list of `ProviderDescriptor`s (`providers/*` — `local.ts` =
-  `claude`/`command`; `anthropic`/`openai`/`gemini` = direct HTTP over `http.ts`, which owns 429/5xx
-  retry + a size cap). `index.ts`'s `complete(request, config)` dispatches through the registry with
+  `claude-cli`/`command`; `claude-api`/`openai`/`gemini` = direct HTTP over `http.ts`, which owns
+  429/5xx retry + a size cap; `openrouter` = a preset over the openai transport). `index.ts`'s
+  `complete(request, config)` dispatches through the registry with
   **no per-provider branching**; `config.ts`'s apiKeyEnv default and `secrets.ts`'s allowlist derive
   from it too, so adding a provider is one descriptor + one registry entry. Never throws —
   `off`/no-key/network/bad-shape → `ok:false`. Pure of secret access (the consumer fills
@@ -205,8 +206,8 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   filters user-authored text into `TaskCandidateFact`s and recognizes Argus's own `claude -p` prompts
   so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments
   tasks/chapters, pass 2 judges per-task outcome/frustration from the reconstructed dialogue — via the
-  `off`/`claude`/`command` providers (the claude provider runs `claude -p --no-session-persistence
-  --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
+  shared LLM layer (`src/llm/`), defaulting to the `claude-cli` provider (`claude -p
+  --no-session-persistence --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
   per-source reconstruction lives in each producer's parser (`NativeProducer.reconstructDialogue`) and
   is an in-memory intermediate — **no message text is stored**.
 

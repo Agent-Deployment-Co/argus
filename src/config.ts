@@ -16,12 +16,16 @@
 // own `taskExtraction.*` block (the historical keys, kept working with a deprecation note).
 import { readFileSync } from "node:fs";
 import { CONFIG_FILE } from "./paths.ts";
-import { getProvider, isLlmProvider } from "./llm/index.ts";
+import { getProvider, isLlmProvider, LLM_PROVIDERS } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
 /** The task-extraction provider default, preserved from before the generalization: enabling task
  *  extraction with no provider configured uses the local `claude` CLI. */
-const DEFAULT_TASK_PROVIDER: LlmProvider = "claude";
+const DEFAULT_TASK_PROVIDER: LlmProvider = "claude-cli";
+
+/** Back-compat aliases for provider values that were released under older names, so existing
+ *  argus.json / env values keep resolving without a warning. */
+const PROVIDER_ALIASES: Record<string, LlmProvider> = { claude: "claude-cli" };
 
 /** The typed shape of `argus.json`. Designed to grow; task extraction is the first LLM consumer. */
 export interface ArgusConfig {
@@ -145,9 +149,10 @@ function parseNumber(raw: unknown): number | undefined {
 // ultimately the consumer's default — applies.
 function parseProvider(raw: unknown): LlmProvider | undefined {
   const value = String(raw);
-  if (isLlmProvider(value)) return value;
+  const aliased = PROVIDER_ALIASES[value] ?? value;
+  if (isLlmProvider(aliased)) return aliased;
   console.warn(
-    `Ignoring invalid LLM provider ${JSON.stringify(value)} (expected off, claude, command, anthropic, openai, gemini, or hub).`,
+    `Ignoring invalid LLM provider ${JSON.stringify(value)} (expected ${LLM_PROVIDERS.join(", ")}).`,
   );
   return undefined;
 }

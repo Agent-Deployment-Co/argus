@@ -55,7 +55,7 @@ Example `argus.json`:
 
 ```json
 {
-  "taskExtraction": { "enabled": true, "provider": "claude" }
+  "taskExtraction": { "enabled": true, "provider": "claude-cli" }
 }
 ```
 
@@ -74,15 +74,23 @@ interpretation). It resolves through the same flag > env > file > default chain.
 | max output tokens | `llm.maxTokens` | `ARGUS_LLM_MAX_TOKENS` | `--llm-max-tokens` |
 | command (command provider) | `llm.command` | `ARGUS_LLM_COMMAND` | `--llm-command` |
 
-Providers: `off` (default — no LLM), `claude` (local `claude -p`), `command` (local command),
-`anthropic` / `openai` / `gemini` (direct HTTP, BYO key), and `hub` (reserved). `apiKeyEnv` defaults to
-the provider's standard env var (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`).
+Providers: `off` (default — no LLM), `claude-cli` (local `claude -p`), `command` (local command),
+`claude-api` / `openai` / `gemini` (direct HTTP, BYO key), `openrouter` (the OpenRouter gateway — one
+key, many upstream models), and `hub` (reserved). `apiKeyEnv` defaults to the provider's standard env
+var (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`). The legacy
+value `claude` is still accepted as an alias for `claude-cli`.
 
 ```jsonc
 {
-  "llm": { "provider": "anthropic", "model": "claude-haiku-4-5" },
+  "llm": { "provider": "claude-api", "model": "claude-haiku-4-5" },
   "taskExtraction": { "enabled": true }
 }
+```
+
+OpenRouter example (one key reaches many backends; model ids are namespaced):
+
+```jsonc
+{ "llm": { "provider": "openrouter", "model": "anthropic/claude-haiku-4.5" } }
 ```
 
 **Per-consumer overrides (deprecated).** `taskExtraction.provider` / `taskExtraction.model` /
@@ -113,7 +121,7 @@ None of these protects a key from the machine owner — that's intrinsic to a lo
 over a plaintext file is at-rest encryption on macOS/Windows. Secrets are **never** uploaded by `sync`.
 
 > **Privacy.** The default provider is `off` — nothing is sent off-machine. Selecting an API provider
-> (`anthropic`/`openai`/`gemini`) transmits the reconstructed session prompt/response text to that
+> (`claude-api`/`openai`/`gemini`/`openrouter`) transmits the reconstructed session prompt/response text to that
 > third party. The reconstructed dialogue stays an in-memory intermediate (never stored on disk), but
 > it does leave your machine when an API provider is used.
 

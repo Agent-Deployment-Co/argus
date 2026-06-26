@@ -2,10 +2,11 @@
 // behave. Everything else derives from this list: the client dispatches through it, config derives a
 // provider's default API-key env var from it, and the secret allowlist is built from it. Adding a
 // provider is adding one descriptor file and one entry here; no other file needs a per-provider branch.
-import { anthropicProvider } from "./providers/anthropic.ts";
+import { claudeApiProvider } from "./providers/anthropic.ts";
 import { openaiProvider } from "./providers/openai.ts";
 import { geminiProvider } from "./providers/gemini.ts";
-import { claudeProvider, commandProvider } from "./providers/local.ts";
+import { openrouterProvider } from "./providers/openrouter.ts";
+import { claudeCliProvider, commandProvider } from "./providers/local.ts";
 import type { LlmProvider, ProviderDescriptor } from "./types.ts";
 
 /** `off`: the default "no LLM" state. The client returns this descriptor's clear, non-fatal reason. */
@@ -23,11 +24,12 @@ const hubProvider: ProviderDescriptor = {
 /** Every provider Argus knows about. Order is the documentation order (off first as the default). */
 export const PROVIDERS: readonly ProviderDescriptor[] = [
   offProvider,
-  claudeProvider,
+  claudeCliProvider,
   commandProvider,
-  anthropicProvider,
+  claudeApiProvider,
   openaiProvider,
   geminiProvider,
+  openrouterProvider,
   hubProvider,
 ];
 
