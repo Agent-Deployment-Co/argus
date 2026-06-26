@@ -69,7 +69,8 @@ const LAYOUT: { id: string; label: string; sections: { label?: string; settings:
     label: "Tasks",
     sections: [
       {
-        label: "Task extraction",
+        // Sub-section labels are omitted for now — we'll add headings back if a category grows enough
+        // to need them. A section with no label renders as an unlabeled group.
         settings: [TASK_SETTINGS.enabled, TASK_SETTINGS.prompt, TASK_SETTINGS.promptFile],
       },
     ],
@@ -79,7 +80,6 @@ const LAYOUT: { id: string; label: string; sections: { label?: string; settings:
     label: "LLM",
     sections: [
       {
-        label: "Provider",
         settings: [
           LLM_SETTINGS.provider,
           LLM_SETTINGS.model,

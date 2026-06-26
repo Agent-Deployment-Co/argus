@@ -45,7 +45,6 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
         </button>
         <h1 className="settings-title">Settings</h1>
         <nav className="settings-categories" aria-label="Settings categories">
-          <p className="settings-group-heading">Configuration</p>
           {categories.map((cat) => {
             const Ico = CATEGORY_ICONS[cat.id] ?? SlidersHorizontal;
             return (
