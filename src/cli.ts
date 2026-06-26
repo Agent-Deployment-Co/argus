@@ -13,9 +13,8 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { hubErrorMessage } from "./push.ts";
-import { syncOptions, toSource } from "./cli-options.ts";
-import { type TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
-import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS } from "./config.ts";
+import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
+import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS, type ResolvedTaskExtraction } from "./config.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -452,7 +451,7 @@ const extractTasksArg = {
 function taskExtractionOptions(
   args: Record<string, unknown>,
   debugLog?: (message: string) => void,
-): TaskExtractionOptions {
+): ResolvedTaskExtraction {
   return resolveTaskExtraction(args, loadConfig(), debugLog);
 }
 
