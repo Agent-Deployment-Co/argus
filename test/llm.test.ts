@@ -128,9 +128,13 @@ describe("openai provider", () => {
     expect(res.text).toBe("answer");
     expect(calls[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
     expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer test-key");
+    // Native OpenAI: newer models require max_completion_tokens, not the (rejected) max_tokens.
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.max_completion_tokens).toBeDefined();
+    expect(body.max_tokens).toBeUndefined();
   });
 
-  test("honors a custom baseUrl (trailing slash trimmed)", async () => {
+  test("honors a custom baseUrl (trailing slash trimmed) and uses classic max_tokens", async () => {
     const { fetch, calls } = fakeFetch([json({ choices: [{ message: { content: "ok" } }] })]);
     await complete(
       { prompt: "p" },
@@ -138,11 +142,15 @@ describe("openai provider", () => {
       { fetch },
     );
     expect(calls[0]!.url).toBe("http://localhost:1234/v1/chat/completions");
+    // A self-hosted / compatible endpoint speaks classic OpenAI → max_tokens.
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.max_tokens).toBeDefined();
+    expect(body.max_completion_tokens).toBeUndefined();
   });
 });
 
 describe("openrouter provider", () => {
-  test("reuses the OpenAI transport against OpenRouter's base url", async () => {
+  test("reuses the OpenAI transport against OpenRouter's base url (classic max_tokens)", async () => {
     const { fetch, calls } = fakeFetch([json({ choices: [{ message: { content: "via openrouter" } }] })]);
     const res = await complete(
       { prompt: "p" },
@@ -152,7 +160,11 @@ describe("openrouter provider", () => {
     expect(res.text).toBe("via openrouter");
     expect(calls[0]!.url).toBe("https://openrouter.ai/api/v1/chat/completions");
     expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer test-key");
-    expect(JSON.parse(calls[0]!.init.body as string).model).toBe("anthropic/claude-haiku-4.5");
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.model).toBe("anthropic/claude-haiku-4.5");
+    // OpenRouter is OpenAI-compatible (not api.openai.com) → classic max_tokens.
+    expect(body.max_tokens).toBeDefined();
+    expect(body.max_completion_tokens).toBeUndefined();
   });
 });
 
