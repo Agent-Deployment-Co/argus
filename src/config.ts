@@ -1,33 +1,56 @@
 // The `argus.json` config store — the config peer of the `argus.db` data store (#89).
 //
-// This file holds user *settings*, deliberately kept separate from secrets (`token.json`) and
-// hand-authored price tables (`pricing.json`), which have different sensitivity/backup
-// characteristics and stay as their own files. Keep this minimal and extensible: a typed shape, a
-// tolerant loader, and one uniform resolver so precedence and the three naming conventions live in
-// exactly one place.
+// This file holds user *settings*, deliberately kept separate from secrets (the OS keychain /
+// secrets.json, and token.json) and hand-authored price tables (`pricing.json`), which have different
+// sensitivity/backup characteristics and stay as their own stores. Keep this minimal and extensible:
+// a typed shape, a tolerant loader, and one uniform resolver so precedence and the three naming
+// conventions live in exactly one place.
 //
 // Every setting resolves through a single chain: CLI flag > env var > argus.json > built-in default.
 // The three layers don't share a spelling — flags are kebab-case, env vars SCREAMING_SNAKE, and
-// argus.json keys camelCase — and the names aren't mechanical transforms of each other (the enable
-// toggle is `--extract-tasks` on the CLI but `taskExtraction.enabled` in the file). So each setting
-// binds its three names explicitly via a descriptor; a generic case-converter won't do.
+// argus.json keys camelCase — and the names aren't mechanical transforms of each other. So each
+// setting binds its three names explicitly via a descriptor; a generic case-converter won't do.
+//
+// LLM access (#132) is a top-level `llm` block consumed by any model-driven feature. Task extraction
+// is the first consumer: it references `llm.*` and may override `provider`/`model`/`command` under its
+// own `taskExtraction.*` block (the historical keys, kept working with a deprecation note).
 import { readFileSync } from "node:fs";
 import { CONFIG_FILE } from "./paths.ts";
-import {
-  DEFAULT_TASK_EXTRACTION_PROVIDER,
-  type TaskExtractionOptions,
-  type TaskExtractionProvider,
-} from "./indexing/interpret/task-extraction.ts";
+import { getProvider, isLlmProvider, LLM_PROVIDERS } from "./llm/index.ts";
+import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
-/** The typed shape of `argus.json`. Designed to grow; task extraction is the first consumer. */
+/** The task-extraction provider default, preserved from before the generalization: enabling task
+ *  extraction with no provider configured uses the local `claude` CLI. */
+const DEFAULT_TASK_PROVIDER: LlmProvider = "claude-cli";
+
+/** Back-compat aliases for provider values that were released under older names, so existing
+ *  argus.json / env values keep resolving without a warning. */
+const PROVIDER_ALIASES: Record<string, LlmProvider> = { claude: "claude-cli" };
+
+/** The typed shape of `argus.json`. Designed to grow; task extraction is the first LLM consumer. */
 export interface ArgusConfig {
+  /** General LLM access settings, shared by every model-driven feature (#132). */
+  llm?: {
+    provider?: LlmProvider;
+    model?: string;
+    /** OpenAI-compatible / self-hosted base URL (openai provider). */
+    baseUrl?: string;
+    /** Env var the API key is read from (also the secret-store key). Defaults per provider. */
+    apiKeyEnv?: string;
+    maxTokens?: number;
+    /** Command line for the `command` provider. */
+    command?: string;
+  };
   taskExtraction?: {
     /** Opt-in index-time extraction (#88). Off by default — it's an LLM call per session. */
     enabled?: boolean;
-    provider?: TaskExtractionProvider;
-    model?: string;
     prompt?: string;
     promptFile?: string;
+    /** @deprecated Per-consumer override of `llm.provider`. Prefer `llm.provider`. */
+    provider?: LlmProvider;
+    /** @deprecated Per-consumer override of `llm.model`. Prefer `llm.model`. */
+    model?: string;
+    /** @deprecated Per-consumer override of `llm.command`. Prefer `llm.command`. */
     command?: string;
   };
 }
@@ -70,21 +93,17 @@ export function getPath(obj: unknown, dotted: string): unknown {
 
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
 export interface Setting<T> {
-  /** argus.json location, dotted camelCase — e.g. "taskExtraction.provider". */
+  /** argus.json location, dotted camelCase — e.g. "llm.provider". */
   path: string;
-  /** env var, SCREAMING_SNAKE — e.g. "ARGUS_TASK_PROVIDER". */
+  /** env var, SCREAMING_SNAKE — e.g. "ARGUS_LLM_PROVIDER". */
   env?: string;
-  /** citty flag, kebab-case — e.g. "task-provider". */
+  /** citty flag, kebab-case — e.g. "llm-provider". */
   flag?: string;
   default: T;
   /** Coerce a raw value (string from env/flag, typed from file) to T, validating as needed. */
   parse(raw: unknown): T;
 }
 
-/**
- * Resolve one setting through CLI flag > env var > argus.json > default. Any absent layer yields
- * undefined and falls through, so the same chain works for settings that don't populate every layer.
- */
 /** A layer is "present" only when set to a non-empty value — so `ARGUS_TASK_PROVIDER=""` (an exported
  *  but blank env var) or a blank flag/file value falls through to the next layer rather than being
  *  parsed as a real setting. */
@@ -92,6 +111,10 @@ function present(value: unknown): boolean {
   return value != null && value !== "";
 }
 
+/**
+ * Resolve one setting through CLI flag > env var > argus.json > default. Any absent layer yields
+ * undefined and falls through, so the same chain works for settings that don't populate every layer.
+ */
 export function resolveSetting<T>(
   setting: Setting<T>,
   flags: Record<string, unknown>,
@@ -112,22 +135,85 @@ function parseBool(raw: unknown): boolean {
   return s === "true" || s === "1" || s === "yes" || s === "on";
 }
 
-// Tolerant, like loadConfig: an invalid provider (a typo in argus.json or env) must not hard-exit an
-// unrelated `index`/`serve`/`run` — warn and fall back to the default instead.
-function parseProvider(raw: unknown): TaskExtractionProvider {
-  const value = String(raw);
-  if (value === "off" || value === "claude" || value === "command") return value;
-  console.warn(
-    `Ignoring invalid task extraction provider ${JSON.stringify(value)} (expected claude, command, or off); using "${DEFAULT_TASK_EXTRACTION_PROVIDER}".`,
-  );
-  return DEFAULT_TASK_EXTRACTION_PROVIDER as TaskExtractionProvider;
-}
-
 function parseString(raw: unknown): string {
   return String(raw);
 }
 
-/** The task-extraction settings, one descriptor per row of #89's setting map. */
+function parseNumber(raw: unknown): number | undefined {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+// Tolerant, like loadConfig: an invalid provider (a typo in argus.json or env) must not hard-exit an
+// unrelated `index`/`serve`/`run`. Warn and fall through (return undefined) so the next layer — and
+// ultimately the consumer's default — applies.
+function parseProvider(raw: unknown): LlmProvider | undefined {
+  const value = String(raw);
+  const aliased = PROVIDER_ALIASES[value] ?? value;
+  if (isLlmProvider(aliased)) return aliased;
+  console.warn(
+    `Ignoring invalid LLM provider ${JSON.stringify(value)} (expected ${LLM_PROVIDERS.join(", ")}).`,
+  );
+  return undefined;
+}
+
+/** The standard env var (and secret-store key) for a provider's API key — from the provider registry. */
+function defaultApiKeyEnv(provider: LlmProvider): string | undefined {
+  return getProvider(provider)?.apiKeyEnv;
+}
+
+type OptionalString = string | undefined;
+type OptionalProvider = LlmProvider | undefined;
+type OptionalNumber = number | undefined;
+
+/** The shared `llm.*` settings. */
+const LLM_SETTINGS = {
+  provider: {
+    path: "llm.provider",
+    env: "ARGUS_LLM_PROVIDER",
+    flag: "llm-provider",
+    default: undefined as OptionalProvider,
+    parse: parseProvider,
+  } satisfies Setting<OptionalProvider>,
+  model: {
+    path: "llm.model",
+    env: "ARGUS_LLM_MODEL",
+    flag: "llm-model",
+    default: undefined as OptionalString,
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
+  baseUrl: {
+    path: "llm.baseUrl",
+    env: "ARGUS_LLM_BASE_URL",
+    flag: "llm-base-url",
+    default: undefined as OptionalString,
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
+  apiKeyEnv: {
+    path: "llm.apiKeyEnv",
+    env: "ARGUS_LLM_API_KEY_ENV",
+    flag: "llm-api-key-env",
+    default: undefined as OptionalString,
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
+  maxTokens: {
+    path: "llm.maxTokens",
+    env: "ARGUS_LLM_MAX_TOKENS",
+    flag: "llm-max-tokens",
+    default: undefined as OptionalNumber,
+    parse: parseNumber,
+  } satisfies Setting<OptionalNumber>,
+  command: {
+    path: "llm.command",
+    env: "ARGUS_LLM_COMMAND",
+    flag: "llm-command",
+    default: undefined as OptionalString,
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
+};
+
+/** Task-extraction settings: the opt-in toggle, the consumer-specific prompt, and the deprecated
+ *  per-consumer overrides of provider/model/command (kept working; prefer `llm.*`). */
 const TASK_SETTINGS = {
   enabled: {
     path: "taskExtraction.enabled",
@@ -140,64 +226,107 @@ const TASK_SETTINGS = {
     path: "taskExtraction.provider",
     env: "ARGUS_TASK_PROVIDER",
     flag: "task-provider",
-    default: DEFAULT_TASK_EXTRACTION_PROVIDER as TaskExtractionProvider,
+    default: undefined as OptionalProvider,
     parse: parseProvider,
-  } satisfies Setting<TaskExtractionProvider>,
+  } satisfies Setting<OptionalProvider>,
   model: {
     path: "taskExtraction.model",
     env: "ARGUS_TASK_MODEL",
     flag: "task-model",
-    default: undefined as string | undefined,
+    default: undefined as OptionalString,
     parse: parseString,
-  } satisfies Setting<string | undefined>,
+  } satisfies Setting<OptionalString>,
   prompt: {
     path: "taskExtraction.prompt",
     env: "ARGUS_TASK_PROMPT",
     flag: "task-prompt",
-    default: undefined as string | undefined,
+    default: undefined as OptionalString,
     parse: parseString,
-  } satisfies Setting<string | undefined>,
+  } satisfies Setting<OptionalString>,
   promptFile: {
     path: "taskExtraction.promptFile",
     env: "ARGUS_TASK_PROMPT_FILE",
     flag: "task-prompt-file",
-    default: undefined as string | undefined,
+    default: undefined as OptionalString,
     parse: parseString,
-  } satisfies Setting<string | undefined>,
+  } satisfies Setting<OptionalString>,
   command: {
     path: "taskExtraction.command",
     env: "ARGUS_TASK_COMMAND",
     flag: "task-command",
-    default: undefined as string | undefined,
+    default: undefined as OptionalString,
     parse: parseString,
-  } satisfies Setting<string | undefined>,
+  } satisfies Setting<OptionalString>,
 };
 
-/** The opt-in toggle plus the provider settings, resolved through the uniform chain. */
-export type ResolvedTaskExtraction = TaskExtractionOptions & { enabled: boolean };
+/**
+ * Resolve the shared `llm.*` block into a `ResolvedLlmConfig`. `overrides` carries a consumer's own
+ * provider/model/command (the per-consumer override layer): each wins over the shared `llm.*` value,
+ * which wins over the built-in default. The API key itself is not resolved here (that's an async
+ * secret-store read the consumer performs); `apiKeyEnv` names where to find it.
+ */
+function resolveLlmConfig(
+  flags: Record<string, unknown>,
+  file: ArgusConfig,
+  overrides: { provider?: LlmProvider; model?: string; command?: string },
+  defaultProvider: LlmProvider,
+): ResolvedLlmConfig {
+  const provider =
+    overrides.provider ?? resolveSetting(LLM_SETTINGS.provider, flags, file) ?? defaultProvider;
+  const model = overrides.model ?? resolveSetting(LLM_SETTINGS.model, flags, file);
+  const command = overrides.command ?? resolveSetting(LLM_SETTINGS.command, flags, file);
+  const baseUrl = resolveSetting(LLM_SETTINGS.baseUrl, flags, file);
+  const maxTokens = resolveSetting(LLM_SETTINGS.maxTokens, flags, file);
+  const apiKeyEnv = resolveSetting(LLM_SETTINGS.apiKeyEnv, flags, file) ?? defaultApiKeyEnv(provider);
+
+  const llm: ResolvedLlmConfig = { provider };
+  if (model) llm.model = model;
+  if (baseUrl) llm.baseUrl = baseUrl;
+  if (maxTokens != null) llm.maxTokens = maxTokens;
+  if (command) llm.command = command;
+  if (apiKeyEnv) llm.apiKeyEnv = apiKeyEnv;
+  return llm;
+}
+
+/** The resolved task-extraction settings: the opt-in toggle, the LLM config it runs through, the
+ *  consumer-specific prompt, and a transient debug sink (reattached after resolution). */
+export interface ResolvedTaskExtraction {
+  enabled: boolean;
+  llm: ResolvedLlmConfig;
+  /** Custom instruction prompt. The session data is appended after it. */
+  prompt?: string;
+  /** Read a custom instruction prompt from this file. Takes precedence over `prompt`. */
+  promptFile?: string;
+  /** Optional debug sink. Callers decide whether this goes to stdout/stderr. */
+  debugLog?: (message: string) => void;
+}
 
 /**
  * Resolve the effective task-extraction settings. `flags` is the citty-parsed args object (keys are
- * kebab-case flag names); pass `{}` for commands that don't expose the flags (e.g. `index` today).
- * `debugLog` is reattached after resolution since it isn't a persisted setting.
+ * kebab-case flag names); pass `{}` for commands that don't expose the flags. The deprecated
+ * `taskExtraction.provider`/`model`/`command` keys resolve as the per-consumer override layer over the
+ * shared `llm.*` block. `debugLog` is reattached after resolution since it isn't a persisted setting.
  */
 export function resolveTaskExtraction(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
   debugLog?: (message: string) => void,
 ): ResolvedTaskExtraction {
+  const overrides = {
+    provider: resolveSetting(TASK_SETTINGS.provider, flags, file),
+    model: resolveSetting(TASK_SETTINGS.model, flags, file),
+    command: resolveSetting(TASK_SETTINGS.command, flags, file),
+  };
+  const llm = resolveLlmConfig(flags, file, overrides, DEFAULT_TASK_PROVIDER);
+
   const resolved: ResolvedTaskExtraction = {
     enabled: resolveSetting(TASK_SETTINGS.enabled, flags, file),
-    provider: resolveSetting(TASK_SETTINGS.provider, flags, file),
+    llm,
   };
-  const model = resolveSetting(TASK_SETTINGS.model, flags, file);
   const prompt = resolveSetting(TASK_SETTINGS.prompt, flags, file);
   const promptFile = resolveSetting(TASK_SETTINGS.promptFile, flags, file);
-  const command = resolveSetting(TASK_SETTINGS.command, flags, file);
-  if (model) resolved.model = model;
   if (prompt) resolved.prompt = prompt;
   if (promptFile) resolved.promptFile = promptFile;
-  if (command) resolved.command = command;
   if (debugLog) resolved.debugLog = debugLog;
   return resolved;
 }

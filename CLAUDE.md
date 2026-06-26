@@ -87,7 +87,8 @@ The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/arch
 `reconcile.ts`, `friction.ts`, `parse/producers/*`, `interpret/*`), **`src/store/`** (`store.ts`,
 `store-contract.ts`, `session-store.ts`), **`src/reporting/`** (`aggregate.ts`,
 `dashboard-builder.ts`, `inventory.ts`), and **`src/api/`**. Cross-cutting modules (`types.ts`,
-`config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`) and the CLI/runtime layer (`cli.ts`,
+`config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`, **`src/llm/`** [the shared LLM access
+layer], **`secrets.ts`** [BYO API-key storage]) and the CLI/runtime layer (`cli.ts`,
 `run.ts`, `watch.ts`, `index-ops.ts`, …) stay at `src/` root.
 
 The data flow:
@@ -137,6 +138,21 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
   Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `$ARGUS_CONFIG_DIR/pricing.json`.
+
+- **`src/llm/`** — The shared LLM access layer (#132; design in `docs/llm-providers.md`). `registry.ts`
+  is the single source of truth: a list of `ProviderDescriptor`s (`providers/*` — `local.ts` =
+  `claude-cli`/`command`; `claude-api`/`openai`/`gemini` = direct HTTP over `http.ts`, which owns
+  429/5xx retry + a size cap; `openrouter` = a preset over the openai transport). `index.ts`'s
+  `complete(request, config)` dispatches through the registry with
+  **no per-provider branching**; `config.ts`'s apiKeyEnv default and `secrets.ts`'s allowlist derive
+  from it too, so adding a provider is one descriptor + one registry entry. Never throws —
+  `off`/no-key/network/bad-shape → `ok:false`. Pure of secret access (the consumer fills
+  `config.apiKey`), so it's testable against an injected `fetch`. Task extraction is the first consumer.
+
+- **`secrets.ts`** — BYO API-key storage: a `SecretStore` with platform backends (macOS keychain via
+  `/usr/bin/security`, Windows DPAPI via PowerShell, Linux chmod-600 file), behind an injectable
+  command-runner seam. `resolveApiKey` = `apiKeyEnv` env var → store → none. Local-only; never on the
+  sync wire. Set via `argus secret` or the `serve` secret endpoints.
 
 - **`reporting/inventory.ts`** — Reads `~/.claude/settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`
   to map skills (`plugin:skill`) to owning plugins and to surface **enabled-but-unused** plugins.
@@ -190,8 +206,8 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   filters user-authored text into `TaskCandidateFact`s and recognizes Argus's own `claude -p` prompts
   so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments
   tasks/chapters, pass 2 judges per-task outcome/frustration from the reconstructed dialogue — via the
-  `off`/`claude`/`command` providers (the claude provider runs `claude -p --no-session-persistence
-  --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
+  shared LLM layer (`src/llm/`), defaulting to the `claude-cli` provider (`claude -p
+  --no-session-persistence --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
   per-source reconstruction lives in each producer's parser (`NativeProducer.reconstructDialogue`) and
   is an in-memory intermediate — **no message text is stored**.
 

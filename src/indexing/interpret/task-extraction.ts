@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
   assignInteractionTaskSeqs,
@@ -10,6 +9,9 @@ import {
   type TaskFrustration,
   type TaskOutcome,
 } from "../../store/store-contract.ts";
+import { complete } from "../../llm/index.ts";
+import type { LlmResult } from "../../llm/types.ts";
+import type { ResolvedTaskExtraction } from "../../config.ts";
 
 /** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
  *  interactions, in order — the projection of prompts+responses the session model describes (#122),
@@ -23,13 +25,7 @@ function interactionTurns(interactions: InteractionFact[]): Array<{ role: "user"
   return turns;
 }
 
-const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
-
-export const DEFAULT_TASK_EXTRACTION_PROVIDER = "claude";
-/** Default model for the claude provider — a cheap, fast model for the per-session interpret calls. */
-export const DEFAULT_TASK_EXTRACTION_MODEL = "haiku";
-
-export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in a coding-agent session.
+export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in an agent session.
 
 Return JSON only. Use this exact shape:
 {"tasks":[{"description":"short task description","messageIndexes":[0]}]}
@@ -41,55 +37,22 @@ Rules:
 - Keep descriptions concise and specific.
 - messageIndexes must refer to the filtered user message indexes provided below.`;
 
-export type TaskExtractionProvider = "off" | "claude" | "command";
 export type TaskExtractionDebugLog = (message: string) => void;
-
-export interface TaskExtractionOptions {
-  provider?: TaskExtractionProvider;
-  /** Model passed to providers that support model selection. The default claude provider maps this to --model. */
-  model?: string;
-  /** Custom instruction prompt. The session data is appended after it. */
-  prompt?: string;
-  /** Read a custom instruction prompt from this file. Takes precedence over prompt. */
-  promptFile?: string;
-  /** Custom command provider. The command reads the full prompt on stdin and writes JSON to stdout. */
-  command?: string;
-  /** Optional debug sink for task extraction. Callers decide whether this goes to stdout/stderr. */
-  debugLog?: TaskExtractionDebugLog;
-}
 
 export interface ExtractedTaskSpec {
   description: string;
   messageIndexes: number[];
 }
 
-interface ProviderResult {
-  ok: boolean;
-  stdout: string;
-  error?: string;
-  stderr?: string;
-  status?: number | null;
-}
-
 export function logTaskExtractionDebug(
-  options: TaskExtractionOptions | undefined,
+  options: ResolvedTaskExtraction | undefined,
   message: string,
 ): void {
   options?.debugLog?.(`[task extraction] ${message}`);
 }
 
-// TEMP (remove): always-on estimate of the prompt/context size sent to the interpreter, so we can
-// see how big these calls get during a real run without enabling full debug logging.
-function logPromptSizeEstimate(label: string, prompt: string): void {
-  const bytes = Buffer.byteLength(prompt, "utf8");
-  const approxTokens = Math.round(bytes / 4); // rough ~4 bytes/token heuristic
-  console.error(
-    `[task interpretation] ${label}: ~${approxTokens.toLocaleString()} tokens (${bytes.toLocaleString()} bytes)`,
-  );
-}
-
 function logTaskExtractionBlock(
-  options: TaskExtractionOptions | undefined,
+  options: ResolvedTaskExtraction | undefined,
   label: string,
   body: string,
 ): void {
@@ -111,14 +74,26 @@ function diagnostic(
   return { code, severity, phase: "reconcile", message, ...(position ? { position } : {}) };
 }
 
-export function taskExtractionProvider(
-  options: TaskExtractionOptions | undefined,
-): TaskExtractionProvider {
-  return options?.provider ?? "off";
+/** The configured provider for this run (`off` when no extraction options are present). */
+export function taskExtractionProvider(options: ResolvedTaskExtraction | undefined): string {
+  return options?.llm.provider ?? "off";
+}
+
+/** A one-line summary of the resolved LLM configuration for debug output. Never includes the key
+ *  value — only the env-var name it resolves from and whether a value was found. */
+function llmConfigSummary(options: ResolvedTaskExtraction | undefined): string {
+  const llm = options?.llm;
+  if (!llm) return "llm config: provider=off";
+  const parts = [`provider=${llm.provider}`, `model=${llm.model ?? "(default)"}`];
+  if (llm.baseUrl) parts.push(`baseUrl=${llm.baseUrl}`);
+  if (llm.maxTokens != null) parts.push(`maxTokens=${llm.maxTokens}`);
+  if (llm.command) parts.push(`command=${llm.command}`);
+  if (llm.apiKeyEnv) parts.push(`apiKeyEnv=${llm.apiKeyEnv}`, `key=${llm.apiKey ? "set" : "unset"}`);
+  return `llm config: ${parts.join(" ")}`;
 }
 
 function resolveInstructions(
-  options: TaskExtractionOptions | undefined,
+  options: ResolvedTaskExtraction | undefined,
   diagnostics: ParserDiagnostic[],
 ): string | undefined {
   if (options?.promptFile) {
@@ -210,123 +185,14 @@ export function parseTaskExtractionOutput(raw: string): ExtractedTaskSpec[] {
   return tasks;
 }
 
-export function splitCommand(command: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-
-  for (const char of command.trim()) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-
-  if (escaped) current += "\\";
-  if (quote) throw new Error("unterminated quote");
-  if (current) args.push(current);
-  return args;
-}
-
-function spawnWithStdin(file: string, args: string[], input: string): Promise<ProviderResult> {
-  return new Promise((resolve) => {
-    const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let bytesOut = 0;
-    let truncated = false;
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      bytesOut += chunk.length;
-      if (bytesOut <= MAX_LLM_BUFFER_BYTES) {
-        stdout += chunk.toString("utf8");
-      } else {
-        truncated = true;
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.stdin.end(input, "utf8");
-
-    child.on("close", (code) => {
-      const error = truncated
-        ? "provider output exceeded buffer limit"
-        : code !== 0
-          ? stderr.trim() || `exited with status ${code}`
-          : undefined;
-      resolve({ ok: !error && !!stdout.trim(), stdout, error, stderr, status: code });
-    });
-
-    child.on("error", (err) => {
-      resolve({ ok: false, stdout: "", error: err.message, stderr, status: undefined });
-    });
-  });
-}
-
-/**
- * Args for the headless `claude` provider. Defaults: `--no-session-persistence` (don't leave a
- * transcript on disk — these interpret calls would otherwise be re-indexed as bogus sessions) and a
- * cheap default model. `-` reads the prompt from stdin; a configured `--task-model` /
- * `taskExtraction.model` overrides the model. (Note: `--bare` is deliberately NOT used — in `-p`
- * mode it skips credential loading and the call fails "Not logged in"; the output parser already
- * tolerates the normal fenced/wrapped output, so it buys nothing here.)
- */
-export function claudeProviderArgs(options: TaskExtractionOptions | undefined): string[] {
-  return ["-p", "--no-session-persistence", "--model", options?.model || DEFAULT_TASK_EXTRACTION_MODEL, "-"];
-}
-
-async function runClaude(prompt: string, options: TaskExtractionOptions | undefined): Promise<ProviderResult> {
-  return spawnWithStdin("claude", claudeProviderArgs(options), prompt);
-}
-
-async function runCommand(prompt: string, command: string | undefined): Promise<ProviderResult> {
-  if (!command?.trim()) return { ok: false, stdout: "", error: "no task command configured" };
-  let argv: string[];
-  try {
-    argv = splitCommand(command);
-  } catch (error) {
-    return {
-      ok: false,
-      stdout: "",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-  if (!argv.length) return { ok: false, stdout: "", error: "no task command configured" };
-  return spawnWithStdin(argv[0]!, argv.slice(1), prompt);
-}
-
-async function runProvider(
-  provider: TaskExtractionProvider,
+/** Run the shared LLM client for a task-extraction prompt. `off` is the consumer's "no LLM" signal:
+ *  it returns an empty-tasks result rather than calling the layer (which would just report ok:false). */
+async function runExtraction(
   prompt: string,
-  options: TaskExtractionOptions | undefined,
-): Promise<ProviderResult> {
-  if (provider === "claude") return runClaude(prompt, options);
-  if (provider === "command") return runCommand(prompt, options?.command);
-  return { ok: true, stdout: "{\"tasks\":[]}" };
+  options: ResolvedTaskExtraction | undefined,
+): Promise<LlmResult> {
+  if (taskExtractionProvider(options) === "off") return { ok: true, text: '{"tasks":[]}' };
+  return complete({ prompt }, options!.llm);
 }
 
 function uniqueValidIndexes(indexes: number[], count: number): number[] {
@@ -376,7 +242,7 @@ export function taskFactsFromSpecs(
 export async function extractTasksForSession(
   sessionId: string,
   candidates: InteractionFact[],
-  options: TaskExtractionOptions | undefined,
+  options: ResolvedTaskExtraction | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
@@ -406,28 +272,17 @@ export async function extractTasksForSession(
       : "default prompt";
   logTaskExtractionDebug(options, `using ${promptSource}`);
   const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions);
-  logPromptSizeEstimate(`pass 1 (segment) ${sessionId}`, prompt); // TEMP (remove)
   logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
   logTaskExtractionBlock(options, "prompt", prompt);
-  if (provider === "claude") {
-    logTaskExtractionDebug(
-      options,
-      `running claude provider with model ${options?.model || DEFAULT_TASK_EXTRACTION_MODEL}`,
-    );
-  } else if (provider === "command") {
-    logTaskExtractionDebug(options, `running command provider: ${options?.command ?? "(none)"}`);
-  }
-  const result = await runProvider(provider, prompt, options);
+  logTaskExtractionDebug(options, llmConfigSummary(options));
+  const result = await runExtraction(prompt, options);
   logTaskExtractionDebug(
     options,
     `provider finished: ok=${result.ok}${result.status == null ? "" : ` status=${result.status}`}${
       result.error ? ` error=${result.error}` : ""
     }`,
   );
-  logTaskExtractionBlock(options, "provider stdout", result.stdout);
-  if (result.stderr?.trim()) {
-    logTaskExtractionBlock(options, "provider stderr", result.stderr);
-  }
+  logTaskExtractionBlock(options, "provider output", result.text);
   if (!result.ok) {
     diagnostics.push(
       diagnostic(
@@ -441,7 +296,7 @@ export async function extractTasksForSession(
   }
 
   try {
-    const specs = parseTaskExtractionOutput(result.stdout);
+    const specs = parseTaskExtractionOutput(result.text);
     logTaskExtractionDebug(options, `parsed tasks=${specs.length}`);
     const tasks = taskFactsFromSpecs(sessionId, candidates, specs);
     logTaskExtractionDebug(options, `created tasks=${tasks.length}`);
@@ -467,15 +322,20 @@ export async function extractTasksForSession(
 
 // --- Pass 2: per-task outcome and frustration (#91) ---
 
-export const DEFAULT_TASK_OUTCOME_PROMPT = `You judge how a single task in a coding-agent session turned out, from the dialogue between the user and the assistant.
+export const DEFAULT_TASK_OUTCOME_PROMPT = `
+You judge how a single task in an agent session turned out, from the interaction dialogue between the user and the
+assistant. Note that this dialogue does not include the assistant's narration messages or specific tool invocations.
+It has been reduced to user prompts and the assistant's final message at the end of a completed interaction.
 
 Return JSON only. Use this exact shape:
 {"outcome":"success","frustration":"none","signals":["short tag"],"reason":"one sentence"}
 
 Rules:
-- outcome is one of: "success" (the user got what they asked for), "failure" (they clearly did not), "unclear" (you can't tell).
-- Judge from the WHOLE exchange, not just the final message. Users sometimes give up mid-task, and assistants sometimes over-claim success.
-- frustration is one of: "none", "low", "high" — how frustrated the user seemed across the task (repeated re-asks, corrections, escalating tone, or the assistant repeatedly saying it can't do something / lacks access).
+- outcome is one of: "success" (the user got what they asked for), "failure" (they clearly did not), "unclear"
+  (you can't tell).
+- Judge from the WHOLE exchange, not just the final message.
+- frustration is one of: "none", "moderate", "high" — how frustrated the user seemed across the task (repeated re-asks,
+  corrections, escalating tone, or the assistant repeatedly saying it can't do something / lacks access).
 - signals: a few short evidence tags, e.g. "repeated re-asks", "no access", "assistant over-claimed". Omit or use [] if there are none.
 - reason: one concise sentence explaining the call.`;
 
@@ -527,16 +387,14 @@ export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
 export async function judgeTaskOutcome(
   description: string,
   interactions: InteractionFact[],
-  options: TaskExtractionOptions | undefined,
+  options: ResolvedTaskExtraction | undefined,
 ): Promise<{ judgment?: TaskOutcomeJudgment; diagnostics: ParserDiagnostic[] }> {
-  const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
   const hasText = interactions.some((i) => i.promptText || i.responseText);
-  if (provider === "off" || !hasText) return { diagnostics };
+  if (taskExtractionProvider(options) === "off" || !hasText) return { diagnostics };
 
   const prompt = buildTaskOutcomePrompt(description, interactions);
-  logPromptSizeEstimate(`pass 2 (outcome) "${description.slice(0, 60)}"`, prompt); // TEMP (remove)
-  const result = await runProvider(provider, prompt, options);
+  const result = await complete({ prompt }, options!.llm);
   if (!result.ok) {
     diagnostics.push(
       diagnostic(
@@ -547,7 +405,7 @@ export async function judgeTaskOutcome(
     return { diagnostics };
   }
   try {
-    return { judgment: parseTaskOutcomeOutput(result.stdout), diagnostics };
+    return { judgment: parseTaskOutcomeOutput(result.text), diagnostics };
   } catch (error) {
     diagnostics.push(
       diagnostic(
@@ -584,7 +442,7 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
 export async function extractTasksWithOutcome(
   sessionId: string,
   interactions: InteractionFact[],
-  options: TaskExtractionOptions | undefined,
+  options: ResolvedTaskExtraction | undefined,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
   // Task candidates are the human interaction openings that carry task text (#122).
   const candidates = interactions.filter(

@@ -11,18 +11,26 @@ import type { DeleteOptions, RefreshOptions, SyncOptions } from "./cli-options.t
 /** Resolve task-extraction settings for an indexing run: the `--extract-tasks` override (when set)
  *  wins over argus.json, which wins over the built-in default (off) — the uniform #89 chain, with
  *  the flag occupying its flag layer. `provider`/`model`/etc. always come from argus.json. */
-function resolveExtraction(extractTasks: boolean | undefined): ResolvedTaskExtraction {
+function resolveExtraction(extractTasks: boolean | undefined, debug = false): ResolvedTaskExtraction {
+  // `--debug` wires the task-extraction debug sink to stdout (the same stream `argus run --debug` prints).
+  const debugLog = debug ? (message: string) => process.stdout.write(message + "\n") : undefined;
   return resolveTaskExtraction(
     extractTasks === undefined ? {} : { "extract-tasks": extractTasks },
     loadConfig(),
+    debugLog,
   );
 }
 
 /** Bring the store up to date for the requested sources (producers reconcile + materialize). When
  *  task extraction is enabled (argus.json, or `--extract-tasks`), indexing a changed session also
  *  extracts its tasks; otherwise indexing behaves exactly as before. */
-export async function runIndex(opts: SyncOptions, log: Log, extractTasks?: boolean): Promise<void> {
-  const taskExtraction = resolveExtraction(extractTasks);
+export async function runIndex(
+  opts: SyncOptions,
+  log: Log,
+  extractTasks?: boolean,
+  debug = false,
+): Promise<void> {
+  const taskExtraction = resolveExtraction(extractTasks, debug);
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
     taskExtraction,
@@ -55,6 +63,7 @@ export async function runIndexRebuild(
   opts: SyncOptions & { force: boolean },
   log: Log,
   extractTasks?: boolean,
+  debug = false,
 ): Promise<void> {
   // Counting archived sessions is best-effort — a damaged store can't be read, but the rebuild still
   // proceeds and replaces it.
@@ -91,7 +100,7 @@ export async function runIndexRebuild(
   const rebuilt = await rebuildStore();
   await rebuilt.close();
   log("Rebuilt the local store from scratch. Re-reading all transcripts from disk…");
-  await runIndex(opts, log, extractTasks);
+  await runIndex(opts, log, extractTasks, debug);
 }
 
 /** Re-read transcripts from disk. Bare: re-derive the whole structural index while preserving the
@@ -109,14 +118,14 @@ export async function runIndexRefresh(opts: RefreshOptions, log: Log): Promise<v
     await store.close();
   }
   log("Re-reading all transcripts from disk…");
-  await runIndex(opts, log, opts.extractTasks);
+  await runIndex(opts, log, opts.extractTasks, opts.debug);
 }
 
 /** Reindex specific sessions in isolation, reporting per session. A session that's unknown or whose
  *  transcript has left disk reports a clear error and changes nothing for that session. */
 async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
-  const taskExtraction = resolveExtraction(opts.extractTasks);
-  const extracting = taskExtraction.enabled && taskExtraction.provider !== "off";
+  const taskExtraction = resolveExtraction(opts.extractTasks, opts.debug);
+  const extracting = taskExtraction.enabled && taskExtraction.llm.provider !== "off";
   const store = await openStore(opts.storePath ? { path: opts.storePath } : undefined);
   let refreshed = 0;
   let failed = 0;

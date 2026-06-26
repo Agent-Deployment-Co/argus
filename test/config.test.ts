@@ -39,8 +39,8 @@ describe("loadConfig", () => {
   });
 
   test("valid file → parsed object", () => {
-    const path = tmpConfig(JSON.stringify({ taskExtraction: { enabled: true, provider: "claude" } }));
-    expect(loadConfig(path)).toEqual({ taskExtraction: { enabled: true, provider: "claude" } });
+    const path = tmpConfig(JSON.stringify({ taskExtraction: { enabled: true, provider: "claude-cli" } }));
+    expect(loadConfig(path)).toEqual({ taskExtraction: { enabled: true, provider: "claude-cli" } });
   });
 
   test("malformed JSON → warning + defaults, no throw", () => {
@@ -102,27 +102,27 @@ describe("resolveSetting precedence", () => {
 
 describe("resolveTaskExtraction", () => {
   test("acceptance #89: file enables extraction with no flags", () => {
-    const file = { taskExtraction: { enabled: true, provider: "claude" as const } };
+    const file = { taskExtraction: { enabled: true, provider: "claude-cli" as const } };
     const resolved = resolveTaskExtraction({}, file);
     expect(resolved.enabled).toBe(true);
-    expect(resolved.provider).toBe("claude");
+    expect(resolved.llm.provider).toBe("claude-cli");
   });
 
-  test("empty config → today's defaults (disabled, provider claude, no extras)", () => {
+  test("empty config → today's defaults (disabled, provider claude-cli, no extras)", () => {
     const resolved = resolveTaskExtraction({}, {});
     expect(resolved.enabled).toBe(false);
-    expect(resolved.provider).toBe("claude");
-    expect(resolved.model).toBeUndefined();
-    expect(resolved.command).toBeUndefined();
+    expect(resolved.llm.provider).toBe("claude-cli");
+    expect(resolved.llm.model).toBeUndefined();
+    expect(resolved.llm.command).toBeUndefined();
   });
 
   test("env var enables and overrides file provider", () => {
     process.env.ARGUS_TASK_ENABLED = "true";
     process.env.ARGUS_TASK_PROVIDER = "command";
-    const file = { taskExtraction: { enabled: false, provider: "claude" as const } };
+    const file = { taskExtraction: { enabled: false, provider: "claude-cli" as const } };
     const resolved = resolveTaskExtraction({}, file);
     expect(resolved.enabled).toBe(true);
-    expect(resolved.provider).toBe("command");
+    expect(resolved.llm.provider).toBe("command");
   });
 
   test("#93: --extract-tasks false forces off even when the file enables it", () => {
@@ -137,10 +137,10 @@ describe("resolveTaskExtraction", () => {
     process.env.ARGUS_TASK_PROVIDER = "command";
     const resolved = resolveTaskExtraction(
       { "task-provider": "off", "task-model": "haiku" },
-      { taskExtraction: { provider: "claude" } },
+      { taskExtraction: { provider: "claude-cli" } },
     );
-    expect(resolved.provider).toBe("off");
-    expect(resolved.model).toBe("haiku");
+    expect(resolved.llm.provider).toBe("off");
+    expect(resolved.llm.model).toBe("haiku");
   });
 
   test("boolean coercion of string env/file values", () => {
@@ -156,8 +156,21 @@ describe("resolveTaskExtraction", () => {
     try {
       // A typo in argus.json must not kill an unrelated `index`/`serve`/`run`.
       const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "cluade" as never } });
-      expect(resolved.provider).toBe("claude");
-      expect(warnings.join("\n")).toContain("Ignoring invalid task extraction provider");
+      expect(resolved.llm.provider).toBe("claude-cli");
+      expect(warnings.join("\n")).toContain("Ignoring invalid LLM provider");
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  test("legacy provider value 'claude' aliases to 'claude-cli' without warning", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (m?: unknown) => warnings.push(String(m));
+    try {
+      const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "claude" as never } });
+      expect(resolved.llm.provider).toBe("claude-cli");
+      expect(warnings).toHaveLength(0);
     } finally {
       console.warn = original;
     }
@@ -166,11 +179,57 @@ describe("resolveTaskExtraction", () => {
   test("an exported-but-empty env var is treated as unset, not a value", () => {
     process.env.ARGUS_TASK_PROVIDER = "";
     // "" must fall through to the file rather than route through provider validation.
-    expect(resolveTaskExtraction({}, { taskExtraction: { provider: "command" } }).provider).toBe("command");
+    expect(resolveTaskExtraction({}, { taskExtraction: { provider: "command" } }).llm.provider).toBe("command");
   });
 
   test("reattaches debugLog (not a persisted setting)", () => {
     const sink = () => {};
     expect(resolveTaskExtraction({}, {}, sink).debugLog).toBe(sink);
+  });
+});
+
+describe("llm block (#132)", () => {
+  afterEach(() => {
+    for (const k of ["ARGUS_LLM_PROVIDER", "ARGUS_LLM_MODEL", "ARGUS_LLM_MAX_TOKENS", "ARGUS_LLM_BASE_URL", "ARGUS_LLM_API_KEY_ENV"]) {
+      delete process.env[k];
+    }
+  });
+
+  test("task extraction reads the shared llm.* block", () => {
+    const file = {
+      taskExtraction: { enabled: true },
+      llm: { provider: "claude-api" as const, model: "claude-haiku-4-5", maxTokens: 4096, baseUrl: "http://x" },
+    };
+    const resolved = resolveTaskExtraction({}, file);
+    expect(resolved.llm).toMatchObject({
+      provider: "claude-api",
+      model: "claude-haiku-4-5",
+      maxTokens: 4096,
+      baseUrl: "http://x",
+      apiKeyEnv: "ANTHROPIC_API_KEY", // defaulted from the provider
+    });
+  });
+
+  test("apiKeyEnv defaults per provider but an explicit value wins", () => {
+    expect(resolveTaskExtraction({}, { llm: { provider: "openai" } }).llm.apiKeyEnv).toBe("OPENAI_API_KEY");
+    expect(resolveTaskExtraction({}, { llm: { provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
+    expect(
+      resolveTaskExtraction({}, { llm: { provider: "openai", apiKeyEnv: "MY_KEY" } }).llm.apiKeyEnv,
+    ).toBe("MY_KEY");
+  });
+
+  test("the deprecated taskExtraction.provider overrides the shared llm.provider", () => {
+    const file = { llm: { provider: "claude-api" as const }, taskExtraction: { provider: "claude-cli" as const } };
+    expect(resolveTaskExtraction({}, file).llm.provider).toBe("claude-cli");
+  });
+
+  test("local providers carry no apiKeyEnv", () => {
+    expect(resolveTaskExtraction({}, { llm: { provider: "claude-cli" } }).llm.apiKeyEnv).toBeUndefined();
+  });
+
+  test("openrouter is a first-class provider with its own key env", () => {
+    const resolved = resolveTaskExtraction({}, { llm: { provider: "openrouter" } });
+    expect(resolved.llm.provider).toBe("openrouter");
+    expect(resolved.llm.apiKeyEnv).toBe("OPENROUTER_API_KEY");
   });
 });
