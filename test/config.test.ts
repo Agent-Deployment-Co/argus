@@ -205,6 +205,7 @@ describe("Setting secret flag", () => {
   });
 });
 
+
 describe("llm block (#132)", () => {
   afterEach(() => {
     for (const k of ["ARGUS_LLM_PROVIDER", "ARGUS_LLM_MODEL", "ARGUS_LLM_MAX_TOKENS", "ARGUS_LLM_BASE_URL", "ARGUS_LLM_API_KEY_ENV"]) {
