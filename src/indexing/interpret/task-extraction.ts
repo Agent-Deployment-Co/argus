@@ -25,7 +25,7 @@ function interactionTurns(interactions: InteractionFact[]): Array<{ role: "user"
   return turns;
 }
 
-export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in a coding-agent session.
+export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in an agent session.
 
 Return JSON only. Use this exact shape:
 {"tasks":[{"description":"short task description","messageIndexes":[0]}]}
@@ -87,6 +87,19 @@ function diagnostic(
 /** The configured provider for this run (`off` when no extraction options are present). */
 export function taskExtractionProvider(options: ResolvedTaskExtraction | undefined): string {
   return options?.llm.provider ?? "off";
+}
+
+/** A one-line summary of the resolved LLM configuration for debug output. Never includes the key
+ *  value — only the env-var name it resolves from and whether a value was found. */
+function llmConfigSummary(options: ResolvedTaskExtraction | undefined): string {
+  const llm = options?.llm;
+  if (!llm) return "llm config: provider=off";
+  const parts = [`provider=${llm.provider}`, `model=${llm.model ?? "(default)"}`];
+  if (llm.baseUrl) parts.push(`baseUrl=${llm.baseUrl}`);
+  if (llm.maxTokens != null) parts.push(`maxTokens=${llm.maxTokens}`);
+  if (llm.command) parts.push(`command=${llm.command}`);
+  if (llm.apiKeyEnv) parts.push(`apiKeyEnv=${llm.apiKeyEnv}`, `key=${llm.apiKey ? "set" : "unset"}`);
+  return `llm config: ${parts.join(" ")}`;
 }
 
 function resolveInstructions(
@@ -272,7 +285,7 @@ export async function extractTasksForSession(
   logPromptSizeEstimate(`pass 1 (segment) ${sessionId}`, prompt); // TEMP (remove)
   logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
   logTaskExtractionBlock(options, "prompt", prompt);
-  logTaskExtractionDebug(options, `running ${provider} provider${options?.llm.model ? ` (model ${options.llm.model})` : ""}`);
+  logTaskExtractionDebug(options, llmConfigSummary(options));
   const result = await runExtraction(prompt, options);
   logTaskExtractionDebug(
     options,
@@ -320,15 +333,20 @@ export async function extractTasksForSession(
 
 // --- Pass 2: per-task outcome and frustration (#91) ---
 
-export const DEFAULT_TASK_OUTCOME_PROMPT = `You judge how a single task in a coding-agent session turned out, from the dialogue between the user and the assistant.
+export const DEFAULT_TASK_OUTCOME_PROMPT = `
+You judge how a single task in an agent session turned out, from the interaction dialogue between the user and the
+assistant. Note that this dialogue does not include the assistant's narration messages or specific tool invocations.
+It has been reduced to user prompts and the assistant's final message at the end of a completed interaction.
 
 Return JSON only. Use this exact shape:
 {"outcome":"success","frustration":"none","signals":["short tag"],"reason":"one sentence"}
 
 Rules:
-- outcome is one of: "success" (the user got what they asked for), "failure" (they clearly did not), "unclear" (you can't tell).
-- Judge from the WHOLE exchange, not just the final message. Users sometimes give up mid-task, and assistants sometimes over-claim success.
-- frustration is one of: "none", "low", "high" — how frustrated the user seemed across the task (repeated re-asks, corrections, escalating tone, or the assistant repeatedly saying it can't do something / lacks access).
+- outcome is one of: "success" (the user got what they asked for), "failure" (they clearly did not), "unclear"
+  (you can't tell).
+- Judge from the WHOLE exchange, not just the final message.
+- frustration is one of: "none", "moderate", "high" — how frustrated the user seemed across the task (repeated re-asks,
+  corrections, escalating tone, or the assistant repeatedly saying it can't do something / lacks access).
 - signals: a few short evidence tags, e.g. "repeated re-asks", "no access", "assistant over-claimed". Omit or use [] if there are none.
 - reason: one concise sentence explaining the call.`;
 
