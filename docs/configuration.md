@@ -77,7 +77,7 @@ interpretation). It resolves through the same flag > env > file > default chain.
 Providers: `off` (default — no LLM), `claude-cli` (local `claude -p`), `command` (local command),
 `claude-api` / `openai` / `gemini` (direct HTTP, BYO key), `openrouter` (the OpenRouter gateway — one
 key, many upstream models), and `hub` (reserved). `apiKeyEnv` defaults to the provider's standard env
-var (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`). The legacy
+var (`CLAUDE_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`). The legacy
 value `claude` is still accepted as an alias for `claude-cli`.
 
 ```jsonc
@@ -103,9 +103,9 @@ API keys are **not** stored in `argus.json` (it's settings only). They live in a
 the web API or the CLI, and are resolved at call time as **`apiKeyEnv` env var → secret store → none**.
 
 ```bash
-argus secret set ANTHROPIC_API_KEY    # reads the value from stdin or a hidden prompt
+argus secret set CLAUDE_API_KEY    # reads the value from stdin or a hidden prompt
 argus secret status                   # masked: which keys are stored
-argus secret rm ANTHROPIC_API_KEY
+argus secret rm CLAUDE_API_KEY
 ```
 
 The backend is chosen by platform — same posture everywhere (encrypted at rest where the OS allows,
