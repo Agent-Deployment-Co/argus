@@ -258,7 +258,9 @@ export const LLM_SETTINGS = {
       label: "Provider",
       description: "Which model backend Argus's AI features use.",
       control: "select",
-      options: SELECTABLE_PROVIDERS,
+      // Alpha ascending: the providers have no inherent ranking, so present them in an obvious order
+      // rather than registry/declaration order (see the "User-facing UI" rules in CLAUDE.md).
+      options: [...SELECTABLE_PROVIDERS].sort(),
     },
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,
