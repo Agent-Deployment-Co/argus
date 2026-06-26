@@ -1,9 +1,8 @@
 import { Link, useParams, useRouter } from "@tanstack/react-router";
 import {
   ArrowLeft,
-  Bot,
+  Brain,
   Check,
-  ListChecks,
   Loader2,
   SlidersHorizontal,
   type LucideIcon,
@@ -17,8 +16,7 @@ import type { SettingDescriptor, SettingsCategory } from "../types";
  *  only purely-presentational mapping the surface adds. Unknown ids fall back to the sliders icon. */
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
-  tasks: ListChecks,
-  llm: Bot,
+  interpretation: Brain,
 };
 
 /** The full settings surface (#154): a Codex-style take-over with a left category nav and a right
