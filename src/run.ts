@@ -8,7 +8,7 @@ import type { BuildDashboardOptions, Log } from "./reporting/dashboard-builder.t
 import { startServer } from "./api/serve.ts";
 import { watchIndex, watchSync } from "./watch.ts";
 import type { SyncOptions } from "./cli-options.ts";
-import type { TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
+import type { ResolvedTaskExtraction } from "./config.ts";
 
 export interface RunOptions extends SyncOptions {
   port: number;
@@ -16,7 +16,7 @@ export interface RunOptions extends SyncOptions {
   syncIntervalMin: number;
   endpoint: string;
   noSync: boolean;
-  taskExtraction: TaskExtractionOptions;
+  taskExtraction: ResolvedTaskExtraction;
 }
 
 /**
@@ -40,7 +40,7 @@ export function assertHomeResolved(log: Log): void {
 
 /** The web-server leg: run the server until shutdown, restarting with backoff if it errors. */
 async function serveLeg(
-  opts: { port: number; build: BuildDashboardOptions; taskExtraction: TaskExtractionOptions },
+  opts: { port: number; build: BuildDashboardOptions; taskExtraction: ResolvedTaskExtraction },
   log: Log,
   signal: AbortSignal,
 ): Promise<void> {

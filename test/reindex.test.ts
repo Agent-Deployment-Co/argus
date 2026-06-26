@@ -39,7 +39,7 @@ function fakeProviderCommand(root: string): string {
 }
 
 function commandExtraction(root: string): ResolvedTaskExtraction {
-  return { enabled: true, provider: "command", command: fakeProviderCommand(root) };
+  return { enabled: true, llm: { provider: "command", command: fakeProviderCommand(root) } };
 }
 
 async function indexCodex(root: string): Promise<string> {

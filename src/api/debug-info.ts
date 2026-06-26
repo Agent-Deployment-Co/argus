@@ -170,7 +170,7 @@ export async function collectDebugInfo(opts: { serveReadOnly: boolean }): Promis
     ],
     env: ENV_VARS.map((name) => ({ name, value: process.env[name] ?? null })),
     config,
-    taskExtraction: { enabled: resolved.enabled, provider: resolved.provider ?? "off", model: resolved.model },
+    taskExtraction: { enabled: resolved.enabled, provider: resolved.llm.provider, model: resolved.llm.model },
     store,
   };
 }
