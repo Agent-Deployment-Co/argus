@@ -64,21 +64,27 @@ producer concern). The dialogue is an in-memory intermediate, consumed by the pa
 
 ## Configuration (`argus.json`)
 
-Task interpretation is configured through the `argus.json` settings store (see
-[configuration.md](./configuration.md)). The relevant block:
+Task interpretation is the first **consumer of the shared LLM layer** (`src/llm/`, see
+[llm-providers.md](./llm-providers.md)). It owns its prompt and output parsing; which model runs and
+how comes from the shared `llm` block in `argus.json`. The opt-in toggle and the consumer-specific
+prompt stay under `taskExtraction`:
 
 ```jsonc
 {
+  "llm": {
+    "provider": "claude",    // off | claude | command | anthropic | openai | gemini | hub
+    "model": "..."           // optional; the claude provider defaults to haiku
+  },
   "taskExtraction": {
     "enabled": false,        // opt-in index-time extraction
-    "provider": "claude",    // "off" | "claude" | "command"
-    "model": "...",          // optional; the claude provider defaults to haiku
     "prompt": "...",         // optional inline prompt override
-    "promptFile": "...",     // optional path; precedence over prompt
-    "command": "..."         // for the "command" provider
+    "promptFile": "..."      // optional path; precedence over prompt
   }
 }
 ```
+
+For back-compat, the older `taskExtraction.provider` / `taskExtraction.model` / `taskExtraction.command`
+keys still work as a per-consumer override of the shared `llm.*` values (deprecated — prefer `llm`).
 
 The **claude provider** invokes `claude -p --no-session-persistence --model haiku -`:
 `--no-session-persistence` keeps each interpret call from leaving its own transcript on disk (which
@@ -87,7 +93,9 @@ configured `model` overrides the default. (`--bare` is intentionally not used �
 "Not logged in".)
 
 The **command provider** runs an arbitrary command that reads the prompt on stdin and writes the task
-JSON to stdout.
+JSON to stdout. The **anthropic/openai/gemini providers** call a third-party API directly with a
+BYO key (`argus secret set …`); note this transmits the reconstructed dialogue off-machine — see the
+privacy note in [llm-providers.md](./llm-providers.md).
 
 ## When it runs
 
