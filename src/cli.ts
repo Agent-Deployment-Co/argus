@@ -12,8 +12,9 @@ import { openStore } from "./store/store.ts";
 import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
+import { hubErrorMessage } from "./push.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import { loadConfig, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
+import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS, type ResolvedTaskExtraction } from "./config.ts";
 import { defaultSecretStore, isSecretName, maskSecret, SECRET_NAMES } from "./secrets.ts";
 import pkg from "../package.json" with { type: "json" };
 
@@ -220,9 +221,25 @@ async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
 
 /** One-shot upload of the current snapshot to the team dashboard (the bare `argus sync`). */
 async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
+  const hubCfg = resolveHubConfig();
+  if (hubCfg) {
+    const res = await pushSnapshotForOpts(opts, {}, log);
+    if (res.ok) {
+      log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
+    } else if (res.status === 422) {
+      log(`✗ Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
+      process.exit(1);
+    } else {
+      log(`✗ Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   const credentials = await resolveCredentials(opts.endpoint, log);
   if (!credentials) {
     log("Not logged in. Run `argus login` first to upload to the team dashboard.");
+    log("  If your team runs Argus Hub, set ARGUS_HUB_URL and ARGUS_HUB_KEY instead — no login required.");
     process.exit(1);
   }
 
@@ -303,11 +320,87 @@ async function runStatus(log: Log): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// `argus config` helpers
+// ---------------------------------------------------------------------------
+
+/** Recursively flatten a config object into dotted key-value pairs. */
+function flattenObject(obj: unknown, prefix = ""): [string, unknown][] {
+  if (obj == null || typeof obj !== "object" || Array.isArray(obj)) return [];
+  const result: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value != null && typeof value === "object" && !Array.isArray(value)) {
+      result.push(...flattenObject(value, path));
+    } else {
+      result.push([path, value]);
+    }
+  }
+  return result;
+}
+
+async function runConfigGet(key: string, log: Log, json = false): Promise<void> {
+  const value = getPath(loadConfig(), key);
+  if (json) {
+    process.stdout.write(JSON.stringify(value ?? null) + "\n");
+    return;
+  }
+  if (value === undefined) {
+    log("(not set)");
+  } else {
+    process.stdout.write(String(value) + "\n");
+  }
+}
+
+async function runConfigSet(key: string, rawValue: string, log: Log): Promise<void> {
+  const setting = ALL_SETTINGS[key];
+  if (!setting) {
+    throw new Error(`Unknown key: ${JSON.stringify(key)}\nKnown keys: ${Object.keys(ALL_SETTINGS).join(", ")}`);
+  }
+  const parsed = setting.parse(rawValue);
+  const cfg = loadConfig();
+  setPath(cfg as Record<string, unknown>, key, parsed);
+  writeConfig(cfg);
+  log(`${key} = ${JSON.stringify(parsed)}`);
+}
+
+async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, log: Log): Promise<void> {
+  const cfg = loadConfig();
+  if (opts.asJson) {
+    process.stdout.write(JSON.stringify(cfg, null, 2) + "\n");
+    return;
+  }
+  const pairs = flattenObject(cfg);
+  if (pairs.length === 0) {
+    log("(no settings in argus.json)");
+    return;
+  }
+  let hasRedacted = false;
+  for (const [k, v] of pairs) {
+    const isSecret = ALL_SETTINGS[k]?.secret === true;
+    if (isSecret && !opts.showSecrets) {
+      process.stdout.write(`${k}=<redacted>\n`);
+      hasRedacted = true;
+    } else {
+      process.stdout.write(`${k}=${JSON.stringify(v)}\n`);
+    }
+  }
+  if (hasRedacted) {
+    process.stderr.write("(use --show-secrets to reveal secret values, or --json for machine-readable output)\n");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLI definition (citty). Each subcommand declares its own flags; --help scopes
 // to that subcommand automatically and flag types flow into the run handlers.
 // ---------------------------------------------------------------------------
 
-/** Source selection — shared by serve, sync, run, and the `index` commands.
+const filterArgs = {
+  since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
+  until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
+  project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
+} as const;
+
+/** Source selection — shared by `run` and the `index` commands.
  *  Declared as a string (not enum) so citty's flag inference stays intact; the value set is
  *  validated by `toSource`. */
 const sourceArg = {
@@ -317,13 +410,6 @@ const sourceArg = {
     description: "Transcript source: claude, codex, gemini, cowork, claude-chat, or all",
     valueHint: "claude|codex|gemini|cowork|claude-chat|all",
   },
-} as const;
-
-/** Date/project filters — shared by serve and sync. */
-const filterArgs = {
-  since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
-  until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
-  project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
 } as const;
 
 // Task extraction options for web/session-screen extraction. Flags carry no env-var defaults: an
@@ -377,6 +463,7 @@ const buildArgs = {
   ...sourceArg,
   ...filterArgs,
 } as const;
+
 
 /** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
  *  > argus.json > default). The `enabled` toggle is unused here — these commands extract on demand. */
@@ -488,7 +575,7 @@ const status = defineCommand({
 });
 
 const login = defineCommand({
-  meta: { name: "login", description: "login via Cloudflare Access SSO in your browser" },
+  meta: { name: "login", description: "login via Cloudflare Access SSO in your browser (not needed when using Argus Hub — set ARGUS_HUB_URL and ARGUS_HUB_KEY instead)" },
   args: {
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for login (env ARGUS_ENDPOINT)", valueHint: "url" },
   },
@@ -496,17 +583,17 @@ const login = defineCommand({
 });
 
 const sync = defineCommand({
-  meta: { name: "sync", description: "upload your usage snapshot to a team dashboard" },
+  meta: { name: "sync", description: "upload usage data to a team dashboard or Hub" },
   args: {
-    ...buildArgs,
     endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
     user: { type: "string", description: "Override the user id (default: git email, else $USER@host)", valueHint: "id" },
     org: { type: "string", default: process.env.ARGUS_ORG, description: "Override the org (env ARGUS_ORG)", valueHint: "id" },
     watch: { type: "boolean", default: false, description: "Keep uploading on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between uploads (with --watch)", valueHint: "N" },
+    all: { type: "boolean", default: false, description: "Hub mode: re-upload every session, skipping local cursor filtering" },
   },
   run: handler(async (args) => {
-    const base: PushLoopOptions = { ...buildOptions(args), endpoint: args.endpoint, user: args.user, org: args.org };
+    const base: PushLoopOptions = { source: "all", endpoint: args.endpoint, user: args.user, org: args.org, all: !!args.all };
     if (args.watch) {
       const ac = abortOnSignals();
       await watchSync({ ...base, intervalMin: Number(args.interval) || 5, onUnauthenticated: "fail" }, log, ac.signal);
@@ -546,6 +633,48 @@ const runCmd = defineCommand({
     );
   }),
 });
+
+const configGet = defineCommand({
+  meta: { name: "get", description: "print a setting from argus.json" },
+  args: {
+    key: { type: "positional", required: true, description: "dotted key, e.g. taskExtraction.enabled" },
+    json: { type: "boolean", default: false, description: "print the value as JSON (null when unset)" },
+  },
+  run: handler((args) => {
+    if (args._.length !== 1) failArg("Usage: argus config get <key>");
+    return runConfigGet(args._[0]!, log, args.json);
+  }),
+});
+
+const configSet = defineCommand({
+  meta: { name: "set", description: "write a setting to argus.json" },
+  args: {
+    key: { type: "positional", required: true, description: "dotted key and value, e.g. taskExtraction.enabled true" },
+  },
+  run: handler((args) => {
+    if (args._.length !== 2) failArg("Usage: argus config set <key> <value>");
+    return runConfigSet(args._[0]!, args._[1]!, log);
+  }),
+});
+
+const configList = defineCommand({
+  meta: { name: "list", description: "list all settings currently in argus.json" },
+  args: {
+    "show-secrets": { type: "boolean", default: false, description: "Print secret values (e.g. hub.key) in plain text" },
+    json: { type: "boolean", default: false, description: "Output settings as JSON (unredacted; for programmatic use)" },
+  },
+  run: handler((args) => runConfigList({ showSecrets: !!args["show-secrets"], asJson: !!args.json }, log)),
+});
+
+const config = defineCommand({
+  meta: { name: "config", description: "read and write settings in argus.json" },
+  subCommands: { get: configGet, set: configSet, list: configList },
+  run: async (ctx) => {
+    if (dispatchedSubcommand(ctx) !== undefined) return;
+    await showUsage(ctx.cmd);
+  },
+});
+
 
 // --- `argus secret`: manage stored LLM API keys (#132) ---
 
@@ -676,7 +805,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, login, secret },
+  subCommands: { serve, index, sync, run: runCmd, status, login, config, secret },
 });
 
 async function run() {

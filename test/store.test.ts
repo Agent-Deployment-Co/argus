@@ -252,10 +252,17 @@ describe("SQLite store", () => {
           "SELECT COUNT(*) AS count FROM index_dependencies WHERE file_id = 'claude:one'",
         )
       )?.count,
+      hubCursorTable: (
+        await rawGet<{ count: number }>(
+          db,
+          "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'hub_session_cursors'",
+        )
+      )?.count,
     }));
     expect(schema.applicationId).toBe(STORE_APPLICATION_ID);
     expect(schema.userVersion).toBe(STORE_SCHEMA_VERSION);
     expect(schema.dependencies).toBe(1);
+    expect(schema.hubCursorTable).toBe(1);
 
     if (process.platform !== "win32") {
       expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
@@ -472,6 +479,51 @@ describe("SQLite store", () => {
     const version = await withRawDatabase(path, async (db) =>
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("repairs a v16 store the colliding migration left without hub_session_cursors", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:keep-me",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+      },
+    ]);
+    await initial.close();
+
+    // Reproduce the store the shipped-buggy build produced: two migrations were keyed 15 -> 16, so
+    // the object literal kept only the claude-chat rebuild and dropped the hub_session_cursors step.
+    // A store upgraded by that build reaches v16 without the table. Drop it and stamp v16.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS hub_session_cursors");
+      await rawExec(db, "PRAGMA user_version = 16");
+    });
+
+    // Reopening must REPAIR (16 -> 17 recreates the table) rather than reject as incompatible — the
+    // schema verification step queries hub_session_cursors, so a successful open proves it's back.
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:keep-me")).toBe(true);
+    } finally {
+      await migrated.close();
+    }
+
+    const [tableBack, version] = await withRawDatabase(path, async (db) => [
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hub_session_cursors'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(tableBack?.name).toBe("hub_session_cursors");
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 

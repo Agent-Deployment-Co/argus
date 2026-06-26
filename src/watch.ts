@@ -15,8 +15,10 @@ import {
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
 import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
-import { ACCESS_TOKEN_FILE } from "./paths.ts";
-import { detectOrg, detectUser, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
+import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
+import { detectOrg, detectUser, hubErrorMessage, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
+import { resolveHubConfig } from "./config.ts";
+import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
 
 const MIN_INTERVAL_MIN = 1;
@@ -57,6 +59,8 @@ export interface PushLoopOptions extends BuildDashboardOptions {
   endpoint: string;
   user?: string;
   org?: string;
+  /** Hub mode only: skip local cursor filtering and re-upload every session. */
+  all?: boolean;
 }
 
 export type OnUnauthenticated = "fail" | "dormant";
@@ -104,8 +108,24 @@ export async function resolveCredentials(endpoint: string, log: Log): Promise<Pu
 }
 
 /** Build the current snapshot and POST it. Logs who/where, then returns the raw result so callers
- *  map success/challenge/error to their own behavior (exit codes for one-shot, backoff for watch). */
+ *  map success/challenge/error to their own behavior (exit codes for one-shot, backoff for watch).
+ *  When hub.url + hub.key are configured, uploads the session data as JSON read from the local
+ *  store instead of a Worker-aggregated snapshot; credentials are not used in that path. */
 export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: PushCredentials, log: Log): Promise<PushResult> {
+  const hubCfg = resolveHubConfig();
+  if (hubCfg) {
+    log(`Uploading to Hub → ${hubCfg.url}`);
+    const store = await openStore({ path: STORE_FILE });
+    await store.close();
+    return pushHubJson(hubCfg.url, hubCfg.key, STORE_FILE, {
+      all: opts.all,
+      log,
+      source: opts.source,
+      since: opts.since,
+      until: opts.until,
+      project: opts.project,
+    });
+  }
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);
   // forWire: drop local-only sources (claude.ai chat) from the uploaded snapshot — it's personal
@@ -188,9 +208,12 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
   const waitForToken = deps.waitForTokenChange ?? waitForTokenFileChange;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
 
+  // Hub mode: api key lives in config, no OAuth needed. Skip the credential preflight entirely.
+  const hubMode = !!resolveHubConfig();
+
   // Startup auth preflight: fail fast for the standalone command rather than looping forever with no
   // hope of success. Mid-run staleness (below) is handled differently — it never crashes the loop.
-  const initial = await resolveCreds(opts.endpoint, log);
+  const initial = hubMode ? ({} as PushCredentials) : await resolveCreds(opts.endpoint, log);
   if (!initial && opts.onUnauthenticated === "fail") {
     throw new Error("Not logged in. Run `argus login` first to upload to the team dashboard.");
   }
@@ -202,7 +225,7 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
     "upload",
     async (sig) => {
       while (!sig.aborted) {
-        const cred = await resolveCreds(opts.endpoint, log);
+        const cred = hubMode ? ({} as PushCredentials) : await resolveCreds(opts.endpoint, log);
         if (!cred) {
           // Log once, then park until the token file actually changes — no polling, no repeated
           // refresh attempts. `argus login` writes the token file, which wakes this wait.
@@ -230,6 +253,11 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           log(`✓ Uploaded (${res.status}).`);
           backoff.reset();
           await sleep(intervalMs, sig);
+        } else if (res.status === 422) {
+          // Schema version mismatch: permanent until one side is upgraded. The Hub's body states
+          // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
+          log(`✗ Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
+          await sleep(Number.MAX_SAFE_INTEGER, sig);
         } else if (res.isAccessChallenge) {
           // Token went stale: the next pass re-reads the cache and tries a refresh. Back off meanwhile.
           collapser.note("Upload needs a fresh login — run `argus login`. Retrying…");

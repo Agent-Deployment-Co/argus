@@ -125,14 +125,8 @@ the user id when needed:
 npx @agentdeploymentco/argus sync --user alice
 ```
 
-`sync` accepts source, date, and project filters:
-
-```bash
-npx @agentdeploymentco/argus sync --source claude --since 2026-05-01
-npx @agentdeploymentco/argus sync --project client-app
-```
-
-Run `sync` regularly to keep the dashboard current and build a useful history for analysis.
+`sync` uploads the syncable data in the local store. Run it regularly to keep the dashboard current
+and build a useful history for analysis.
 Uploading the same snapshot again does not double-count it. To upload continuously, add `--watch`
 (every N minutes, default 5) — it retries quietly through network drops and resumes once you're back
 online:

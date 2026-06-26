@@ -47,7 +47,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 16;
+export const STORE_SCHEMA_VERSION = 17;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -384,6 +384,21 @@ const CREATE_SCHEMA_SQL = `
     ts_ms INTEGER NOT NULL,
     PRIMARY KEY (key, ts_ms)
   );
+
+  -- Per-Hub upload cursors. A row means this client got a successful response from that Hub after
+  -- sending the session at the recorded local last_ts / content_digest / parser_version.
+  CREATE TABLE hub_session_cursors (
+    hub_url TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    last_ts INTEGER,
+    content_digest TEXT,
+    parser_version INTEGER,
+    uploaded_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (hub_url, client_id, session_id)
+  );
+  CREATE INDEX hub_session_cursors_hub_uploaded
+    ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
 `;
 
 /** Fact tables in the order their rows are cleared when a fragment is re-materialized. */
@@ -594,7 +609,7 @@ function openDatabase(path: string, busyTimeoutMs: number): Database {
 }
 
 function rebuildHint(_path: string): string {
-  return "Run `argus reindex --force` to rebuild the local store from your transcripts.";
+  return "Run `argus index rebuild` to rebuild the local store from your transcripts.";
 }
 
 function asStoreError(
@@ -968,9 +983,12 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       );
     `,
   },
-  // 15 -> 16: claude-chat source (#94). Recreate index_files with a CHECK constraint that includes
-  // 'claude-chat' — same table-rebuild pattern as the 5 -> 6 (cowork) migration. DROP TABLE doesn't
-  // fire ON DELETE CASCADE (FK enforcement only fires on DML), so child-table rows survive the rename.
+  // 15 -> 16: two changes in one step (combined to resolve a prior duplicate-key collision in this map
+  // that silently dropped the hub_session_cursors step on every JS engine that evaluated the object):
+  //   a) claude-chat source (#94): recreate index_files with a CHECK constraint that includes 'claude-chat'.
+  //      DROP TABLE doesn't fire ON DELETE CASCADE, so child-table rows survive.
+  //   b) per-Hub client-side upload cursors (#142): create hub_session_cursors if not already present.
+  //      IF NOT EXISTS ensures idempotency for any test or tooling that pre-creates the table.
   15: {
     to: 16,
     sql: `
@@ -1004,6 +1022,53 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ALTER TABLE index_files_v16 RENAME TO index_files;
       CREATE INDEX index_files_source_root ON index_files(source, root_id);
       CREATE INDEX index_files_identity ON index_files(file_identity);
+      CREATE TABLE IF NOT EXISTS hub_session_cursors (
+        hub_url TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_ts INTEGER,
+        uploaded_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (hub_url, client_id, session_id)
+      );
+      CREATE INDEX IF NOT EXISTS hub_session_cursors_hub_uploaded
+        ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
+    `,
+  },
+  // 16 -> 17: strengthen Hub upload cursors with content_digest and parser_version (#140 review fix).
+  // These let the client detect reindexed data (new tasks, parser upgrades, archive-state flips)
+  // that does not advance last_ts, so re-syncs pick up those changes without a manual --all.
+  // Recreate-table pattern handles two cases:
+  //   - Fresh v16 stores: have hub_session_cursors with 5 columns; rebuild with 7.
+  //   - v15 stores that ran the old (buggy, claude-chat-only) 15->16 migration: hub_session_cursors
+  //     may be absent; IF NOT EXISTS creates an empty table first, then the rebuild adds new columns.
+  16: {
+    to: 17,
+    sql: `
+      CREATE TABLE IF NOT EXISTS hub_session_cursors (
+        hub_url TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_ts INTEGER,
+        uploaded_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (hub_url, client_id, session_id)
+      );
+      CREATE TABLE hub_session_cursors_v17 (
+        hub_url TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_ts INTEGER,
+        content_digest TEXT,
+        parser_version INTEGER,
+        uploaded_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (hub_url, client_id, session_id)
+      );
+      INSERT OR IGNORE INTO hub_session_cursors_v17
+        SELECT hub_url, client_id, session_id, last_ts, NULL, NULL, uploaded_at_ms
+        FROM hub_session_cursors;
+      DROP TABLE hub_session_cursors;
+      ALTER TABLE hub_session_cursors_v17 RENAME TO hub_session_cursors;
+      CREATE INDEX hub_session_cursors_hub_uploaded
+        ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
     `,
   },
 };
@@ -1018,7 +1083,7 @@ async function migrateSchema(db: Database, path: string, fromVersion: number): P
         "incompatible_schema",
         path,
         `Argus can't upgrade the local store from this older version. ` +
-          `Run \`argus reindex --force\` to rebuild it from your transcripts (this drops sessions no longer on disk).`,
+          `Run \`argus index rebuild\` to rebuild it from your transcripts (this drops sessions no longer on disk).`,
       );
     }
     await transaction(db, async () => {
@@ -1089,6 +1154,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
     await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
+    await get(db, "SELECT hub_url, client_id, session_id, last_ts, content_digest, parser_version FROM hub_session_cursors LIMIT 1");
   } catch (error) {
     if (!(error instanceof SQLiteError)) throw error;
     // Busy/corrupt errors propagate so asStoreError can classify them; anything else

@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ALL_SETTINGS,
   getPath,
   loadConfig,
   resolveSetting,
@@ -187,6 +188,23 @@ describe("resolveTaskExtraction", () => {
     expect(resolveTaskExtraction({}, {}, sink).debugLog).toBe(sink);
   });
 });
+
+describe("Setting secret flag", () => {
+  test("hub.key is marked secret", () => {
+    expect(ALL_SETTINGS["hub.key"]?.secret).toBe(true);
+  });
+
+  test("hub.url is not secret", () => {
+    expect(ALL_SETTINGS["hub.url"]?.secret).toBeFalsy();
+  });
+
+  test("task settings are not secret", () => {
+    for (const key of ["taskExtraction.enabled", "taskExtraction.provider", "taskExtraction.model"]) {
+      expect(ALL_SETTINGS[key]?.secret).toBeFalsy();
+    }
+  });
+});
+
 
 describe("llm block (#132)", () => {
   afterEach(() => {
