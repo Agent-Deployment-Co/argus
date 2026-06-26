@@ -7,7 +7,7 @@ import { openaiProvider } from "./providers/openai.ts";
 import { geminiProvider } from "./providers/gemini.ts";
 import { openrouterProvider } from "./providers/openrouter.ts";
 import { claudeCliProvider, commandProvider } from "./providers/local.ts";
-import type { LlmProvider, ProviderDescriptor } from "./types.ts";
+import type { LlmConfigField, LlmProvider, ProviderDescriptor } from "./types.ts";
 
 /** `off`: the default "no LLM" state. The client returns this descriptor's clear, non-fatal reason. */
 const offProvider: ProviderDescriptor = {
@@ -53,6 +53,12 @@ export const SELECTABLE_PROVIDERS: readonly LlmProvider[] = PROVIDERS.filter((p)
 
 export function isLlmProvider(value: string): value is LlmProvider {
   return BY_NAME.has(value);
+}
+
+/** The selectable providers that use a given `llm.*` config field — drives which providers a field is
+ *  shown for in the settings UI. Reserved providers are excluded (they aren't offered anyway). */
+export function providersForConfigField(field: LlmConfigField): readonly LlmProvider[] {
+  return PROVIDERS.filter((p) => !p.reserved && p.configFields?.includes(field)).map((p) => p.name);
 }
 
 /** The standard API-key env vars across all providers — the basis for the secret allowlist. */

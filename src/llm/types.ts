@@ -20,6 +20,10 @@ export type LlmProvider =
   | "openrouter"
   | "hub";
 
+/** The `llm.*` config fields a provider can meaningfully use. Drives which fields the settings UI
+ *  shows for a selected provider (e.g. an API provider needs a key env var; the local CLI doesn't). */
+export type LlmConfigField = "model" | "baseUrl" | "apiKeyEnv" | "maxTokens" | "command";
+
 /** A consumer-agnostic completion request. `system` carries instructions, `prompt` carries the data;
  *  the single-blob callers map everything to `prompt` with no `system`. */
 export interface LlmRequest {
@@ -96,6 +100,9 @@ export interface ProviderDescriptor {
    *  reserved extension point that isn't implemented). Such providers still validate so an existing
    *  config value doesn't error, but they're excluded from user-facing choices like the settings UI. */
   reserved?: boolean;
+  /** The `llm.*` config fields this provider actually uses — drives which fields the settings UI shows
+   *  when this provider is selected. Omitted/empty → none (e.g. `off`). */
+  configFields?: readonly LlmConfigField[];
   complete(call: ProviderCall): Promise<LlmResult>;
 }
 

@@ -17,7 +17,13 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
-import { getProvider, isLlmProvider, LLM_PROVIDERS, SELECTABLE_PROVIDERS } from "./llm/index.ts";
+import {
+  getProvider,
+  isLlmProvider,
+  LLM_PROVIDERS,
+  providersForConfigField,
+  SELECTABLE_PROVIDERS,
+} from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
 /** The task-extraction provider default, preserved from before the generalization: enabling task
@@ -130,6 +136,15 @@ export interface SettingUi {
   /** The full ordered option list for a `select` control, including the unset choice and any
    *  separators. Presented verbatim, so order it deliberately (see the UI ordering rules in CLAUDE.md). */
   options?: readonly SelectItem[];
+  /** Gate: the control is inactive (disabled) unless the boolean setting at this path is on. E.g. the
+   *  LLM fields are inactive until task extraction is enabled. */
+  activeWhen?: { path: string };
+  /** Gate: the control is hidden unless the (effective) value of the setting at `path` is one of `in`.
+   *  E.g. a provider-specific field is shown only for the providers that use it. */
+  visibleWhen?: { path: string; in: readonly string[] };
+  /** The value this control resolves to when unset — used to evaluate `visibleWhen` against another
+   *  field's effective value (e.g. an unset provider resolves to its default). */
+  effectiveDefault?: string;
 }
 
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
@@ -272,6 +287,16 @@ const PROVIDER_OPTIONS: SelectItem[] = [
     .map((p) => ({ value: p, label: p })),
 ];
 
+/** All `llm.*` settings are inactive until task extraction (their only consumer today) is enabled. */
+const TASK_GATE = { path: "taskExtraction.enabled" } as const;
+
+/** A provider-specific field is shown only for the providers that actually use it (from the registry),
+ *  evaluated against the selected `llm.provider`. */
+const visibleForField = (field: Parameters<typeof providersForConfigField>[0]) => ({
+  path: "llm.provider",
+  in: providersForConfigField(field) as readonly string[],
+});
+
 /** The shared `llm.*` settings. */
 export const LLM_SETTINGS = {
   provider: {
@@ -280,10 +305,13 @@ export const LLM_SETTINGS = {
     flag: "llm-provider",
     default: undefined as OptionalProvider,
     ui: {
-      label: "Provider",
+      label: "LLM Provider",
       description: "Which model backend Argus's AI features use.",
       control: "select",
       options: PROVIDER_OPTIONS,
+      activeWhen: TASK_GATE,
+      // An unset provider resolves to the default, so provider-specific fields show for it too.
+      effectiveDefault: DEFAULT_TASK_PROVIDER,
     },
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,
@@ -296,6 +324,8 @@ export const LLM_SETTINGS = {
       label: "Model",
       description: "Model name to request. Leave blank to use the provider's default.",
       control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("model"),
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,
@@ -308,6 +338,8 @@ export const LLM_SETTINGS = {
       label: "Base URL",
       description: "OpenAI-compatible API endpoint, for the OpenAI provider or a self-hosted server.",
       control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("baseUrl"),
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,
@@ -320,6 +352,8 @@ export const LLM_SETTINGS = {
       label: "API key variable",
       description: "Environment variable the API key is read from. Defaults per provider.",
       control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("apiKeyEnv"),
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,
@@ -332,6 +366,8 @@ export const LLM_SETTINGS = {
       label: "Max output tokens",
       description: "Cap on the number of tokens generated per request.",
       control: "number",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("maxTokens"),
     },
     parse: parseNumber,
   } satisfies Setting<OptionalNumber>,
@@ -344,6 +380,8 @@ export const LLM_SETTINGS = {
       label: "Command",
       description: 'Command line to run for the "command" provider.',
       control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("command"),
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,

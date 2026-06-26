@@ -7,7 +7,7 @@ import {
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { saveSetting, useSettingsQuery } from "../lib/settings";
 import { Select } from "../components/Select";
 import type { SettingDescriptor, SettingsCategory } from "../types";
@@ -77,8 +77,36 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
   );
 }
 
+/** Seed the editable value for a setting from the file layer (toggles hold a boolean, the rest a
+ *  string). Conditions read live from these values, so they react as the user edits. */
+function seedValue(s: SettingDescriptor): unknown {
+  if (s.ui.control === "toggle") return Boolean(s.fileValue ?? s.effectiveValue);
+  return s.fileValue != null ? String(s.fileValue) : "";
+}
+
 function SettingsCategoryPane({ category }: { category: SettingsCategory }) {
   const sections = category.sections.filter((s) => s.settings.length > 0);
+  const all = sections.flatMap((s) => s.settings);
+  const byPath = new Map(all.map((s) => [s.path, s]));
+
+  // Current value per setting path, lifted here so cross-field conditions (a field's activeWhen /
+  // visibleWhen referencing another field) can be evaluated and react live as the user edits.
+  const [values, setValues] = useState<Record<string, unknown>>(() =>
+    Object.fromEntries(all.map((s) => [s.path, seedValue(s)])),
+  );
+  const setValue = (path: string, v: unknown) => setValues((prev) => ({ ...prev, [path]: v }));
+
+  // The value used to evaluate a condition against `path`: the live value, or the referenced setting's
+  // effectiveDefault when unset (e.g. an unset provider resolves to its default, claude-cli).
+  const condValue = (path: string): string => {
+    const v = values[path];
+    if (v != null && v !== "") return String(v);
+    return byPath.get(path)?.ui.effectiveDefault ?? "";
+  };
+  const isActive = (s: SettingDescriptor) => !s.ui.activeWhen || Boolean(values[s.ui.activeWhen.path]);
+  const isVisible = (s: SettingDescriptor) =>
+    !s.ui.visibleWhen || s.ui.visibleWhen.in.includes(condValue(s.ui.visibleWhen.path));
+
   return (
     <div className="settings-content">
       <header className="settings-pane-head">
@@ -87,16 +115,26 @@ function SettingsCategoryPane({ category }: { category: SettingsCategory }) {
       {sections.length === 0 ? (
         <p className="settings-empty">No settings in this category yet.</p>
       ) : (
-        sections.map((section, i) => (
-          <section className="settings-section" key={section.label ?? i}>
-            {section.label && <h3 className="settings-section-head">{section.label}</h3>}
-            <div className="settings-rows">
-              {section.settings.map((s) => (
-                <SettingRow key={s.path} descriptor={s} />
-              ))}
-            </div>
-          </section>
-        ))
+        sections.map((section, i) => {
+          const visible = section.settings.filter(isVisible);
+          if (!visible.length) return null;
+          return (
+            <section className="settings-section" key={section.label ?? i}>
+              {section.label && <h3 className="settings-section-head">{section.label}</h3>}
+              <div className="settings-rows">
+                {visible.map((s) => (
+                  <SettingRow
+                    key={s.path}
+                    descriptor={s}
+                    value={values[s.path]}
+                    disabled={!isActive(s)}
+                    onChange={(v) => setValue(s.path, v)}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })
       )}
     </div>
   );
@@ -104,29 +142,45 @@ function SettingsCategoryPane({ category }: { category: SettingsCategory }) {
 
 type SaveState = { kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "error"; message: string };
 
-/** One setting: name + description on the left, its control on the right (#154). Text-like controls
- *  save on blur; toggles/selects save immediately. The control edits the `argus.json` layer; when an
- *  env var overrides it, the row says so (a file edit won't take effect until the override is unset). */
-function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
+/** One setting: name + description on the left, its control on the right (#154). The value is owned by
+ *  the pane (so conditions can see it); this row drives the control and its own save status. Text-like
+ *  controls save on blur; toggles/selects save immediately. `disabled` greys the control out (e.g. the
+ *  LLM fields until task extraction is on). When an env var overrides the value, the row says so. */
+function SettingRow({
+  descriptor,
+  value,
+  disabled,
+  onChange,
+}: {
+  descriptor: SettingDescriptor;
+  value: unknown;
+  disabled: boolean;
+  onChange: (v: unknown) => void;
+}) {
   const { ui, fileValue, effectiveValue, override } = descriptor;
   const [state, setState] = useState<SaveState>({ kind: "idle" });
+  // The last value persisted to the server, so a blur with no real change doesn't re-save.
+  const savedRef = useRef(fileValue != null ? String(fileValue) : "");
 
-  // Local control state, so edits reflect immediately (we don't refetch the whole surface per save).
-  const initialText = fileValue != null ? String(fileValue) : "";
-  const [text, setText] = useState(initialText);
-  const [checked, setChecked] = useState(Boolean(fileValue ?? effectiveValue));
+  const text = value == null ? "" : String(value);
+  const checked = Boolean(value);
   const placeholder = effectiveValue != null ? String(effectiveValue) : "Default";
 
-  async function save(value: unknown) {
+  async function save(v: unknown) {
     setState({ kind: "saving" });
     try {
-      await saveSetting(descriptor.path, value);
+      await saveSetting(descriptor.path, v);
       setState({ kind: "saved" });
     } catch (err) {
       setState({ kind: "error", message: (err as Error).message });
       throw err;
     }
   }
+  const saveText = () => {
+    if (text === savedRef.current) return;
+    savedRef.current = text;
+    void save(text).catch(() => {});
+  };
 
   const control = (() => {
     switch (ui.control) {
@@ -137,10 +191,11 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
             role="switch"
             aria-checked={checked}
             className="setting-toggle"
+            disabled={disabled}
             onClick={() => {
               const next = !checked;
-              setChecked(next); // optimistic
-              save(next).catch(() => setChecked(!next)); // revert on failure
+              onChange(next); // optimistic; update the pane so conditions react
+              save(next).catch(() => onChange(!next)); // revert on failure
             }}
           >
             <span className="setting-toggle-knob" />
@@ -151,8 +206,10 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
           <Select
             wrapperClassName="setting-select"
             value={text}
+            disabled={disabled}
             onChange={(e) => {
-              setText(e.target.value);
+              onChange(e.target.value);
+              savedRef.current = e.target.value;
               void save(e.target.value).catch(() => {});
             }}
           >
@@ -174,8 +231,9 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
             value={text}
             placeholder={placeholder}
             rows={3}
-            onChange={(e) => setText(e.target.value)}
-            onBlur={() => text !== initialText && void save(text).catch(() => {})}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            onBlur={saveText}
           />
         );
       case "number":
@@ -185,8 +243,9 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
             className="setting-input"
             value={text}
             placeholder={placeholder}
-            onChange={(e) => setText(e.target.value)}
-            onBlur={() => text !== initialText && void save(text).catch(() => {})}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            onBlur={saveText}
           />
         );
       default:
@@ -196,15 +255,16 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
             className="setting-input"
             value={text}
             placeholder={placeholder}
-            onChange={(e) => setText(e.target.value)}
-            onBlur={() => text !== initialText && void save(text).catch(() => {})}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            onBlur={saveText}
           />
         );
     }
   })();
 
   return (
-    <div className="setting-row">
+    <div className={`setting-row${disabled ? " setting-row-disabled" : ""}`}>
       <div className="setting-label">
         <span className="setting-name">{ui.label}</span>
         {ui.description && <span className="setting-desc">{ui.description}</span>}
@@ -217,7 +277,7 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
       </div>
       <div className="setting-control">
         {control}
-        <SaveStatus state={state} />
+        {!disabled && <SaveStatus state={state} />}
       </div>
     </div>
   );

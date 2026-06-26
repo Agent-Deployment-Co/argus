@@ -22,6 +22,7 @@ export const geminiProvider: ProviderDescriptor = {
   apiKeyEnv: "GEMINI_API_KEY",
   defaultModel: DEFAULT_GEMINI_MODEL,
   requiresApiKey: true,
+  configFields: ["model", "apiKeyEnv", "maxTokens"],
   complete(call: ProviderCall) {
     return httpComplete(
       () => ({
