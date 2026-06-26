@@ -394,6 +394,12 @@ async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, 
 // to that subcommand automatically and flag types flow into the run handlers.
 // ---------------------------------------------------------------------------
 
+const filterArgs = {
+  since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
+  until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
+  project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
+} as const;
+
 /** Source selection — shared by `run` and the `index` commands.
  *  Declared as a string (not enum) so citty's flag inference stays intact; the value set is
  *  validated by `toSource`. */
@@ -798,15 +804,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-<<<<<<< HEAD
-<<<<<<< HEAD
   subCommands: { serve, index, sync, run: runCmd, status, login, config, secret },
-=======
-  subCommands: { serve, index, sync, run: runCmd, status, login, secret, llm: llmCmd /* TEMP */ },
->>>>>>> 7517a18 (TEMP: `argus llm <text>` test command — do not merge — #132)
-=======
-  subCommands: { serve, index, sync, run: runCmd, status, login, secret },
->>>>>>> 40bada7 (cli: remove the TEMP `argus llm` test command — #132)
 });
 
 async function run() {
