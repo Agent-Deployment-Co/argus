@@ -9,6 +9,20 @@ import type { PushPayload } from "@agentdeploymentco/argus-schema";
 export { SCHEMA_VERSION };
 export type { PushPayload };
 
+/** Pull the human-readable message out of a Hub/Worker JSON error body (`{ "error": "..." }`),
+ *  falling back to the raw text when it isn't that shape. The Hub's 422 body states the actual
+ *  direction of a version mismatch (client too new → update the Hub; client too old → re-index),
+ *  so surfacing it verbatim beats a hardcoded guess. */
+export function hubErrorMessage(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Not JSON — fall through to the raw text.
+  }
+  return body.slice(0, 400);
+}
+
 /**
  * Resolve the user id for a snapshot: explicit override wins, else `git config user.email`,
  * else $USER@hostname. Used to tag whose sessions are whose in the team dashboard.

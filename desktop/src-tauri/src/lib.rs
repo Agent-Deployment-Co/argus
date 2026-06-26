@@ -1,7 +1,9 @@
 // Argus tray app: a thin native shell around the `argus` sidecar.
 //
-// On launch it starts `argus run` (index + serve + sync, supervised in one process) on a free
-// local port and exposes a tray menu whose items map onto the CLI's command surface. "Open
+// On launch it starts `argus run` (index + serve, plus sync when a Hub URL + key are configured —
+// otherwise `--no-sync`, all supervised in one process) on a free local port and exposes a tray menu
+// whose items map onto the CLI's command surface. Logs are written to a rotating file (path shown in
+// Settings). "Open
 // dashboard" opens the user's default browser at the served URL; the only embedded webview is the
 // bundled About screen.
 use std::path::{Path, PathBuf};
@@ -18,6 +20,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry,
 };
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -84,11 +87,23 @@ fn refresh_status(app: &AppHandle) {
 /// tray never claims to be running a process that has gone away.
 fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     let port = app.state::<AppState>().port;
+    // Enable uploads only when a Hub URL + key are configured (mirrors the CLI's resolveHubConfig).
+    // Without them there's nothing to upload to, so run index + serve only. Re-checked on every
+    // start, so toggling the Hub settings then using Stop/Start picks up the change.
+    let sync_enabled = hub_configured();
+    let mut args = vec!["run".to_string(), "--port".to_string(), port.to_string()];
+    if !sync_enabled {
+        args.push("--no-sync".to_string());
+    }
+    log::info!(
+        "starting argus on port {port} ({})",
+        if sync_enabled { "sync on" } else { "sync off" }
+    );
     let mut command = app
         .shell()
         .sidecar("argus")
         .map_err(|e| format!("locating the argus sidecar: {e}"))?
-        .args(["run", "--port", &port.to_string(), "--no-sync"]);
+        .args(args);
     if let Some(root) = web_root(app) {
         command = command.env("ARGUS_WEB_ROOT", root);
     }
@@ -229,6 +244,31 @@ async fn write_setting(app: AppHandle, key: String, value: String) -> Result<(),
     Ok(())
 }
 
+/// The absolute path of the log file, for the Settings window to display. `None` if the log
+/// directory can't be resolved (the window then just omits the path).
+#[tauri::command]
+fn log_file_path(app: AppHandle) -> Option<String> {
+    log_file(&app).and_then(|path| path.to_str().map(|s| s.to_string()))
+}
+
+/// Reveal the log file in the OS file manager. Reveals the file itself when it exists; before the
+/// first line is written it may not, so fall back to opening the containing folder.
+#[tauri::command]
+fn reveal_log_file(app: AppHandle) -> Result<(), String> {
+    let path = log_file(&app).ok_or("could not resolve the log directory")?;
+    let opener = app.opener();
+    if path.exists() {
+        return opener
+            .reveal_item_in_dir(&path)
+            .map_err(|e| format!("revealing the log file: {e}"));
+    }
+    let dir = path.parent().ok_or("the log file has no parent directory")?;
+    let _ = std::fs::create_dir_all(dir);
+    opener
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| format!("opening the log folder: {e}"))
+}
+
 fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
@@ -268,6 +308,64 @@ fn argus_data_dir() -> Option<PathBuf> {
 
 fn argus_store_file() -> Option<PathBuf> {
     argus_data_dir().map(|dir| dir.join("argus.db"))
+}
+
+/// Where `argus.json` lives, mirroring the CLI's `defaultArgusConfigDir` resolution chain. Read
+/// directly (rather than shelling out to the CLI) so the Hub check stays synchronous and works
+/// before the sidecar is up — the same trade-off `read_store_client_id` makes for `argus.db`.
+fn argus_config_dir() -> Option<PathBuf> {
+    if let Some(path) = non_empty_env("ARGUS_CONFIG_DIR") {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(path) = non_empty_env("ARGUS_HOME") {
+        return Some(PathBuf::from(path).join("config"));
+    }
+    if let Some(path) = non_empty_env("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(path).join("argus"));
+    }
+    if cfg!(target_os = "macos") {
+        return home_dir().map(|dir| dir.join("Library/Application Support/argus"));
+    }
+    if cfg!(windows) {
+        if let Some(path) = non_empty_env("APPDATA") {
+            return Some(PathBuf::from(path).join("Argus"));
+        }
+    }
+    home_dir().map(|dir| dir.join(".config").join("argus"))
+}
+
+/// True when both `hub.url` and `hub.key` are configured (env or `argus.json`), the same condition
+/// the CLI's `resolveHubConfig` uses to switch on Hub uploads. When true the tray runs `argus run`
+/// with sync on (no `--no-sync`). Tolerant: a missing or malformed config simply reads as "not
+/// configured", so the service still starts (index + serve only).
+fn hub_configured() -> bool {
+    if non_empty_env("ARGUS_HUB_URL").is_some() && non_empty_env("ARGUS_HUB_KEY").is_some() {
+        return true;
+    }
+    let Some(dir) = argus_config_dir() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("argus.json")) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let non_empty = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    };
+    let hub = json.get("hub");
+    non_empty(hub.and_then(|h| h.get("url"))) && non_empty(hub.and_then(|h| h.get("key")))
+}
+
+/// The file the desktop app writes its logs to (the sidecar's forwarded stdout/stderr plus our own
+/// lines): `argus.log` in the platform log directory. The path is fixed by the `tauri-plugin-log`
+/// file target configured in `run()`.
+fn log_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_log_dir().ok().map(|dir| dir.join("argus.log"))
 }
 
 /// Read the per-install client id out of the store's `store_metadata` bag. Opens `argus.db`
@@ -510,15 +608,27 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![read_settings, write_setting])
+        .invoke_handler(tauri::generate_handler![
+            read_settings,
+            write_setting,
+            log_file_path,
+            reveal_log_file
+        ])
         .setup(|app| {
+            // Write the sidecar's forwarded output (and our own log lines) to a rotating file so a
+            // synced install keeps a durable record to troubleshoot uploads from. Its path is shown
+            // in Settings. In dev, also mirror to stdout.
+            let mut log_builder = tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .rotation_strategy(RotationStrategy::KeepOne)
+                .max_file_size(5_000_000)
+                .target(Target::new(TargetKind::LogDir {
+                    file_name: Some("argus".into()),
+                }));
             if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+                log_builder = log_builder.target(Target::new(TargetKind::Stdout));
             }
+            app.handle().plugin(log_builder.build())?;
 
             // No Dock icon / no app-switcher entry — this is a menu-bar accessory.
             #[cfg(target_os = "macos")]
