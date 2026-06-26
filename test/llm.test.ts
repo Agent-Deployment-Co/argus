@@ -48,7 +48,7 @@ describe("provider registry (single source of truth)", () => {
 
   test("the secret allowlist + key requirement derive from descriptors", () => {
     expect([...PROVIDER_API_KEY_ENVS].sort()).toEqual([
-      "CLAUDE_API_KEY",
+      "ANTHROPIC_API_KEY",
       "GEMINI_API_KEY",
       "OPENAI_API_KEY",
       "OPENROUTER_API_KEY",
@@ -82,10 +82,10 @@ describe("llm client routing", () => {
   test("http provider with no key → diagnostic naming the env var", async () => {
     const res = await complete(
       { prompt: "hi" },
-      { provider: "claude-api", apiKeyEnv: "CLAUDE_API_KEY" },
+      { provider: "claude-api", apiKeyEnv: "ANTHROPIC_API_KEY" },
     );
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("CLAUDE_API_KEY");
+    expect(res.error).toContain("ANTHROPIC_API_KEY");
   });
 });
 

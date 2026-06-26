@@ -40,7 +40,7 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
 | `off` | — | — | Default. `ok: false` "no provider"; consumers treat it as "no LLM". |
 | `claude-cli` | local `claude -p` | none | Uses your Claude login; the historical task-extraction default. |
 | `command` | local subprocess | none | Prompt on stdin, JSON on stdout. |
-| `claude-api` | HTTP | `CLAUDE_API_KEY` | Anthropic's API. Default model `claude-haiku-4-5`. |
+| `claude-api` | HTTP | `ANTHROPIC_API_KEY` | Anthropic's API. Default model `claude-haiku-4-5`. |
 | `openai` | HTTP | `OPENAI_API_KEY` | `baseUrl` for compatible/self-hosted endpoints. |
 | `gemini` | HTTP | `GEMINI_API_KEY` | |
 | `openrouter` | HTTP | `OPENROUTER_API_KEY` | OpenRouter gateway → many upstream models (OpenAI-compatible). No default model (ids are namespaced). |
