@@ -636,7 +636,7 @@ pub fn run() {
 
             let status =
                 MenuItem::with_id(app, "status", "Argus is starting…", false, None::<&str>)?;
-            let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "Open Argus", true, None::<&str>)?;
             let start_item = MenuItem::with_id(app, "start", "Start", true, None::<&str>)?;
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
             let settings_item =
@@ -699,7 +699,7 @@ pub fn run() {
                 .build(app)?;
 
             // Start the background work immediately so the dashboard is live by the time the user
-            // clicks "Open dashboard".
+            // clicks "Open Argus".
             start(app.handle());
 
             // Check for a newer signed build in the background. There's no manual "Check for
