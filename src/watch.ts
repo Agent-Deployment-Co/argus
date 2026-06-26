@@ -117,7 +117,14 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: Pu
     log(`Uploading to Hub → ${hubCfg.url}`);
     const store = await openStore({ path: STORE_FILE });
     await store.close();
-    return pushHubJson(hubCfg.url, hubCfg.key, STORE_FILE, { all: opts.all, log });
+    return pushHubJson(hubCfg.url, hubCfg.key, STORE_FILE, {
+      all: opts.all,
+      log,
+      source: opts.source,
+      since: opts.since,
+      until: opts.until,
+      project: opts.project,
+    });
   }
   const user = detectUser(opts.user);
   const org = detectOrg(opts.org);

@@ -410,3 +410,98 @@ describe("pushHubJson with client-side Hub cursors", () => {
     } finally { globalThis.fetch = originalFetch; }
   });
 });
+
+// ---- Filter threading (Finding #1) -------------------------------------------------------
+
+/** Insert an extra session into an existing argus.db test fixture. */
+function addSession(dbPath: string, opts: {
+  sessionId: string;
+  source?: string;
+  project?: string;
+  cwd?: string;
+  firstTs?: number;
+  lastTs?: number | null;
+}): void {
+  const db = new Database(dbPath);
+  const source = opts.source ?? "claude";
+  const project = opts.project ?? "/p";
+  const cwd = opts.cwd ?? project;
+  const firstTs = opts.firstTs ?? 1_000_000;
+  const lastTs = opts.lastTs === undefined ? null : opts.lastTs;
+  db.query(
+    `INSERT INTO resolved_sessions(session_id, source, project, cwd, first_ts, last_ts, message_count, meta_json)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+  ).run(opts.sessionId, source, project, cwd, firstTs, lastTs, JSON.stringify({ sessionId: opts.sessionId, source, project, cwd }));
+  db.query(
+    `INSERT INTO resolved_usage(session_id, seq, source, ts, date, cwd, project, record_json,
+       input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h, model)
+     VALUES (?, 0, ?, ?, '2026-01-01', ?, ?, ?, 100, 50, 0, 0, 0, 'claude-sonnet-4-6')`,
+  ).run(opts.sessionId, source, firstTs, cwd, project, JSON.stringify({ sessionId: opts.sessionId }));
+  db.close();
+}
+
+describe("pushHubJson filter threading", () => {
+  test("source filter restricts uploaded sessions", async () => {
+    const path = buildArgusDb({ sessionId: "sess-claude", lastTs: 1_000_000 });
+    addSession(path, { sessionId: "sess-codex", source: "codex", project: "/p2", lastTs: 2_000_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch();
+    globalThis.fetch = mockFetch;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path, { all: true, source: "codex" });
+      expect(res.ok).toBe(true);
+      expect(calls[0]!.body.rows.sessions).toHaveLength(1);
+      expect(calls[0]!.body.rows.sessions[0]!.session_id).toBe("sess-codex");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("project filter restricts uploaded sessions", async () => {
+    const path = buildArgusDb({ sessionId: "sess-a", lastTs: 1_000_000 });
+    addSession(path, { sessionId: "sess-b", source: "claude", project: "/specific-project", cwd: "/specific-project", lastTs: 2_000_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch();
+    globalThis.fetch = mockFetch;
+    try {
+      await pushHubJson("http://hub.test", "k", path, { all: true, project: "specific-project" });
+      expect(calls[0]!.body.rows.sessions).toHaveLength(1);
+      expect(calls[0]!.body.rows.sessions[0]!.session_id).toBe("sess-b");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("since filter restricts by activity date", async () => {
+    // sess-old: last_ts in Jan 2024 (before cutoff); sess-new: last_ts in Jan 2026
+    const JAN_2024_MS = new Date("2024-01-15T00:00:00Z").getTime();
+    const JAN_2026_MS = new Date("2026-01-15T00:00:00Z").getTime();
+    const path = buildArgusDb({ sessionId: "sess-old", lastTs: JAN_2024_MS });
+    addSession(path, { sessionId: "sess-new", source: "claude", project: "/p", lastTs: JAN_2026_MS });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch();
+    globalThis.fetch = mockFetch;
+    try {
+      await pushHubJson("http://hub.test", "k", path, { all: true, since: "2025-01-01" });
+      const uploadedIds = (calls[0]!.body.rows.sessions as { session_id: string }[]).map((s) => s.session_id);
+      expect(uploadedIds).toContain("sess-new");
+      expect(uploadedIds).not.toContain("sess-old");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("cursor-based path also respects source filter", async () => {
+    const path = buildArgusDb({ sessionId: "sess-claude", lastTs: 1_000_000 });
+    addSession(path, { sessionId: "sess-codex", source: "codex", project: "/p2", lastTs: 2_000_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = routedFetch();
+    globalThis.fetch = mockFetch;
+    try {
+      // First sync without filter (both sessions upload)
+      await pushHubJson("http://hub.test", "k", path);
+      expect(calls[0]!.body.rows.sessions).toHaveLength(2);
+      // Second sync with source=codex; only sess-codex is in scope but cursor skips it (unchanged)
+      await pushHubJson("http://hub.test", "k", path, { source: "codex" });
+      expect(calls[1]!.body.rows.sessions).toHaveLength(0);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+});
