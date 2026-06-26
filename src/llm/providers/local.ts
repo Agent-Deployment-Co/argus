@@ -128,8 +128,8 @@ export async function runCommandProvider(ctx: LocalProviderContext): Promise<Llm
   return spawnWithStdin(argv[0]!, argv.slice(1), blob(ctx), ctx.signal);
 }
 
-export const claudeProvider: ProviderDescriptor = {
-  name: "claude",
+export const claudeCliProvider: ProviderDescriptor = {
+  name: "claude-cli",
   defaultModel: DEFAULT_CLAUDE_PROVIDER_MODEL,
   complete: (call: ProviderCall) =>
     runClaudeProvider({ system: call.system, prompt: call.prompt, model: call.model, signal: call.signal }),
