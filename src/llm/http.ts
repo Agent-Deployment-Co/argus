@@ -23,6 +23,40 @@ function retryAfterMs(header: string | null): number | undefined {
   return undefined;
 }
 
+/**
+ * Read a response body to text, aborting once the running byte count exceeds `cap`. Streams the body
+ * (rather than `res.text()`, which buffers the whole thing first) so an undeclared/chunked oversized
+ * response — a lying `Content-Length`, a misbehaving proxy at a user-set `baseUrl` — can't be fully
+ * buffered into memory before we reject it, mirroring the local subprocess path's streaming cap.
+ * Returns `undefined` when the body exceeds the cap.
+ */
+async function readCappedText(res: Response, cap: number): Promise<string | undefined> {
+  if (!res.body) {
+    // No stream (e.g. a mock Response without a body) — fall back to buffering, then check.
+    const text = await res.text();
+    return Buffer.byteLength(text, "utf8") > cap ? undefined : text;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > cap) {
+        await reader.cancel().catch(() => {});
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Pull a human-readable reason out of an error response body, falling back to the status. */
 function describeHttpError(status: number, bodyText: string): string {
   const trimmed = bodyText.trim();
@@ -85,8 +119,8 @@ export async function httpComplete(
       if (Number.isFinite(declared) && declared > MAX_LLM_RESPONSE_BYTES) {
         return { ok: false, text: "", error: "provider response exceeded size limit", status: res.status };
       }
-      const text = await res.text();
-      if (Buffer.byteLength(text, "utf8") > MAX_LLM_RESPONSE_BYTES) {
+      const text = await readCappedText(res, MAX_LLM_RESPONSE_BYTES);
+      if (text === undefined) {
         return { ok: false, text: "", error: "provider response exceeded size limit", status: res.status };
       }
       let body: unknown;

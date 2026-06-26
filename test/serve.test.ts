@@ -320,6 +320,18 @@ describe("secret settings endpoints (#132)", () => {
     expect(res.status).toBe(403);
   });
 
+  test("accepts IPv6 loopback Host, bracketed-with-port and bare", async () => {
+    for (const host of ["[::1]:4242", "::1"]) {
+      const app = appWithSecrets();
+      const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+        method: "POST",
+        headers: { "X-Argus-App": "1", Host: host, "content-type": "application/json" },
+        body: JSON.stringify({ value: "sk-x" }),
+      });
+      expect(res.status).toBe(200);
+    }
+  });
+
   test("rejects a cross-origin Origin", async () => {
     const app = appWithSecrets();
     const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {

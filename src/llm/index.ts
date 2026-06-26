@@ -60,11 +60,15 @@ export async function complete(
   if (provider.requiresApiKey && !config.apiKey) {
     return { ok: false, text: "", error: missingKeyMessage(config) };
   }
+  // Clamp to the default when no positive cap is set: a configured `0` is not a meaningful output
+  // cap (providers reject it or return an empty completion), so treat it as absent — unlike `??`,
+  // which would forward the `0` verbatim.
+  const maxTokens = request.maxTokens || config.maxTokens || DEFAULT_MAX_TOKENS;
   return provider.complete({
     system: request.system,
     prompt: request.prompt,
     model: request.model ?? config.model ?? provider.defaultModel ?? "",
-    maxTokens: request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
+    maxTokens,
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     command: config.command,
