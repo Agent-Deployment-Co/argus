@@ -2,19 +2,24 @@ import { describe, expect, test } from "bun:test";
 import {
   buildTaskExtractionPrompt,
   buildTaskOutcomePrompt,
-  claudeProviderArgs,
   extractTasksForSession,
   judgeTaskOutcome,
   parseTaskExtractionOutput,
   parseTaskOutcomeOutput,
-  splitCommand,
   taskFactsFromSpecs,
 } from "../src/indexing/interpret/task-extraction.ts";
+import { claudeProviderArgs, splitCommand } from "../src/llm/providers/local.ts";
+import type { ResolvedTaskExtraction } from "../src/config.ts";
 import {
   assignInteractionTaskSeqs,
   type InteractionFact,
   type TaskFact,
 } from "../src/store/store-contract.ts";
+
+/** Build a ResolvedTaskExtraction for a test, defaulting `enabled` on. */
+function te(over: Partial<ResolvedTaskExtraction> & { llm: ResolvedTaskExtraction["llm"] }): ResolvedTaskExtraction {
+  return { enabled: true, ...over };
+}
 
 // Pass-1 input is the session's human interaction openings (#122) — each carrying its prompt text.
 function candidate(seq: number, promptText: string, timestampMs?: number, responseText?: string): InteractionFact {
@@ -86,10 +91,7 @@ describe("task extraction", () => {
 
   test("emits debug logs through the configured sink", async () => {
     const logs: string[] = [];
-    const result = await extractTasksForSession("codex:one", candidates, {
-      provider: "off",
-      debugLog: (message) => logs.push(message),
-    });
+    const result = await extractTasksForSession("codex:one", candidates, te({ llm: { provider: "off" }, debugLog: (message) => logs.push(message) }));
     expect(result).toEqual({ tasks: [], diagnostics: [] });
     expect(logs.join("\n")).toContain("[task extraction] starting extraction for codex:one");
     expect(logs.join("\n")).toContain("provider=off");
@@ -106,7 +108,7 @@ describe("task extraction", () => {
       "-",
     ]);
     // A configured model overrides the default; the flag stays on.
-    expect(claudeProviderArgs({ model: "opus" })).toEqual([
+    expect(claudeProviderArgs("opus")).toEqual([
       "-p",
       "--no-session-persistence",
       "--model",
@@ -144,10 +146,10 @@ describe("task outcome (pass 2)", () => {
 
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {
     // Provider off short-circuits even with text; no-text interactions short-circuit even with a provider.
-    expect(await judgeTaskOutcome("t", [candidate(0, "x")], { provider: "off" })).toEqual({
+    expect(await judgeTaskOutcome("t", [candidate(0, "x")], te({ llm: { provider: "off" } }))).toEqual({
       diagnostics: [],
     });
-    expect(await judgeTaskOutcome("t", [], { provider: "claude" })).toEqual({ diagnostics: [] });
+    expect(await judgeTaskOutcome("t", [], te({ llm: { provider: "claude-cli" } }))).toEqual({ diagnostics: [] });
   });
 });
 

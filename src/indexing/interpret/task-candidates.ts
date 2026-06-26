@@ -128,10 +128,10 @@ export function taskExtractionPromptTitle(text: string): string | undefined {
   const targetSessionId = taskExtractionPromptTargetSessionId(text);
   if (targetSessionId) return `Task extraction for ${targetSessionId}`;
   const trimmed = text.trimStart();
+  // Match a stable leading clause (not the full sentence) so it survives prompt-wording tweaks like
+  // "coding-agent session" → "agent session"; the "Filtered user messages:" marker keeps it specific.
   if (
-    trimmed.startsWith(
-      "You identify the actual tasks a user was trying to accomplish in a coding-agent session.",
-    ) &&
+    trimmed.startsWith("You identify the actual tasks a user was trying to accomplish") &&
     trimmed.includes("Filtered user messages:")
   ) {
     return "Task extraction run";
@@ -161,8 +161,8 @@ export function sessionAnalysisPromptTitle(text: string): string | undefined {
 // Argus-generated rather than mistaken for a real user message/task.
 export function taskOutcomePromptTitle(text: string): string | undefined {
   const trimmed = text.trimStart();
-  return trimmed.startsWith("You judge how a single task in a coding-agent session turned out") &&
-    trimmed.includes("Dialogue:")
+  // Stable leading clause (survives wording tweaks); buildTaskOutcomePrompt always appends "Dialogue:".
+  return trimmed.startsWith("You judge how a single task") && trimmed.includes("Dialogue:")
     ? "Task outcome run"
     : undefined;
 }

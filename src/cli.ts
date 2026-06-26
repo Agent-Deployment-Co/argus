@@ -13,8 +13,8 @@ import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./in
 import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
 import { runRun } from "./run.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import { type TaskExtractionOptions } from "./indexing/interpret/task-extraction.ts";
-import { loadConfig, resolveTaskExtraction } from "./config.ts";
+import { loadConfig, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
+import { defaultSecretStore, isSecretName, maskSecret, SECRET_NAMES } from "./secrets.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -367,6 +367,11 @@ const extractTasksArg = {
   },
 } as const;
 
+/** Print the full task-extraction debug stream to stdout (one-off runs; not applied under --watch). */
+const debugArg = {
+  debug: { type: "boolean", default: false, description: "Print full task-extraction debug output to stdout" },
+} as const;
+
 /** Inputs shared by serve and sync (everything `buildDashboard` reads). */
 const buildArgs = {
   ...sourceArg,
@@ -378,7 +383,7 @@ const buildArgs = {
 function taskExtractionOptions(
   args: Record<string, unknown>,
   debugLog?: (message: string) => void,
-): TaskExtractionOptions {
+): ResolvedTaskExtraction {
   return resolveTaskExtraction(args, loadConfig(), debugLog);
 }
 
@@ -406,6 +411,7 @@ const indexRebuild = defineCommand({
   args: {
     ...sourceArg,
     ...extractTasksArg,
+    ...debugArg,
     force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
   run: handler((args) =>
@@ -413,6 +419,7 @@ const indexRebuild = defineCommand({
       { ...syncOptions(args), force: args.force },
       log,
       toExtractTasksOverride(args["extract-tasks"]),
+      !!args.debug,
     ),
   ),
 });
@@ -423,10 +430,16 @@ const indexRefresh = defineCommand({
     id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
     ...sourceArg,
     ...extractTasksArg,
+    ...debugArg,
   },
   run: handler((args) =>
     runIndexRefresh(
-      { ...syncOptions(args), ids: args._, extractTasks: toExtractTasksOverride(args["extract-tasks"]) },
+      {
+        ...syncOptions(args),
+        ids: args._,
+        extractTasks: toExtractTasksOverride(args["extract-tasks"]),
+        debug: !!args.debug,
+      },
       log,
     ),
   ),
@@ -447,6 +460,7 @@ const index = defineCommand({
   args: {
     ...sourceArg,
     ...extractTasksArg,
+    ...debugArg,
     watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
   },
@@ -462,7 +476,7 @@ const index = defineCommand({
         const ac = abortOnSignals();
         await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks }, log, ac.signal);
       } else {
-        await runIndex(syncOptions(args), log, extractTasks);
+        await runIndex(syncOptions(args), log, extractTasks, !!args.debug);
       }
     });
   },
@@ -533,6 +547,126 @@ const runCmd = defineCommand({
   }),
 });
 
+// --- `argus secret`: manage stored LLM API keys (#132) ---
+
+/** Prompt for a secret on the terminal, echoing each character as `*`. Raw-mode, so the raw value
+ *  never reaches the screen or shell history; supports backspace and Ctrl-C. Pressing Enter on an empty
+ *  line returns "" (the caller treats that as "skip"). Prompt and mask are written to stderr. */
+function promptSecret(name: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const input = process.stdin;
+    process.stderr.write(`Set ${name} [Enter to skip] 🔒: `);
+    let value = "";
+    const cleanup = () => {
+      input.off("data", onData);
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
+    };
+    const onData = (buf: Buffer) => {
+      for (const ch of buf.toString("utf8")) {
+        const code = ch.charCodeAt(0);
+        if (ch === "\n" || ch === "\r") {
+          cleanup();
+          process.stderr.write("\n");
+          resolve(value);
+          return;
+        }
+        if (code === 3) {
+          // Ctrl-C
+          cleanup();
+          process.stderr.write("\n");
+          reject(new Error("Cancelled."));
+          return;
+        }
+        if (code === 127 || code === 8) {
+          // Backspace / DEL — erase the last char and its mask.
+          if (value.length) {
+            value = value.slice(0, -1);
+            process.stderr.write("\b \b");
+          }
+        } else if (code >= 32) {
+          // Printable — accumulate and echo a mask character.
+          value += ch;
+          process.stderr.write("*");
+        }
+        // Other control chars are ignored.
+      }
+    };
+    if (input.isTTY) input.setRawMode(true);
+    input.resume();
+    input.on("data", onData);
+  });
+}
+
+/** Read a secret value without exposing it in argv: piped stdin verbatim, or — when nothing is piped
+ *  (stdin is a TTY) — a hidden interactive prompt. Returns "" when the user skips / pipes nothing. */
+async function readSecretValue(name: string): Promise<string> {
+  let value: string;
+  if (process.stdin.isTTY) {
+    value = await promptSecret(name);
+  } else {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    value = Buffer.concat(chunks).toString("utf8");
+  }
+  return value.replace(/\r?\n$/, "");
+}
+
+function requireSecretName(args: Record<string, unknown>): string {
+  const name = String(args.name ?? (Array.isArray(args._) ? args._[0] : "") ?? "");
+  if (!isSecretName(name)) {
+    throw new Error(`Unknown secret "${name}". Known secrets: ${SECRET_NAMES.join(", ")}.`);
+  }
+  return name;
+}
+
+const secretSet = defineCommand({
+  meta: { name: "set", description: "store an API key (read from stdin, or prompted if interactive)" },
+  args: { name: { type: "positional", required: true, description: "secret name (e.g. ANTHROPIC_API_KEY)" } },
+  run: handler(async (args) => {
+    const name = requireSecretName(args);
+    const value = await readSecretValue(name);
+    if (!value.trim()) {
+      // Empty input (pressed Enter / piped nothing) means skip — leave any existing value untouched.
+      log(`Skipped ${name} — nothing entered.`);
+      return;
+    }
+    await defaultSecretStore().set(name, value);
+    // Mask the value in hand rather than reading it back (which would spawn a second keychain/DPAPI call).
+    log(`Saved ${name} (${maskSecret(value)})`);
+  }),
+});
+
+const secretRm = defineCommand({
+  meta: { name: "rm", description: "remove a stored API key" },
+  args: { name: { type: "positional", required: true, description: "secret name to remove" } },
+  run: handler(async (args) => {
+    const name = requireSecretName(args);
+    const removed = await defaultSecretStore().delete(name);
+    log(removed ? `Removed ${name}.` : `${name} was not set.`);
+  }),
+});
+
+const secretStatus = defineCommand({
+  meta: { name: "status", description: "show which API keys are stored (masked)" },
+  run: handler(async () => {
+    const store = defaultSecretStore();
+    for (const name of SECRET_NAMES) {
+      const status = await store.describe(name);
+      log(`  ${name}: ${status.configured ? (status.hint ?? "set") : "not set"}`);
+    }
+  }),
+});
+
+const secret = defineCommand({
+  meta: { name: "secret", description: "manage stored LLM API keys (kept in your OS keychain where available)" },
+  subCommands: { set: secretSet, rm: secretRm, status: secretStatus },
+  run: (ctx) => {
+    if (dispatchedSubcommand(ctx) !== undefined) return Promise.resolve();
+    return showUsage(ctx.cmd).then(() => {});
+  },
+});
+
 const main = defineCommand({
   meta: {
     name: "argus",
@@ -542,7 +676,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, login },
+  subCommands: { serve, index, sync, run: runCmd, status, login, secret },
 });
 
 async function run() {
@@ -554,7 +688,9 @@ async function run() {
     process.stdout.write(pkg.version + "\n");
     return;
   }
-  printBanner();
+  // The `argus secret` commands are utilitarian (and `secret set` reads a key from stdin), so skip
+  // the banner there — it's just noise.
+  if (argv[0] !== "secret") printBanner();
   // A bare `argus` (no subcommand) shows the usage/help with a success exit code; citty's own
   // "no command specified" path would treat the same input as an error. `argus <command>` and
   // `argus --help` flow through citty normally.

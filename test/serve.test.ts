@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FileSecretStore } from "../src/secrets.ts";
 import { PushPayloadSchema, SCHEMA_VERSION } from "@agentdeploymentco/argus-schema";
 import { aggregate } from "../src/reporting/aggregate.ts";
 import { parseFixtures } from "./helpers/parse-fixtures.ts";
@@ -255,5 +258,98 @@ describe("serve API", () => {
     const res = await app.request("/projects");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
+  });
+});
+
+describe("secret settings endpoints (#132)", () => {
+  // A file-backed store in a temp dir so the test never touches the real keychain.
+  function appWithSecrets() {
+    const dir = mkdtempSync(join(tmpdir(), "argus-serve-secrets-"));
+    const store = new FileSecretStore(join(dir, "secrets.json"));
+    return createApp(async () => fixtureSnapshot(), null, { secrets: store });
+  }
+  // A same-origin POST carrying a JSON body (the app header + loopback Host).
+  const post = (value: unknown) => ({
+    method: "POST",
+    headers: { "X-Argus-App": "1", Host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+  const getHeaders = { headers: { "X-Argus-App": "1", Host: "localhost" } };
+
+  test("write then masked read; the value never comes back", async () => {
+    const app = appWithSecrets();
+    const write = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("sk-supersecret-WXYZ"));
+    expect(write.status).toBe(200);
+    const writeBody = await write.json();
+    expect(writeBody).toEqual({ configured: true, hint: "…WXYZ" });
+    expect(JSON.stringify(writeBody)).not.toContain("supersecret");
+
+    const read = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", getHeaders);
+    expect(await read.json()).toEqual({ configured: true, hint: "…WXYZ" });
+  });
+
+  test("unconfigured secret reports not configured", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/OPENAI_API_KEY", getHeaders);
+    expect(await res.json()).toEqual({ configured: false });
+  });
+
+  test("rejects a non-allowlisted secret name", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/HOME", post("x"));
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects a write missing the same-origin app header (CSRF)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "POST",
+      headers: { Host: "localhost", "content-type": "application/json" },
+      body: JSON.stringify({ value: "x" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("rejects a non-loopback Host (DNS rebinding)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com", "content-type": "application/json" },
+      body: JSON.stringify({ value: "x" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("accepts IPv6 loopback Host, bracketed-with-port and bare", async () => {
+    for (const host of ["[::1]:4242", "::1"]) {
+      const app = appWithSecrets();
+      const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+        method: "POST",
+        headers: { "X-Argus-App": "1", Host: host, "content-type": "application/json" },
+        body: JSON.stringify({ value: "sk-x" }),
+      });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  test("rejects a cross-origin Origin", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "POST",
+      headers: {
+        "X-Argus-App": "1",
+        Host: "localhost",
+        Origin: "https://evil.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ value: "x" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("rejects an empty value", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("   "));
+    expect(res.status).toBe(400);
   });
 });
