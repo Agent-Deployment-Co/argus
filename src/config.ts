@@ -14,8 +14,8 @@
 // LLM access (#132) is a top-level `llm` block consumed by any model-driven feature. Task extraction
 // is the first consumer: it references `llm.*` and may override `provider`/`model`/`command` under its
 // own `taskExtraction.*` block (the historical keys, kept working with a deprecation note).
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
 import { getProvider, isLlmProvider, LLM_PROVIDERS } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
@@ -107,6 +107,19 @@ export function getPath(obj: unknown, dotted: string): unknown {
   return cur;
 }
 
+/** How a setting is presented as an editable control in the web settings surface (#154). The control
+ *  follows from the setting's type: boolean → toggle, fixed-choice → select, free number → number, the
+ *  rest → text/textarea. UI-only metadata; the value contract still lives in `parse()`/`default`. */
+export interface SettingUi {
+  /** Human-facing field name, e.g. "Provider". */
+  label: string;
+  /** One-line explanation shown beside the control. */
+  description?: string;
+  control: "toggle" | "text" | "textarea" | "number" | "select";
+  /** Allowed values for a `select` control (the enum the value must be one of). */
+  options?: readonly string[];
+}
+
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
 export interface Setting<T> {
   /** argus.json location, dotted camelCase — e.g. "llm.provider". */
@@ -118,6 +131,8 @@ export interface Setting<T> {
   default: T;
   /** When true, `argus config list` redacts the value in human output to avoid leaking secrets. */
   secret?: boolean;
+  /** Presentation metadata for the web settings surface (#154). Absent → not shown in the UI. */
+  ui?: SettingUi;
   /** Coerce a raw value (string from env/flag, typed from file) to T, validating as needed. */
   parse(raw: unknown): T;
 }
@@ -125,7 +140,7 @@ export interface Setting<T> {
 /** A layer is "present" only when set to a non-empty value — so `ARGUS_TASK_PROVIDER=""` (an exported
  *  but blank env var) or a blank flag/file value falls through to the next layer rather than being
  *  parsed as a real setting. */
-function present(value: unknown): boolean {
+export function present(value: unknown): boolean {
   return value != null && value !== "";
 }
 
@@ -233,12 +248,18 @@ type OptionalProvider = LlmProvider | undefined;
 type OptionalNumber = number | undefined;
 
 /** The shared `llm.*` settings. */
-const LLM_SETTINGS = {
+export const LLM_SETTINGS = {
   provider: {
     path: "llm.provider",
     env: "ARGUS_LLM_PROVIDER",
     flag: "llm-provider",
     default: undefined as OptionalProvider,
+    ui: {
+      label: "Provider",
+      description: "Which model backend Argus's AI features use.",
+      control: "select",
+      options: LLM_PROVIDERS,
+    },
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,
   model: {
@@ -246,6 +267,11 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_MODEL",
     flag: "llm-model",
     default: undefined as OptionalString,
+    ui: {
+      label: "Model",
+      description: "Model name to request. Leave blank to use the provider's default.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   baseUrl: {
@@ -253,6 +279,11 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_BASE_URL",
     flag: "llm-base-url",
     default: undefined as OptionalString,
+    ui: {
+      label: "Base URL",
+      description: "OpenAI-compatible API endpoint, for the OpenAI provider or a self-hosted server.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   apiKeyEnv: {
@@ -260,6 +291,11 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_API_KEY_ENV",
     flag: "llm-api-key-env",
     default: undefined as OptionalString,
+    ui: {
+      label: "API key variable",
+      description: "Environment variable the API key is read from. Defaults per provider.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   maxTokens: {
@@ -267,6 +303,11 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_MAX_TOKENS",
     flag: "llm-max-tokens",
     default: undefined as OptionalNumber,
+    ui: {
+      label: "Max output tokens",
+      description: "Cap on the number of tokens generated per request.",
+      control: "number",
+    },
     parse: parseNumber,
   } satisfies Setting<OptionalNumber>,
   command: {
@@ -274,6 +315,11 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_COMMAND",
     flag: "llm-command",
     default: undefined as OptionalString,
+    ui: {
+      label: "Command",
+      description: 'Command line to run for the "command" provider.',
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
 };
@@ -283,12 +329,18 @@ const LLM_SETTINGS = {
 /** Default hourly ceiling for the background interpretation drain (#153). */
 export const DEFAULT_MAX_SESSIONS_PER_HOUR = 30;
 
-const TASK_SETTINGS = {
+export const TASK_SETTINGS = {
   enabled: {
     path: "taskExtraction.enabled",
     env: "ARGUS_TASK_ENABLED",
     flag: "extract-tasks",
     default: false,
+    ui: {
+      label: "Extract tasks",
+      description:
+        "Run a model over each session at index time to segment and judge tasks. Off by default — it's a model call per session.",
+      control: "toggle",
+    },
     parse: parseBool,
   } satisfies Setting<boolean>,
   provider: {
@@ -310,6 +362,11 @@ const TASK_SETTINGS = {
     env: "ARGUS_TASK_PROMPT",
     flag: "task-prompt",
     default: undefined as OptionalString,
+    ui: {
+      label: "Custom prompt",
+      description: "Override the built-in instructions. The session data is appended after it.",
+      control: "textarea",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   promptFile: {
@@ -317,6 +374,11 @@ const TASK_SETTINGS = {
     env: "ARGUS_TASK_PROMPT_FILE",
     flag: "task-prompt-file",
     default: undefined as OptionalString,
+    ui: {
+      label: "Prompt file",
+      description: "Read the custom instructions from this file. Takes precedence over the prompt above.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   command: {
@@ -338,9 +400,11 @@ const TASK_SETTINGS = {
   } satisfies Setting<OptionalNumber>,
 };
 
-/** All known settings keyed by dotted argus.json path — used by `argus config get/set/list`. */
+/** All known settings keyed by dotted argus.json path — used by `argus config get/set/list` and the
+ *  web settings surface (#154). */
 export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries(
   [
+    ...Object.values(LLM_SETTINGS),
     ...Object.values(TASK_SETTINGS),
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
@@ -370,6 +434,20 @@ export function setPath(obj: Record<string, unknown>, dotted: string, value: unk
 export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf8");
+}
+
+/**
+ * Write `config` atomically: serialize to a sibling temp file, then `rename()` over the target so a
+ * crash or kill mid-write can never leave a truncated/corrupt `argus.json` that breaks the next
+ * startup (#154). `rename` is atomic within a filesystem, and the temp file is a sibling so it always
+ * is. This is durability, not concurrency — the web server is the only writer.
+ */
+export function writeConfigAtomic(config: ArgusConfig, path: string = CONFIG_FILE): void {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+  const tmp = join(dir, `.argus.json.${process.pid}.tmp`);
+  writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
+  renameSync(tmp, path);
 }
 
 

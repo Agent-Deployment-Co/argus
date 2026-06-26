@@ -1,9 +1,10 @@
 import { Link, Outlet, useRouterState, useSearch } from "@tanstack/react-router";
-import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Sun, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
 import { useTheme } from "../lib/theme";
+import { SettingsSurface } from "../routes/Settings";
 
 const BrandMark = () => (
   <svg className="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="6 0 128 100" role="img" aria-label="The Agent Deployment Co. chevron">
@@ -70,8 +71,11 @@ export function Layout() {
   // fetch entirely there — otherwise a broken/slow /api/snapshot still fires in the background and
   // undermines the page as a diagnostic surface.
   const isDebug = useRouterState({ select: (s) => s.location.pathname === "/debug" });
+  // The settings surface takes over the whole view and reads its own data, so it bypasses the
+  // snapshot gate (and we skip the snapshot fetch while it's open).
+  const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
   const filters = useSearch({ strict: false, select: (s) => ({ since: s.since, until: s.until, source: s.source }) });
-  const query = useSnapshotQuery(filters, !isDebug);
+  const query = useSnapshotQuery(filters, !isDebug && !isSettings);
   const snap = query.data;
   const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
 
@@ -83,6 +87,10 @@ export function Layout() {
       return next;
     });
   }, []);
+
+  // Full-screen take-over: the settings surface renders its own two-pane layout (its own nav + a
+  // "Back to app" affordance), replacing the app shell entirely. Deep-linkable via /settings.
+  if (isSettings) return <SettingsSurface />;
 
   return (
     <div className={`app-shell${collapsed ? " rail-collapsed" : ""}`}>
@@ -111,7 +119,18 @@ export function Layout() {
             );
           })}
         </nav>
+        {/* Bottom controls. DOM order is settings, theme, expand — so the collapsed rail (stacked
+            top-to-bottom) reads settings, theme, expand; expanded, the toggle is pushed right. */}
         <div className="rail-footer">
+          <Link
+            to="/settings/$category"
+            params={{ category: "general" }}
+            className="rail-icon-btn"
+            title="Settings"
+            aria-label="Settings"
+          >
+            <Settings size={18} strokeWidth={1.75} />
+          </Link>
           <ThemeToggle collapsed={collapsed} />
           <button
             className="rail-icon-btn rail-toggle"
