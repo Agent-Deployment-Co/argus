@@ -108,13 +108,21 @@ export class KeychainSecretStore implements SecretStore {
   }
 
   async set(name: string, value: string): Promise<void> {
-    // `-U` updates an existing item. `-w` (last token, no inline value) prompts twice for the
-    // password and reads both lines from stdin — keeping the secret out of argv (visible via `ps`).
-    const res = await this.runner.run(
-      "/usr/bin/security",
-      ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-U", "-w"],
-      { stdin: `${value}\n${value}\n` },
-    );
+    // `-U` updates an existing item. The value is passed inline with `-w`: the stdin form makes
+    // `security` emit interactive "password data for new item:" / "retype password" prompts, which is
+    // exactly the confirmation noise we don't want. The trade-off is a brief, local argv exposure of
+    // the value (visible to a same-user `ps` only for this short-lived process) — the same approach
+    // gw-cli takes, and the machine owner can already read the keychain.
+    const res = await this.runner.run("/usr/bin/security", [
+      "add-generic-password",
+      "-s",
+      KEYCHAIN_SERVICE,
+      "-a",
+      name,
+      "-U",
+      "-w",
+      value,
+    ]);
     if (res.code !== 0) {
       throw new Error(`Couldn't save ${name} to the keychain: ${res.stderr.trim() || `exit ${res.code}`}`);
     }
