@@ -447,6 +447,18 @@ const extractTasksArg = {
   },
 } as const;
 
+/** Print the full task-extraction debug stream to stdout (one-off runs; not applied under --watch). */
+const debugArg = {
+  debug: { type: "boolean", default: false, description: "Print full task-extraction debug output to stdout" },
+} as const;
+
+/** Inputs shared by serve and sync (everything `buildDashboard` reads). */
+const buildArgs = {
+  ...sourceArg,
+  ...filterArgs,
+} as const;
+
+
 /** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
  *  > argus.json > default). The `enabled` toggle is unused here — these commands extract on demand. */
 function taskExtractionOptions(
@@ -480,6 +492,7 @@ const indexRebuild = defineCommand({
   args: {
     ...sourceArg,
     ...extractTasksArg,
+    ...debugArg,
     force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
   run: handler((args) =>
@@ -487,6 +500,7 @@ const indexRebuild = defineCommand({
       { ...syncOptions(args), force: args.force },
       log,
       toExtractTasksOverride(args["extract-tasks"]),
+      !!args.debug,
     ),
   ),
 });
@@ -497,10 +511,16 @@ const indexRefresh = defineCommand({
     id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
     ...sourceArg,
     ...extractTasksArg,
+    ...debugArg,
   },
   run: handler((args) =>
     runIndexRefresh(
-      { ...syncOptions(args), ids: args._, extractTasks: toExtractTasksOverride(args["extract-tasks"]) },
+      {
+        ...syncOptions(args),
+        ids: args._,
+        extractTasks: toExtractTasksOverride(args["extract-tasks"]),
+        debug: !!args.debug,
+      },
       log,
     ),
   ),
@@ -521,6 +541,7 @@ const index = defineCommand({
   args: {
     ...sourceArg,
     ...extractTasksArg,
+    ...debugArg,
     watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
   },
@@ -536,7 +557,7 @@ const index = defineCommand({
         const ac = abortOnSignals();
         await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks }, log, ac.signal);
       } else {
-        await runIndex(syncOptions(args), log, extractTasks);
+        await runIndex(syncOptions(args), log, extractTasks, !!args.debug);
       }
     });
   },
