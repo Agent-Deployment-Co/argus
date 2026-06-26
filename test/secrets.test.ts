@@ -77,9 +77,11 @@ describe("KeychainSecretStore (mock /usr/bin/security)", () => {
     await new KeychainSecretStore(runner).set("ANTHROPIC_API_KEY", "sk-xyz");
     const call = calls[0]!;
     expect(call.file).toBe("/usr/bin/security");
-    // Inline `-w <value>` (not stdin) so `security` doesn't emit its own password prompts.
+    // Inline `-w <value>` (not stdin) so `security` doesn't emit its own password prompts; the
+    // reverse-DNS service id avoids collisions, and `-l Argus` is the friendly display name.
     expect(call.args).toEqual([
-      "add-generic-password", "-s", "argus", "-a", "ANTHROPIC_API_KEY", "-U", "-w", "sk-xyz",
+      "add-generic-password", "-s", "co.agentdeployment.argus", "-a", "ANTHROPIC_API_KEY",
+      "-l", "Argus", "-U", "-w", "sk-xyz",
     ]);
     expect(call.stdin).toBeUndefined();
   });
