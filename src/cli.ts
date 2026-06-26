@@ -650,22 +650,13 @@ const config = defineCommand({
 
 // --- `argus secret`: manage stored LLM API keys (#132) ---
 
-/** Human-readable labels for the prompt; falls back to the env-var name itself. */
-const SECRET_LABELS: Record<string, string> = {
-  ANTHROPIC_API_KEY: "Anthropic API key",
-  OPENAI_API_KEY: "OpenAI API key",
-  GEMINI_API_KEY: "Gemini API key",
-  OPENROUTER_API_KEY: "OpenRouter API key",
-};
-
-/** Prompt for a secret on the terminal with the input hidden (no echo). Raw-mode, so the value never
- *  reaches the screen or shell history; supports backspace and Ctrl-C. Pressing Enter on an empty line
- *  returns "" (the caller treats that as "skip"). The prompt is written to stderr. */
+/** Prompt for a secret on the terminal, echoing each character as `*`. Raw-mode, so the raw value
+ *  never reaches the screen or shell history; supports backspace and Ctrl-C. Pressing Enter on an empty
+ *  line returns "" (the caller treats that as "skip"). Prompt and mask are written to stderr. */
 function promptSecret(name: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const input = process.stdin;
-    const label = SECRET_LABELS[name] ?? name;
-    process.stderr.write(`Enter ${label} (${name}) [Enter to skip]: 🔒 `);
+    process.stderr.write(`Set ${name} [Enter to skip] 🔒: `);
     let value = "";
     const cleanup = () => {
       input.off("data", onData);
@@ -689,11 +680,15 @@ function promptSecret(name: string): Promise<string> {
           return;
         }
         if (code === 127 || code === 8) {
-          // Backspace / DEL — drop the last char (nothing was echoed, so no visual change needed).
-          value = value.slice(0, -1);
+          // Backspace / DEL — erase the last char and its mask.
+          if (value.length) {
+            value = value.slice(0, -1);
+            process.stderr.write("\b \b");
+          }
         } else if (code >= 32) {
-          // Printable — accumulate, but never echo.
+          // Printable — accumulate and echo a mask character.
           value += ch;
+          process.stderr.write("*");
         }
         // Other control chars are ignored.
       }
@@ -740,7 +735,7 @@ const secretSet = defineCommand({
     const store = defaultSecretStore();
     await store.set(name, value);
     const status = await store.describe(name);
-    log(`Saved ${name} (${status.hint ?? "set"}).`);
+    log(`Saved ${name} (${status.hint ?? "set"})`);
   }),
 });
 
