@@ -26,7 +26,6 @@ import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
-import type { TaskExtractionOptions } from "../indexing/interpret/task-extraction.ts";
 
 export interface ServeOptions {
   port: number;
@@ -35,7 +34,7 @@ export interface ServeOptions {
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
   /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
-  taskExtraction: TaskExtractionOptions;
+  taskExtraction: ResolvedTaskExtraction;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
   installSignalHandlers?: boolean;
