@@ -25,18 +25,45 @@ bun run build:web                 # build web/ into dist/web
 bun run src/cli.ts serve --open # serve it at http://localhost:4242
 ```
 
-For live-reloading UI development, run the API and the Vite dev server in two terminals:
+For live-reloading UI development, use the combined dev script:
 
 ```bash
-bun run src/cli.ts serve --port 4242   # terminal 1: the JSON API
-bun run dev:web                          # terminal 2: Vite (proxies /api → 4242)
+bun run dev
 ```
 
-Then open the URL Vite prints. Edits under `web/src/**` hot-reload without a rebuild.
+This runs both halves with one command (see `scripts/dev.sh`):
+
+- The **API server** (`argus serve` under `bun --watch`) — restarts on any change under `src/`.
+- The **Vite dev server** for `web/` — hot-reloads the browser on changes under `web/src/**`.
+
+Vite proxies `/api` to the API server, so the two talk to each other. The script opens the web
+app in your browser automatically once Vite is listening. `Ctrl-C` stops both cleanly.
+
+A few conveniences make it safe to run several worktrees' dev servers at once:
+
+- **Random free ports.** Both servers bind random unused ports by default, so concurrent dev
+  servers never collide. Pin them with `ARGUS_PORT=<n>` (the API port — `argus serve` reads this
+  env var as its default port too) and `WEB_PORT=<n>` (the Vite port). `ARGUS_PORT` doubles as the
+  proxy target Vite points `/api` at.
+- **Per-worktree store + config.** `ARGUS_HOME` defaults to this worktree's `./tmp`, so the local
+  store lands in `./tmp/data` and config in `./tmp/config` — each worktree gets its own isolated
+  data, and `rm -rf tmp` resets it. Override with `ARGUS_HOME=<dir>` (or the granular
+  `ARGUS_DATA_DIR`/`ARGUS_CONFIG_DIR` vars, which win over `ARGUS_HOME`) to point at a shared store.
+
+```bash
+ARGUS_PORT=4242 bun run dev          # pin the API port
+ARGUS_HOME=~/.argus bun run dev      # use a shared store/config instead of the worktree's ./tmp
+```
+
+A fresh worktree starts with an empty local store under `./tmp` until you index into it
+(`bun run src/cli.ts index`). To run the two halves by hand instead, start them in separate
+terminals: `bun run src/cli.ts serve --port 4242` and `bun run dev:web` (which proxies `/api` →
+4242).
 
 ## Development commands
 
 ```bash
+bun run dev                    # API + Vite together (random ports, per-worktree ./tmp store, opens browser)
 bun run typecheck              # TypeScript checks (root src + web/)
 bun test                       # Full test suite
 bun test test/parse.test.ts    # One test file
