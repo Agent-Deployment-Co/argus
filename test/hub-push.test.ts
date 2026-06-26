@@ -36,7 +36,7 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
   db.run("CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
   db.query("INSERT INTO store_metadata(key, value) VALUES ('client_id', ?)").run(clientId);
   db.run("CREATE TABLE client_fingerprint (key TEXT NOT NULL, value TEXT NOT NULL, ts_ms INTEGER NOT NULL, PRIMARY KEY (key, ts_ms))");
-  db.run("CREATE TABLE hub_session_cursors (hub_url TEXT NOT NULL, client_id TEXT NOT NULL, session_id TEXT NOT NULL, last_ts INTEGER, uploaded_at_ms INTEGER NOT NULL, PRIMARY KEY (hub_url, client_id, session_id))");
+  db.run("CREATE TABLE hub_session_cursors (hub_url TEXT NOT NULL, client_id TEXT NOT NULL, session_id TEXT NOT NULL, last_ts INTEGER, content_digest TEXT, parser_version INTEGER, uploaded_at_ms INTEGER NOT NULL, PRIMARY KEY (hub_url, client_id, session_id))");
   for (const fp of opts.fingerprint ?? []) {
     db.query("INSERT INTO client_fingerprint(key, value, ts_ms) VALUES (?, ?, ?)").run(fp.key, fp.value, fp.tsMs);
   }
@@ -76,12 +76,12 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
   return path;
 }
 
-function cursorRows(path: string): Array<{ hub_url: string; client_id: string; session_id: string; last_ts: number | null }> {
+function cursorRows(path: string): Array<{ hub_url: string; client_id: string; session_id: string; last_ts: number | null; content_digest: string | null; parser_version: number | null }> {
   const db = new Database(path, { readonly: true });
   try {
     return db
-      .query<{ hub_url: string; client_id: string; session_id: string; last_ts: number | null }, []>(
-        "SELECT hub_url, client_id, session_id, last_ts FROM hub_session_cursors ORDER BY hub_url, session_id",
+      .query<{ hub_url: string; client_id: string; session_id: string; last_ts: number | null; content_digest: string | null; parser_version: number | null }, []>(
+        "SELECT hub_url, client_id, session_id, last_ts, content_digest, parser_version FROM hub_session_cursors ORDER BY hub_url, session_id",
       )
       .all();
   } finally {
@@ -329,10 +329,11 @@ describe("pushHubJson with client-side Hub cursors", () => {
       expect(calls[0]!.url).toBe("http://hub.test/api/sync");
       expect(calls[0]!.body.rows.sessions).toHaveLength(1);
       expect(calls[0]!.body.rows.usage).toHaveLength(1);
-      expect(cursorRows(path)).toEqual([
-        { hub_url: "http://hub.test", client_id: TEST_CLIENT_ID, session_id: "sess-only", last_ts: 1_000_000 },
-      ]);
-      expect(readChangedHubSessionIds(path, "http://hub.test", TEST_CLIENT_ID).sessions).toEqual([]);
+      expect(cursorRows(path)).toHaveLength(1);
+      expect(cursorRows(path)[0]).toMatchObject({ hub_url: "http://hub.test", client_id: TEST_CLIENT_ID, session_id: "sess-only", last_ts: 1_000_000 });
+      expect(cursorRows(path)[0]!.content_digest).toBeString();
+      expect(cursorRows(path)[0]!.parser_version).toBeNumber();
+      expect(readChangedHubSessionIds(path, "http://hub.test", TEST_CLIENT_ID).sessions).toHaveLength(0);
     } finally { globalThis.fetch = originalFetch; }
   });
 
@@ -390,10 +391,12 @@ describe("pushHubJson with client-side Hub cursors", () => {
       expect(res.status).toBe(500);
       expect(calls).toHaveLength(1);
       expect(calls[0]!.url).toBe("http://hub.test/api/sync");
-      expect(cursorRows(path)).toEqual([]);
-      expect(readChangedHubSessionIds(path, "http://hub.test", TEST_CLIENT_ID).sessions).toEqual([
-        { sessionId: "sess-1", lastTs: 5_000_000 },
-      ]);
+      expect(cursorRows(path)).toHaveLength(0);
+      const changed = readChangedHubSessionIds(path, "http://hub.test", TEST_CLIENT_ID).sessions;
+      expect(changed).toHaveLength(1);
+      expect(changed[0]).toMatchObject({ sessionId: "sess-1", lastTs: 5_000_000 });
+      expect(changed[0]!.contentDigest).toBeString();
+      expect(changed[0]!.parserVersion).toBeNumber();
     } finally { globalThis.fetch = originalFetch; }
   });
 
@@ -590,6 +593,79 @@ describe("pushHubJson Hub probe", () => {
       const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(true);
       expect(c2[0]!.body.rows.sessions).toHaveLength(0); // cursor-only: nothing changed
+    } finally { globalThis.fetch = originalFetch; }
+  });
+});
+
+// ---- Digest-based cursor invalidation (Finding #3) --------------------------------------
+
+describe("pushHubJson digest-based cursor invalidation", () => {
+  test("task extraction (adding resolved_tasks rows without bumping last_ts) triggers re-upload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 7_000_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1, calls: c1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true); }
+    finally { globalThis.fetch = originalFetch; }
+    expect(c1[0]!.body.rows.sessions).toHaveLength(1);
+
+    // Add a task row without changing last_ts — simulates task extraction reindex
+    const db = new Database(path);
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 7000000, ?)")
+      .run("sess-1", JSON.stringify({ title: "new task" }));
+    db.close();
+
+    // Second sync: digest changed → session re-uploads even though last_ts is the same
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1);
+      expect(c2[0]!.body.rows.tasks).toHaveLength(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("archive state change without last_ts bump triggers re-upload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-arch", lastTs: 8_000_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { await pushHubJson("http://hub.test", "k", path); }
+    finally { globalThis.fetch = originalFetch; }
+
+    // Archive the session without changing last_ts
+    const db = new Database(path);
+    db.query("UPDATE resolved_sessions SET archived = 1 WHERE session_id = ?").run("sess-arch");
+    db.close();
+
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1); // archived flag change triggers re-upload
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("identical content and parser version is still skipped by cursor", async () => {
+    const path = buildArgusDb({ sessionId: "sess-skip", lastTs: 9_000_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { await pushHubJson("http://hub.test", "k", path); }
+    finally { globalThis.fetch = originalFetch; }
+
+    // Second sync with nothing changed — cursor should skip it
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(0); // no change → skipped
     } finally { globalThis.fetch = originalFetch; }
   });
 });
