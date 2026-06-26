@@ -287,18 +287,33 @@ describe("fetchUnknownSessionIds", () => {
 
 interface CapturedRequest { url: string; body: any }
 
-/** Mock fetch that captures each sync body. */
+/** Mock fetch that routes /api/sync and /api/sync/unknown-sessions independently.
+ *  `calls` captures only /api/sync requests (preserving existing cursor-test assertions);
+ *  `probeCalls` captures probe requests. The probe returns an empty unknown list by default. */
 function routedFetch(
   syncResponse: { ok: boolean; status: number; body: string } = { ok: true, status: 200, body: '{"sessionsUpserted":0,"usersKnown":1}' },
-): { fetch: typeof fetch; calls: CapturedRequest[] } {
+  probeResponse?: { ok: boolean; status: number; unknownIds?: string[] },
+): { fetch: typeof fetch; calls: CapturedRequest[]; probeCalls: CapturedRequest[] } {
   const calls: CapturedRequest[] = [];
+  const probeCalls: CapturedRequest[] = [];
   const fn = (async (url: any, options: any) => {
     const u = String(url);
     const body = options?.body ? JSON.parse(String(options.body)) : undefined;
+    if (u.includes("/unknown-sessions")) {
+      probeCalls.push({ url: u, body });
+      const probe = probeResponse ?? { ok: true, status: 200, unknownIds: [] };
+      return {
+        ok: probe.ok,
+        status: probe.status,
+        text: async () => probe.ok
+          ? JSON.stringify({ unknownSessionIds: probe.unknownIds ?? [] })
+          : "error",
+      } as Response;
+    }
     calls.push({ url: u, body });
     return { ok: syncResponse.ok, status: syncResponse.status, text: async () => syncResponse.body } as Response;
   }) as any;
-  return { fetch: fn, calls };
+  return { fetch: fn, calls, probeCalls };
 }
 
 describe("pushHubJson with client-side Hub cursors", () => {
@@ -502,6 +517,79 @@ describe("pushHubJson filter threading", () => {
       // Second sync with source=codex; only sess-codex is in scope but cursor skips it (unchanged)
       await pushHubJson("http://hub.test", "k", path, { source: "codex" });
       expect(calls[1]!.body.rows.sessions).toHaveLength(0);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+});
+
+// ---- Hub probe recovery (Finding #2) -----------------------------------------------------
+
+describe("pushHubJson Hub probe", () => {
+  test("session cursor-skipped but Hub-unknown gets re-uploaded", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 1_000_000 });
+    const originalFetch = globalThis.fetch;
+    // First sync: uploads sess-1 and records cursor
+    const { fetch: f1, calls: c1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true); }
+    finally { globalThis.fetch = originalFetch; }
+    expect(c1).toHaveLength(1); // one sync call
+
+    // Hub DB is wiped: probe now says sess-1 is unknown, even though local cursor exists
+    const { fetch: f2, calls: c2 } = routedFetch(
+      { ok: true, status: 200, body: '{"sessionsUpserted":1}' },
+      { ok: true, status: 200, unknownIds: ["sess-1"] }, // Hub says it's unknown
+    );
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2).toHaveLength(1);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1); // re-uploaded despite cursor
+      expect(c2[0]!.body.rows.sessions[0]!.session_id).toBe("sess-1");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("probe 404 falls back to full upload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 2_000_000 });
+    const originalFetch = globalThis.fetch;
+    // First sync to record a cursor
+    const { fetch: f1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { await pushHubJson("http://hub.test", "k", path); }
+    finally { globalThis.fetch = originalFetch; }
+
+    // Second sync: probe returns 404 (older Hub), should fall back to full upload
+    const { fetch: f2, calls: c2 } = routedFetch(
+      { ok: true, status: 200, body: '{"sessionsUpserted":1}' },
+      { ok: false, status: 404, unknownIds: [] },
+    );
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1); // all sessions uploaded
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("probe non-404 failure falls back to cursor-only (session not re-uploaded)", async () => {
+    const path = buildArgusDb({ sessionId: "sess-1", lastTs: 3_000_000 });
+    const originalFetch = globalThis.fetch;
+    // First sync to record a cursor
+    const { fetch: f1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { await pushHubJson("http://hub.test", "k", path); }
+    finally { globalThis.fetch = originalFetch; }
+
+    // Second sync: probe returns 500, cursor says nothing changed → upload empty payload
+    const { fetch: f2, calls: c2 } = routedFetch(
+      { ok: true, status: 200, body: '{"sessionsUpserted":0}' },
+      { ok: false, status: 500, unknownIds: [] },
+    );
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(0); // cursor-only: nothing changed
     } finally { globalThis.fetch = originalFetch; }
   });
 });

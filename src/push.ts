@@ -472,8 +472,44 @@ export async function pushHubJson(
     }
     selectedSessions = selection.sessions;
     onlySessionIds = new Set(selectedSessions.map((session) => session.sessionId));
-    const known = selection.totalSessions - selectedSessions.length;
-    opts.log?.(`Hub already has ${known}/${selection.totalSessions} sessions at the latest local timestamp; uploading ${selectedSessions.length}.`);
+
+    // Probe the Hub for sessions it doesn't know about. A restored/wiped Hub DB returns sessions
+    // the local cursor already marked as uploaded — the probe catches them and adds them back.
+    // 404 means older Hub without this endpoint → fall back to full upload. Any other probe failure
+    // is non-fatal: log and continue with cursor-only selection.
+    let allIds: string[];
+    try {
+      allIds = readSessionIds(dbPath, filters);
+    } catch (err) {
+      allIds = [];
+    }
+    if (allIds.length > 0) {
+      const CHUNK = 10_000;
+      let probeFailed = false;
+      let probeFallbackFull = false;
+      for (let i = 0; i < allIds.length; i += CHUNK) {
+        const chunk = allIds.slice(i, i + CHUNK);
+        const probeResult = await fetchUnknownSessionIds(base, hubKey, clientId, chunk);
+        if (!probeResult.ok) {
+          if (probeResult.status === 404) {
+            probeFallbackFull = true;
+          } else {
+            probeFailed = true;
+          }
+          break;
+        }
+        for (const id of probeResult.unknownSessionIds ?? []) onlySessionIds.add(id);
+      }
+      if (probeFallbackFull) {
+        onlySessionIds = undefined; // Hub doesn't support probe — upload everything
+        opts.log?.("Hub does not support unknown-session probe; uploading all sessions.");
+      } else if (probeFailed) {
+        opts.log?.("Hub probe failed; falling back to cursor-only selection.");
+      }
+    }
+
+    const known = selection.totalSessions - (onlySessionIds?.size ?? 0);
+    opts.log?.(`Hub already has ${known}/${selection.totalSessions} sessions at the latest local timestamp; uploading ${onlySessionIds?.size ?? selection.totalSessions}.`);
   }
 
   let uploadedSessions: HubSessionCursorRow[];
