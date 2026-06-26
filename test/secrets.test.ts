@@ -72,16 +72,16 @@ describe("FileSecretStore (real round-trip)", () => {
 });
 
 describe("KeychainSecretStore (mock /usr/bin/security)", () => {
-  test("set writes the value twice on stdin, never in argv", async () => {
+  test("set passes the value inline to security (no interactive prompt)", async () => {
     const { runner, calls } = mockRunner(() => ok());
     await new KeychainSecretStore(runner).set("ANTHROPIC_API_KEY", "sk-xyz");
     const call = calls[0]!;
     expect(call.file).toBe("/usr/bin/security");
+    // Inline `-w <value>` (not stdin) so `security` doesn't emit its own password prompts.
     expect(call.args).toEqual([
-      "add-generic-password", "-s", "argus", "-a", "ANTHROPIC_API_KEY", "-U", "-w",
+      "add-generic-password", "-s", "argus", "-a", "ANTHROPIC_API_KEY", "-U", "-w", "sk-xyz",
     ]);
-    expect(call.args).not.toContain("sk-xyz"); // not in argv
-    expect(call.stdin).toBe("sk-xyz\nsk-xyz\n"); // password + retype
+    expect(call.stdin).toBeUndefined();
   });
 
   test("get strips the trailing newline", async () => {
