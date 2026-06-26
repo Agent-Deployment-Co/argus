@@ -752,7 +752,9 @@ async function run() {
     process.stdout.write(pkg.version + "\n");
     return;
   }
-  printBanner();
+  // The `argus secret` commands are utilitarian (and `secret set` reads a key from stdin), so skip
+  // the banner there — it's just noise.
+  if (argv[0] !== "secret") printBanner();
   // A bare `argus` (no subcommand) shows the usage/help with a success exit code; citty's own
   // "no command specified" path would treat the same input as an error. `argus <command>` and
   // `argus --help` flow through citty normally.
