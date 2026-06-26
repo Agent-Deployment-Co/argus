@@ -158,12 +158,15 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
               void save(e.target.value).catch(() => {});
             }}
           >
-            <option value="">Default{effectiveValue != null ? ` (${effectiveValue})` : ""}</option>
-            {(ui.options ?? []).map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
+            {(ui.options ?? []).map((opt, i) =>
+              opt === "separator" ? (
+                <hr key={`sep-${i}`} />
+              ) : (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ),
+            )}
           </Select>
         );
       case "textarea":

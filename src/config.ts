@@ -107,6 +107,17 @@ export function getPath(obj: unknown, dotted: string): unknown {
   return cur;
 }
 
+/** One option in a `select` control: the stored value plus its display label. An empty `value` is the
+ *  "unset" choice (clears the setting so it falls back through env/default). */
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+/** An item in a select's option list: a real option, or a visual "separator" (rendered as a divider).
+ *  The list is presented in the exact order given — pinned/special items first, then the rest. */
+export type SelectItem = SelectOption | "separator";
+
 /** How a setting is presented as an editable control in the web settings surface (#154). The control
  *  follows from the setting's type: boolean → toggle, fixed-choice → select, free number → number, the
  *  rest → text/textarea. UI-only metadata; the value contract still lives in `parse()`/`default`. */
@@ -116,8 +127,9 @@ export interface SettingUi {
   /** One-line explanation shown beside the control. */
   description?: string;
   control: "toggle" | "text" | "textarea" | "number" | "select";
-  /** Allowed values for a `select` control (the enum the value must be one of). */
-  options?: readonly string[];
+  /** The full ordered option list for a `select` control, including the unset choice and any
+   *  separators. Presented verbatim, so order it deliberately (see the UI ordering rules in CLAUDE.md). */
+  options?: readonly SelectItem[];
 }
 
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
@@ -247,6 +259,19 @@ type OptionalString = string | undefined;
 type OptionalProvider = LlmProvider | undefined;
 type OptionalNumber = number | undefined;
 
+/** The provider dropdown's option list. Pinned at the top: the unset choice (labeled with the default
+ *  provider it resolves to) and an explicit "Off". Then a separator, then every selectable provider in
+ *  alpha order (including claude-cli, excluding the special "off" which is pinned above). */
+const PROVIDER_OPTIONS: SelectItem[] = [
+  { value: "", label: `Default (${DEFAULT_TASK_PROVIDER})` },
+  { value: "off", label: "Off" },
+  "separator",
+  ...SELECTABLE_PROVIDERS.filter((p) => p !== "off")
+    .map((p) => p as string)
+    .sort()
+    .map((p) => ({ value: p, label: p })),
+];
+
 /** The shared `llm.*` settings. */
 export const LLM_SETTINGS = {
   provider: {
@@ -258,9 +283,7 @@ export const LLM_SETTINGS = {
       label: "Provider",
       description: "Which model backend Argus's AI features use.",
       control: "select",
-      // Alpha ascending: the providers have no inherent ranking, so present them in an obvious order
-      // rather than registry/declaration order (see the "User-facing UI" rules in CLAUDE.md).
-      options: [...SELECTABLE_PROVIDERS].sort(),
+      options: PROVIDER_OPTIONS,
     },
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,

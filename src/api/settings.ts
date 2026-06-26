@@ -13,6 +13,7 @@ import {
   TASK_SETTINGS,
   writeConfigAtomic,
   type ArgusConfig,
+  type SelectOption,
   type Setting,
   type SettingUi,
 } from "../config.ts";
@@ -155,7 +156,10 @@ export function applySetting(path: string, raw: unknown, configPath: string = CO
     // parse() returns undefined to reject a present-but-invalid value (e.g. bad enum / NaN). A coerced
     // value is never undefined, so undefined here means "rejected".
     if (value === undefined) {
-      const allowed = setting.ui?.options ? ` (expected one of: ${setting.ui.options.join(", ")})` : "";
+      const values = (setting.ui?.options ?? [])
+        .filter((o): o is SelectOption => o !== "separator" && o.value !== "")
+        .map((o) => o.value);
+      const allowed = values.length ? ` (expected one of: ${values.join(", ")})` : "";
       return { ok: false, status: 400, error: `Invalid value for ${setting.ui?.label ?? path}${allowed}.` };
     }
   }
