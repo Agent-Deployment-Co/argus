@@ -134,7 +134,7 @@ describe("openai provider", () => {
     expect(body.max_tokens).toBeUndefined();
   });
 
-  test("honors a custom baseUrl (trailing slash trimmed) and uses classic max_tokens", async () => {
+  test("honors a custom baseUrl (trailing slash trimmed); still native max_completion_tokens", async () => {
     const { fetch, calls } = fakeFetch([json({ choices: [{ message: { content: "ok" } }] })]);
     await complete(
       { prompt: "p" },
@@ -142,10 +142,10 @@ describe("openai provider", () => {
       { fetch },
     );
     expect(calls[0]!.url).toBe("http://localhost:1234/v1/chat/completions");
-    // A self-hosted / compatible endpoint speaks classic OpenAI → max_tokens.
+    // The native openai provider uses the modern field regardless of base URL.
     const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.max_tokens).toBeDefined();
-    expect(body.max_completion_tokens).toBeUndefined();
+    expect(body.max_completion_tokens).toBeDefined();
+    expect(body.max_tokens).toBeUndefined();
   });
 });
 
