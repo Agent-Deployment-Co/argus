@@ -2,6 +2,7 @@ import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tans
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
+import { Select } from "../components/Select";
 import type { SessionListItem, SessionSort } from "../types";
 
 type FilterKey = "project" | "source";
@@ -130,18 +131,16 @@ function SessionList() {
           <span className="session-count">{rows.length === total ? total : `${rows.length} / ${total}`}</span>
         </div>
         <div className="session-filters">
-          <span className="select-wrap">
-            <select
-              className="session-sort"
-              value={sort}
-              onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
-              aria-label="Sort sessions"
-            >
-              {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
-                <option key={s} value={s}>{SORT_LABELS[s]}</option>
-              ))}
-            </select>
-          </span>
+          <Select
+            variant="pill"
+            value={sort}
+            onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
+            aria-label="Sort sessions"
+          >
+            {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
+              <option key={s} value={s}>{SORT_LABELS[s]}</option>
+            ))}
+          </Select>
           {activeFilters.map(([key, value]) => (
             <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
               {key}: {value}
