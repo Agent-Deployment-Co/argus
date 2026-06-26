@@ -723,7 +723,7 @@ function requireSecretName(args: Record<string, unknown>): string {
 
 const secretSet = defineCommand({
   meta: { name: "set", description: "store an API key (read from stdin, or prompted if interactive)" },
-  args: { name: { type: "positional", required: true, description: "secret name (e.g. CLAUDE_API_KEY)" } },
+  args: { name: { type: "positional", required: true, description: "secret name (e.g. ANTHROPIC_API_KEY)" } },
   run: handler(async (args) => {
     const name = requireSecretName(args);
     const value = await readSecretValue(name);

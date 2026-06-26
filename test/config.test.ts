@@ -223,7 +223,7 @@ describe("llm block (#132)", () => {
       model: "claude-haiku-4-5",
       maxTokens: 4096,
       baseUrl: "http://x",
-      apiKeyEnv: "CLAUDE_API_KEY", // defaulted from the provider
+      apiKeyEnv: "ANTHROPIC_API_KEY", // defaulted from the provider
     });
   });
 
