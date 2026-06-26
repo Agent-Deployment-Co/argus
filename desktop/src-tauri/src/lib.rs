@@ -503,13 +503,6 @@ pub fn run() {
             let stop_item = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
             let about = MenuItem::with_id(app, "about", "About Argus", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Argus", true, None::<&str>)?;
-            let version = MenuItem::with_id(
-                app,
-                "version",
-                &format!("Version {}", env!("CARGO_PKG_VERSION")),
-                false,
-                None::<&str>,
-            )?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -520,7 +513,6 @@ pub fn run() {
                     &stop_item,
                     &about,
                     &PredefinedMenuItem::separator(app)?,
-                    &version,
                     &quit,
                 ],
             )?;
