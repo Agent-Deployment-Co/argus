@@ -675,6 +675,7 @@ const config = defineCommand({
   },
 });
 
+
 // --- `argus secret`: manage stored LLM API keys (#132) ---
 
 /** Prompt for a secret on the terminal, echoing each character as `*`. Raw-mode, so the raw value

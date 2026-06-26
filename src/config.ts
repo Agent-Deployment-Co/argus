@@ -164,6 +164,7 @@ const HUB_SETTINGS = {
   } satisfies Setting<string | undefined>,
 };
 
+
 function parseNumber(raw: unknown): number | undefined {
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
@@ -314,6 +315,7 @@ export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): vo
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf8");
 }
+
 
 /**
  * Resolve the shared `llm.*` block into a `ResolvedLlmConfig`. `overrides` carries a consumer's own
