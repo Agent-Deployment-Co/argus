@@ -20,7 +20,7 @@ function extractText(body: unknown): string {
 
 export const claudeApiProvider: ProviderDescriptor = {
   name: "claude-api",
-  apiKeyEnv: "ANTHROPIC_API_KEY",
+  apiKeyEnv: "CLAUDE_API_KEY",
   defaultModel: DEFAULT_ANTHROPIC_MODEL,
   requiresApiKey: true,
   complete(call: ProviderCall) {

@@ -42,7 +42,7 @@ const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "" });
 
 describe("allowlist + masking", () => {
   test("isSecretName accepts the provider keys and rejects others", () => {
-    expect(isSecretName("ANTHROPIC_API_KEY")).toBe(true);
+    expect(isSecretName("CLAUDE_API_KEY")).toBe(true);
     expect(isSecretName("OPENAI_API_KEY")).toBe(true);
     expect(isSecretName("HOME")).toBe(false);
   });
@@ -56,31 +56,31 @@ describe("FileSecretStore (real round-trip)", () => {
   test("set/get/describe/delete with 0600 perms", async () => {
     const path = tmpFile();
     const store = new FileSecretStore(path);
-    expect(await store.get("ANTHROPIC_API_KEY")).toBeUndefined();
-    expect(await store.describe("ANTHROPIC_API_KEY")).toEqual({ configured: false });
+    expect(await store.get("CLAUDE_API_KEY")).toBeUndefined();
+    expect(await store.describe("CLAUDE_API_KEY")).toEqual({ configured: false });
 
-    await store.set("ANTHROPIC_API_KEY", "sk-secret-1234");
-    expect(await store.get("ANTHROPIC_API_KEY")).toBe("sk-secret-1234");
-    expect(await store.describe("ANTHROPIC_API_KEY")).toEqual({ configured: true, hint: "…1234" });
+    await store.set("CLAUDE_API_KEY", "sk-secret-1234");
+    expect(await store.get("CLAUDE_API_KEY")).toBe("sk-secret-1234");
+    expect(await store.describe("CLAUDE_API_KEY")).toEqual({ configured: true, hint: "…1234" });
     // file is chmod 600
     expect(statSync(path).mode & 0o777).toBe(0o600);
 
-    expect(await store.delete("ANTHROPIC_API_KEY")).toBe(true);
-    expect(await store.delete("ANTHROPIC_API_KEY")).toBe(false);
-    expect(await store.get("ANTHROPIC_API_KEY")).toBeUndefined();
+    expect(await store.delete("CLAUDE_API_KEY")).toBe(true);
+    expect(await store.delete("CLAUDE_API_KEY")).toBe(false);
+    expect(await store.get("CLAUDE_API_KEY")).toBeUndefined();
   });
 });
 
 describe("KeychainSecretStore (mock /usr/bin/security)", () => {
   test("set passes the value inline to security (no interactive prompt)", async () => {
     const { runner, calls } = mockRunner(() => ok());
-    await new KeychainSecretStore(runner).set("ANTHROPIC_API_KEY", "sk-xyz");
+    await new KeychainSecretStore(runner).set("CLAUDE_API_KEY", "sk-xyz");
     const call = calls[0]!;
     expect(call.file).toBe("/usr/bin/security");
     // Inline `-w <value>` (not stdin) so `security` doesn't emit its own password prompts; the
     // reverse-DNS service id avoids collisions, and `-l Argus` is the friendly display name.
     expect(call.args).toEqual([
-      "add-generic-password", "-s", "co.agentdeployment.argus", "-a", "ANTHROPIC_API_KEY",
+      "add-generic-password", "-s", "co.agentdeployment.argus", "-a", "CLAUDE_API_KEY",
       "-l", "Argus", "-U", "-w", "sk-xyz",
     ]);
     expect(call.stdin).toBeUndefined();
@@ -117,15 +117,15 @@ describe("DpapiSecretStore (mock PowerShell)", () => {
     });
     const store = new DpapiSecretStore(runner, path);
 
-    await store.set("ANTHROPIC_API_KEY", "plaintext-key");
+    await store.set("CLAUDE_API_KEY", "plaintext-key");
     // value went via env, not argv
     expect(calls[0]!.env?.ARGUS_SECRET_VALUE).toBe("plaintext-key");
     expect(calls[0]!.args).not.toContain("plaintext-key");
 
-    expect(await store.get("ANTHROPIC_API_KEY")).toBe("plaintext-key");
-    expect(await store.describe("ANTHROPIC_API_KEY")).toEqual({ configured: true, hint: "…-key" });
-    expect(await store.delete("ANTHROPIC_API_KEY")).toBe(true);
-    expect(await store.get("ANTHROPIC_API_KEY")).toBeUndefined();
+    expect(await store.get("CLAUDE_API_KEY")).toBe("plaintext-key");
+    expect(await store.describe("CLAUDE_API_KEY")).toEqual({ configured: true, hint: "…-key" });
+    expect(await store.delete("CLAUDE_API_KEY")).toBe(true);
+    expect(await store.get("CLAUDE_API_KEY")).toBeUndefined();
   });
 });
 
