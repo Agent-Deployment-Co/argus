@@ -1,6 +1,6 @@
 import { Link, Outlet, useRouterState, useSearch } from "@tanstack/react-router";
 import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun, Wrench, type LucideIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
 import { useTheme } from "../lib/theme";
@@ -74,6 +74,12 @@ export function Layout() {
   // The settings surface takes over the whole view and reads its own data, so it bypasses the
   // snapshot gate (and we skip the snapshot fetch while it's open).
   const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
+  // Remember the last screen the user was actually on (not a settings sub-route) so "Back to app"
+  // closes settings and returns there — including when they navigated between settings categories or
+  // deep-linked straight into /settings. The full href keeps the active filters/date range.
+  const href = useRouterState({ select: (s) => s.location.href });
+  const lastAppHref = useRef("/");
+  if (!isSettings) lastAppHref.current = href;
   const filters = useSearch({ strict: false, select: (s) => ({ since: s.since, until: s.until, source: s.source }) });
   const query = useSnapshotQuery(filters, !isDebug && !isSettings);
   const snap = query.data;
@@ -90,7 +96,7 @@ export function Layout() {
 
   // Full-screen take-over: the settings surface renders its own two-pane layout (its own nav + a
   // "Back to app" affordance), replacing the app shell entirely. Deep-linkable via /settings.
-  if (isSettings) return <SettingsSurface />;
+  if (isSettings) return <SettingsSurface backTo={lastAppHref.current} />;
 
   return (
     <div className={`app-shell${collapsed ? " rail-collapsed" : ""}`}>

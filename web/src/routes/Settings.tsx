@@ -21,8 +21,10 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
 };
 
 /** The full settings surface (#154): a Codex-style take-over with a left category nav and a right
- *  pane of sectioned settings. Reached at /settings/$category and deep-linkable. */
-export function SettingsSurface() {
+ *  pane of sectioned settings. Reached at /settings/$category and deep-linkable. `backTo` is the app
+ *  screen to return to on close — the Layout supplies the last non-settings location; it defaults to
+ *  the dashboard for a cold deep-link (the route renders this with no props). */
+export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
   const { category } = useParams({ strict: false }) as { category?: string };
   const router = useRouter();
   const query = useSettingsQuery();
@@ -36,7 +38,7 @@ export function SettingsSurface() {
         <button
           type="button"
           className="settings-back"
-          onClick={() => router.history.back()}
+          onClick={() => router.history.push(backTo)}
         >
           <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
           <span>Back to app</span>
