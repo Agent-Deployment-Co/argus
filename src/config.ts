@@ -30,6 +30,11 @@ const PROVIDER_ALIASES: Record<string, LlmProvider> = { claude: "claude-cli" };
 
 /** The typed shape of `argus.json`. Designed to grow; task extraction is the first LLM consumer. */
 export interface ArgusConfig {
+  /** Desktop app updates. Enabled by default so signed releases install automatically. */
+  autoUpdate?: {
+    enabled?: boolean;
+    checkIntervalMinutes?: number;
+  };
   /** General LLM access settings, shared by every model-driven feature (#132). */
   llm?: {
     provider?: LlmProvider;
@@ -148,6 +153,8 @@ function parseString(raw: unknown): string {
   return String(raw);
 }
 
+const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
+
 const HUB_SETTINGS = {
   url: {
     path: "hub.url",
@@ -164,6 +171,25 @@ const HUB_SETTINGS = {
   } satisfies Setting<string | undefined>,
 };
 
+const AUTO_UPDATE_SETTINGS = {
+  enabled: {
+    path: "autoUpdate.enabled",
+    env: "ARGUS_AUTO_UPDATE_ENABLED",
+    default: true,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+  checkIntervalMinutes: {
+    path: "autoUpdate.checkIntervalMinutes",
+    env: "ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES",
+    default: DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES,
+    parse: (raw: unknown): number => {
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0
+        ? Math.max(1, Math.floor(n))
+        : DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES;
+    },
+  } satisfies Setting<number>,
+};
 
 function parseNumber(raw: unknown): number | undefined {
   const n = Number(raw);
@@ -287,9 +313,11 @@ const TASK_SETTINGS = {
 
 /** All known settings keyed by dotted argus.json path — used by `argus config get/set/list`. */
 export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries(
-  [...Object.values(TASK_SETTINGS), ...Object.values(HUB_SETTINGS)].map(
-    (s) => [s.path, s as Setting<unknown>],
-  ),
+  [
+    ...Object.values(TASK_SETTINGS),
+    ...Object.values(HUB_SETTINGS),
+    ...Object.values(AUTO_UPDATE_SETTINGS),
+  ].map((s) => [s.path, s as Setting<unknown>]),
 );
 
 /**
@@ -387,6 +415,22 @@ export function resolveTaskExtraction(
   if (promptFile) resolved.promptFile = promptFile;
   if (debugLog) resolved.debugLog = debugLog;
   return resolved;
+}
+
+/** Automatic desktop update behavior. Defaults on. */
+export function resolveAutoUpdateEnabled(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(AUTO_UPDATE_SETTINGS.enabled, flags, file);
+}
+
+/** Minutes between desktop update checks. Defaults to 60. */
+export function resolveAutoUpdateCheckIntervalMinutes(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): number {
+  return resolveSetting(AUTO_UPDATE_SETTINGS.checkIntervalMinutes, flags, file);
 }
 
 export interface ResolvedHubConfig {

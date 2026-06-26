@@ -246,6 +246,18 @@
                     </div>
                 </div>
                 <div class="row">
+                    <div class="label">Latest version</div>
+                    <div class="value">
+                        <code id="latest-version">unknown</code>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="label">Last check</div>
+                    <div class="value">
+                        <code id="last-update-check">Never</code>
+                    </div>
+                </div>
+                <div class="row">
                     <div class="label">Client ID</div>
                     <div class="value">
                         <code id="client-id">unavailable</code>
@@ -263,9 +275,21 @@
         </main>
 
         <script>
+            function formatUpdateCheck(ms) {
+                if (!Number.isFinite(ms)) return "Never";
+                return new Intl.DateTimeFormat(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                }).format(new Date(ms));
+            }
+
             function renderAbout(info) {
                 document.getElementById("version").textContent =
                     info.version || "unknown";
+                document.getElementById("latest-version").textContent =
+                    info.latestVersion || info.version || "unknown";
+                document.getElementById("last-update-check").textContent =
+                    formatUpdateCheck(info.lastUpdateCheckMs);
                 document.getElementById("build-number").textContent =
                     info.buildNumber || "dev";
                 document.getElementById("client-id").textContent =

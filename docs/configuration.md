@@ -34,6 +34,28 @@ the resolver walks them. Precedence, coercion, and naming live in exactly one pl
 
 ## Settings today
 
+### Desktop updates
+
+The desktop tray app checks for signed updates on an interval. Automatic installs are enabled by
+default; set `autoUpdate.enabled` to `false` to leave available updates waiting behind the tray
+menu's `Install Update` item.
+
+| Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
+|---|---|---|---|
+| automatic desktop updates | `autoUpdate.enabled` | `ARGUS_AUTO_UPDATE_ENABLED` | — |
+| update check interval, minutes | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | — |
+
+```json
+{
+  "autoUpdate": {
+    "enabled": false,
+    "checkIntervalMinutes": 60
+  }
+}
+```
+
+### Task interpretation
+
 The first consumer is task interpretation (see [task-interpretation.md](./task-interpretation.md)):
 
 | Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |

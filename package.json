@@ -14,6 +14,7 @@
     "build:web": "vite build --config web/vite.config.ts",
     "build:compile": "bun run build:web && bun build --compile src/cli.ts --outfile dist/argus",
     "bump-version": "bun run scripts/bump-version.ts",
+    "get-version": "bun run scripts/get-version.ts",
     "build:npm": "bun run scripts/build-npm-packages.ts",
     "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
     "desktop:dev": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri dev",

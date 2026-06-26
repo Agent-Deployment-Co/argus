@@ -1,4 +1,4 @@
-.PHONY: build test typecheck publish clean desktop dmg help
+.PHONY: build test typecheck publish clean desktop dmg version bump help
 
 .DEFAULT_GOAL := help
 
@@ -11,6 +11,17 @@ help:
 	@echo "  clean      Remove dist/"
 	@echo "  desktop    Build the desktop app"
 	@echo "  dmg        Build a macOS DMG (requires APPLE_ID and APPLE_PASSWORD)"
+	@echo "  version    Print the current version"
+	@echo "  bump       Bump the version (requires VERSION=major.minor.patch)"
+
+version:
+	@bun run get-version
+
+bump:
+ifndef VERSION
+	$(error VERSION is not set; usage: make bump VERSION=0.2.0)
+endif
+	bun run bump-version $(VERSION)
 
 build:
 	bun run build
