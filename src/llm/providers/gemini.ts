@@ -1,7 +1,7 @@
 // Google Gemini (Generative Language API) provider. POST .../models/{model}:generateContent with an
 // x-goog-api-key header; the completion is the concatenation of candidates[0].content.parts[].text.
 import { httpComplete } from "../http.ts";
-import type { HttpProviderContext, LlmResult } from "../types.ts";
+import type { ProviderCall, ProviderDescriptor } from "../types.ts";
 
 export const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
@@ -17,24 +17,30 @@ function extractText(body: unknown): string {
     .join("");
 }
 
-export function runGeminiProvider(ctx: HttpProviderContext): Promise<LlmResult> {
-  return httpComplete(
-    () => ({
-      url: `${GEMINI_API_BASE}/models/${encodeURIComponent(ctx.model)}:generateContent`,
-      init: {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": ctx.apiKey,
+export const geminiProvider: ProviderDescriptor = {
+  name: "gemini",
+  apiKeyEnv: "GEMINI_API_KEY",
+  defaultModel: DEFAULT_GEMINI_MODEL,
+  requiresApiKey: true,
+  complete(call: ProviderCall) {
+    return httpComplete(
+      () => ({
+        url: `${GEMINI_API_BASE}/models/${encodeURIComponent(call.model)}:generateContent`,
+        init: {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": call.apiKey!,
+          },
+          body: JSON.stringify({
+            ...(call.system ? { systemInstruction: { parts: [{ text: call.system }] } } : {}),
+            contents: [{ parts: [{ text: call.prompt }] }],
+            generationConfig: { maxOutputTokens: call.maxTokens },
+          }),
         },
-        body: JSON.stringify({
-          ...(ctx.system ? { systemInstruction: { parts: [{ text: ctx.system }] } } : {}),
-          contents: [{ parts: [{ text: ctx.prompt }] }],
-          generationConfig: { maxOutputTokens: ctx.maxTokens },
-        }),
-      },
-    }),
-    extractText,
-    { fetch: ctx.fetch, signal: ctx.signal },
-  );
-}
+      }),
+      extractText,
+      { fetch: call.fetch, signal: call.signal },
+    );
+  },
+};

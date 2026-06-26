@@ -3,7 +3,7 @@
 // was generalized (#132) — these are the no-API-key providers, and `claude` stays the default so
 // "no LLM configured" behaves exactly as before.
 import { spawn } from "node:child_process";
-import type { LlmResult, LocalProviderContext } from "../types.ts";
+import type { LlmResult, LocalProviderContext, ProviderCall, ProviderDescriptor } from "../types.ts";
 
 /** Cap on a provider's stdout so a runaway process can't exhaust memory. */
 export const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
@@ -127,3 +127,16 @@ export async function runCommandProvider(ctx: LocalProviderContext): Promise<Llm
   if (!argv.length) return { ok: false, text: "", error: "no command configured" };
   return spawnWithStdin(argv[0]!, argv.slice(1), blob(ctx), ctx.signal);
 }
+
+export const claudeProvider: ProviderDescriptor = {
+  name: "claude",
+  defaultModel: DEFAULT_CLAUDE_PROVIDER_MODEL,
+  complete: (call: ProviderCall) =>
+    runClaudeProvider({ system: call.system, prompt: call.prompt, model: call.model, signal: call.signal }),
+};
+
+export const commandProvider: ProviderDescriptor = {
+  name: "command",
+  complete: (call: ProviderCall) =>
+    runCommandProvider({ system: call.system, prompt: call.prompt, command: call.command, signal: call.signal }),
+};

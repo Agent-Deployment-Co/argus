@@ -7,7 +7,10 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
 
 ## The layer (`src/llm/`)
 
-- **`index.ts`** — the registry + client. One entry point:
+- **`registry.ts`** — the single source of truth: the list of `ProviderDescriptor`s. The client, the
+  config's per-provider `apiKeyEnv` default, and the secret allowlist all derive from it.
+- **`index.ts`** — the client. One entry point, dispatching through the registry with **no
+  per-provider branching**:
 
   ```ts
   complete(request: LlmRequest, config: ResolvedLlmConfig): Promise<LlmResult>
@@ -73,8 +76,25 @@ otherwise-local processing. The reconstructed dialogue is an in-memory intermedi
 disk), but it does leave the machine when an API provider is selected. This is surfaced in
 user-facing config docs and stays opt-in.
 
+## Adding a provider
+
+A provider is one `ProviderDescriptor` — `{ name, apiKeyEnv?, defaultModel?, requiresApiKey?, complete }`.
+To add one (e.g. `mistral`):
+
+1. Add `"mistral"` to the `LlmProvider` union in `types.ts`.
+2. Add `src/llm/providers/mistral.ts` exporting a `ProviderDescriptor` (its `apiKeyEnv`, default model,
+   and a `complete(call)` that shapes the request and extracts the text — reuse `httpComplete` for the
+   transport).
+3. Register it in the `PROVIDERS` array in `registry.ts`.
+
+That's it. The client dispatches to it automatically; `config.ts` derives its `apiKeyEnv` default and
+`secrets.ts` adds its key to the allowlist — both from the registry, with no per-provider branches to
+touch. The client resolves `model`/`maxTokens` and (for `requiresApiKey` providers) guarantees
+`call.apiKey` before invoking `complete`.
+
 ## Adding a consumer
 
 A new consumer resolves a `ResolvedLlmConfig` (its own block, or the shared `llm.*`), fills
-`config.apiKey` via `resolveApiKey(config.apiKeyEnv)` for HTTP providers, then calls `complete()`,
-builds its own prompt, and parses its own output. Nothing in `src/llm/` is task-extraction-specific.
+`config.apiKey` via `resolveApiKey(config.apiKeyEnv)` when the provider declares a key env var, then
+calls `complete()`, builds its own prompt, and parses its own output. Nothing in `src/llm/` is
+task-extraction-specific.

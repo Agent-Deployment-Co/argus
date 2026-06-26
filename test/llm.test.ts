@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { complete, type LlmProvider } from "../src/llm/index.ts";
+import {
+  complete,
+  getProvider,
+  isLlmProvider,
+  LLM_PROVIDERS,
+  PROVIDER_API_KEY_ENVS,
+  type LlmProvider,
+} from "../src/llm/index.ts";
 import type { ResolvedLlmConfig } from "../src/llm/types.ts";
 
 /** A recording fake fetch that returns scripted responses in order. */
@@ -29,6 +36,31 @@ function json(body: unknown, init?: ResponseInit): Response {
 const cfg = (over: Partial<ResolvedLlmConfig> & { provider: LlmProvider }): ResolvedLlmConfig => ({
   apiKey: "test-key",
   ...over,
+});
+
+describe("provider registry (single source of truth)", () => {
+  test("every provider name resolves to its descriptor; unknown → undefined", () => {
+    for (const name of LLM_PROVIDERS) expect(getProvider(name)?.name).toBe(name);
+    expect(getProvider("nope")).toBeUndefined();
+    expect(isLlmProvider("anthropic")).toBe(true);
+    expect(isLlmProvider("nope")).toBe(false);
+  });
+
+  test("the secret allowlist + key requirement derive from descriptors", () => {
+    expect([...PROVIDER_API_KEY_ENVS].sort()).toEqual([
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "OPENAI_API_KEY",
+    ]);
+    expect(getProvider("anthropic")?.requiresApiKey).toBe(true);
+    expect(getProvider("claude")?.requiresApiKey).toBeUndefined();
+  });
+
+  test("an unknown provider → ok:false, never throws", async () => {
+    const res = await complete({ prompt: "x" }, { provider: "bogus" as LlmProvider });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("Unknown");
+  });
 });
 
 describe("llm client routing", () => {
