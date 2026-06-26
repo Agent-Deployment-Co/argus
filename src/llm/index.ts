@@ -14,6 +14,7 @@ export {
   getProvider,
   isLlmProvider,
   LLM_PROVIDERS,
+  SELECTABLE_PROVIDERS,
   PROVIDER_API_KEY_ENVS,
   PROVIDERS,
 } from "./registry.ts";
