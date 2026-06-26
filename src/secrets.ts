@@ -86,8 +86,12 @@ function describeFrom(value: string | undefined): SecretStatus {
 
 // --- macOS: login keychain via /usr/bin/security ---
 
-/** Keychain service name; the account is the secret name. */
-const KEYCHAIN_SERVICE = "argus";
+/** Keychain service (the `(service, account)` pair is the item's identity). A reverse-DNS name —
+ *  matching the desktop app's bundle id — so it can't collide with another tool's generic-password
+ *  items. The account is the secret name. */
+const KEYCHAIN_SERVICE = "co.agentdeployment.argus";
+/** Display name (kSecAttrLabel) shown in Keychain Access; the service stays the unique reverse-DNS id. */
+const KEYCHAIN_LABEL = "Argus";
 /** `security` exit code when an item isn't found. */
 const SECURITY_NOT_FOUND = 44;
 
@@ -119,6 +123,8 @@ export class KeychainSecretStore implements SecretStore {
       KEYCHAIN_SERVICE,
       "-a",
       name,
+      "-l",
+      KEYCHAIN_LABEL,
       "-U",
       "-w",
       value,
