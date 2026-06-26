@@ -15,7 +15,7 @@ import { runRun } from "./run.ts";
 import { hubErrorMessage } from "./push.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
 import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS, type ResolvedTaskExtraction } from "./config.ts";
-import { defaultSecretStore, isSecretName, SECRET_NAMES } from "./secrets.ts";
+import { defaultSecretStore, isSecretName, maskSecret, SECRET_NAMES } from "./secrets.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -753,10 +753,9 @@ const secretSet = defineCommand({
       log(`Skipped ${name} — nothing entered.`);
       return;
     }
-    const store = defaultSecretStore();
-    await store.set(name, value);
-    const status = await store.describe(name);
-    log(`Saved ${name} (${status.hint ?? "set"})`);
+    await defaultSecretStore().set(name, value);
+    // Mask the value in hand rather than reading it back (which would spawn a second keychain/DPAPI call).
+    log(`Saved ${name} (${maskSecret(value)})`);
   }),
 });
 

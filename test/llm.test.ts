@@ -117,6 +117,12 @@ describe("anthropic provider", () => {
     await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(JSON.parse(calls[0]!.init.body as string).model).toBe("claude-haiku-4-5");
   });
+
+  test("a configured maxTokens of 0 clamps to the default (never sends max_tokens: 0)", async () => {
+    const { fetch, calls } = fakeFetch([json({ content: [{ type: "text", text: "x" }] })]);
+    await complete({ prompt: "p" }, cfg({ provider: "claude-api", maxTokens: 0 }), { fetch });
+    expect(JSON.parse(calls[0]!.init.body as string).max_tokens).toBe(2048);
+  });
 });
 
 describe("openai provider", () => {
@@ -232,5 +238,35 @@ describe("error and retry paths", () => {
     const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
     expect(res.ok).toBe(false);
     expect(res.error).toContain("size limit");
+  });
+
+  test("oversized response (undeclared, streamed) → ok:false without buffering it all", async () => {
+    // A 1 MB chunk emitted repeatedly past the 32 MB cap, with NO content-length so the pre-check
+    // can't catch it. The streaming reader must stop and cancel rather than buffer the whole body.
+    const chunk = new Uint8Array(1024 * 1024); // 1 MB
+    let emitted = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted > 64 * 1024 * 1024) {
+          controller.close();
+          return;
+        }
+        emitted += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { fetch } = fakeFetch([
+      () => new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
+    ]);
+    const res = await complete({ prompt: "p" }, cfg({ provider: "claude-api" }), { fetch });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("size limit");
+    expect(cancelled).toBe(true);
+    // Stopped near the cap, not after draining the full 64 MB the stream would have produced.
+    expect(emitted).toBeLessThan(40 * 1024 * 1024);
   });
 });
