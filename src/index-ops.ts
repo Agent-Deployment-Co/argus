@@ -116,7 +116,7 @@ export async function runIndexRefresh(opts: RefreshOptions, log: Log): Promise<v
  *  transcript has left disk reports a clear error and changes nothing for that session. */
 async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
   const taskExtraction = resolveExtraction(opts.extractTasks);
-  const extracting = taskExtraction.enabled && taskExtraction.provider !== "off";
+  const extracting = taskExtraction.enabled && taskExtraction.llm.provider !== "off";
   const store = await openStore(opts.storePath ? { path: opts.storePath } : undefined);
   let refreshed = 0;
   let failed = 0;

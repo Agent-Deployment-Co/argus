@@ -7,11 +7,24 @@
 // response text — there is no separate candidate list or reconstructed dialogue.
 import type { MaterializeSession, ParserDiagnostic } from "../../store/store-contract.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
+import { isHttpProvider } from "../../llm/index.ts";
+import { resolveApiKey } from "../../secrets.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
 
 /** True when index-time task extraction should run for this call. */
 export function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined): boolean {
-  return !!taskExtraction?.enabled && taskExtraction.provider !== "off";
+  return !!taskExtraction?.enabled && taskExtraction.llm.provider !== "off";
+}
+
+/** Fill in the API key for an HTTP provider once per run (env var → secret store). The LLM client is
+ *  kept pure of secret access, so the key is resolved here and handed down on `llm.apiKey`. */
+async function withResolvedApiKey(
+  taskExtraction: ResolvedTaskExtraction,
+): Promise<ResolvedTaskExtraction> {
+  const { llm } = taskExtraction;
+  if (!isHttpProvider(llm.provider) || llm.apiKey) return taskExtraction;
+  const apiKey = await resolveApiKey(llm.apiKeyEnv);
+  return { ...taskExtraction, llm: { ...llm, apiKey } };
 }
 
 /** A short, human-facing label for progress output: the project plus a short session id. */
@@ -44,6 +57,8 @@ export async function extractTasksForSessions(
     (session) => targets.has(session.meta.sessionId) && hasTaskCandidate(session),
   );
   if (!toExtract.length) return;
+  // Resolve the API key once for the whole run (one keychain read, not one per session).
+  const resolved = await withResolvedApiKey(taskExtraction);
   // Task extraction runs an AI model per session, so it can take a while — emit a heartbeat as each
   // session starts so the command doesn't look stuck.
   log?.(
@@ -56,7 +71,7 @@ export async function extractTasksForSessions(
     const { tasks, diagnostics: extractionDiagnostics } = await extractTasksWithOutcome(
       sid,
       session.interactions ?? [],
-      taskExtraction,
+      resolved,
     );
     diagnostics.push(...extractionDiagnostics);
     session.tasks = tasks;
