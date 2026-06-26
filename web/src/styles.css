@@ -65,17 +65,32 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .filter-dates { display: inline-flex; align-items: center; gap: 8px; }
 .filter-dash { color: var(--muted); }
 /* Fixed height (padding-free vertically) so date inputs and the source select are identical — date
-   inputs otherwise render taller than a select from UA styling. box-sizing:border-box is global. */
+   inputs otherwise render taller than a select from UA styling. box-sizing:border-box is global. The
+   select itself is the shared .select component below, sized to the same 32px height. */
 .filter-input { box-sizing: border-box; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
 /* Fixed width so the from/to date inputs are identical regardless of value vs. placeholder text. */
 .filter-input[type="date"] { width: 150px; }
-
-/* Custom select caret: the native arrow can't be inset from the right edge, so we drop it and draw
-   our own chevron in a relative wrapper, positioned to match the date inputs' calendar-icon inset. */
-.select-wrap { position: relative; display: inline-flex; align-items: center; }
-.select-wrap > select { appearance: none; -webkit-appearance: none; padding-right: 28px; }
-.select-wrap::after { content: ""; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Shared <select> (use the <Select> component) ──────────────────────────────
+   One consistent dropdown everywhere. The native arrow can't be inset from the right edge across
+   platforms, so we reset the UA appearance and draw our own chevron in a relative wrapper. Variants
+   (default box, pill) live here so per-screen selects can't drift apart. */
+.select { position: relative; display: inline-flex; align-items: center; }
+.select__control {
+  box-sizing: border-box; height: 32px; appearance: none; -webkit-appearance: none;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0 30px 0 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; cursor: pointer;
+}
+.select__control:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.select::after {
+  content: ""; position: absolute; right: 12px; top: 50%; width: 6px; height: 6px;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-70%) rotate(45deg); pointer-events: none;
+}
+/* Pill variant: compact + rounded, to sit among the filter pills (Sessions sort). */
+.select--pill .select__control { height: auto; padding: 3px 26px 3px 12px; border-radius: 999px; font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; }
+.select--pill::after { right: 11px; }
 .filter-reset { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
 .filter-reset:hover:not(:disabled) { color: var(--heading); border-color: var(--accent); }
 .filter-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -134,8 +149,6 @@ main:has(.sessions-split) { padding: 0; }
 .filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
 .filter-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; user-select: none; }
 .filter-toggle:hover { border-color: var(--accent); }
-.session-sort { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 26px 3px 10px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
-.session-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
 .session-load-more:hover { border-color: var(--accent); color: var(--heading); }
 .session-load-more:disabled { opacity: .6; cursor: default; }
@@ -262,9 +275,6 @@ section h2 { font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size
 .card .label { color: var(--muted); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
 .card .value { color: var(--heading); font-size: 25px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .card .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
-.usersel { color: var(--muted); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
-.usersel select { background: var(--surface); color: var(--text); border: 1px solid var(--cornflower-ocean); border-radius: 7px; padding: 5px 9px; font: 13px "Aleo", Georgia, serif; text-transform: none; letter-spacing: normal; }
-.usersel select:focus-visible { outline: 2px solid var(--tiger-orange); outline-offset: 2px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 @media (max-width: 880px) { .grid2 { grid-template-columns: 1fr; } }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
@@ -341,9 +351,14 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-desc { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .setting-override { color: var(--accent); font-size: 12px; line-height: 1.45; margin-top: 2px; }
 .setting-control { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 220px; }
-.setting-input { width: 220px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+/* The settings control column is a fixed width so inputs and the shared <Select> line up. Text/number
+   inputs match the .select__control height (32px) so they sit identically beside it. */
+.setting-input { box-sizing: border-box; width: 220px; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
 .setting-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
-.setting-textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.setting-textarea { width: 220px; height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* The provider dropdown is the shared <Select>; size its wrapper to the control column. */
+.setting-select { width: 220px; }
+.setting-select .select__control { width: 100%; }
 
 .setting-toggle { position: relative; width: 42px; height: 24px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; background: var(--hover); cursor: pointer; transition: background .15s; }
 .setting-toggle[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
@@ -363,5 +378,5 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .setting-row { flex-direction: column; align-items: stretch; gap: 10px; }
   .setting-label { max-width: 100%; }
   .setting-control { align-items: stretch; }
-  .setting-input { width: 100%; }
+  .setting-input, .setting-textarea, .setting-select { width: 100%; }
 }

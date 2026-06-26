@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { saveSetting, useSettingsQuery } from "../lib/settings";
+import { Select } from "../components/Select";
 import type { SettingDescriptor, SettingsCategory } from "../types";
 
 /** Icon per category id. Categories themselves come from the server (registry-driven); this is the
@@ -149,8 +150,8 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
         );
       case "select":
         return (
-          <select
-            className="setting-input"
+          <Select
+            wrapperClassName="setting-select"
             value={text}
             onChange={(e) => {
               setText(e.target.value);
@@ -163,7 +164,7 @@ function SettingRow({ descriptor }: { descriptor: SettingDescriptor }) {
                 {opt}
               </option>
             ))}
-          </select>
+          </Select>
         );
       case "textarea":
         return (
