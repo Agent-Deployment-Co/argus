@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="The Agent Deployment Co.">
+  <style>
+    .tile { fill: #1c1105; }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #f9ebdc; }
+    }
+  </style>
+  <rect class="tile" width="512" height="512" rx="112" ry="112"/>
+  <g transform="translate(81 131) scale(2.5)">
+    <path d="M6 0 L30 0 L62 50 L30 100 L6 100 L38 50 Z" fill="#e2302c"/>
+    <path d="M30 0 L54 0 L86 50 L54 100 L30 100 L62 50 Z" fill="#ef8920"/>
+    <path d="M54 0 L78 0 L110 50 L78 100 L54 100 L86 50 Z" fill="#5dbcdf"/>
+    <path d="M78 0 L102 0 L134 50 L102 100 L78 100 L110 50 Z" fill="#286992"/>
+  </g>
+</svg>
