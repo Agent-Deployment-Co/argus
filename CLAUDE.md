@@ -210,7 +210,8 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   defaulting to the `claude-cli` provider (`claude -p --no-session-persistence --model haiku -`). The
   per-interaction prompt/response text is kept **out of the stored interaction records** but is
   retained separately, **opt-in (default-on) and local-only**, in `resolved_interaction_text` (#120;
-  `retainText` setting) — never on the sync wire.
+  `retainText` setting) — a tall, typed table (`type` = prompt/response, narration-ready) shaped like
+  `resolved_usage`/`resolved_invocations` (own `seq` + soft-link `interaction_seq`), never on the sync wire.
 
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`serve`,
   `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly

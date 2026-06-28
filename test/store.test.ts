@@ -1414,7 +1414,7 @@ describe("SQLite store", () => {
   });
 });
 
-describe("prompt/response text retention (#120)", () => {
+describe("conversation text retention (#120)", () => {
   const sid = "claude:retain";
   const pos = (i: number) => ({ originKey: "f", recordIndex: i, itemIndex: 0 });
   const sessionWithText = () => ({
@@ -1435,17 +1435,69 @@ describe("prompt/response text retention (#120)", () => {
     ],
   });
 
-  test("retention on stores text; readInteractionText round-trips; only text-bearing rows exist", async () => {
-    const store = await openStore({ path: storePath() });
+  test("retention on stores typed chunks; readInteractionText groups them by interaction in order", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
     try {
       await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
       const text = await store.readInteractionText(sid);
-      expect(text.size).toBe(1);
-      expect(text.get(0)).toEqual({ promptText: "fix the bug", responseText: "fixed it" });
+      expect(text.size).toBe(1); // only the text-bearing interaction (seq 0); seq 1 has no text
+      expect(text.get(0)).toEqual([
+        { type: "prompt", text: "fix the bug" },
+        { type: "response", text: "fixed it" },
+      ]);
       expect(text.has(1)).toBe(false);
     } finally {
       await store.close();
     }
+    // The tall row layout: running per-session `seq`, soft-linked `interaction_seq`, typed rows.
+    const rows = await withRawDatabase(path, (db) =>
+      rawAll<{ seq: number; interaction_seq: number; type: string; text: string }>(
+        db,
+        `SELECT seq, interaction_seq, type, text FROM resolved_interaction_text WHERE session_id = '${sid}' ORDER BY seq`,
+      ),
+    );
+    expect(rows).toEqual([
+      { seq: 0, interaction_seq: 0, type: "prompt", text: "fix the bug" },
+      { seq: 1, interaction_seq: 0, type: "response", text: "fixed it" },
+    ]);
+  });
+
+  test("seq is a running per-session ordinal across multiple interactions", async () => {
+    const path = storePath();
+    const sid2 = "claude:retain-multi";
+    const mk = (seq: number, prompt: string, response: string) => ({
+      id: `i${seq}`, source: "claude" as const, sourceSessionId: sid2, seq, initiator: "human" as const,
+      disposition: "completed" as const, compactionCount: 0, timestampMs: 1000 + seq,
+      promptPosition: pos(seq), position: pos(seq), promptText: prompt, responseText: response,
+    });
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions(
+        "claude",
+        [{
+          meta: { source: "claude", sessionId: sid2, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+          messages: [],
+          interactions: [mk(0, "ask one", "answer one"), mk(1, "ask two", "answer two")],
+        }],
+        { retainText: true },
+      );
+    } finally {
+      await store.close();
+    }
+    const rows = await withRawDatabase(path, (db) =>
+      rawAll<{ seq: number; interaction_seq: number; type: string }>(
+        db,
+        `SELECT seq, interaction_seq, type FROM resolved_interaction_text WHERE session_id = '${sid2}' ORDER BY seq`,
+      ),
+    );
+    // prompt/response of interaction 0 are seq 0/1; interaction 1's are 2/3 — a single climbing counter.
+    expect(rows).toEqual([
+      { seq: 0, interaction_seq: 0, type: "prompt" },
+      { seq: 1, interaction_seq: 0, type: "response" },
+      { seq: 2, interaction_seq: 1, type: "prompt" },
+      { seq: 3, interaction_seq: 1, type: "response" },
+    ]);
   });
 
   test("retention off stores no text", async () => {
