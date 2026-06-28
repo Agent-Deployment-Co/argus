@@ -1,7 +1,5 @@
 import { defineConfig } from 'vitepress'
 
-const repoUrl = 'https://github.com/Agent-Deployment-Co/argus'
-
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: 'Argus',
@@ -77,10 +75,6 @@ export default defineConfig({
     },
     footer: {
       copyright: 'Copyright © The Agent Deployment Company'
-    },
-
-    socialLinks: [
-      { icon: 'github', link: repoUrl }
-    ]
+    }
   }
 })

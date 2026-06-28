@@ -434,6 +434,19 @@ body {
 }
 
 /*
+ * Keep the search box compact on the right, next to the theme switcher,
+ * instead of letting it stretch across the nav (the default gives it
+ * flex-grow: 1). The scoped rule carries a [data-v-*] attribute, so the
+ * override needs !important to win.
+ */
+@media (min-width: 768px) {
+  .VPNavBarSearch {
+    flex-grow: 0 !important;
+    margin-right: 8px;
+  }
+}
+
+/*
  * Every page now has a sidebar, and the default theme hides the global
  * footer whenever a sidebar is present. Show it anyway, and pad it left
  * to line up with the content column (mirrors VPContent.has-sidebar).
