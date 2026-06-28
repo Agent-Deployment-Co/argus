@@ -432,3 +432,28 @@ body {
     overflow-wrap: break-word;
   }
 }
+
+/*
+ * Every page now has a sidebar, and the default theme hides the global
+ * footer whenever a sidebar is present. Show it anyway, and pad it left
+ * to line up with the content column (mirrors VPContent.has-sidebar).
+ */
+.VPFooter.has-sidebar {
+  /* override VitePress's scoped `.has-sidebar { display: none }` (it carries a
+     [data-v-*] attribute, so it outranks a plain class selector) */
+  display: block !important;
+}
+
+@media (min-width: 960px) {
+  .VPFooter.has-sidebar {
+    padding-left: var(--vp-sidebar-width);
+  }
+}
+
+@media (min-width: 1440px) {
+  .VPFooter.has-sidebar {
+    padding-left: calc(
+      (100% - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width)
+    );
+  }
+}
