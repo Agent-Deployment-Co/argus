@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { fetchUnknownSessionIds, pushHubJson, readChangedHubSessionIds, readClientId, readHubUploadPayload, readSessionIds } from "../src/push.ts";
-import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "../src/store/store.ts";
+import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION, openStore } from "../src/store/store.ts";
 
 const TEST_CLIENT_ID = `client-${randomUUID()}`;
 
@@ -107,6 +107,42 @@ describe("readHubUploadPayload", () => {
   test("throws on a non-argus database", () => {
     const path = buildArgusDb({ appId: 0 });
     expect(() => readHubUploadPayload(path)).toThrow(/not an Argus store/);
+  });
+
+  test("never carries retained prompt/response text, even with retention on (#120)", async () => {
+    // A real materialized store with retention ON, so resolved_interaction_text is populated.
+    const path = join(tempDir(), "private", "fragments.sqlite3");
+    const sid = "claude:retain-sync";
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions(
+        "claude",
+        [
+          {
+            meta: { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+            messages: [
+              { source: "claude", sessionId: sid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1000, date: "2026-06-01", model: "claude-opus-4", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }, attributionSkill: null, interactionSeq: 0, toolUses: [] },
+            ],
+            interactions: [
+              { id: "i0", source: "claude", sourceSessionId: sid, seq: 0, initiator: "human", disposition: "completed", compactionCount: 0, timestampMs: 1000, promptPosition: { originKey: "f", recordIndex: 0, itemIndex: 0 }, position: { originKey: "f", recordIndex: 0, itemIndex: 0 }, promptText: "SECRET-PROMPT-TEXT", responseText: "SECRET-RESPONSE-TEXT" },
+            ],
+          },
+        ],
+        { retainText: true },
+      );
+    } finally {
+      await store.close();
+    }
+
+    const payload = readHubUploadPayload(path);
+    // Structural guarantee: the payload reads only resolved_interactions.interaction_json, never the
+    // resolved_interaction_text side table — so retained text can't reach the wire in any field.
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain("SECRET-PROMPT-TEXT");
+    expect(serialized).not.toContain("SECRET-RESPONSE-TEXT");
+    expect(serialized).not.toContain("promptText");
+    expect(serialized).not.toContain("responseText");
+    expect(Object.keys(payload.rows)).not.toContain("interactionText");
   });
 
   test("includes the client_fingerprint log in the payload", () => {

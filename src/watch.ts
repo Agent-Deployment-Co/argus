@@ -28,11 +28,13 @@ export interface WatchIndexOptions extends SyncOptions {
   intervalMin: number;
   /** Tri-state `--extract-tasks` override threaded to each pass (undefined = defer to argus.json). */
   extractTasks?: boolean;
+  /** Tri-state `--retain-text` override threaded to each pass (undefined = defer to argus.json/env, #120). */
+  retainText?: boolean;
 }
 
 /** Test seam: override the one-shot index pass (defaults to the real `runIndex`). */
 export interface WatchIndexDeps {
-  index?: (opts: SyncOptions, log: Log, extractTasks?: boolean) => Promise<void>;
+  index?: (opts: SyncOptions, log: Log, extractTasks?: boolean, debug?: boolean, retainText?: boolean) => Promise<void>;
 }
 
 /**
@@ -47,7 +49,7 @@ export async function watchIndex(opts: WatchIndexOptions, log: Log, signal: Abor
     "indexing",
     async (sig) => {
       while (!sig.aborted) {
-        await indexPass(opts, log, opts.extractTasks);
+        await indexPass(opts, log, opts.extractTasks, false, opts.retainText);
         await sleep(intervalMs, sig);
       }
     },
