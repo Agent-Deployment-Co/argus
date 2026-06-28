@@ -66,6 +66,9 @@ export interface IncrementalParseOptions extends ParseOptions {
   /** Opt-in index-time task extraction (#91). When enabled, indexing a changed session also runs the
    *  two-pass extraction and materializes its tasks. Off/unset → indexing behaves exactly as today. */
   taskExtraction?: ResolvedTaskExtraction;
+  /** Keep prompt/response text in the local store (#120). Default-on; unset → retained. Local-only —
+   *  never uploaded by sync. */
+  retainText?: boolean;
   /** Optional progress sink for the long-running parts (task extraction). The terminal commands wire
    *  this to their logger so the user sees a heartbeat; read-only/embedded callers can omit it. */
   log?: (message: string) => void;
@@ -499,7 +502,7 @@ async function syncStore(
       }
       // Marks these present (archived = 0); the store's don't-regress guard keeps the fuller stored
       // copy if a re-parse came back short (e.g. a file partly aged out or failed to parse this run).
-      await store.materializeSessions(producer.id, materialize);
+      await store.materializeSessions(producer.id, materialize, { retainText: opts.retainText });
     }
 
     // Durable archive: sessions we owned that are no longer discoverable on disk are RETAINED and
@@ -663,6 +666,8 @@ export async function reindexSession(
     store?: Store;
     storePath?: string;
     taskExtraction?: ResolvedTaskExtraction;
+    /** Keep prompt/response text in the local store (#120). Default-on; unset → retained. */
+    retainText?: boolean;
     /** Discovery locations for auxiliary inputs (history/project roots). Defaults to the real paths;
      *  tests pass fixture dirs. */
     context?: ProducerContext;
@@ -740,7 +745,7 @@ export async function reindexSession(
         diagnostics,
       );
     }
-    await store.materializeSessions(producer.id, materialize);
+    await store.materializeSessions(producer.id, materialize, { retainText: opts.retainText });
     const tasks = materialize.find((session) => session.meta.sessionId === sessionId)?.tasks ?? [];
     return { ok: true, tasks, diagnostics };
   } finally {

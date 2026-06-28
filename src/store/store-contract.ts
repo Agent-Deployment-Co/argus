@@ -224,8 +224,9 @@ export interface PromptFact {
 /**
  * One interaction: prompt → agent loop → response (see docs/session-model.md). The atomic unit of a
  * session. **Reconcile-derived**, not a per-file fact: reconcile groups the deduped timeline into
- * these. Text is NOT stored — the slot positions let Interpret re-read prompt/response from disk
- * without re-deriving structure from role tags. Tasks (#122) will span interactions.
+ * these. The stored `interaction_json` is always text-free (the slot positions pin where the text
+ * lives); prompt/response text is persisted separately, opt-in and local-only, in
+ * resolved_interaction_text (#120). Tasks (#122) span interactions.
  */
 export interface InteractionFact {
   id: string;
@@ -245,14 +246,28 @@ export interface InteractionFact {
   promptPosition: SourcePosition;
   /** Position of the response slot, when the interaction produced one (absent if interrupted/incomplete). */
   responsePosition?: SourcePosition;
-  /** The opening prompt's text, for human-initiated task-start interactions (#122). In-memory only:
-   *  the Interpret stage reads it (pass-1 segmentation + pass-2 dialogue); never stored until #120's
-   *  opt-in retention. Absent on agent/harness openings and noise-filtered human turns. */
+  /** The opening prompt's text, for human-initiated task-start interactions (#122). The Interpret stage
+   *  reads it (pass-1 segmentation + pass-2 dialogue). Never embedded in the stored interaction_json;
+   *  persisted (opt-in, local-only) in resolved_interaction_text under #120's retention. Absent on
+   *  agent/harness openings and noise-filtered human turns. */
   promptText?: string;
   /** The response slot's text (the interaction's final own-session assistant turn), when present.
-   *  In-memory only — pass-2 dialogue projection; persisted only under #120's opt-in retention. */
+   *  Pass-2 dialogue projection; persisted opt-in/local-only in resolved_interaction_text (#120),
+   *  never in the stored interaction_json. */
   responseText?: string;
   position: SourcePosition;
+}
+
+/** One retained conversation-text chunk (#120): a piece of the dialogue with its role. `seq` is the
+ *  chunk's own per-session ordinal (timeline order); `interactionSeq` is the owning interaction, or
+ *  null for a future session-level chunk that belongs to no single interaction. `type` is a controlled
+ *  vocabulary — `"prompt"` | `"response"` today, `"narration"` (etc.) later — kept as a string so new
+ *  kinds need no type change. Local-only — never on the sync wire. */
+export interface InteractionTextChunk {
+  seq: number;
+  interactionSeq: number | null;
+  type: string;
+  text: string;
 }
 
 export interface InvocationFact {
@@ -547,8 +562,9 @@ export interface MaterializeSession {
   messages: MessageRecord[];
   tasks?: TaskFact[];
   /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions.
-   *  Each carries in-memory promptText/responseText (#122) the Interpret stage reads; materialize
-   *  strips that text (not stored until #120's opt-in retention). */
+   *  Each carries in-memory promptText/responseText (#122) the Interpret stage reads; the stored
+   *  interaction_json is always text-free, and that text is persisted (opt-in, default-on, local-only)
+   *  in resolved_interaction_text (#120). */
   interactions?: InteractionFact[];
 }
 
@@ -638,9 +654,18 @@ export interface ReadModelStore {
    * the count. The archived flag is left untouched (whether a session truly left disk is decided by
    * discovery, not a count dip). Returns the ids it kept (skipped) that way.
    */
-  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]>;
+  materializeSessions(
+    owner: string,
+    sessions: MaterializeSession[],
+    opts?: { retainText?: boolean },
+  ): Promise<string[]>;
   /** Metadata for a single resolved session, without loading messages or tasks. */
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
+  /** Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
+   *  order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. A reader
+   *  groups by `interactionSeq` as needed. Empty when retention was off at index time. Local-only —
+   *  never on the sync wire. */
+  readInteractionText(sessionId: string): Promise<InteractionTextChunk[]>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
   /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by

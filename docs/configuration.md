@@ -54,6 +54,35 @@ menu's `Install Update` item.
 }
 ```
 
+### Session text retention
+
+Argus keeps the prompt and response text of your sessions in the local store (`argus.db`) so that
+interpretation can read it without re-reading transcripts from disk, and so it survives after a
+transcript ages off disk. This is **on by default**. Set `retainText` to `false` to keep session
+text out of `argus.db` entirely.
+
+| Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
+|---|---|---|---|
+| keep session text locally | `retainText` | `ARGUS_RETAIN_TEXT` | `--retain-text` |
+
+`--retain-text` is a three-state flag — `true` / `false` / unset — on `index` / `index rebuild` /
+`index refresh`, mirroring `--extract-tasks`. Unset defers to `argus.json`/env; `true`/`false`
+overrides it for that run. Turning it off and re-indexing removes any text already stored.
+
+What is kept is bounded: the opening prompt of each task (truncated) and the final response text of
+each interaction — not full transcripts, tool output, or attached files.
+
+> **Privacy.** Retained text is **local-only — it is never uploaded by `sync`.** The upload path
+> reads only the text-free interaction records, so stored text cannot reach the server in any mode.
+> It is stored as plaintext in `argus.db`; protect it the way you protect the rest of your data
+> directory (e.g. full-disk encryption). To store nothing, set `retainText: false`.
+
+```json
+{
+  "retainText": false
+}
+```
+
 ### Task interpretation
 
 The first consumer is task interpretation (see [task-interpretation.md](./task-interpretation.md)):
