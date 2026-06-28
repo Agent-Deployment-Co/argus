@@ -470,3 +470,13 @@ body {
     );
   }
 }
+
+/*
+ * Code blocks use the dark Coffee Bean background in both light and dark
+ * mode. VitePress, in light mode, colors syntax tokens with Shiki's
+ * light-theme palette (dark tokens meant for a light background), which is
+ * unreadable on our dark block. Use the dark-theme palette in light mode too.
+ */
+html:not(.dark) .shiki span {
+  color: var(--shiki-dark, inherit);
+}
