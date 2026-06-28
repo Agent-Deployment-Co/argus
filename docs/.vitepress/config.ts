@@ -68,10 +68,6 @@ export default defineConfig({
       { text: 'LLM providers', link: '/llm-providers' }
     ],
 
-    editLink: {
-      pattern: `${repoUrl}/edit/main/docs/:path`,
-      text: 'Edit this page on GitHub'
-    },
     lastUpdated: {
       text: 'Updated'
     },
@@ -80,7 +76,6 @@ export default defineConfig({
       next: 'Next'
     },
     footer: {
-      message: 'Built for local-first agent usage auditing.',
       copyright: 'Copyright © The Agent Deployment Company'
     },
 
