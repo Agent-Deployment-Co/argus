@@ -57,6 +57,7 @@ export default defineConfig({
 
     sidebar: [
       { text: 'Introduction', link: '/' },
+      { text: 'Installation', link: '/installation' },
       { text: 'Architecture', link: '/architecture' },
       { text: 'Session model', link: '/session-model' },
       { text: 'Task interpretation', link: '/task-interpretation' },
