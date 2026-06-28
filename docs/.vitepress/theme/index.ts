@@ -1,6 +1,7 @@
 import DefaultTheme from 'vitepress/theme'
 import { h } from 'vue'
 import GithubStars from './GithubStars.vue'
+import DownloadMac from './DownloadMac.vue'
 import './style.css'
 
 export default {
@@ -10,5 +11,9 @@ export default {
     return h(DefaultTheme.Layout, null, {
       'nav-bar-content-after': () => h(GithubStars)
     })
+  },
+  enhanceApp({ app }) {
+    // Usable directly in markdown (e.g. the installation page).
+    app.component('DownloadMac', DownloadMac)
   }
 }
