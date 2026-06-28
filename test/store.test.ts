@@ -1435,18 +1435,17 @@ describe("conversation text retention (#120)", () => {
     ],
   });
 
-  test("retention on stores typed chunks; readInteractionText groups them by interaction in order", async () => {
+  test("retention on stores typed chunks; readInteractionText returns them in seq order", async () => {
     const path = storePath();
     const store = await openStore({ path });
     try {
       await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
       const text = await store.readInteractionText(sid);
-      expect(text.size).toBe(1); // only the text-bearing interaction (seq 0); seq 1 has no text
-      expect(text.get(0)).toEqual([
-        { type: "prompt", text: "fix the bug" },
-        { type: "response", text: "fixed it" },
+      // Flat, seq-ordered list tagged with the owning interaction; seq 1 (no text) contributes nothing.
+      expect(text).toEqual([
+        { seq: 0, interactionSeq: 0, type: "prompt", text: "fix the bug" },
+        { seq: 1, interactionSeq: 0, type: "response", text: "fixed it" },
       ]);
-      expect(text.has(1)).toBe(false);
     } finally {
       await store.close();
     }
@@ -1504,7 +1503,7 @@ describe("conversation text retention (#120)", () => {
     const store = await openStore({ path: storePath() });
     try {
       await store.materializeSessions("claude", [sessionWithText()], { retainText: false });
-      expect((await store.readInteractionText(sid)).size).toBe(0);
+      expect(await store.readInteractionText(sid)).toEqual([]);
     } finally {
       await store.close();
     }
@@ -1538,11 +1537,63 @@ describe("conversation text retention (#120)", () => {
     const store = await openStore({ path });
     try {
       await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
-      expect((await store.readInteractionText(sid)).size).toBe(1);
+      expect((await store.readInteractionText(sid)).length).toBe(2);
       await store.materializeSessions("claude", [sessionWithText()], { retainText: false });
-      expect((await store.readInteractionText(sid)).size).toBe(0);
+      expect(await store.readInteractionText(sid)).toEqual([]);
     } finally {
       await store.close();
+    }
+  });
+
+  test("opt-out clears retained text even when the don't-regress guard keeps the fuller record", async () => {
+    const sidg = "claude:retain-guard";
+    const session = (msgCount: number) => ({
+      meta: { source: "claude" as const, sessionId: sidg, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+      messages: Array.from({ length: msgCount }, (_, i) => ({
+        source: "claude" as const, sessionId: sidg, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1000 + i,
+        date: "2026-06-01", model: "claude-x", usage: { input: 1, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null, interactionSeq: 0, toolUses: [],
+      })),
+      interactions: [
+        { id: "i0", source: "claude" as const, sourceSessionId: sidg, seq: 0, initiator: "human" as const, disposition: "completed" as const, compactionCount: 0, timestampMs: 1000, promptPosition: pos(0), position: pos(0), promptText: "fix the bug", responseText: "fixed it" },
+      ],
+    });
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [session(2)], { retainText: true });
+      expect((await store.readInteractionText(sidg)).length).toBe(2);
+      // A shorter re-parse (1 < 2) trips the don't-regress guard, so the wholesale DELETE+CASCADE is
+      // skipped — but with retention off the text must still be cleared to honor the opt-out (#120).
+      const kept = await store.materializeSessions("claude", [session(1)], { retainText: false });
+      expect(kept).toEqual([sidg]); // the fuller record was kept (guarded), not overwritten
+      expect(await store.readInteractionText(sidg)).toEqual([]); // ...but the retained text is gone
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("readInteractionText surfaces a chunk with no owning interaction (extensibility, not dropped)", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
+    } finally {
+      await store.close();
+    }
+    // A future session-level chunk (e.g. narration belonging to no single interaction) has a null
+    // interaction_seq; the reader must still return it rather than silently drop it.
+    await withRawDatabase(path, (db) =>
+      rawExec(
+        db,
+        `INSERT INTO resolved_interaction_text(session_id, seq, interaction_seq, type, text) VALUES ('${sid}', 2, NULL, 'narration', 'session-level note')`,
+      ),
+    );
+    const reopened = await openStore({ path });
+    try {
+      const text = await reopened.readInteractionText(sid);
+      expect(text).toContainEqual({ seq: 2, interactionSeq: null, type: "narration", text: "session-level note" });
+    } finally {
+      await reopened.close();
     }
   });
 
@@ -1564,7 +1615,7 @@ describe("conversation text retention (#120)", () => {
     try {
       // Reopening migrated 17 -> 18; the session row survived and the new (empty) table is usable.
       expect((await migrated.readResolved()).sessions.has(sid)).toBe(true);
-      expect((await migrated.readInteractionText(sid)).size).toBe(0); // no backfill — re-derives on next index
+      expect(await migrated.readInteractionText(sid)).toEqual([]); // no backfill — re-derives on next index
     } finally {
       await migrated.close();
     }

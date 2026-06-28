@@ -32,25 +32,15 @@ interface ServeOptions {
 
 const log: Log = (s) => process.stderr.write(s + "\n");
 
-/** Parse the tri-state `--extract-tasks` flag: unset → undefined (defer to argus.json), else the
- *  explicit boolean override. Anything other than true/false is a usage error. */
-function toExtractTasksOverride(value: string | undefined): boolean | undefined {
+/** Parse a tri-state boolean override flag (e.g. `--extract-tasks`, `--retain-text`): unset → undefined
+ *  (defer to argus.json/env), else the explicit boolean. Anything other than true/false is a usage
+ *  error. One place so the accepted vocabulary and exit code don't drift across flags. */
+function toBoolOverride(value: string | undefined, flagName: string): boolean | undefined {
   if (value == null) return undefined;
   const v = value.trim().toLowerCase();
   if (v === "true") return true;
   if (v === "false") return false;
-  console.error(`Invalid --extract-tasks: ${value} (expected true or false)`);
-  process.exit(2);
-}
-
-/** Parse the tri-state `--retain-text` flag: unset → undefined (defer to argus.json/env), else the
- *  explicit boolean override (#120). Anything other than true/false is a usage error. */
-function toRetainTextOverride(value: string | undefined): boolean | undefined {
-  if (value == null) return undefined;
-  const v = value.trim().toLowerCase();
-  if (v === "true") return true;
-  if (v === "false") return false;
-  console.error(`Invalid --retain-text: ${value} (expected true or false)`);
+  console.error(`Invalid --${flagName}: ${value} (expected true or false)`);
   process.exit(2);
 }
 
@@ -527,9 +517,9 @@ const indexRebuild = defineCommand({
     runIndexRebuild(
       { ...syncOptions(args), force: args.force },
       log,
-      toExtractTasksOverride(args["extract-tasks"]),
+      toBoolOverride(args["extract-tasks"], "extract-tasks"),
       !!args.debug,
-      toRetainTextOverride(args["retain-text"]),
+      toBoolOverride(args["retain-text"], "retain-text"),
     ),
   ),
 });
@@ -548,8 +538,8 @@ const indexRefresh = defineCommand({
       {
         ...syncOptions(args),
         ids: args._,
-        extractTasks: toExtractTasksOverride(args["extract-tasks"]),
-        retainText: toRetainTextOverride(args["retain-text"]),
+        extractTasks: toBoolOverride(args["extract-tasks"], "extract-tasks"),
+        retainText: toBoolOverride(args["retain-text"], "retain-text"),
         debug: !!args.debug,
       },
       log,
@@ -584,8 +574,8 @@ const index = defineCommand({
     validateArgs(ctx);
     return guard(async () => {
       const args = ctx.args;
-      const extractTasks = toExtractTasksOverride(args["extract-tasks"]);
-      const retainText = toRetainTextOverride(args["retain-text"]);
+      const extractTasks = toBoolOverride(args["extract-tasks"], "extract-tasks");
+      const retainText = toBoolOverride(args["retain-text"], "retain-text");
       if (args.watch) {
         const ac = abortOnSignals();
         await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks, retainText }, log, ac.signal);

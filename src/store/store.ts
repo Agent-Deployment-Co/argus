@@ -1725,25 +1725,25 @@ export class SqliteStore implements Store {
     });
   }
 
-  // Opt-in retained conversation text for a session (#120), grouped by owning interaction seq with
-  // each interaction's chunks in timeline order (the table's own `seq`). Empty when retention was off
-  // when the session was indexed. Lets a consumer (the Interpret backfill, #153) read the dialogue
-  // from the store instead of re-parsing the transcript from disk; local-only data.
-  readInteractionText(sessionId: string): Promise<Map<number, InteractionTextChunk[]>> {
+  // Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
+  // order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. Returned
+  // as a flat ordered list — matching the tall table's extensibility — so nothing is dropped if a
+  // future chunk (e.g. session-level narration) carries a null interaction_seq; a consumer groups by
+  // interactionSeq as needed. Empty when retention was off at index time. Lets a consumer (the
+  // Interpret backfill, #153) read the dialogue from the store instead of re-parsing disk; local-only.
+  readInteractionText(sessionId: string): Promise<InteractionTextChunk[]> {
     return this.schedule(async () => {
-      const rows = await all<{ interaction_seq: number | null; type: string; text: string }>(
+      const rows = await all<{ seq: number; interaction_seq: number | null; type: string; text: string }>(
         this.db,
-        "SELECT interaction_seq, type, text FROM resolved_interaction_text WHERE session_id = ? ORDER BY seq",
+        "SELECT seq, interaction_seq, type, text FROM resolved_interaction_text WHERE session_id = ? ORDER BY seq",
         [sessionId],
       );
-      const out = new Map<number, InteractionTextChunk[]>();
-      for (const row of rows) {
-        if (row.interaction_seq == null) continue; // text always belongs to an interaction
-        const chunks = out.get(row.interaction_seq) ?? [];
-        chunks.push({ type: row.type, text: row.text });
-        out.set(row.interaction_seq, chunks);
-      }
-      return out;
+      return rows.map((row) => ({
+        seq: row.seq,
+        interactionSeq: row.interaction_seq,
+        type: row.type,
+        text: row.text,
+      }));
     });
   }
 
@@ -2192,6 +2192,12 @@ export class SqliteStore implements Store {
           );
           if (existing && session.messages.length < existing.message_count) {
             keptFuller.push(sid);
+            // We keep the fuller stored row (skipping the wholesale DELETE + its CASCADE below), but an
+            // opt-out must still take effect: clear any previously retained text for this session so
+            // "turn retention off and re-index removes stored text" holds even on this short-parse path (#120).
+            if (!retainText) {
+              await run(this.db, "DELETE FROM resolved_interaction_text WHERE session_id = ?", [sid]);
+            }
             continue;
           }
           const existingSnapshot = incomingTasks.length
@@ -2326,8 +2332,9 @@ export class SqliteStore implements Store {
           // Tall: each interaction contributes its text chunks (prompt and/or response prose today;
           // narration later) flattened in timeline order, with `seq` a running per-session ordinal and
           // `interaction_seq` the soft link back — exactly the resolved_usage/resolved_invocations
-          // shape. The wholesale per-session DELETE above already cleared any prior rows via CASCADE,
-          // so turning retention off and re-indexing leaves the table empty for the session.
+          // shape. The wholesale per-session DELETE above already cleared any prior rows via CASCADE (and
+          // the kept-fuller short-parse path clears them explicitly when retention is off), so turning
+          // retention off and re-indexing leaves the table empty for the session.
           if (retainText) {
             const textRows: unknown[][] = [];
             for (const interaction of session.interactions ?? []) {

@@ -258,10 +258,14 @@ export interface InteractionFact {
   position: SourcePosition;
 }
 
-/** One retained conversation-text chunk (#120): a piece of the dialogue with its role. `type` is a
- *  controlled vocabulary — `"prompt"` | `"response"` today, `"narration"` (etc.) later — kept as a
- *  string so new kinds need no type change. Local-only — never on the sync wire. */
+/** One retained conversation-text chunk (#120): a piece of the dialogue with its role. `seq` is the
+ *  chunk's own per-session ordinal (timeline order); `interactionSeq` is the owning interaction, or
+ *  null for a future session-level chunk that belongs to no single interaction. `type` is a controlled
+ *  vocabulary — `"prompt"` | `"response"` today, `"narration"` (etc.) later — kept as a string so new
+ *  kinds need no type change. Local-only — never on the sync wire. */
 export interface InteractionTextChunk {
+  seq: number;
+  interactionSeq: number | null;
   type: string;
   text: string;
 }
@@ -558,8 +562,9 @@ export interface MaterializeSession {
   messages: MessageRecord[];
   tasks?: TaskFact[];
   /** Reconcile-derived interactions for this session (#117/#119), persisted to resolved_interactions.
-   *  Each carries in-memory promptText/responseText (#122) the Interpret stage reads; materialize
-   *  strips that text (not stored until #120's opt-in retention). */
+   *  Each carries in-memory promptText/responseText (#122) the Interpret stage reads; the stored
+   *  interaction_json is always text-free, and that text is persisted (opt-in, default-on, local-only)
+   *  in resolved_interaction_text (#120). */
   interactions?: InteractionFact[];
 }
 
@@ -656,10 +661,11 @@ export interface ReadModelStore {
   ): Promise<string[]>;
   /** Metadata for a single resolved session, without loading messages or tasks. */
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
-  /** Opt-in retained conversation text for a session (#120): owning interaction seq → that
-   *  interaction's text chunks in timeline order. Empty when retention was off at index time.
-   *  Local-only — never on the sync wire. */
-  readInteractionText(sessionId: string): Promise<Map<number, InteractionTextChunk[]>>;
+  /** Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
+   *  order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. A reader
+   *  groups by `interactionSeq` as needed. Empty when retention was off at index time. Local-only —
+   *  never on the sync wire. */
+  readInteractionText(sessionId: string): Promise<InteractionTextChunk[]>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
   /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
