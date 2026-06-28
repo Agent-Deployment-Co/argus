@@ -43,6 +43,17 @@ function toExtractTasksOverride(value: string | undefined): boolean | undefined 
   process.exit(2);
 }
 
+/** Parse the tri-state `--retain-text` flag: unset → undefined (defer to argus.json/env), else the
+ *  explicit boolean override (#120). Anything other than true/false is a usage error. */
+function toRetainTextOverride(value: string | undefined): boolean | undefined {
+  if (value == null) return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === "true") return true;
+  if (v === "false") return false;
+  console.error(`Invalid --retain-text: ${value} (expected true or false)`);
+  process.exit(2);
+}
+
 /** Build an AbortController wired to one-shot SIGINT/SIGTERM handlers, for the `--watch` commands. */
 function abortOnSignals(): AbortController {
   const ac = new AbortController();
@@ -453,6 +464,16 @@ const extractTasksArg = {
   },
 } as const;
 
+/** The local text-retention override shared by the indexing commands (#120). Tri-state: unset defers
+ *  to argus.json/env; true/false overrides it for the run. Stored text is local-only — never synced. */
+const retainTextArg = {
+  "retain-text": {
+    type: "string",
+    description: "Keep prompt/response text in the local store this run: true|false (local-only, never synced; overrides argus.json).",
+    valueHint: "true|false",
+  },
+} as const;
+
 /** Print the full task-extraction debug stream to stdout (one-off runs; not applied under --watch). */
 const debugArg = {
   debug: { type: "boolean", default: false, description: "Print full task-extraction debug output to stdout" },
@@ -498,6 +519,7 @@ const indexRebuild = defineCommand({
   args: {
     ...sourceArg,
     ...extractTasksArg,
+    ...retainTextArg,
     ...debugArg,
     force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
   },
@@ -507,6 +529,7 @@ const indexRebuild = defineCommand({
       log,
       toExtractTasksOverride(args["extract-tasks"]),
       !!args.debug,
+      toRetainTextOverride(args["retain-text"]),
     ),
   ),
 });
@@ -517,6 +540,7 @@ const indexRefresh = defineCommand({
     id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
     ...sourceArg,
     ...extractTasksArg,
+    ...retainTextArg,
     ...debugArg,
   },
   run: handler((args) =>
@@ -525,6 +549,7 @@ const indexRefresh = defineCommand({
         ...syncOptions(args),
         ids: args._,
         extractTasks: toExtractTasksOverride(args["extract-tasks"]),
+        retainText: toRetainTextOverride(args["retain-text"]),
         debug: !!args.debug,
       },
       log,
@@ -547,6 +572,7 @@ const index = defineCommand({
   args: {
     ...sourceArg,
     ...extractTasksArg,
+    ...retainTextArg,
     ...debugArg,
     watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
     interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
@@ -559,11 +585,12 @@ const index = defineCommand({
     return guard(async () => {
       const args = ctx.args;
       const extractTasks = toExtractTasksOverride(args["extract-tasks"]);
+      const retainText = toRetainTextOverride(args["retain-text"]);
       if (args.watch) {
         const ac = abortOnSignals();
-        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks }, log, ac.signal);
+        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks, retainText }, log, ac.signal);
       } else {
-        await runIndex(syncOptions(args), log, extractTasks, !!args.debug);
+        await runIndex(syncOptions(args), log, extractTasks, !!args.debug, retainText);
       }
     });
   },

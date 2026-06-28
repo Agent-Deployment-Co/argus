@@ -1413,3 +1413,112 @@ describe("SQLite store", () => {
     }
   });
 });
+
+describe("prompt/response text retention (#120)", () => {
+  const sid = "claude:retain";
+  const pos = (i: number) => ({ originKey: "f", recordIndex: i, itemIndex: 0 });
+  const sessionWithText = () => ({
+    meta: {
+      source: "claude" as const,
+      sessionId: sid,
+      project: "p",
+      cwd: "/tmp/p",
+      filePath: "/tmp/p/r.jsonl",
+    },
+    messages: [
+      { source: "claude" as const, sessionId: sid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1000, date: "2026-06-01", model: "claude-opus-4", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }, attributionSkill: null, interactionSeq: 0, toolUses: [] },
+    ],
+    interactions: [
+      // seq 0 carries text; seq 1 carries none (agent-initiated) — only seq 0 should get a row.
+      { id: "i0", source: "claude" as const, sourceSessionId: sid, seq: 0, initiator: "human" as const, disposition: "completed" as const, compactionCount: 0, timestampMs: 1000, promptPosition: pos(0), position: pos(0), promptText: "fix the bug", responseText: "fixed it" },
+      { id: "i1", source: "claude" as const, sourceSessionId: sid, seq: 1, initiator: "agent" as const, disposition: "completed" as const, compactionCount: 0, timestampMs: 1002, promptPosition: pos(1), position: pos(1) },
+    ],
+  });
+
+  test("retention on stores text; readInteractionText round-trips; only text-bearing rows exist", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
+      const text = await store.readInteractionText(sid);
+      expect(text.size).toBe(1);
+      expect(text.get(0)).toEqual({ promptText: "fix the bug", responseText: "fixed it" });
+      expect(text.has(1)).toBe(false);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("retention off stores no text", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: false });
+      expect((await store.readInteractionText(sid)).size).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("interaction_json never carries text, in either mode (the never-synced guarantee)", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
+    } finally {
+      await store.close();
+    }
+    const json = await withRawDatabase(path, (db) =>
+      rawAll<{ interaction_json: string }>(
+        db,
+        `SELECT interaction_json FROM resolved_interactions WHERE session_id = '${sid}'`,
+      ).map((r) => r.interaction_json),
+    );
+    expect(json.length).toBe(2);
+    for (const j of json) {
+      expect(j).not.toContain("fix the bug");
+      expect(j).not.toContain("fixed it");
+      expect(j).not.toContain("promptText");
+      expect(j).not.toContain("responseText");
+    }
+  });
+
+  test("re-materializing with retention off clears previously stored text (CASCADE)", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
+      expect((await store.readInteractionText(sid)).size).toBe(1);
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: false });
+      expect((await store.readInteractionText(sid)).size).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("v17 -> v18 migration adds resolved_interaction_text and preserves existing data", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionWithText()], { retainText: true });
+    } finally {
+      await store.close();
+    }
+    // Degrade to v17: drop the v18 table and set the version back, simulating an older store.
+    await withRawDatabase(path, async (db) => {
+      rawExec(db, "DROP TABLE resolved_interaction_text");
+      rawExec(db, "PRAGMA user_version = 17");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      // Reopening migrated 17 -> 18; the session row survived and the new (empty) table is usable.
+      expect((await migrated.readResolved()).sessions.has(sid)).toBe(true);
+      expect((await migrated.readInteractionText(sid)).size).toBe(0); // no backfill — re-derives on next index
+    } finally {
+      await migrated.close();
+    }
+    const version = await withRawDatabase(path, (db) =>
+      rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+});

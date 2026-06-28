@@ -63,8 +63,9 @@ export interface ReconcileInput {
  *  a separate per-session map — resolved_tool_results is retired. */
 export interface ReconcileResult extends ParseResult {
   tasksBySession: Map<string, TaskFact[]>;
-  /** Interactions (#117), derived here by grouping the deduped/ordered timeline. Each carries in-memory
-   *  promptText/responseText (#122) for the Interpret stage; not persisted (stripped at materialize). */
+  /** Interactions (#117), derived here by grouping the deduped/ordered timeline. Each carries
+   *  promptText/responseText (#122) for the Interpret stage; never embedded in the stored
+   *  interaction_json, but persisted opt-in/local-only in resolved_interaction_text (#120). */
   interactions: InteractionFact[];
   /** Count of result facts (#130) that didn't correlate to any parsed call — their tokens are dropped
    *  from the per-tool result-size totals (the call deduped away on a resumed session, lives in an
@@ -211,9 +212,10 @@ function deriveInteractions(
         timestampMs: open.ts,
         promptPosition: open.position,
         ...(responsePosition ? { responsePosition } : {}),
-        // Prompt/response text (#122), in-memory only for the Interpret stage — promptText is set only
-        // on human task-start openings (the sole source of task candidates); responseText is the
-        // response slot's text. Materialize strips both; #120 makes persistence opt-in.
+        // Prompt/response text (#122) for the Interpret stage — promptText is set only on human
+        // task-start openings (the sole source of task candidates); responseText is the response
+        // slot's text. Kept out of the stored interaction_json; persisted (opt-in/local-only) in
+        // resolved_interaction_text under #120's retention.
         ...(open.text ? { promptText: open.text } : {}),
         ...(responseText ? { responseText } : {}),
         position: open.position,
