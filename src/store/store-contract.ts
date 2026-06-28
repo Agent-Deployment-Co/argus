@@ -258,11 +258,12 @@ export interface InteractionFact {
   position: SourcePosition;
 }
 
-/** Opt-in retained prompt/response text for one interaction (#120). Local-only — never on the sync
- *  wire. Returned by `Store.readInteractionText`, keyed by interaction seq. */
-export interface InteractionText {
-  promptText?: string;
-  responseText?: string;
+/** One retained conversation-text chunk (#120): a piece of the dialogue with its role. `type` is a
+ *  controlled vocabulary — `"prompt"` | `"response"` today, `"narration"` (etc.) later — kept as a
+ *  string so new kinds need no type change. Local-only — never on the sync wire. */
+export interface InteractionTextChunk {
+  type: string;
+  text: string;
 }
 
 export interface InvocationFact {
@@ -655,9 +656,10 @@ export interface ReadModelStore {
   ): Promise<string[]>;
   /** Metadata for a single resolved session, without loading messages or tasks. */
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
-  /** Opt-in retained prompt/response text for a session (#120), keyed by interaction seq. Empty when
-   *  retention was off at index time. Local-only — never on the sync wire. */
-  readInteractionText(sessionId: string): Promise<Map<number, InteractionText>>;
+  /** Opt-in retained conversation text for a session (#120): owning interaction seq → that
+   *  interaction's text chunks in timeline order. Empty when retention was off at index time.
+   *  Local-only — never on the sync wire. */
+  readInteractionText(sessionId: string): Promise<Map<number, InteractionTextChunk[]>>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
   /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
