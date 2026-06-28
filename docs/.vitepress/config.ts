@@ -53,32 +53,19 @@ export default defineConfig({
     search: {
       provider: 'local'
     },
-    // https://vitepress.dev/reference/default-theme-config
-    nav: [
-      { text: 'Guide', link: '/architecture', activeMatch: '^/(architecture|configuration|session-model|task-interpretation|web-app)' },
-      { text: 'Examples', link: '/api-examples', activeMatch: '^/(api-examples|markdown-examples)' },
-      { text: 'GitHub', link: repoUrl }
-    ],
+    // One flat list of pages down the left side — no top nav menu; the
+    // logo, search, and GitHub icon live in the header.
+    nav: [],
 
     sidebar: [
-      {
-        text: 'Overview',
-        items: [
-          { text: 'Introduction', link: '/' },
-          { text: 'Architecture', link: '/architecture' },
-          { text: 'Configuration', link: '/configuration' },
-          { text: 'Session model', link: '/session-model' },
-          { text: 'Task interpretation', link: '/task-interpretation' },
-          { text: 'Web app', link: '/web-app' }
-        ]
-      },
-      {
-        text: 'Examples',
-        items: [
-          { text: 'API examples', link: '/api-examples' },
-          { text: 'Markdown examples', link: '/markdown-examples' }
-        ]
-      }
+      { text: 'Introduction', link: '/' },
+      { text: 'Architecture', link: '/architecture' },
+      { text: 'Session model', link: '/session-model' },
+      { text: 'Task interpretation', link: '/task-interpretation' },
+      { text: 'Web app', link: '/web-app' },
+      { text: 'Configuration', link: '/configuration' },
+      { text: 'Database schema', link: '/database-schema' },
+      { text: 'LLM providers', link: '/llm-providers' }
     ],
 
     editLink: {
