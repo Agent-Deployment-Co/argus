@@ -1,0 +1,96 @@
+# Voice and tone
+
+These rules define how Argus docs sound. They adapt ADC's house voice for technical
+documentation, and everything you need is on this page. When in doubt, favor
+clarity over flourish.
+
+## The dial for docs
+
+The house voice runs from opinionated long-form (posts, the newsletter) to plain
+reference (internal docs). Argus docs sit near the plain end: clear, confident,
+concise. Say what the thing is, how it works, and when to use it. Skip the warm-up.
+Write for someone who needs to act on the page, not someone who needs to be sold.
+
+Keep the core voice, and ease off the long-form signature:
+
+- Don't open with a scene, an anecdote, or a hook. Lead with what the page covers.
+- Go light on analogies. Use one only when it does real explanatory work.
+- No footnote asides, no self-deprecating bits, no winking. Those belong in posts.
+
+## Core principles
+
+These always hold.
+
+- **Every word earns its place.** Use the fewest, clearest words that say exactly
+  what you mean. If a sentence can be cut, cut it. If a paragraph can be a
+  sentence, make it one.
+- **Say what it is.** Direct statements over hedged or inflated ones. If you
+  genuinely don't know, say so and say why.
+- **Active voice.** Say who or what does the thing. "The producer reads the
+  transcript," not "the transcript is read."
+- **Connect with words, not punctuation.** Let "but," "so," "while," and "because"
+  carry the logic instead of a colon or a dash.
+- **Be human, in moderation.** Contractions are good. A plain, friendly register
+  beats a stiff one. Docs just don't need a joke to land.
+
+## Argus specifics
+
+These come from the repo's own rules (`CLAUDE.md`, "User-facing messages") and
+apply to docs as much as to terminal output.
+
+- **Plain language for a moderately technical reader.** The reader understands
+  agents and computers generally, but hasn't read the code. Use words they already
+  know: file, directory, session, transcript, project, source.
+- **Don't name code internals.** Describe the effect the reader observes, not the
+  implementation. "Re-reads your transcripts from disk," not "clears the structural
+  index." Internal vocabulary (table names, layer numbers, fragments, fact rows)
+  stays off user-facing pages. The architecture and database-schema pages are the
+  exception: they document internals on purpose.
+- **Product names.** Anthropic styles it **Claude Cowork** (lowercase "w"). Use that
+  exact casing. The other sources are Claude Code, Codex, and Gemini.
+- **Never use real data.** This is a public repo. Synthesize obviously-fake
+  examples (`/Users/you`, `user@example.com`). Never paste real paths, names,
+  emails, tokens, or transcript content.
+
+## Cut on sight
+
+The tells that make writing read as generic or machine-made. Scan for these before
+calling a draft done.
+
+- **Marketing buzzwords:** unlock, supercharge, leverage, empower, streamline,
+  seamlessly, world-class. Say what actually happens instead.
+- **The rhetorical reframe:** "That's not X, it's Y." Keep the half that does real
+  work, cut the setup.
+- **Filler emphasis:** "Here's the thing:", "Let's be clear:". Just say the thing.
+- **Self-certifying honesty:** "honestly," "to be honest," "frankly." Cut the
+  qualifier and make the claim.
+- **Passive voice.** Say who does what.
+- **Over-explaining the value.** State the outcome and trust the reader.
+- **Example-stuffing.** An abstract phrase with a list of specifics bolted on to
+  prove you were concrete. Trust the description, or give the single sharpest
+  example.
+- **Sentence-long bolding.** Bold one surgical phrase or a term, never a whole
+  sentence.
+- **Consultant-speak:** leverage to "use," utilize to "use," pain point to
+  "problem." Reach for the plainer word.
+
+## No em-dashes
+
+Don't use em-dashes in Argus docs. Not as a connector, not as a parenthetical pair,
+not as a trailing aside. Use commas or parentheses for an aside, a colon or a new
+sentence for a supplement, and a conjunction (or two sentences) for a connector.
+This is a bright line ADC holds because agent-drafted copy reaches for em-dashes
+constantly, so it's easier to hold the line than to ration them.
+
+## Before you ship
+
+- [ ] Buzzword or consultant-speak, swap for the plainer word
+- [ ] Rhetorical reframe ("not X, it's Y"), keep the real half
+- [ ] Filler emphasis or self-certifying honesty, cut it
+- [ ] Passive voice, say who does what
+- [ ] Over-explaining, state the outcome and stop
+- [ ] Code internals on a user-facing page, describe the observable effect
+- [ ] Real paths, names, or data, swap for fake fixtures
+- [ ] Any em-dash, use a comma, parentheses, colon, or conjunction
+- [ ] Could this paragraph be a sentence? Could this sentence be cut?
+- [ ] Read it aloud: does it sound like a person, or a brochure?

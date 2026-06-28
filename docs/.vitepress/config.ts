@@ -7,6 +7,9 @@ export default defineConfig({
     'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.',
   cleanUrls: true,
   lastUpdated: true,
+  // Authoring guides for contributors/agents, not product docs — kept in the
+  // repo but excluded from the published site. See docs/contributing/.
+  srcExclude: ['contributing/**'],
   head: [
     ['link', { rel: 'icon', href: '/favicon.ico', sizes: '48x48' }],
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],

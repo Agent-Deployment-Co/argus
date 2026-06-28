@@ -80,6 +80,15 @@ may use the internal vocabulary freely.
 (not "CoWork" or "Co-Work"). Use this exact casing in all user-facing strings. The internal
 source identifier / slug stays `cowork` (all lowercase).
 
+## Writing the docs
+
+When writing or editing anything under `docs/` (the VitePress site), follow the authoring
+guides in **`docs/contributing/`**: `voice-and-tone.md` (how the docs should sound) and
+`technical-writing.md` (structure, formatting, terminology). They specialize ADC's house voice
+for Argus's technical docs and extend the "User-facing messages" rules above. Note in
+particular: no em-dashes, and don't surface code internals on user-facing pages. The
+`docs/contributing/` guides are excluded from the published site (`srcExclude`).
+
 ## Architecture
 
 The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/architecture.md`):
