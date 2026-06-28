@@ -41,10 +41,11 @@ export default defineConfig({
   ],
   themeConfig: {
     logo: {
-      src: '/favicon.svg',
-      alt: 'The Agent Deployment Co. chevron'
+      light: '/wordmark-on-light.svg',
+      dark: '/wordmark-on-dark.svg',
+      alt: 'Argus'
     },
-    siteTitle: 'Argus',
+    siteTitle: false,
     outline: {
       label: 'On this page',
       level: [2, 3]
