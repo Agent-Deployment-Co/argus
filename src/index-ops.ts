@@ -5,29 +5,30 @@ import { sourcesFor, type Log } from "./reporting/dashboard-builder.ts";
 import { syncStatsSummary, reindexSession } from "./indexing/pipeline.ts";
 import { openSessionStore } from "./store/session-store.ts";
 import { openStore, rebuildStore } from "./store/store.ts";
-import { loadConfig, resolveRetainText, resolveTaskExtraction, type ResolvedTaskExtraction } from "./config.ts";
+import { loadConfig, resolveRetainText, resolveTaskExtraction, type ArgusConfig, type ResolvedTaskExtraction } from "./config.ts";
 import type { DeleteOptions, RefreshOptions, SyncOptions } from "./cli-options.ts";
 
 /** Resolve task-extraction settings for an indexing run: the `--extract-tasks` override (when set)
  *  wins over argus.json, which wins over the built-in default (off) — the uniform #89 chain, with
  *  the flag occupying its flag layer. `provider`/`model`/etc. always come from argus.json. */
-function resolveExtraction(extractTasks: boolean | undefined, debug = false): ResolvedTaskExtraction {
+function resolveExtraction(
+  extractTasks: boolean | undefined,
+  file: ArgusConfig,
+  debug = false,
+): ResolvedTaskExtraction {
   // `--debug` wires the task-extraction debug sink to stdout (the same stream `argus run --debug` prints).
   const debugLog = debug ? (message: string) => process.stdout.write(message + "\n") : undefined;
   return resolveTaskExtraction(
     extractTasks === undefined ? {} : { "extract-tasks": extractTasks },
-    loadConfig(),
+    file,
     debugLog,
   );
 }
 
 /** Resolve local text retention for an indexing run (#120): the `--retain-text` override (when set)
  *  wins over argus.json/env, which wins over the built-in default (on). */
-function resolveRetention(retainText: boolean | undefined): boolean {
-  return resolveRetainText(
-    retainText === undefined ? {} : { "retain-text": retainText },
-    loadConfig(),
-  );
+function resolveRetention(retainText: boolean | undefined, file: ArgusConfig): boolean {
+  return resolveRetainText(retainText === undefined ? {} : { "retain-text": retainText }, file);
 }
 
 /** Bring the store up to date for the requested sources (producers reconcile + materialize). When
@@ -40,11 +41,13 @@ export async function runIndex(
   debug = false,
   retainText?: boolean,
 ): Promise<void> {
-  const taskExtraction = resolveExtraction(extractTasks, debug);
+  // Read argus.json once and thread it into both resolvers (avoid a double parse per pass / watch tick).
+  const config = loadConfig();
+  const taskExtraction = resolveExtraction(extractTasks, config, debug);
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
     taskExtraction,
-    retainText: resolveRetention(retainText),
+    retainText: resolveRetention(retainText, config),
     log,
   });
   try {
@@ -136,8 +139,9 @@ export async function runIndexRefresh(opts: RefreshOptions, log: Log): Promise<v
 /** Reindex specific sessions in isolation, reporting per session. A session that's unknown or whose
  *  transcript has left disk reports a clear error and changes nothing for that session. */
 async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
-  const taskExtraction = resolveExtraction(opts.extractTasks, opts.debug);
-  const retainText = resolveRetention(opts.retainText);
+  const config = loadConfig();
+  const taskExtraction = resolveExtraction(opts.extractTasks, config, opts.debug);
+  const retainText = resolveRetention(opts.retainText, config);
   const extracting = taskExtraction.enabled && taskExtraction.llm.provider !== "off";
   const store = await openStore(opts.storePath ? { path: opts.storePath } : undefined);
   let refreshed = 0;

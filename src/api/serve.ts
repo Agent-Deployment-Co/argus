@@ -23,7 +23,7 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import type { ResolvedTaskExtraction } from "../config.ts";
+import { resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, type SecretStatus, type SecretStore } from "../secrets.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
@@ -446,14 +446,19 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     }
   }
 
-  // Task extraction is always on for an explicit single-session Refresh (deliberately unlike the CLI
-  // `index refresh`, which defers to the config opt-in): force `enabled` on while keeping the
-  // configured provider/model. A provider explicitly set to "off" stays off.
-  const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: true };
   const reindex: SessionReindexer = async (sessionId) => {
+    // Honor the local text-retention opt-out (#120) on the web Refresh path: resolve it from config
+    // (env > argus.json > default-on) the same way taskExtraction is resolved, and thread it through.
+    // Resolved per request so a config change while serving takes effect.
+    const retainText = resolveRetainText();
+    // Refresh normally force-extracts tasks (deliberately unlike the CLI `index refresh`, which defers
+    // to the config opt-in), keeping the configured provider/model — but only when we're retaining
+    // text: with retention off we neither store the conversation nor run the model over it. A provider
+    // explicitly set to "off" stays off.
+    const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: retainText };
     const store = await openStore();
     try {
-      return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction });
+      return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction, retainText });
     } finally {
       await store.close();
     }
