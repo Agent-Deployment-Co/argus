@@ -278,10 +278,12 @@ async function runStatus(log: Log): Promise<void> {
   // Count every session the store actually holds, grouped by where it came from, so the per-source
   // lines and the total reconcile with what `argus index` reports (which counts the whole store).
   let counts: Array<{ owner: string; present: number; archived: number }> = [];
+  let interpretation: { interpreted: number; pending: number; outdated: number } | undefined;
   try {
     const store = await openStore();
     try {
       counts = await store.resolvedSessionCounts();
+      interpretation = await store.interpretationProgress();
     } finally {
       await store.close();
     }
@@ -316,6 +318,15 @@ async function runStatus(log: Log): Promise<void> {
   if (lines.length > 1) log(`Total: ${total} sessions`);
   if (totalArchived) {
     log(`Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus index delete --archived\``);
+  }
+  // Interpretation backfill progress (#153): only meaningful once some sessions have been interpreted
+  // or are waiting to be. Stay silent otherwise so a user who hasn't turned task extraction on sees nothing.
+  if (interpretation && (interpretation.interpreted > 0 || interpretation.pending > 0)) {
+    const outdated = interpretation.outdated ? `, ${interpretation.outdated} outdated` : "";
+    log(
+      `Interpreted ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
+        `(${interpretation.pending} waiting${outdated}).`,
+    );
   }
   if (pending) log("Run `argus index` to pick up new and changed sessions.");
 }

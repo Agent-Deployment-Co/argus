@@ -23,6 +23,7 @@ import type {
   FileFingerprint,
   FileIdentity,
   FileRole,
+  InteractionFact,
   InteractionTextChunk,
   MaterializeSession,
   ParsedAuxiliaryFragment,
@@ -48,7 +49,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 18;
+export const STORE_SCHEMA_VERSION = 19;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -314,12 +315,27 @@ const CREATE_SCHEMA_SQL = `
     friction_compactions INTEGER,
     friction_turns INTEGER,
     last_interruption_ms INTEGER,
+    -- Interpretation state (#153). These are owned by the Interpret stage, not by structural indexing:
+    -- materialize only ever sets content_indexed_at_ms (and only when message content actually changed);
+    -- interpreted_at_ms / interpretation_version are written solely by writeSessionTasks. A session is
+    -- eligible for (re)interpretation iff content_indexed_at_ms > COALESCE(interpreted_at_ms, 0) — the
+    -- same comparison is the "outdated" signal (interpreted once, then content changed). The version is
+    -- the interpreter's own implementation version (provenance); it is DELIBERATELY NOT part of the
+    -- eligibility test, so bumping the interpreter never re-triggers the background drain.
+    content_indexed_at_ms INTEGER,
+    interpreted_at_ms INTEGER,
+    interpretation_version TEXT,
     meta_json TEXT NOT NULL
   );
   CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
   CREATE INDEX resolved_sessions_last_ts ON resolved_sessions(last_ts);
   CREATE INDEX resolved_sessions_source ON resolved_sessions(source);
   CREATE INDEX resolved_sessions_archived ON resolved_sessions(archived);
+  -- Steady-state eligibility scan (#153): when nothing is pending this index is empty, so the
+  -- newest-first drain query stays cheap regardless of how many sessions are interpreted.
+  CREATE INDEX resolved_sessions_interpret_pending
+    ON resolved_sessions(last_ts DESC)
+    WHERE content_indexed_at_ms > COALESCE(interpreted_at_ms, 0);
 
   CREATE TABLE resolved_usage (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -506,15 +522,26 @@ interface ResolvedSessionSnapshot {
   metaJson: string;
   messageJsons: string[];
   tasks: TaskFact[];
+  // Interpretation state to carry across a re-materialize (#153). Materialize preserves tasks +
+  // interpreted_at_ms + interpretation_version untouched (it owns none of them); content_indexed_at_ms
+  // is carried only when the content is unchanged, and replaced with "now" when it changed.
+  contentIndexedAtMs: number | null;
+  interpretedAtMs: number | null;
+  interpretationVersion: string | null;
 }
 
 async function readResolvedSessionSnapshot(
   db: Database,
   sessionId: string,
 ): Promise<ResolvedSessionSnapshot | undefined> {
-  const row = await get<{ meta_json: string }>(
+  const row = await get<{
+    meta_json: string;
+    content_indexed_at_ms: number | null;
+    interpreted_at_ms: number | null;
+    interpretation_version: string | null;
+  }>(
     db,
-    "SELECT meta_json FROM resolved_sessions WHERE session_id = ?",
+    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version FROM resolved_sessions WHERE session_id = ?",
     [sessionId],
   );
   if (!row) return undefined;
@@ -532,6 +559,9 @@ async function readResolvedSessionSnapshot(
     metaJson: row.meta_json,
     messageJsons: messageRows.map((message) => message.record_json),
     tasks: taskRows.map((task) => JSON.parse(task.task_json) as TaskFact),
+    contentIndexedAtMs: row.content_indexed_at_ms,
+    interpretedAtMs: row.interpreted_at_ms,
+    interpretationVersion: row.interpretation_version,
   };
 }
 
@@ -540,7 +570,10 @@ function materializedSessionMatchesSnapshot(
   snapshot: ResolvedSessionSnapshot,
 ): boolean {
   // Tool-result sizes live inside each message's toolUses now (#130), so the message comparison
-  // already covers them — no separate tool-results check.
+  // already covers them — no separate tool-results check. This is purely a CONTENT (meta + messages)
+  // comparison: it must NOT consult interpretation_version. Interpretation freshness is a separate
+  // axis (content_indexed_at_ms vs interpreted_at_ms); a version bump alone is deliberately not a
+  // content change and must never re-trigger materialize or the background drain (#153).
   return (
     snapshot.metaJson === JSON.stringify(session.meta) &&
     snapshot.messageJsons.length === session.messages.length &&
@@ -1115,6 +1148,25 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       );
     `,
   },
+  // 18 -> 19: decoupled, throttled Interpret (#153). Add per-session interpretation state to
+  // resolved_sessions: content_indexed_at_ms (processing time, set by materialize only on real content
+  // change), interpreted_at_ms + interpretation_version (written solely by writeSessionTasks). Backfill
+  // content_indexed_at_ms to "now" so existing sessions read as freshly indexed and thus eligible
+  // (interpreted_at_ms is NULL → never interpreted). The partial index keeps the eligibility scan cheap.
+  18: {
+    to: 19,
+    sql: `
+      ALTER TABLE resolved_sessions ADD COLUMN content_indexed_at_ms INTEGER;
+      ALTER TABLE resolved_sessions ADD COLUMN interpreted_at_ms INTEGER;
+      ALTER TABLE resolved_sessions ADD COLUMN interpretation_version TEXT;
+      UPDATE resolved_sessions
+        SET content_indexed_at_ms = strftime('%s', 'now') * 1000
+        WHERE content_indexed_at_ms IS NULL;
+      CREATE INDEX resolved_sessions_interpret_pending
+        ON resolved_sessions(last_ts DESC)
+        WHERE content_indexed_at_ms > COALESCE(interpreted_at_ms, 0);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -1680,6 +1732,185 @@ export class SqliteStore implements Store {
     });
   }
 
+  // The interaction spine for a session, rehydrated with its retained prompt/response text (#153). The
+  // stored interaction_json is text-free by construction (#120); we merge promptText/responseText back
+  // from resolved_interaction_text by interaction_seq so this is the SINGLE text source the Interpret
+  // stage reads — both the background drain and the inline refresh interpret from here, never from the
+  // in-memory parse artifacts. Empty text (retention was off at index time) yields interactions without
+  // promptText/responseText, which the interpreter treats as "no candidate".
+  readSessionInteractions(sessionId: string): Promise<InteractionFact[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ interaction_json: string }>(
+        this.db,
+        "SELECT interaction_json FROM resolved_interactions WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      const interactions = rows.map((row) => JSON.parse(row.interaction_json) as InteractionFact);
+      const byInteraction = new Map<number, InteractionFact>();
+      for (const interaction of interactions) byInteraction.set(interaction.seq, interaction);
+      const textRows = await all<{ interaction_seq: number | null; type: string; text: string }>(
+        this.db,
+        "SELECT interaction_seq, type, text FROM resolved_interaction_text WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      for (const row of textRows) {
+        if (row.interaction_seq == null) continue;
+        const interaction = byInteraction.get(row.interaction_seq);
+        if (!interaction) continue;
+        // Concatenate defensively: today there is at most one prompt + one response chunk per
+        // interaction, but the tall table can carry more — overwriting would silently drop text.
+        if (row.type === "prompt") interaction.promptText = (interaction.promptText ?? "") + row.text;
+        else if (row.type === "response") interaction.responseText = (interaction.responseText ?? "") + row.text;
+      }
+      return interactions;
+    });
+  }
+
+  // Canonical ids of sessions eligible for (re)interpretation (#153), newest-first, capped at `limit`.
+  // Eligible = content indexed more recently than last interpreted (interpreted_at_ms NULL → 0, so
+  // never-interpreted qualifies) AND a human-authored opening prompt whose text was retained exists
+  // (without retained text there's nothing to interpret from, which also subsumes the retain-text
+  // gate). interpretation_version is deliberately NOT consulted: bumping the interpreter must not
+  // re-trigger the background drain — only a content change or an explicit refresh does.
+  readPendingInterpretationSessions(limit: number): Promise<string[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT s.session_id FROM resolved_sessions s
+         WHERE s.content_indexed_at_ms > COALESCE(s.interpreted_at_ms, 0)
+           AND EXISTS (
+             SELECT 1 FROM resolved_interaction_text t
+             JOIN resolved_interactions i
+               ON i.session_id = t.session_id AND i.seq = t.interaction_seq
+             WHERE t.session_id = s.session_id AND t.type = 'prompt' AND i.initiator = 'human'
+           )
+         ORDER BY s.last_ts DESC, s.session_id
+         LIMIT ?`,
+        [limit],
+      );
+      return rows.map((row) => row.session_id);
+    });
+  }
+
+  // The SOLE writer of resolved_tasks + interpretation state (#153). Replaces a session's tasks without
+  // re-materializing its messages/interactions/text, re-derives task↔interaction membership
+  // (resolved_interactions.task_seq) over the new tasks, and stamps interpreted_at_ms +
+  // interpretation_version. ALWAYS stamps — even for an empty task list — so a session with no
+  // extractable tasks de-queues instead of being re-interpreted on every drain tick. Survives a later
+  // unchanged re-materialize via materialize's carry-forward; discarded only when content changes.
+  writeSessionTasks(sessionId: string, tasks: TaskFact[], version: string): Promise<void> {
+    return this.schedule(async () => {
+      await transaction(this.db, async () => {
+        await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
+        await insertRows(
+          this.db,
+          "resolved_tasks",
+          ["session_id", "seq", "source", "ts", "task_json"],
+          tasks.map((task, seq) => [
+            sessionId,
+            seq,
+            task.source,
+            task.timestampMs ?? null,
+            JSON.stringify(task),
+          ]),
+        );
+        const interactionRows = await all<{ seq: number; ts: number | null }>(
+          this.db,
+          "SELECT seq, ts FROM resolved_interactions WHERE session_id = ?",
+          [sessionId],
+        );
+        const interactions = interactionRows.map(
+          (row) => ({ seq: row.seq, timestampMs: row.ts ?? undefined }),
+        ) as unknown as InteractionFact[];
+        const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, interactions);
+        await run(this.db, "UPDATE resolved_interactions SET task_seq = NULL WHERE session_id = ?", [sessionId]);
+        for (const [interactionSeq, taskSeq] of taskSeqByInteraction) {
+          await run(
+            this.db,
+            "UPDATE resolved_interactions SET task_seq = ? WHERE session_id = ? AND seq = ?",
+            [taskSeq, sessionId, interactionSeq],
+          );
+        }
+        await run(
+          this.db,
+          "UPDATE resolved_sessions SET interpreted_at_ms = ?, interpretation_version = ? WHERE session_id = ?",
+          [Date.now(), version, sessionId],
+        );
+      });
+      secureSqliteFiles(this.path);
+    });
+  }
+
+  // Persisted rate limiter for the throttled Interpret drain (#153). A leaky-bucket of "credits" where
+  // one credit = permission to interpret one session (deliberately NOT called "tokens" — these are
+  // unrelated to LLM tokens). Continuous refill at `maxPerHour` per hour, capacity `maxPerHour`; a fresh
+  // bucket starts full (the rate is a ceiling, not a startup delay). Returns how many credits were
+  // actually granted (min of `want` and whole credits available), decrementing by that amount. State
+  // lives in store_metadata so the ceiling holds across process restarts and repeated one-shot
+  // `argus index` runs. Decrement is on GRANT (an attempt), so a failing session still costs a credit —
+  // bounding spend even when interpretation errors.
+  takeInterpretCredits(want: number, maxPerHour: number): Promise<number> {
+    return this.schedule(async () => {
+      if (want <= 0 || maxPerHour <= 0) return 0;
+      const nowMs = Date.now();
+      const row = await get<{ value: string }>(
+        this.db,
+        "SELECT value FROM store_metadata WHERE key = 'interpret_rate'",
+      );
+      let credits = maxPerHour;
+      if (row) {
+        try {
+          const state = JSON.parse(row.value) as { credits?: number; lastRefillMs?: number };
+          const lastRefillMs = typeof state.lastRefillMs === "number" ? state.lastRefillMs : nowMs;
+          const prior = typeof state.credits === "number" ? state.credits : maxPerHour;
+          const elapsedMs = Math.max(0, nowMs - lastRefillMs);
+          credits = Math.min(maxPerHour, prior + (elapsedMs / 3_600_000) * maxPerHour);
+        } catch {
+          credits = maxPerHour;
+        }
+      }
+      const granted = Math.min(want, Math.floor(credits));
+      await run(
+        this.db,
+        "INSERT OR REPLACE INTO store_metadata (key, value) VALUES ('interpret_rate', ?)",
+        [JSON.stringify({ credits: credits - granted, lastRefillMs: nowMs })],
+      );
+      return granted;
+    });
+  }
+
+  // Backfill progress for `argus status` (#153). interpreted = sessions interpreted at least once;
+  // outdated = interpreted but content has changed since (the "new data, refresh?" signal); pending =
+  // eligible for the drain (never-or-outdated AND has retained human prompt text), matching
+  // readPendingInterpretationSessions so the number a user sees is the real remaining backlog.
+  interpretationProgress(): Promise<{ interpreted: number; pending: number; outdated: number }> {
+    return this.schedule(async () => {
+      const counts = await get<{ interpreted: number; outdated: number }>(
+        this.db,
+        `SELECT
+           COUNT(*) FILTER (WHERE interpreted_at_ms IS NOT NULL) AS interpreted,
+           COUNT(*) FILTER (WHERE interpreted_at_ms IS NOT NULL AND content_indexed_at_ms > interpreted_at_ms) AS outdated
+         FROM resolved_sessions`,
+      );
+      const pendingRow = await get<{ n: number }>(
+        this.db,
+        `SELECT COUNT(*) AS n FROM resolved_sessions s
+         WHERE s.content_indexed_at_ms > COALESCE(s.interpreted_at_ms, 0)
+           AND EXISTS (
+             SELECT 1 FROM resolved_interaction_text t
+             JOIN resolved_interactions i
+               ON i.session_id = t.session_id AND i.seq = t.interaction_seq
+             WHERE t.session_id = s.session_id AND t.type = 'prompt' AND i.initiator = 'human'
+           )`,
+      );
+      return {
+        interpreted: counts?.interpreted ?? 0,
+        pending: pendingRow?.n ?? 0,
+        outdated: counts?.outdated ?? 0,
+      };
+    });
+  }
+
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>> {
     return this.schedule(async () => {
       // One pass for the whole session: map each task's seq -> id, then bucket the attributed
@@ -2200,13 +2431,24 @@ export class SqliteStore implements Store {
             }
             continue;
           }
-          const existingSnapshot = incomingTasks.length
-            ? undefined
-            : await readResolvedSessionSnapshot(this.db, sid);
-          const tasks =
-            existingSnapshot && materializedSessionMatchesSnapshot(session, existingSnapshot)
-              ? existingSnapshot.tasks
-              : incomingTasks;
+          // Interpretation is decoupled from indexing (#153): materialize never writes tasks or
+          // interpretation state for an EXISTING session — it carries them forward untouched (the
+          // Interpret stage's writeSessionTasks is the sole task writer). So we always read the prior
+          // snapshot to preserve it, and only seed `incomingTasks` for a brand-new session (tests /
+          // programmatic callers). Even when the content changed, the prior tasks stay (shown as
+          // "outdated" via the timestamp comparison) until the drain re-interprets.
+          const existingSnapshot = await readResolvedSessionSnapshot(this.db, sid);
+          const contentChanged =
+            !existingSnapshot || !materializedSessionMatchesSnapshot(session, existingSnapshot);
+          const tasks = existingSnapshot ? existingSnapshot.tasks : incomingTasks;
+          // content_indexed_at_ms is a processing-time stamp bumped ONLY on a real content change (or a
+          // brand-new session). An unchanged re-materialize (e.g. a bare `index refresh`) carries the old
+          // value forward, so it does not falsely mark every session outdated. interpreted_at_ms /
+          // interpretation_version are always carried forward; only writeSessionTasks updates them.
+          const nowMs = Date.now();
+          const contentIndexedAtMs = contentChanged ? nowMs : (existingSnapshot!.contentIndexedAtMs ?? nowMs);
+          const interpretedAtMs = existingSnapshot?.interpretedAtMs ?? null;
+          const interpretationVersion = existingSnapshot?.interpretationVersion ?? null;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
@@ -2220,8 +2462,9 @@ export class SqliteStore implements Store {
             this.db,
             `INSERT INTO resolved_sessions(
                session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived,
-               friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+               friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms,
+               content_indexed_at_ms, interpreted_at_ms, interpretation_version, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               sid,
               owner,
@@ -2237,6 +2480,9 @@ export class SqliteStore implements Store {
               friction ? friction.compactions : null,
               friction ? (session.meta.rawTurns ?? friction.turns) : null,
               friction?.lastInterruptionMs ?? null,
+              contentIndexedAtMs,
+              interpretedAtMs,
+              interpretationVersion,
               JSON.stringify(session.meta),
             ],
           );

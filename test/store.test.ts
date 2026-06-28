@@ -199,6 +199,16 @@ function rawExec(db: Database, sql: string): void {
   db.run(sql);
 }
 
+/** Strip the v19 interpretation columns + partial index (#153) so a test that degrades a current-schema
+ *  store to a pre-19 version can re-run the 18 -> 19 migration without colliding with columns the
+ *  current CREATE_SCHEMA_SQL already created. Mirrors how these tests strip every other post-version add. */
+function dropInterpretationColumns(db: Database): void {
+  rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_interpret_pending");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN content_indexed_at_ms");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpreted_at_ms");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpretation_version");
+}
+
 function rawGet<T>(db: Database, sql: string): T | undefined {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (db.query<T, any[]>(sql).get() as T | null) ?? undefined;
@@ -462,6 +472,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
+      dropInterpretationColumns(db);
       await rawExec(db, "PRAGMA user_version = 4");
     });
 
@@ -504,6 +515,7 @@ describe("SQLite store", () => {
     // A store upgraded by that build reaches v16 without the table. Drop it and stamp v16.
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP TABLE IF EXISTS hub_session_cursors");
+      dropInterpretationColumns(db);
       await rawExec(db, "PRAGMA user_version = 16");
     });
 
@@ -749,7 +761,7 @@ describe("SQLite store", () => {
     }
   });
 
-  test("materializeSessions preserves extracted tasks only when the session is unchanged", async () => {
+  test("materializeSessions carries tasks forward across re-materialize (interpretation is decoupled, #153)", async () => {
     const path = storePath();
     const store = await openStore({ path });
     try {
@@ -787,14 +799,18 @@ describe("SQLite store", () => {
         messages: [message(ts)],
       });
 
+      // Tasks may be seeded directly only for a brand-new session; materialize writes them once.
       await store.materializeSessions("codex", [{ ...materialized(1000), tasks: [task] }]);
       expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
 
+      // Unchanged re-materialize: tasks preserved.
       await store.materializeSessions("codex", [materialized(1000)]);
       expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
 
+      // Content changed: materialize no longer wipes tasks (#153) — the prior interpretation is kept
+      // (it will read as "outdated" via the timestamp comparison) until the drain re-interprets.
       await store.materializeSessions("codex", [materialized(2000)]);
-      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([]);
+      expect(await store.readSessionTasks("codex:preserve-tasks")).toEqual([task]);
     } finally {
       await store.close();
     }
@@ -1056,6 +1072,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
+      dropInterpretationColumns(db);
       await rawExec(db, "PRAGMA user_version = 8");
     });
 
@@ -1212,6 +1229,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
+      dropInterpretationColumns(db);
       await rawExec(db, "PRAGMA user_version = 10");
     });
 
@@ -1295,6 +1313,7 @@ describe("SQLite store", () => {
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
       await rawExec(db, `INSERT INTO resolved_tool_results VALUES ('${sid}', 'Bash', 2, 100), ('${sid}', 'Read', 1, 30)`);
+      dropInterpretationColumns(db);
       await rawExec(db, "PRAGMA user_version = 11");
     });
 
@@ -1363,6 +1382,7 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_usage ADD COLUMN task_seq INTEGER");
       await rawExec(db, "CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq)");
       await rawExec(db, `UPDATE resolved_usage SET task_seq = 0 WHERE session_id = '${sid}'`);
+      dropInterpretationColumns(db);
       await rawExec(db, "PRAGMA user_version = 12");
     });
 
@@ -1608,6 +1628,7 @@ describe("conversation text retention (#120)", () => {
     // Degrade to v17: drop the v18 table and set the version back, simulating an older store.
     await withRawDatabase(path, async (db) => {
       rawExec(db, "DROP TABLE resolved_interaction_text");
+      dropInterpretationColumns(db);
       rawExec(db, "PRAGMA user_version = 17");
     });
 

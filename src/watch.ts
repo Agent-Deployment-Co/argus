@@ -34,7 +34,14 @@ export interface WatchIndexOptions extends SyncOptions {
 
 /** Test seam: override the one-shot index pass (defaults to the real `runIndex`). */
 export interface WatchIndexDeps {
-  index?: (opts: SyncOptions, log: Log, extractTasks?: boolean, debug?: boolean, retainText?: boolean) => Promise<void>;
+  index?: (
+    opts: SyncOptions,
+    log: Log,
+    extractTasks?: boolean,
+    debug?: boolean,
+    retainText?: boolean,
+    interpretCollapser?: RepeatCollapser,
+  ) => Promise<void>;
 }
 
 /**
@@ -45,11 +52,14 @@ export interface WatchIndexDeps {
 export async function watchIndex(opts: WatchIndexOptions, log: Log, signal: AbortSignal, deps: WatchIndexDeps = {}): Promise<void> {
   const indexPass = deps.index ?? runIndex;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
+  // One collapser for the whole watch lifetime so the interpretation drain's throttle-pause / failure
+  // lines (#153) are said once and not repeated every tick while the situation persists.
+  const interpretCollapser = new RepeatCollapser(log);
   await superviseLoop(
     "indexing",
     async (sig) => {
       while (!sig.aborted) {
-        await indexPass(opts, log, opts.extractTasks, false, opts.retainText);
+        await indexPass(opts, log, opts.extractTasks, false, opts.retainText, interpretCollapser);
         await sleep(intervalMs, sig);
       }
     },
