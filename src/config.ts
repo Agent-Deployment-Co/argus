@@ -280,6 +280,9 @@ const LLM_SETTINGS = {
 
 /** Task-extraction settings: the opt-in toggle, the consumer-specific prompt, and the deprecated
  *  per-consumer overrides of provider/model/command (kept working; prefer `llm.*`). */
+/** Default hourly ceiling for the background interpretation drain (#153). */
+export const DEFAULT_MAX_SESSIONS_PER_HOUR = 30;
+
 const TASK_SETTINGS = {
   enabled: {
     path: "taskExtraction.enabled",
@@ -323,6 +326,16 @@ const TASK_SETTINGS = {
     default: undefined as OptionalString,
     parse: parseString,
   } satisfies Setting<OptionalString>,
+  // Throttle for the background interpretation drain (#153): the hourly ceiling on how many sessions
+  // are interpreted automatically. The primary spend knob — predictable cost per hour regardless of how
+  // often indexing wakes. The inline refresh path is not subject to it.
+  maxSessionsPerHour: {
+    path: "taskExtraction.maxSessionsPerHour",
+    env: "ARGUS_TASK_MAX_PER_HOUR",
+    flag: "task-max-per-hour",
+    default: DEFAULT_MAX_SESSIONS_PER_HOUR as OptionalNumber,
+    parse: parseNumber,
+  } satisfies Setting<OptionalNumber>,
 };
 
 /** All known settings keyed by dotted argus.json path — used by `argus config get/set/list`. */
@@ -394,6 +407,8 @@ function resolveLlmConfig(
 export interface ResolvedTaskExtraction {
   enabled: boolean;
   llm: ResolvedLlmConfig;
+  /** Hourly ceiling for the throttled background drain (#153); always a positive number. */
+  maxSessionsPerHour: number;
   /** Custom instruction prompt. The session data is appended after it. */
   prompt?: string;
   /** Read a custom instruction prompt from this file. Takes precedence over `prompt`. */
@@ -420,9 +435,11 @@ export function resolveTaskExtraction(
   };
   const llm = resolveLlmConfig(flags, file, overrides, DEFAULT_TASK_PROVIDER);
 
+  const maxPerHour = resolveSetting(TASK_SETTINGS.maxSessionsPerHour, flags, file);
   const resolved: ResolvedTaskExtraction = {
     enabled: resolveSetting(TASK_SETTINGS.enabled, flags, file),
     llm,
+    maxSessionsPerHour: maxPerHour != null && maxPerHour > 0 ? maxPerHour : DEFAULT_MAX_SESSIONS_PER_HOUR,
   };
   const prompt = resolveSetting(TASK_SETTINGS.prompt, flags, file);
   const promptFile = resolveSetting(TASK_SETTINGS.promptFile, flags, file);

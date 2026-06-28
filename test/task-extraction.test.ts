@@ -18,7 +18,7 @@ import {
 
 /** Build a ResolvedTaskExtraction for a test, defaulting `enabled` on. */
 function te(over: Partial<ResolvedTaskExtraction> & { llm: ResolvedTaskExtraction["llm"] }): ResolvedTaskExtraction {
-  return { enabled: true, ...over };
+  return { enabled: true, maxSessionsPerHour: 30, ...over };
 }
 
 // Pass-1 input is the session's human interaction openings (#122) — each carrying its prompt text.
