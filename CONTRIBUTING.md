@@ -76,6 +76,23 @@ bun run build                  # Build the distributable Node.js CLI (runs build
 CI installs with the frozen lockfile, typechecks both the root and `web/`, runs the full test
 suite, and verifies the web build.
 
+## Documentation
+
+The docs site is a [VitePress](https://vitepress.dev) project under `docs/`, published to
+[argus.agentdeployment.co](https://argus.agentdeployment.co) on every merge to `main` that touches
+`docs/`.
+
+```bash
+bun run docs:dev      # live-reloading local preview
+bun run docs:build    # build the static site (catches dead links)
+bun run docs:preview  # serve the built output
+```
+
+Before writing or editing pages, read the authoring guides in
+[`docs/contributing/`](docs/contributing/README.md): voice and tone, and technical writing. They
+keep the docs consistent and on-voice. (They live in the repo but are excluded from the published
+site.)
+
 ## Architecture
 
 The core data flow is:
