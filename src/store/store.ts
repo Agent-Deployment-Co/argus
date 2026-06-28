@@ -23,6 +23,7 @@ import type {
   FileFingerprint,
   FileIdentity,
   FileRole,
+  InteractionText,
   MaterializeSession,
   ParsedAuxiliaryFragment,
   PhysicalFileIdentity,
@@ -47,7 +48,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 17;
+export const STORE_SCHEMA_VERSION = 18;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -189,6 +190,22 @@ const RESOLVED_INVOCATIONS_INDEXES = `
   CREATE INDEX resolved_invocations_date ON resolved_invocations(date);
   CREATE INDEX resolved_invocations_mcp_server ON resolved_invocations(mcp_server) WHERE mcp_server IS NOT NULL;
   CREATE INDEX resolved_invocations_skill ON resolved_invocations(skill) WHERE skill IS NOT NULL;`;
+
+// Opt-in (default-on) local retention of prompt/response text (#120). Kept in its OWN table, never in
+// resolved_interactions.interaction_json, so the push path (which reads only interaction_json) is
+// text-free by construction — "never synced" is structural, not a strip step. Plaintext: privacy
+// rests on the never-synced guarantee + OS disk encryption, keeping a future session-search feature
+// open. Rows exist only for interactions that carry text (human task-start prompt and/or response
+// prose); CASCADE clears them when the session is re-materialized or retention is turned off.
+// Shared so CREATE_SCHEMA_SQL and the v17 -> v18 migration can't drift.
+const RESOLVED_INTERACTION_TEXT_DDL = `
+  CREATE TABLE resolved_interaction_text (
+    session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    prompt_text TEXT,
+    response_text TEXT,
+    PRIMARY KEY (session_id, seq)
+  );`;
 
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
@@ -334,9 +351,13 @@ const CREATE_SCHEMA_SQL = `
 
   -- The interaction spine (#117): one row per interaction (prompt -> loop -> response). Promoted
   -- initiator/disposition columns back the friction/outcome GROUP BY (#121); interaction_json keeps
-  -- the full fact (incl. prompt/response slot positions) for detail reads.
+  -- the full fact (incl. prompt/response slot positions) for detail reads. interaction_json is always
+  -- text-free; opt-in retained prompt/response text lives in resolved_interaction_text (#120).
   ${RESOLVED_INTERACTIONS_DDL}
   ${RESOLVED_INTERACTIONS_INDEXES}
+
+  -- Opt-in (default-on) local prompt/response text retention (#120). Local-only; never synced.
+  ${RESOLVED_INTERACTION_TEXT_DDL}
 
   -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
   -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
@@ -1071,6 +1092,21 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
     `,
   },
+  // 17 -> 18: opt-in (default-on) local prompt/response text retention (#120). Add an empty side table;
+  // no backfill — text re-derives on the next index from the transcripts still on disk. Kept separate
+  // from resolved_interactions.interaction_json so the push path stays text-free by construction.
+  17: {
+    to: 18,
+    sql: `
+      CREATE TABLE IF NOT EXISTS resolved_interaction_text (
+        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        prompt_text TEXT,
+        response_text TEXT,
+        PRIMARY KEY (session_id, seq)
+      );
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -1150,6 +1186,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
+    await get(db, "SELECT session_id, seq, prompt_text, response_text FROM resolved_interaction_text LIMIT 1");
     await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
@@ -1680,6 +1717,27 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Opt-in retained prompt/response text for a session (#120), keyed by interaction seq. Empty when
+  // retention was off when the session was indexed. Lets a consumer (the Interpret backfill, #153)
+  // read text from the store instead of re-parsing the transcript from disk; local-only data.
+  readInteractionText(sessionId: string): Promise<Map<number, InteractionText>> {
+    return this.schedule(async () => {
+      const rows = await all<{ seq: number; prompt_text: string | null; response_text: string | null }>(
+        this.db,
+        "SELECT seq, prompt_text, response_text FROM resolved_interaction_text WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      const out = new Map<number, InteractionText>();
+      for (const row of rows) {
+        const text: InteractionText = {};
+        if (row.prompt_text != null) text.promptText = row.prompt_text;
+        if (row.response_text != null) text.responseText = row.response_text;
+        out.set(row.seq, text);
+      }
+      return out;
+    });
+  }
+
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]> {
     return this.schedule(async () => {
       // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
@@ -2096,7 +2154,14 @@ export class SqliteStore implements Store {
     return { messages, sessions, toolResults, tasksBySession };
   }
 
-  materializeSessions(owner: string, sessions: MaterializeSession[]): Promise<string[]> {
+  materializeSessions(
+    owner: string,
+    sessions: MaterializeSession[],
+    opts: { retainText?: boolean } = {},
+  ): Promise<string[]> {
+    // Default-on local text retention (#120). The caller resolves the setting; default true so any
+    // caller that doesn't pass it (tests, programmatic use) gets the core behavior.
+    const retainText = opts.retainText ?? true;
     return this.schedule(async () => {
       if (!sessions.length) return [];
       const keptFuller: string[] = [];
@@ -2230,8 +2295,9 @@ export class SqliteStore implements Store {
             "resolved_interactions",
             ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "task_seq", "interaction_json"],
             (session.interactions ?? []).map((interaction) => {
-              // promptText/responseText (#122) are in-memory only for the Interpret stage — strip them
-              // so the stored interaction_json stays text-free (persistence is #120's opt-in retention).
+              // interaction_json is ALWAYS text-free: promptText/responseText are split off into
+              // resolved_interaction_text (below, when retention is on), never embedded here. This keeps
+              // the push path — which reads only interaction_json — text-free by construction (#120).
               const { promptText: _p, responseText: _r, ...stored } = interaction;
               return [
                 sid,
@@ -2246,6 +2312,26 @@ export class SqliteStore implements Store {
               ];
             }),
           );
+          // Opt-in (default-on) local prompt/response text retention (#120). Local-only — this table is
+          // never read by the push path, so retained text is structurally unable to reach the Hub. Only
+          // interactions that carry text get a row (task-start prompt and/or response prose); the
+          // wholesale per-session DELETE above already cleared any prior rows via CASCADE, so turning
+          // retention off and re-indexing leaves the table empty for the session.
+          if (retainText) {
+            await insertRows(
+              this.db,
+              "resolved_interaction_text",
+              ["session_id", "seq", "prompt_text", "response_text"],
+              (session.interactions ?? [])
+                .filter((interaction) => interaction.promptText || interaction.responseText)
+                .map((interaction) => [
+                  sid,
+                  interaction.seq,
+                  interaction.promptText ?? null,
+                  interaction.responseText ?? null,
+                ]),
+            );
+          }
           // Per-tool-use rows (#113 Part B / #130) from the reconciled messages' toolUses, so byTool/
           // byMcp/bySkill/heaviestToolResults become GROUP BY queries (#121). Each row is the call+result
           // unit: approx_result_tokens carries the paired result size folded on in reconcile.

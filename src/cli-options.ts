@@ -22,6 +22,8 @@ export interface DeleteOptions {
 export interface RefreshOptions extends SyncOptions {
   ids: string[];
   extractTasks?: boolean;
+  /** Tri-state `--retain-text` override (undefined = defer to argus.json/env). Local text retention (#120). */
+  retainText?: boolean;
   /** Print the full task-extraction debug stream to stdout (`--debug`). */
   debug?: boolean;
   /** Test seam: override the store path for targeted refresh (the CLI uses the default store). */

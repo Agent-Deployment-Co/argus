@@ -32,6 +32,8 @@ export interface SessionStoreOptions {
   storePath?: string;
   /** Opt-in index-time task extraction (#91). Used by index(); off/unset → no extraction. */
   taskExtraction?: ResolvedTaskExtraction;
+  /** Keep prompt/response text in the local store (#120). Default-on; unset → retained. Local-only. */
+  retainText?: boolean;
   /** Optional progress sink for long-running work (task extraction), wired to the command's logger. */
   log?: (message: string) => void;
 }
@@ -76,6 +78,7 @@ class StoreBackedSessionStore implements SessionStore {
       sources: this.opts.sources,
       storePath: this.opts.storePath,
       taskExtraction: this.opts.taskExtraction,
+      retainText: this.opts.retainText,
       log: this.opts.log,
       query,
     });

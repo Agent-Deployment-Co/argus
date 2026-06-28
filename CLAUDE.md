@@ -205,11 +205,12 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   `taskExtractionActive`) the pipeline calls. `task-candidates.ts`
   filters user-authored text into `TaskCandidateFact`s and recognizes Argus's own `claude -p` prompts
   so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments
-  tasks/chapters, pass 2 judges per-task outcome/frustration from the reconstructed dialogue — via the
-  shared LLM layer (`src/llm/`), defaulting to the `claude-cli` provider (`claude -p
-  --no-session-persistence --model haiku -`). `dialogue.ts` holds the format-agnostic `DialogueTurn` + time-slicing; the
-  per-source reconstruction lives in each producer's parser (`NativeProducer.reconstructDialogue`) and
-  is an in-memory intermediate — **no message text is stored**.
+  tasks/chapters, pass 2 judges per-task outcome/frustration from the prompt/response dialogue
+  projected straight from the reconciled interactions — via the shared LLM layer (`src/llm/`),
+  defaulting to the `claude-cli` provider (`claude -p --no-session-persistence --model haiku -`). The
+  per-interaction prompt/response text is kept **out of the stored interaction records** but is
+  retained separately, **opt-in (default-on) and local-only**, in `resolved_interaction_text` (#120;
+  `retainText` setting) — never on the sync wire.
 
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`serve`,
   `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly

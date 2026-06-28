@@ -65,6 +65,10 @@ export interface ArgusConfig {
     /** Shared API key for Hub authentication */
     key?: string;
   };
+  /** Keep prompt/response text in the local store so interpretation can read it without re-reading
+   *  transcripts from disk (#120). Stored text is local-only — never uploaded by `sync`. On by
+   *  default; set to false to keep session text out of `argus.db` entirely. */
+  retainText?: boolean;
 }
 
 export type ConfigWarn = (message: string) => void;
@@ -189,6 +193,16 @@ const AUTO_UPDATE_SETTINGS = {
         : DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES;
     },
   } satisfies Setting<number>,
+};
+
+const RETENTION_SETTINGS = {
+  retainText: {
+    path: "retainText",
+    env: "ARGUS_RETAIN_TEXT",
+    flag: "retain-text",
+    default: true,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
 };
 
 function parseNumber(raw: unknown): number | undefined {
@@ -317,6 +331,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(TASK_SETTINGS),
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
+    ...Object.values(RETENTION_SETTINGS),
   ].map((s) => [s.path, s as Setting<unknown>]),
 );
 
@@ -431,6 +446,14 @@ export function resolveAutoUpdateCheckIntervalMinutes(
   file: ArgusConfig = loadConfig(),
 ): number {
   return resolveSetting(AUTO_UPDATE_SETTINGS.checkIntervalMinutes, flags, file);
+}
+
+/** Whether to keep prompt/response text in the local store (#120). Defaults on; local-only. */
+export function resolveRetainText(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(RETENTION_SETTINGS.retainText, flags, file);
 }
 
 export interface ResolvedHubConfig {

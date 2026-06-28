@@ -8,6 +8,7 @@ import {
   loadConfig,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
+  resolveRetainText,
   resolveSetting,
   resolveTaskExtraction,
   type Setting,
@@ -29,6 +30,7 @@ const CONFIG_ENV = [
   "ARGUS_TASK_PROMPT",
   "ARGUS_TASK_PROMPT_FILE",
   "ARGUS_TASK_COMMAND",
+  "ARGUS_RETAIN_TEXT",
 ];
 
 afterEach(() => {
@@ -251,6 +253,31 @@ describe("resolveAutoUpdateCheckIntervalMinutes", () => {
     expect(
       resolveAutoUpdateCheckIntervalMinutes({}, { autoUpdate: { checkIntervalMinutes: 0 } }),
     ).toBe(60);
+  });
+});
+
+describe("resolveRetainText", () => {
+  test("defaults to on (core capability, opt-out)", () => {
+    expect(resolveRetainText({}, {})).toBe(true);
+  });
+
+  test("argus.json can opt out", () => {
+    expect(resolveRetainText({}, { retainText: false })).toBe(false);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_RETAIN_TEXT = "false";
+    expect(resolveRetainText({}, { retainText: true })).toBe(false);
+  });
+
+  test("flag overrides env and file", () => {
+    process.env.ARGUS_RETAIN_TEXT = "false";
+    expect(resolveRetainText({ "retain-text": true }, { retainText: false })).toBe(true);
+  });
+
+  test("empty env value falls through to the default", () => {
+    process.env.ARGUS_RETAIN_TEXT = "";
+    expect(resolveRetainText({}, {})).toBe(true);
   });
 });
 
