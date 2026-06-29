@@ -113,7 +113,7 @@ export interface SettingsResponse {
 const API_KEY_FIELD: SecretFieldDescriptor = {
   key: "llm.apiKey",
   label: "API key",
-  description: "Stored securely on this machine (OS keychain) and never uploaded.",
+  description: "Stored securely on this machine (OS keychain).",
   activeWhen: { path: "taskExtraction.enabled" },
   providerPath: "llm.provider",
   secretNames: Object.fromEntries(
@@ -127,7 +127,7 @@ const API_KEY_FIELD: SecretFieldDescriptor = {
 const HUB_KEY_FIELD: SecretFieldDescriptor = {
   key: "hub.key",
   label: "Hub key",
-  description: "Stored securely on this machine (OS keychain); never written to argus.json or uploaded.",
+  description: "Stored securely on this machine (OS keychain).",
   providerPath: "hub.url",
   secretName: HUB_SETTINGS.key.env!,
 };
