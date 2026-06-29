@@ -7,6 +7,7 @@ import {
   Lock,
   Pencil,
   PlugZap,
+  Server,
   SlidersHorizontal,
   Trash2,
   TriangleAlert,
@@ -30,6 +31,7 @@ import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCa
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
   interpretation: Brain,
+  hub: Server,
 };
 
 /** Serializes setting writes (auto-save) into one queue: one request in flight at a time, so the

@@ -40,11 +40,18 @@ function findSetting(file: Parameters<typeof describeSettings>[0], path: string)
 }
 
 describe("describeSettings", () => {
-  test("groups the registry into General + Session Interpretation categories", () => {
+  test("groups the registry into General + Session Interpretation + Argus Hub categories", () => {
     const { categories } = describeSettings({});
-    expect(categories.map((c) => c.id)).toEqual(["general", "interpretation"]);
+    expect(categories.map((c) => c.id)).toEqual(["general", "interpretation", "hub"]);
     // General is intentionally empty for now (#154).
     expect(categories[0]!.sections).toHaveLength(0);
+  });
+
+  test("the Argus Hub category exposes hub.url (key not yet surfaced)", () => {
+    const hub = describeSettings({}).categories.find((c) => c.id === "hub")!;
+    const paths = hub.sections.flatMap((s) => s.settings).map((s) => s.path);
+    expect(paths).toEqual(["hub.url"]);
+    expect(paths).not.toContain("hub.key");
   });
 
   test("each setting carries its UI metadata, file value, and effective value", () => {
