@@ -365,6 +365,8 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
    inputs match the .select__control height (32px) so they sit identically beside it. */
 .setting-input { box-sizing: border-box; width: var(--setting-control-w); height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
 .setting-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+/* Numeric values read better flush-right (and the spinner sits at the edge). */
+.setting-input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .setting-textarea { width: var(--setting-control-w); height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* A textarea row stacks: label + description on top, a full-width control below. */
 .setting-row-stacked { flex-direction: column; align-items: stretch; gap: 10px; }
