@@ -65,26 +65,27 @@ describe("describeSettings", () => {
     expect(provider.ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
     expect(provider.ui.effectiveDefault).toBe("claude-cli");
 
-    // Every llm.* field is inactive until task extraction is on.
-    for (const path of ["llm.model", "llm.baseUrl", "llm.maxTokens", "llm.command"]) {
+    // Every llm.* field shown in the UI is inactive until task extraction is on.
+    for (const path of ["llm.model", "llm.command"]) {
       expect(findSetting({}, path).ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
     }
 
-    // Field relevance comes from the provider registry: base URL is OpenAI-only, command is the
-    // command provider only, model spans most. (The API key env var itself is advanced/CLI-only.)
+    // Field relevance comes from the provider registry: command is the command provider only, model
+    // spans most providers (but never "off").
     const visible = (path: string) => findSetting({}, path).ui.visibleWhen!;
-    expect(visible("llm.baseUrl")).toEqual({ path: "llm.provider", in: ["openai"] });
     expect(visible("llm.command")).toEqual({ path: "llm.provider", in: ["command"] });
     expect(visible("llm.model").in).toContain("claude-cli");
     expect(visible("llm.model").in).not.toContain("off");
   });
 
-  test("the API key env-var field is not in the UI (advanced/CLI only)", () => {
+  test("base URL, max tokens, and the API key env var are advanced/CLI only (not in the UI)", () => {
     const paths = describeSettings({})
       .categories.flatMap((c) => c.sections)
       .flatMap((s) => s.settings)
       .map((s) => s.path);
     expect(paths).not.toContain("llm.apiKeyEnv");
+    expect(paths).not.toContain("llm.baseUrl");
+    expect(paths).not.toContain("llm.maxTokens");
   });
 
   test("exposes an API key secret field for the BYO-key providers", () => {
@@ -121,13 +122,18 @@ describe("applySetting", () => {
     expect(loadConfig(path)).toEqual({ llm: { provider: "openai" } });
   });
 
-  test("coerces typed values (toggle, number)", () => {
+  test("coerces a toggle value", () => {
     const path = tmpConfig();
     applySetting("taskExtraction.enabled", true, path);
-    applySetting("llm.maxTokens", "4096", path);
-    const cfg = loadConfig(path);
-    expect(cfg.taskExtraction?.enabled).toBe(true);
-    expect(cfg.llm?.maxTokens).toBe(4096);
+    expect(loadConfig(path).taskExtraction?.enabled).toBe(true);
+  });
+
+  test("rejects a setting that isn't in the UI (e.g. max tokens) with a 404", () => {
+    const path = tmpConfig();
+    const result = applySetting("llm.maxTokens", "4096", path);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(404);
+    expect(loadConfig(path)).toEqual({}); // untouched
   });
 
   test("rejects an invalid enum value with a 400 and does not write", () => {

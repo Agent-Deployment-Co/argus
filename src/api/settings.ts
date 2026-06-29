@@ -117,15 +117,10 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
       // Custom prompt / prompt file are intentionally not exposed yet.
       { settings: [TASK_SETTINGS.enabled] },
       {
-        // `llm.apiKeyEnv` (which env var the key is read from) is advanced/CLI-only; the UI offers the
-        // key itself (API_KEY_FIELD) instead.
-        settings: [
-          LLM_SETTINGS.provider,
-          LLM_SETTINGS.model,
-          LLM_SETTINGS.baseUrl,
-          LLM_SETTINGS.maxTokens,
-          LLM_SETTINGS.command,
-        ],
+        // Advanced / CLI-only (not in the UI): `llm.apiKeyEnv` (the UI offers the key itself via
+        // API_KEY_FIELD instead), `llm.baseUrl` (each provider sets its own endpoint), and
+        // `llm.maxTokens`.
+        settings: [LLM_SETTINGS.provider, LLM_SETTINGS.model, LLM_SETTINGS.command],
         secrets: [API_KEY_FIELD],
       },
     ],
