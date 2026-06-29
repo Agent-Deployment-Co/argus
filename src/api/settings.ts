@@ -44,6 +44,9 @@ export interface SettingDescriptor {
   effectiveValue: unknown;
   /** Present when the effective value comes from a higher-precedence layer than the file. */
   override?: SettingOverride;
+  /** A server-computed placeholder hint shown when the field is empty (e.g. the auto-resolved
+   *  `claude` binary path for `llm.claudeCliPath`). */
+  placeholder?: string;
 }
 
 /** A secret-backed field in the surface (#132): the value is written/read through the
@@ -161,8 +164,8 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
       {
         // Advanced / CLI-only (not in the UI): `llm.apiKeyEnv` (the UI offers the key itself via
         // API_KEY_FIELD instead), `llm.baseUrl` (each provider sets its own endpoint), and
-        // `llm.maxTokens`.
-        settings: [LLM_SETTINGS.provider, LLM_SETTINGS.model, LLM_SETTINGS.command],
+        // `llm.maxTokens`. `claudeCliPath` shows only for the claude-cli provider (its configFields).
+        settings: [LLM_SETTINGS.provider, LLM_SETTINGS.model, LLM_SETTINGS.claudeCliPath, LLM_SETTINGS.command],
         secrets: [API_KEY_FIELD],
         connectionTest: { activeWhen: { path: "taskExtraction.enabled" } },
       },
@@ -176,8 +179,10 @@ const EDITABLE: Map<string, Setting<unknown>> = new Map(
   LAYOUT.flatMap((cat) => cat.sections).flatMap((sec) => sec.settings).map((s) => [s.path, s]),
 );
 
-/** Build the JSON-safe descriptor for one setting against the given config file contents. */
-function describe(setting: Setting<unknown>, file: ArgusConfig): SettingDescriptor {
+/** Build the JSON-safe descriptor for one setting against the given config file contents. `claudeBinary`
+ *  (the auto-resolved `claude` path) is threaded in only by the serve route — so the binary resolution
+ *  (which may spawn a login shell) is an explicit caller concern, not a side effect of describing. */
+function describe(setting: Setting<unknown>, file: ArgusConfig, claudeBinary?: string): SettingDescriptor {
   const fileValue = getPath(file, setting.path) ?? null;
   // Resolve with no flags: the serve process doesn't carry the CLI flags, so the only layer that can
   // override the file here is an env var. resolveSetting still applies the file value and default.
@@ -192,18 +197,23 @@ function describe(setting: Setting<unknown>, file: ArgusConfig): SettingDescript
   if (setting.env && present(process.env[setting.env])) {
     descriptor.override = { layer: "env", name: setting.env };
   }
+  // The Claude CLI path field shows the auto-resolved binary as its placeholder, so the user sees what
+  // "leave blank to auto-detect" would actually use.
+  if (setting.path === "llm.claudeCliPath" && claudeBinary) descriptor.placeholder = claudeBinary;
   return descriptor;
 }
 
-/** Build the full settings surface payload from `argus.json` (defaults to the live file). */
-export function describeSettings(file: ArgusConfig = loadConfig()): SettingsResponse {
+/** Build the full settings surface payload from `argus.json` (defaults to the live file). `claudeBinary`
+ *  is the auto-resolved `claude` path used as the Claude CLI path placeholder; the serve route passes
+ *  it (via `resolveClaudeBinary()`) and other callers can omit it. */
+export function describeSettings(file: ArgusConfig = loadConfig(), claudeBinary?: string): SettingsResponse {
   return {
     categories: LAYOUT.map((cat) => ({
       id: cat.id,
       label: cat.label,
       sections: cat.sections.map((sec) => ({
         label: sec.label,
-        settings: sec.settings.filter((s) => s.ui).map((s) => describe(s, file)),
+        settings: sec.settings.filter((s) => s.ui).map((s) => describe(s, file, claudeBinary)),
         ...(sec.secrets ? { secretFields: sec.secrets } : {}),
         ...(sec.connectionTest ? { connectionTest: sec.connectionTest } : {}),
       })),

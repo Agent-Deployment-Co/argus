@@ -400,14 +400,21 @@ export const LLM_SETTINGS = {
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,
-  // Advanced / CLI-only (not in the settings UI): an explicit path to the `claude` binary, for when
-  // it can't be auto-resolved — e.g. a GUI-launched app's minimal PATH (#159). Normally unset; the
-  // claude-cli provider auto-resolves the binary (PATH → login shell → known locations).
+  // An explicit path to the `claude` binary, for when it can't be auto-resolved — e.g. a GUI-launched
+  // app's minimal PATH (#159). Normally unset; the claude-cli provider auto-resolves the binary
+  // (PATH → login shell → known locations), and the UI shows that resolved path as the placeholder.
   claudeCliPath: {
     path: "llm.claudeCliPath",
     env: "ARGUS_CLAUDE_CLI_PATH",
     flag: "claude-cli-path",
     default: undefined as OptionalString,
+    ui: {
+      label: "Claude CLI path",
+      description: "Full path to the claude binary. Leave blank to auto-detect.",
+      control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("claudeCliPath"),
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
 };

@@ -594,9 +594,11 @@ function SettingRow({
 
   const text = value == null ? "" : String(value);
   const checked = Boolean(value);
-  // A context-dependent placeholder (e.g. the provider's default model) wins; otherwise the effective
-  // value, otherwise "Default".
-  const placeholder = placeholderOverride ?? (effectiveValue != null ? String(effectiveValue) : "Default");
+  // Placeholder precedence: a cross-field placeholder (e.g. the provider's default model), then a
+  // server-computed one (e.g. the auto-resolved claude binary path), then the effective value, then
+  // "Default".
+  const placeholder =
+    placeholderOverride ?? descriptor.placeholder ?? (effectiveValue != null ? String(effectiveValue) : "Default");
 
   const saveText = () => {
     if (text === savedRef.current) return;

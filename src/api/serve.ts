@@ -27,6 +27,7 @@ import { loadConfig, resolveRetainText, type ResolvedTaskExtraction } from "../c
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
+import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
 export interface ServeOptions {
@@ -358,7 +359,12 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
   // gets the same hardening as the secret endpoints: CSRF (rejectCrossSite) + DNS-rebinding
   // (rejectUnsafeHost).
   app.get("/api/settings", (c) =>
-    c.json(describeSettings(opts.configPath ? loadConfig(opts.configPath) : undefined) satisfies SettingsResponse),
+    c.json(
+      describeSettings(
+        opts.configPath ? loadConfig(opts.configPath) : undefined,
+        resolveClaudeBinary(), // the Claude CLI path placeholder; memoized after the first resolve
+      ) satisfies SettingsResponse,
+    ),
   );
 
   app.put("/api/settings/:path", async (c) => {

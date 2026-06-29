@@ -22,7 +22,7 @@ export type LlmProvider =
 
 /** The `llm.*` config fields a provider can meaningfully use. Drives which fields the settings UI
  *  shows for a selected provider (e.g. an API provider needs a key env var; the local CLI doesn't). */
-export type LlmConfigField = "model" | "baseUrl" | "apiKeyEnv" | "maxTokens" | "command";
+export type LlmConfigField = "model" | "baseUrl" | "apiKeyEnv" | "maxTokens" | "command" | "claudeCliPath";
 
 /** A consumer-agnostic completion request. `system` carries instructions, `prompt` carries the data;
  *  the single-blob callers map everything to `prompt` with no `system`. */

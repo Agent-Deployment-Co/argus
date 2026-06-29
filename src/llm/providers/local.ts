@@ -246,7 +246,7 @@ export async function runCommandProvider(ctx: LocalProviderContext): Promise<Llm
 export const claudeCliProvider: ProviderDescriptor = {
   name: "claude-cli",
   defaultModel: DEFAULT_CLAUDE_PROVIDER_MODEL,
-  configFields: ["model"],
+  configFields: ["model", "claudeCliPath"],
   complete: (call: ProviderCall) =>
     runClaudeProvider({
       system: call.system,
