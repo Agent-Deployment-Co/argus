@@ -69,16 +69,16 @@ describe("describeSettings", () => {
     expect(provider.override).toBeUndefined();
   });
 
-  test("provider options: pinned default + off, a separator, then alpha providers without off", () => {
+  test("provider options: pinned default, a separator, then alpha providers (no Off)", () => {
     const opts = findSetting({}, "llm.provider").ui.options ?? [];
-    // First two are the pinned default (unset) and an explicit Off.
+    // The pinned default (unset), then a separator — there's no "Off" choice.
     expect(opts[0]).toEqual({ value: "", label: "Default (claude-cli)" });
-    expect(opts[1]).toEqual({ value: "off", label: "Off" });
-    expect(opts[2]).toBe("separator");
+    expect(opts[1]).toBe("separator");
     // The rest are real providers, alpha ascending, and never the special "off".
-    const rest = opts.slice(3).filter((o): o is { value: string; label: string } => o !== "separator");
+    const rest = opts.slice(2).filter((o): o is { value: string; label: string } => o !== "separator");
     const values = rest.map((o) => o.value);
     expect(values).not.toContain("off");
+    expect(opts).not.toContainEqual({ value: "off", label: "Off" });
     expect(values).toContain("claude-cli");
     expect(values).toEqual([...values].sort());
   });

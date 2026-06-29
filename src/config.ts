@@ -305,11 +305,11 @@ type OptionalProvider = LlmProvider | undefined;
 type OptionalNumber = number | undefined;
 
 /** The provider dropdown's option list. Pinned at the top: the unset choice (labeled with the default
- *  provider it resolves to) and an explicit "Off". Then a separator, then every selectable provider in
- *  alpha order (including claude-cli, excluding the special "off" which is pinned above). */
+ *  provider it resolves to). Then a separator, then every selectable provider in alpha order. There's
+ *  no "Off" choice — the Extract-tasks toggle is the on/off, so an "off" provider while extraction is on
+ *  would be contradictory ("off" stays a valid CLI/config value, just not offered here). */
 const PROVIDER_OPTIONS: SelectItem[] = [
   { value: "", label: `Default (${DEFAULT_TASK_PROVIDER})` },
-  { value: "off", label: "Off" },
   "separator",
   ...SELECTABLE_PROVIDERS.filter((p) => p !== "off")
     .map((p) => p as string)
