@@ -31,6 +31,7 @@
     "@agentdeploymentco/argus-schema": "github:Agent-Deployment-Co/argus-schema#v0.3.0",
     "@hono/node-server": "^2.0.5",
     "citty": "^0.2.2",
+    "consola": "^3.4.2",
     "hono": "^4.12.25"
   },
   "devDependencies": {

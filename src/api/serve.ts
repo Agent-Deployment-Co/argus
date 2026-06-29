@@ -10,7 +10,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dashboard } from "../reporting/aggregate.ts";
-import { ALL_SOURCES, buildSnapshot, sourcesFor, type BuildDashboardOptions, type Log } from "../reporting/dashboard-builder.ts";
+import { ALL_SOURCES, buildSnapshot, sourcesFor, type BuildDashboardOptions } from "../reporting/dashboard-builder.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
   buildSessionDetail,
@@ -29,6 +29,7 @@ import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStor
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
+import { logWarn, type Log } from "../logger.ts";
 
 export interface ServeOptions {
   port: number;
@@ -624,7 +625,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const url = `http://localhost:${info.port}`;
     log(`Listening on ${url} — press Ctrl-C to stop`);
     if (!webRoot) {
-      log("  ! The web app isn't built yet — showing a placeholder. Run `bun run build:web` first.");
+      logWarn(log, "The web app isn't built yet. Showing a placeholder. Run `bun run build:web` first.");
     }
     // Warm the unfiltered build so the first page load is fast; failures surface on the first request.
     void snapshot({}, false).catch(() => {});
@@ -640,7 +641,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     } else {
       // A runtime error after a successful bind — unblock so the caller shuts down (standalone) or
       // the supervisor restarts the leg (run).
-      log(`! Web server error: ${message}`);
+      logWarn(log, `Web server error: ${message}`);
       resolveClosed();
     }
   });

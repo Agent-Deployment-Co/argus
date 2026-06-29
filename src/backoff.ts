@@ -2,7 +2,7 @@
 // `argus run`). These commands assume a flaky laptop — it sleeps and wakes, drops Wi-Fi, loses the
 // network for stretches — so every wait is cancellable, every retry is bounded with jitter, and a
 // crashing leg restarts instead of taking the process down. Nothing here ever busy-waits.
-import type { Log } from "./reporting/dashboard-builder.ts";
+import { logAt, logWarn, type ArgusLogLevel, type Log } from "./logger.ts";
 
 /**
  * Resolve after `ms`, or earlier when `signal` aborts. Always resolves (never rejects) so callers
@@ -77,26 +77,28 @@ export class Backoff {
  */
 export class RepeatCollapser {
   private last: string | null = null;
+  private lastLevel: ArgusLogLevel = "info";
   private repeats = 0;
 
   constructor(private readonly log: Log) {}
 
   /** Note a message. Logs (and returns true) only when it's new; otherwise counts it and returns false. */
-  note(msg: string): boolean {
-    if (msg === this.last) {
+  note(msg: string, level: ArgusLogLevel = "info"): boolean {
+    if (msg === this.last && level === this.lastLevel) {
       this.repeats++;
       return false;
     }
     this.flush();
-    this.log(msg);
+    logAt(this.log, level, msg);
     this.last = msg;
+    this.lastLevel = level;
     return true;
   }
 
   /** Emit any suppressed-repeat summary and clear the run, so the next message always logs fresh. */
   flush(): void {
     if (this.repeats > 0) {
-      this.log(`  (the previous message repeated ${this.repeats} more time${this.repeats === 1 ? "" : "s"})`);
+      logAt(this.log, this.lastLevel, `(the previous message repeated ${this.repeats} more time${this.repeats === 1 ? "" : "s"})`);
       this.repeats = 0;
     }
     this.last = null;
@@ -136,14 +138,14 @@ export async function superviseLoop(
       // A clean return is only expected on abort. If the body returns while still running, treat it
       // like a crash so the leg comes back rather than silently stopping.
       if (signal.aborted) break;
-      msg = `! The ${name} loop stopped unexpectedly — restarting.`;
+      msg = `The ${name} loop stopped unexpectedly. Restarting.`;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      msg = `! The ${name} loop hit an error: ${detail} — restarting.`;
+      msg = `The ${name} loop hit an error: ${detail}. Restarting.`;
     }
     // A new failure mode is a kind of progress: log it and restart the backoff. Identical repeats
     // stay quiet and keep stepping the backoff up toward the cap.
-    const changed = collapse ? collapser.note(msg) : (log(msg), true);
+    const changed = collapse ? collapser.note(msg, "warn") : (logWarn(log, msg), true);
     if (changed) backoff.reset();
     await sleep(backoff.next(), signal);
   }
