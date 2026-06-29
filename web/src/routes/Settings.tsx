@@ -277,7 +277,7 @@ function SettingsCategoryPane({
   return (
     <div className="settings-content">
       <header className="settings-pane-head">
-        <h2>{category.label}</h2>
+        <h2 className="t-title">{category.label}</h2>
       </header>
       {showAppearance && (
         <section className="settings-section">
@@ -297,7 +297,7 @@ function SettingsCategoryPane({
           if (!visibleSettings.length && !visibleSecrets.length) return null;
           return (
             <section className="settings-section" key={section.label ?? i}>
-              {section.label && <h3 className="settings-section-head">{section.label}</h3>}
+              {section.label && <h3 className="t-eyebrow">{section.label}</h3>}
               <div className="settings-rows">
                 {visibleSettings.map((s) => (
                   <Fragment key={s.path}>
