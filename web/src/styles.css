@@ -356,6 +356,8 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .settings-rows { display: flex; flex-direction: column; }
 
 .setting-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+/* The last row in a section needs no divider — the section gap separates groups. */
+.settings-rows > .setting-row:last-child { border-bottom: none; }
 .setting-label { display: flex; flex-direction: column; gap: 3px; max-width: 60%; }
 .setting-name { color: var(--heading); font-weight: 600; font-size: 14px; }
 .setting-desc { color: var(--muted); font-size: 13px; line-height: 1.45; }
