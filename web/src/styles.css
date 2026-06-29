@@ -27,7 +27,7 @@
   --code-bg: rgba(249,235,220,.07); --code-text: var(--porcelain);
   --sel-bg: var(--tiger-orange); --sel-text: var(--coffee-bean);
   /* The UI/label typeface (everything that isn't running serif body text). */
-  --font-ui: var(--font-ui);
+  --font-ui: "Poppins", "Avenir Next", Arial, sans-serif;
 }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="light"] {
