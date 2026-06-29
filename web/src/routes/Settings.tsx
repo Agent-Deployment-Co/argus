@@ -3,8 +3,8 @@ import {
   ArrowLeft,
   Brain,
   Check,
-  KeyRound,
   Loader2,
+  Lock,
   SlidersHorizontal,
   TriangleAlert,
   type LucideIcon,
@@ -297,7 +297,9 @@ function SecretRow({
   return (
     <div className={`setting-row${disabled ? " setting-row-disabled" : ""}`}>
       <div className="setting-label">
-        <span className="setting-name">{field.label}</span>
+        <span className="setting-name">
+          {field.label} <Lock size={12} strokeWidth={2} aria-hidden className="setting-name-icon" />
+        </span>
         {field.description && <span className="setting-desc">{field.description}</span>}
       </div>
       <div className="setting-control">
@@ -340,7 +342,7 @@ function SecretRow({
         ) : (
           <>
             <span className="secret-set">
-              <KeyRound size={13} aria-hidden /> Set <code>{status.hint}</code>
+              <code>****{status.hint}</code>
             </span>
             <div className="secret-actions">
               <button type="button" className="secret-btn" disabled={disabled} onClick={() => setEditing(true)}>
