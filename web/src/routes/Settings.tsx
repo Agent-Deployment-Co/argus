@@ -26,6 +26,7 @@ import {
   testConnection,
   useSettingsQuery,
 } from "../lib/settings";
+import { useQueryClient } from "@tanstack/react-query";
 import { Select } from "../components/Select";
 import { useTheme, type ThemePref } from "../lib/theme";
 import { Debug } from "./Debug";
@@ -60,6 +61,7 @@ function useSaveQueue(): SaveQueue {
   const queue = useRef(new Map<string, unknown>());
   const running = useRef(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryClient = useQueryClient();
 
   const run = useCallback(async () => {
     if (running.current) return;
@@ -81,11 +83,15 @@ function useSaveQueue(): SaveQueue {
     }
     running.current = false;
     setSaving(false);
+    // Refresh the cached settings so a later remount (e.g. switching category tabs and back) re-seeds
+    // from the saved values, not the pre-edit cache. The live pane keeps its own local state, so this
+    // doesn't disturb the current view.
+    void queryClient.invalidateQueries({ queryKey: ["settings"] });
     if (!hadError) {
       setJustSaved(true);
       savedTimer.current = setTimeout(() => setJustSaved(false), 1800);
     }
-  }, []);
+  }, [queryClient]);
 
   const enqueue = useCallback(
     (path: string, value: unknown) => {
