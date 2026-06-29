@@ -17,6 +17,7 @@ import {
   type Setting,
   type SettingUi,
 } from "../config.ts";
+import { getProvider, providersForConfigField } from "../llm/index.ts";
 import { CONFIG_FILE } from "../paths.ts";
 
 /** Where an effective value is coming from when it isn't the `argus.json` layer the UI edits — so the
@@ -42,10 +43,30 @@ export interface SettingDescriptor {
   override?: SettingOverride;
 }
 
+/** An API-key field in the surface, backed by the secret store (#132), not `argus.json`. The actual
+ *  key is written/read through the `/api/settings/secrets/:name` endpoints (masked status only, never
+ *  the raw value), so it's treated like a password. The target secret name depends on the selected
+ *  provider, so the field carries the provider → secret-name map and is shown only for those providers. */
+export interface SecretFieldDescriptor {
+  /** Stable id for the UI (not a stored argus.json path). */
+  key: string;
+  label: string;
+  description?: string;
+  /** Gate: inactive unless the boolean setting at this path is on (task extraction). */
+  activeWhen?: { path: string };
+  /** The field whose selected value picks which secret to read/write (the provider select). */
+  providerPath: string;
+  /** provider value → the secret name (env var) the key is stored under. The field is shown only for
+   *  the providers present here (those that take an API key). */
+  secretNames: Record<string, string>;
+}
+
 /** A labeled group of settings within a category (the right-pane sub-sections). */
 export interface SettingsSection {
   label?: string;
   settings: SettingDescriptor[];
+  /** Secret-store-backed fields (e.g. the API key), rendered after the plain settings. */
+  secretFields?: SecretFieldDescriptor[];
 }
 
 /** A left-nav category and its sectioned settings. */
@@ -67,7 +88,24 @@ export interface SettingsResponse {
  *  Only the settings listed here are editable in the UI. Some settings are deliberately CLI/config-file
  *  only (advanced) and must NOT be added here — notably `retainText` (#120), which stays an
  *  `argus config` / `ARGUS_RETAIN_TEXT` / `--retain-text` setting. */
-const LAYOUT: { id: string; label: string; sections: { label?: string; settings: Setting<unknown>[] }[] }[] = [
+/** The API key field for the BYO-key providers. The user enters the key itself (treated as a password
+ *  and stored in the OS keychain via the secret endpoints); `llm.apiKeyEnv` — which env var the key is
+ *  read from — stays an advanced CLI/config-file setting, not exposed here. The secret name per provider
+ *  is its standard key env var, from the registry. */
+const API_KEY_FIELD: SecretFieldDescriptor = {
+  key: "llm.apiKey",
+  label: "API key",
+  description: "Stored securely on this machine (OS keychain) and never uploaded.",
+  activeWhen: { path: "taskExtraction.enabled" },
+  providerPath: "llm.provider",
+  secretNames: Object.fromEntries(
+    providersForConfigField("apiKeyEnv").map((p) => [p, getProvider(p)!.apiKeyEnv!]),
+  ),
+};
+
+type LayoutSection = { label?: string; settings: Setting<unknown>[]; secrets?: SecretFieldDescriptor[] };
+
+const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
   { id: "general", label: "General", sections: [] },
   {
     // Task extraction + the LLM that powers it live together: task extraction is the only consumer of
@@ -79,14 +117,16 @@ const LAYOUT: { id: string; label: string; sections: { label?: string; settings:
       // Custom prompt / prompt file are intentionally not exposed yet.
       { settings: [TASK_SETTINGS.enabled] },
       {
+        // `llm.apiKeyEnv` (which env var the key is read from) is advanced/CLI-only; the UI offers the
+        // key itself (API_KEY_FIELD) instead.
         settings: [
           LLM_SETTINGS.provider,
           LLM_SETTINGS.model,
           LLM_SETTINGS.baseUrl,
-          LLM_SETTINGS.apiKeyEnv,
           LLM_SETTINGS.maxTokens,
           LLM_SETTINGS.command,
         ],
+        secrets: [API_KEY_FIELD],
       },
     ],
   },
@@ -126,6 +166,7 @@ export function describeSettings(file: ArgusConfig = loadConfig()): SettingsResp
       sections: cat.sections.map((sec) => ({
         label: sec.label,
         settings: sec.settings.filter((s) => s.ui).map((s) => describe(s, file)),
+        ...(sec.secrets ? { secretFields: sec.secrets } : {}),
       })),
     })),
   };

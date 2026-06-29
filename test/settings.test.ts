@@ -66,18 +66,42 @@ describe("describeSettings", () => {
     expect(provider.ui.effectiveDefault).toBe("claude-cli");
 
     // Every llm.* field is inactive until task extraction is on.
-    for (const path of ["llm.model", "llm.baseUrl", "llm.apiKeyEnv", "llm.maxTokens", "llm.command"]) {
+    for (const path of ["llm.model", "llm.baseUrl", "llm.maxTokens", "llm.command"]) {
       expect(findSetting({}, path).ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
     }
 
     // Field relevance comes from the provider registry: base URL is OpenAI-only, command is the
-    // command provider only, the API key var is the BYO-key HTTP providers, model spans most.
+    // command provider only, model spans most. (The API key env var itself is advanced/CLI-only.)
     const visible = (path: string) => findSetting({}, path).ui.visibleWhen!;
     expect(visible("llm.baseUrl")).toEqual({ path: "llm.provider", in: ["openai"] });
     expect(visible("llm.command")).toEqual({ path: "llm.provider", in: ["command"] });
-    expect(visible("llm.apiKeyEnv").in).toEqual(["claude-api", "openai", "gemini", "openrouter"]);
     expect(visible("llm.model").in).toContain("claude-cli");
     expect(visible("llm.model").in).not.toContain("off");
+  });
+
+  test("the API key env-var field is not in the UI (advanced/CLI only)", () => {
+    const paths = describeSettings({})
+      .categories.flatMap((c) => c.sections)
+      .flatMap((s) => s.settings)
+      .map((s) => s.path);
+    expect(paths).not.toContain("llm.apiKeyEnv");
+  });
+
+  test("exposes an API key secret field for the BYO-key providers", () => {
+    const section = describeSettings({})
+      .categories.find((c) => c.id === "interpretation")!
+      .sections.find((s) => (s.secretFields?.length ?? 0) > 0)!;
+    const apiKey = section.secretFields![0]!;
+    expect(apiKey.providerPath).toBe("llm.provider");
+    expect(apiKey.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    // Each BYO provider maps to its standard key env var; the local/off providers are absent.
+    expect(apiKey.secretNames).toEqual({
+      "claude-api": "ANTHROPIC_API_KEY",
+      openai: "OPENAI_API_KEY",
+      gemini: "GEMINI_API_KEY",
+      openrouter: "OPENROUTER_API_KEY",
+    });
+    expect(apiKey.secretNames["claude-cli"]).toBeUndefined();
   });
 
   test("flags an env var that overrides the file layer", () => {

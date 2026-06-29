@@ -19,6 +19,7 @@ import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
 import type { SessionDetailResponse } from "../../src/api/serve";
 import type {
+  SecretFieldDescriptor,
   SettingDescriptor,
   SettingsCategory,
   SettingsResponse,
@@ -26,6 +27,7 @@ import type {
   SettingOverride,
 } from "../../src/api/settings";
 import type { SettingUi } from "../../src/config";
+import type { SecretStatus } from "../../src/secrets";
 
 export type {
   Dashboard,
@@ -40,6 +42,8 @@ export type {
   SessionListResponse,
   SessionDetailResponse,
   SessionSort,
+  SecretFieldDescriptor,
+  SecretStatus,
   SettingDescriptor,
   SettingsCategory,
   SettingsResponse,

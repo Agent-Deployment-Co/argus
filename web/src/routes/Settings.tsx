@@ -3,15 +3,16 @@ import {
   ArrowLeft,
   Brain,
   Check,
+  KeyRound,
   Loader2,
   SlidersHorizontal,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
-import { saveSetting, useSettingsQuery } from "../lib/settings";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchSecretStatus, saveSecret, saveSetting, useSettingsQuery } from "../lib/settings";
 import { Select } from "../components/Select";
-import type { SettingDescriptor, SettingsCategory } from "../types";
+import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
 
 /** Icon per category id. Categories themselves come from the server (registry-driven); this is the
  *  only purely-presentational mapping the surface adds. Unknown ids fall back to the sliders icon. */
@@ -175,7 +176,9 @@ function SettingsCategoryPane({
   category: SettingsCategory;
   enqueue: SaveQueue["enqueue"];
 }) {
-  const sections = category.sections.filter((s) => s.settings.length > 0);
+  const sections = category.sections.filter(
+    (s) => s.settings.length > 0 || (s.secretFields?.length ?? 0) > 0,
+  );
   const all = sections.flatMap((s) => s.settings);
   const byPath = new Map(all.map((s) => [s.path, s]));
 
@@ -196,6 +199,10 @@ function SettingsCategoryPane({
   const isActive = (s: SettingDescriptor) => !s.ui.activeWhen || Boolean(values[s.ui.activeWhen.path]);
   const isVisible = (s: SettingDescriptor) =>
     !s.ui.visibleWhen || s.ui.visibleWhen.in.includes(condValue(s.ui.visibleWhen.path));
+  // A secret field targets the secret named for the currently-selected provider; it's shown only when
+  // that provider takes a key, and inactive (like the other LLM fields) until its gate is on.
+  const secretName = (f: SecretFieldDescriptor) => f.secretNames[condValue(f.providerPath)];
+  const secretActive = (f: SecretFieldDescriptor) => !f.activeWhen || Boolean(values[f.activeWhen.path]);
 
   return (
     <div className="settings-content">
@@ -206,13 +213,16 @@ function SettingsCategoryPane({
         <p className="settings-empty">No settings in this category yet.</p>
       ) : (
         sections.map((section, i) => {
-          const visible = section.settings.filter(isVisible);
-          if (!visible.length) return null;
+          const visibleSettings = section.settings.filter(isVisible);
+          const visibleSecrets = (section.secretFields ?? [])
+            .map((f) => ({ field: f, name: secretName(f) }))
+            .filter((x): x is { field: SecretFieldDescriptor; name: string } => Boolean(x.name));
+          if (!visibleSettings.length && !visibleSecrets.length) return null;
           return (
             <section className="settings-section" key={section.label ?? i}>
               {section.label && <h3 className="settings-section-head">{section.label}</h3>}
               <div className="settings-rows">
-                {visible.map((s) => (
+                {visibleSettings.map((s) => (
                   <SettingRow
                     key={s.path}
                     descriptor={s}
@@ -222,11 +232,125 @@ function SettingsCategoryPane({
                     enqueue={enqueue}
                   />
                 ))}
+                {visibleSecrets.map(({ field, name }) => (
+                  <SecretRow key={field.key} field={field} secretName={name} disabled={!secretActive(field)} />
+                ))}
               </div>
             </section>
           );
         })
       )}
+    </div>
+  );
+}
+
+/** An API-key field backed by the secret store (#132). Shows whether a key is set (masked hint),
+ *  lets the user replace it, and treats the value as a password — the raw key is never read back. */
+function SecretRow({
+  field,
+  secretName,
+  disabled,
+}: {
+  field: SecretFieldDescriptor;
+  secretName: string;
+  disabled: boolean;
+}) {
+  const [status, setStatus] = useState<SecretStatus | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // (Re)load the masked status whenever the target secret changes (e.g. the provider changed).
+  useEffect(() => {
+    let live = true;
+    setStatus(null);
+    setEditing(false);
+    setValue("");
+    setError(null);
+    fetchSecretStatus(secretName)
+      .then((s) => live && setStatus(s))
+      .catch(() => live && setStatus({ configured: false }));
+    return () => {
+      live = false;
+    };
+  }, [secretName]);
+
+  const save = async () => {
+    if (!value.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await saveSecret(secretName, value);
+      setStatus(next);
+      setEditing(false);
+      setValue("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const showInput = !status?.configured || editing;
+
+  return (
+    <div className={`setting-row${disabled ? " setting-row-disabled" : ""}`}>
+      <div className="setting-label">
+        <span className="setting-name">{field.label}</span>
+        {field.description && <span className="setting-desc">{field.description}</span>}
+      </div>
+      <div className="setting-control">
+        {status == null ? (
+          <span className="secret-set">
+            <Loader2 size={13} className="spin" aria-hidden /> Checking…
+          </span>
+        ) : showInput ? (
+          <>
+            <input
+              type="password"
+              className="setting-input"
+              autoComplete="new-password"
+              placeholder={status.configured ? "New API key" : "Paste API key"}
+              value={value}
+              disabled={disabled || saving}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void save()}
+            />
+            <div className="secret-actions">
+              <button type="button" className="secret-btn" disabled={disabled || saving || !value.trim()} onClick={() => void save()}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+              {status.configured && (
+                <button
+                  type="button"
+                  className="secret-btn ghost"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(false);
+                    setValue("");
+                    setError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="secret-set">
+              <KeyRound size={13} aria-hidden /> Set <code>{status.hint}</code>
+            </span>
+            <div className="secret-actions">
+              <button type="button" className="secret-btn" disabled={disabled} onClick={() => setEditing(true)}>
+                Replace
+              </button>
+            </div>
+          </>
+        )}
+        {error && <span className="setting-status error">{error}</span>}
+      </div>
     </div>
   );
 }

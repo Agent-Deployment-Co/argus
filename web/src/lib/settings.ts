@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { SettingDescriptor, SettingsResponse } from "../types";
+import type { SecretStatus, SettingDescriptor, SettingsResponse } from "../types";
 
 /** Fetch the registry-driven settings surface (categories → sections → settings), each carrying its
  *  current `argus.json` value, the effective value after the resolver, and any env override. */
@@ -34,4 +34,33 @@ export async function saveSetting(path: string, value: unknown): Promise<Setting
 /** Load the settings surface. Cached briefly so reopening the screen is instant. */
 export function useSettingsQuery() {
   return useQuery({ queryKey: ["settings"], queryFn: fetchSettings, staleTime: 30_000 });
+}
+
+/** Read a stored API key's masked status (#132): whether it's set and a non-reversible hint like
+ *  "…WXYZ". Never returns the raw value. The endpoint requires the same-origin marker + loopback. */
+export async function fetchSecretStatus(name: string): Promise<SecretStatus> {
+  const res = await fetch(`/api/settings/secrets/${encodeURIComponent(name)}`, {
+    headers: { "X-Argus-App": "1" },
+  });
+  if (!res.ok) throw new Error(`Failed to read key status (${res.status})`);
+  return res.json();
+}
+
+/** Store an API key in the OS keychain via the secret endpoint (#132). Returns the new masked status;
+ *  the raw value is never echoed back. */
+export async function saveSecret(name: string, value: string): Promise<SecretStatus> {
+  const res = await fetch(`/api/settings/secrets/${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Argus-App": "1" },
+    body: JSON.stringify({ value }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message =
+      body && typeof body === "object" && "error" in body && typeof body.error === "string"
+        ? body.error
+        : `Failed to save key (${res.status})`;
+    throw new Error(message);
+  }
+  return body as SecretStatus;
 }
