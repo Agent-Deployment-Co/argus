@@ -7,12 +7,13 @@ import {
   Lock,
   Pencil,
   SlidersHorizontal,
+  Trash2,
   TriangleAlert,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSecretStatus, saveSecret, saveSetting, useSettingsQuery } from "../lib/settings";
+import { deleteSecret, fetchSecretStatus, saveSecret, saveSetting, useSettingsQuery } from "../lib/settings";
 import { Select } from "../components/Select";
 import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
 
@@ -262,6 +263,7 @@ function SecretRow({
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   // (Re)load the masked status whenever the target secret changes (e.g. the provider changed).
   useEffect(() => {
@@ -270,6 +272,7 @@ function SecretRow({
     setEditing(false);
     setValue("");
     setError(null);
+    setConfirmingRemove(false);
     fetchSecretStatus(secretName)
       .then((s) => live && setStatus(s))
       .catch(() => live && setStatus({ configured: false }));
@@ -298,6 +301,21 @@ function SecretRow({
     setEditing(false);
     setValue("");
     setError(null);
+  };
+
+  const remove = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await deleteSecret(secretName);
+      setStatus(next);
+      setConfirmingRemove(false);
+      setValue("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const showInput = !status?.configured || editing;
@@ -354,6 +372,30 @@ function SecretRow({
               </button>
             )}
           </div>
+        ) : confirmingRemove ? (
+          <div className="secret-line">
+            <span className="secret-confirm">Remove key?</span>
+            <button
+              type="button"
+              className="secret-icon-btn danger"
+              title="Confirm remove"
+              aria-label="Confirm remove"
+              disabled={saving}
+              onClick={() => void remove()}
+            >
+              {saving ? <Loader2 size={15} className="spin" aria-hidden /> : <Check size={15} aria-hidden />}
+            </button>
+            <button
+              type="button"
+              className="secret-icon-btn"
+              title="Cancel"
+              aria-label="Cancel"
+              disabled={saving}
+              onClick={() => setConfirmingRemove(false)}
+            >
+              <X size={15} aria-hidden />
+            </button>
+          </div>
         ) : (
           <div className="secret-line">
             <code className="secret-mask">****{status.hint}</code>
@@ -366,6 +408,16 @@ function SecretRow({
               onClick={() => setEditing(true)}
             >
               <Pencil size={15} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="secret-icon-btn"
+              title="Remove key"
+              aria-label="Remove key"
+              disabled={disabled}
+              onClick={() => setConfirmingRemove(true)}
+            >
+              <Trash2 size={15} aria-hidden />
             </button>
           </div>
         )}

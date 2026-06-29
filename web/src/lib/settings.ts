@@ -64,3 +64,20 @@ export async function saveSecret(name: string, value: string): Promise<SecretSta
   }
   return body as SecretStatus;
 }
+
+/** Remove a stored API key (the `argus secret rm` equivalent). Returns the now-unconfigured status. */
+export async function deleteSecret(name: string): Promise<SecretStatus> {
+  const res = await fetch(`/api/settings/secrets/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    headers: { "X-Argus-App": "1" },
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message =
+      body && typeof body === "object" && "error" in body && typeof body.error === "string"
+        ? body.error
+        : `Failed to remove key (${res.status})`;
+    throw new Error(message);
+  }
+  return body as SecretStatus;
+}

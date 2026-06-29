@@ -380,6 +380,8 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .secret-icon-btn:hover:not(:disabled) { color: var(--heading); border-color: var(--accent); }
 .secret-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .secret-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+.secret-icon-btn.danger:hover:not(:disabled) { color: var(--racing-red); border-color: var(--racing-red); }
+.secret-confirm { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--racing-red); }
 .secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .setting-status.error { font-size: 12px; color: var(--racing-red); text-align: right; margin-top: 4px; }
 

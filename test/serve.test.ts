@@ -352,6 +352,55 @@ describe("secret settings endpoints (#132)", () => {
     const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("   "));
     expect(res.status).toBe(400);
   });
+
+  const del = { method: "DELETE", headers: { "X-Argus-App": "1", Host: "localhost" } } as const;
+
+  test("DELETE removes a stored key and reports not configured", async () => {
+    const app = appWithSecrets();
+    await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("sk-to-remove-1234"));
+    expect(await (await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", getHeaders)).json()).toEqual({
+      configured: true,
+      hint: "…1234",
+    });
+    const removed = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", del);
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ configured: false });
+    // Reading it back confirms it's gone.
+    expect(await (await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", getHeaders)).json()).toEqual({
+      configured: false,
+    });
+  });
+
+  test("DELETE on an absent key is idempotent (still not configured)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/OPENAI_API_KEY", del);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ configured: false });
+  });
+
+  test("DELETE requires the same-origin app header (CSRF)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "DELETE",
+      headers: { Host: "localhost" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("DELETE rejects a non-loopback Host (DNS rebinding)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "DELETE",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("DELETE rejects a non-allowlisted secret name", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/HOME", del);
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("settings endpoints (#154)", () => {
