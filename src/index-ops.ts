@@ -3,6 +3,8 @@
 import { createInterface } from "node:readline";
 import { sourcesFor, type Log } from "./reporting/dashboard-builder.ts";
 import { syncStatsSummary, reindexSession } from "./indexing/pipeline.ts";
+import { runInterpretationDrain, taskExtractionActive } from "./indexing/interpret/index.ts";
+import type { RepeatCollapser } from "./backoff.ts";
 import { openSessionStore } from "./store/session-store.ts";
 import { openStore, rebuildStore } from "./store/store.ts";
 import { loadConfig, resolveRetainText, resolveTaskExtraction, type ArgusConfig, type ResolvedTaskExtraction } from "./config.ts";
@@ -40,6 +42,9 @@ export async function runIndex(
   extractTasks?: boolean,
   debug = false,
   retainText?: boolean,
+  // Persisted across watch ticks by the caller (watchIndex) so the drain's throttle-pause / failure
+  // lines collapse instead of repeating every interval. Omitted for a one-shot `argus index`.
+  interpretCollapser?: RepeatCollapser,
 ): Promise<void> {
   // Read argus.json once and thread it into both resolvers (avoid a double parse per pass / watch tick).
   const config = loadConfig();
@@ -57,6 +62,18 @@ export async function runIndex(
     log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
   } finally {
     await store.close();
+  }
+  // Decoupled, throttled interpretation (#153): after the structural index brings the store current,
+  // interpret a bounded, rate-limited batch of eligible sessions, reading retained text back from the
+  // store. A fresh handle (the pipeline closed its own) and strictly after indexing, so there's never a
+  // concurrent writer. No-op when task extraction is disabled — and we skip opening the store entirely.
+  if (taskExtractionActive(taskExtraction)) {
+    const store = await openStore();
+    try {
+      await runInterpretationDrain(store, taskExtraction, log, interpretCollapser);
+    } finally {
+      await store.close();
+    }
   }
 }
 
