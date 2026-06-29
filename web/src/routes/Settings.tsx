@@ -183,7 +183,12 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
         ) : !active ? (
           <div className="center-state">Unknown settings category.</div>
         ) : (
-          <SettingsCategoryPane key={active.id} category={active} enqueue={save.enqueue} />
+          <SettingsCategoryPane
+            key={active.id}
+            category={active}
+            providerConfigs={query.data?.providerConfigs}
+            enqueue={save.enqueue}
+          />
         )}
       </main>
     </div>
@@ -234,9 +239,11 @@ function AppearanceRow() {
 
 function SettingsCategoryPane({
   category,
+  providerConfigs,
   enqueue,
 }: {
   category: SettingsCategory;
+  providerConfigs?: Record<string, Record<string, unknown>>;
   enqueue: SaveQueue["enqueue"];
 }) {
   // The General category leads with the client-only Appearance (theme) control.
@@ -249,9 +256,17 @@ function SettingsCategoryPane({
 
   // Current value per setting path, lifted here so cross-field conditions (a field's activeWhen /
   // visibleWhen referencing another field) can be evaluated and react live as the user edits.
-  const [values, setValues] = useState<Record<string, unknown>>(() =>
-    Object.fromEntries(all.map((s) => [s.path, seedValue(s)])),
-  );
+  // Provider-scoped fields are keyed by their full write path (llm.providerConfigs.<provider>.<field>),
+  // seeded from every provider's stored config, so switching providers shows that provider's own value.
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const seed: Record<string, unknown> = Object.fromEntries(all.map((s) => [s.path, seedValue(s)]));
+    for (const [prov, cfg] of Object.entries(providerConfigs ?? {})) {
+      for (const [field, val] of Object.entries(cfg)) {
+        seed[`llm.providerConfigs.${prov}.${field}`] = val == null ? "" : String(val);
+      }
+    }
+    return seed;
+  });
   const setValue = (path: string, v: unknown) => setValues((prev) => ({ ...prev, [path]: v }));
 
   // The value used to evaluate a condition against `path`: the live value, or the referenced setting's
@@ -261,6 +276,10 @@ function SettingsCategoryPane({
     if (v != null && v !== "") return String(v);
     return byPath.get(path)?.ui.effectiveDefault ?? "";
   };
+  // Where a field's value is read/written: a provider-scoped field targets the *selected* provider's
+  // block; everything else uses its flat path.
+  const writePath = (s: SettingDescriptor): string =>
+    s.providerScoped ? `llm.providerConfigs.${condValue("llm.provider")}.${s.path.slice("llm.".length)}` : s.path;
   const isActive = (s: SettingDescriptor) => !s.ui.activeWhen || Boolean(values[s.ui.activeWhen.path]);
   const isVisible = (s: SettingDescriptor) =>
     !s.ui.visibleWhen || s.ui.visibleWhen.in.includes(condValue(s.ui.visibleWhen.path));
@@ -300,14 +319,18 @@ function SettingsCategoryPane({
             <section className="settings-section" key={section.label ?? i}>
               {section.label && <h3 className="t-eyebrow">{section.label}</h3>}
               <div className="settings-rows">
-                {visibleSettings.map((s) => (
+                {visibleSettings.map((s) => {
+                  const wp = writePath(s);
+                  return (
                   <Fragment key={s.path}>
                     <SettingRow
+                      key={wp}
                       descriptor={s}
-                      value={values[s.path]}
+                      value={values[wp]}
+                      savePath={wp}
                       disabled={!isActive(s)}
                       placeholderOverride={placeholderFor(s)}
-                      onChange={(v) => setValue(s.path, v)}
+                      onChange={(v) => setValue(wp, v)}
                       enqueue={enqueue}
                     />
                     {/* A secret field renders right after the setting it's anchored to (its provider). */}
@@ -317,7 +340,8 @@ function SettingsCategoryPane({
                         <SecretRow key={field.key} field={field} secretName={name} disabled={!secretActive(field)} />
                       ))}
                   </Fragment>
-                ))}
+                  );
+                })}
                 {/* Fallback: any secret whose anchor setting isn't shown renders at the end. */}
                 {visibleSecrets
                   .filter(({ field }) => !visibleSettings.some((s) => s.path === field.providerPath))
@@ -329,7 +353,7 @@ function SettingsCategoryPane({
                 <ConnectionTest
                   // Remount (reset the result) whenever a field in this section changes — a prior
                   // "Connected" for provider A shouldn't linger after switching to provider B.
-                  key={section.settings.map((s) => `${s.path}=${values[s.path] ?? ""}`).join("|")}
+                  key={section.settings.map((s) => `${writePath(s)}=${values[writePath(s)] ?? ""}`).join("|")}
                   disabled={!connTestActive(section.connectionTest)}
                 />
               )}
@@ -578,6 +602,7 @@ function SettingRow({
   value,
   disabled,
   placeholderOverride,
+  savePath,
   onChange,
   enqueue,
 }: {
@@ -585,12 +610,17 @@ function SettingRow({
   value: unknown;
   disabled: boolean;
   placeholderOverride?: string;
+  /** Where edits are written. Defaults to the setting's flat path; a provider-scoped field passes
+   *  `llm.providerConfigs.<provider>.<field>` (the row is keyed by it, so it remounts per provider). */
+  savePath?: string;
   onChange: (v: unknown) => void;
   enqueue: SaveQueue["enqueue"];
 }) {
-  const { ui, fileValue, effectiveValue, override } = descriptor;
-  // The last value queued for save, so a blur with no real change doesn't re-queue.
-  const savedRef = useRef(fileValue != null ? String(fileValue) : "");
+  const { ui, effectiveValue, override } = descriptor;
+  const path = savePath ?? descriptor.path;
+  // The last value queued for save, so a blur with no real change doesn't re-queue. Seeded from the
+  // current value (the row remounts when its save path changes, so this stays correct per provider).
+  const savedRef = useRef(value != null ? String(value) : "");
 
   const text = value == null ? "" : String(value);
   const checked = Boolean(value);
@@ -603,7 +633,7 @@ function SettingRow({
   const saveText = () => {
     if (text === savedRef.current) return;
     savedRef.current = text;
-    enqueue(descriptor.path, text);
+    enqueue(path, text);
   };
 
   const control = (() => {
@@ -619,7 +649,7 @@ function SettingRow({
             onClick={() => {
               const next = !checked;
               onChange(next); // update the pane so conditions react
-              enqueue(descriptor.path, next);
+              enqueue(path, next);
             }}
           >
             <span className="setting-toggle-knob" />
@@ -634,7 +664,7 @@ function SettingRow({
             onChange={(e) => {
               onChange(e.target.value);
               savedRef.current = e.target.value;
-              enqueue(descriptor.path, e.target.value);
+              enqueue(path, e.target.value);
             }}
           >
             {(ui.options ?? []).map((opt, i) =>

@@ -308,6 +308,32 @@ describe("llm block (#132)", () => {
     });
   });
 
+  test("provider-scoped: each provider keeps its own model under providerConfigs", () => {
+    const providerConfigs = {
+      openai: { model: "gpt-5.4-mini" },
+      "claude-api": { model: "claude-sonnet-4-6" },
+    };
+    expect(resolveTaskExtraction({}, { llm: { provider: "openai", providerConfigs } }).llm.model).toBe("gpt-5.4-mini");
+    expect(resolveTaskExtraction({}, { llm: { provider: "claude-api", providerConfigs } }).llm.model).toBe(
+      "claude-sonnet-4-6",
+    );
+  });
+
+  test("provider-scoped: a provider's own config wins over the legacy flat value", () => {
+    const file = { llm: { provider: "openai" as const, model: "flat-legacy", providerConfigs: { openai: { model: "scoped" } } } };
+    expect(resolveTaskExtraction({}, file).llm.model).toBe("scoped");
+  });
+
+  test("provider-scoped: legacy flat llm.model still resolves as a fallback", () => {
+    expect(resolveTaskExtraction({}, { llm: { provider: "openai", model: "flat-legacy" } }).llm.model).toBe("flat-legacy");
+  });
+
+  test("provider-scoped: env (ARGUS_LLM_MODEL) overrides the active provider's stored model", () => {
+    process.env.ARGUS_LLM_MODEL = "env-model";
+    const file = { llm: { provider: "openai" as const, providerConfigs: { openai: { model: "scoped" } } } };
+    expect(resolveTaskExtraction({}, file).llm.model).toBe("env-model");
+  });
+
   test("apiKeyEnv defaults per provider but an explicit value wins", () => {
     expect(resolveTaskExtraction({}, { llm: { provider: "openai" } }).llm.apiKeyEnv).toBe("OPENAI_API_KEY");
     expect(resolveTaskExtraction({}, { llm: { provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
