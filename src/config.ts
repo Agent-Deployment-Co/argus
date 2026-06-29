@@ -206,11 +206,16 @@ function parseString(raw: unknown): string {
 
 const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
 
-const HUB_SETTINGS = {
+export const HUB_SETTINGS = {
   url: {
     path: "hub.url",
     env: "ARGUS_HUB_URL",
     default: undefined as string | undefined,
+    ui: {
+      label: "Hub URL",
+      description: "Argus Hub server to connect to, e.g. http://hub.internal:4242.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<string | undefined>,
   key: {

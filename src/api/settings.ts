@@ -5,6 +5,7 @@
 // fields. This module only *groups* and *serializes* — the value contract stays in `config.ts`.
 import {
   getPath,
+  HUB_SETTINGS,
   loadConfig,
   LLM_SETTINGS,
   present,
@@ -141,6 +142,13 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
         connectionTest: { activeWhen: { path: "taskExtraction.enabled" } },
       },
     ],
+  },
+  {
+    // The Hub connection. `hub.key` (the shared API key) is intentionally not here yet — it still
+    // resolves from argus.json/env and would need secret-store backing before being surfaced.
+    id: "hub",
+    label: "Argus Hub",
+    sections: [{ settings: [HUB_SETTINGS.url] }],
   },
 ];
 
