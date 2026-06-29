@@ -480,3 +480,28 @@ body {
 html:not(.dark) .shiki span {
   color: var(--shiki-dark, inherit);
 }
+
+/*
+ * Mermaid diagrams (e.g. the database-schema ER diagram). The theme renders
+ * the SVG into .mermaid-diagram client-side; center it and let wide diagrams
+ * scroll horizontally rather than overflow the page.
+ */
+.mermaid-diagram {
+  margin: 24px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid-diagram svg {
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-diagram.mermaid-error {
+  white-space: pre-wrap;
+  color: var(--vp-c-danger-1);
+  font-family: var(--vp-font-family-mono);
+  text-align: left;
+}

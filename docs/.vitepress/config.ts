@@ -10,6 +10,25 @@ export default defineConfig({
   // Authoring guides for contributors/agents, not product docs — kept in the
   // repo but excluded from the published site. See docs/contributing/.
   srcExclude: ['contributing/**'],
+  markdown: {
+    // VitePress has no built-in Mermaid support. Turn ```mermaid fences into a
+    // placeholder div carrying the (base64-encoded) source; the theme renders
+    // them client-side with mermaid. base64 keeps the source out of reach of
+    // the Vue template compiler, so braces/pipes in the diagram stay intact.
+    config(md) {
+      const defaultFence = md.renderer.rules.fence
+      md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+        const token = tokens[idx]
+        if (token.info.trim() === 'mermaid') {
+          const encoded = Buffer.from(token.content, 'utf-8').toString('base64')
+          return `<div class="mermaid-diagram" data-mermaid="${encoded}"></div>\n`
+        }
+        return defaultFence
+          ? defaultFence(tokens, idx, options, env, self)
+          : self.renderToken(tokens, idx, options)
+      }
+    }
+  },
   head: [
     ['link', { rel: 'icon', href: '/favicon.ico', sizes: '48x48' }],
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
