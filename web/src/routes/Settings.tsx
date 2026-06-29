@@ -6,10 +6,12 @@ import {
   Check,
   Loader2,
   Lock,
+  Monitor,
+  Moon,
   Pencil,
   PlugZap,
-  Server,
   SlidersHorizontal,
+  Sun,
   Trash2,
   TriangleAlert,
   X,
@@ -25,6 +27,7 @@ import {
   useSettingsQuery,
 } from "../lib/settings";
 import { Select } from "../components/Select";
+import { useTheme, type ThemePref } from "../lib/theme";
 import { Debug } from "./Debug";
 import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
 
@@ -33,7 +36,6 @@ import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCa
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
   interpretation: Brain,
-  hub: Server,
   debug: Bug,
 };
 
@@ -195,6 +197,41 @@ function seedValue(s: SettingDescriptor): unknown {
   return s.fileValue != null ? String(s.fileValue) : "";
 }
 
+/** The color theme picker: a tri-state segmented control (System / Light / Dark) modeled after the
+ *  rail's old theme switcher. It's a client-only preference (localStorage), not an `argus.json`
+ *  setting, so it lives here rather than in the registry-driven rows. */
+function AppearanceRow() {
+  const { pref, setPref } = useTheme();
+  const choice = (value: ThemePref, Ico: LucideIcon, label: string) => (
+    <button
+      key={value}
+      type="button"
+      className="theme-choice"
+      aria-pressed={pref === value}
+      onClick={() => setPref(value)}
+      title={label}
+    >
+      <Ico size={15} strokeWidth={1.75} aria-hidden />
+      <span>{label}</span>
+    </button>
+  );
+  return (
+    <div className="setting-row">
+      <div className="setting-label">
+        <span className="setting-name">Appearance</span>
+        <span className="setting-desc">Color theme for the app. System follows your operating system.</span>
+      </div>
+      <div className="setting-control">
+        <div className="theme-switcher theme-switcher-labeled" role="group" aria-label="Color theme">
+          {choice("system", Monitor, "System")}
+          {choice("light", Sun, "Light")}
+          {choice("dark", Moon, "Dark")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsCategoryPane({
   category,
   enqueue,
@@ -202,6 +239,8 @@ function SettingsCategoryPane({
   category: SettingsCategory;
   enqueue: SaveQueue["enqueue"];
 }) {
+  // The General category leads with the client-only Appearance (theme) control.
+  const showAppearance = category.id === "general";
   const sections = category.sections.filter(
     (s) => s.settings.length > 0 || (s.secretFields?.length ?? 0) > 0,
   );
@@ -240,8 +279,15 @@ function SettingsCategoryPane({
       <header className="settings-pane-head">
         <h2>{category.label}</h2>
       </header>
+      {showAppearance && (
+        <section className="settings-section">
+          <div className="settings-rows">
+            <AppearanceRow />
+          </div>
+        </section>
+      )}
       {sections.length === 0 ? (
-        <p className="settings-empty">No settings in this category yet.</p>
+        showAppearance ? null : <p className="settings-empty">No settings in this category yet.</p>
       ) : (
         sections.map((section, i) => {
           const visibleSettings = section.settings.filter(isVisible);

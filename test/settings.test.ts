@@ -40,16 +40,14 @@ function findSetting(file: Parameters<typeof describeSettings>[0], path: string)
 }
 
 describe("describeSettings", () => {
-  test("groups the registry into General + Session Interpretation + Argus Hub categories", () => {
+  test("groups the registry into General + Session Interpretation categories", () => {
     const { categories } = describeSettings({});
-    expect(categories.map((c) => c.id)).toEqual(["general", "interpretation", "hub"]);
-    // General is intentionally empty for now (#154).
-    expect(categories[0]!.sections).toHaveLength(0);
+    expect(categories.map((c) => c.id)).toEqual(["general", "interpretation"]);
   });
 
-  test("the Argus Hub category exposes hub.url (key not yet surfaced)", () => {
-    const hub = describeSettings({}).categories.find((c) => c.id === "hub")!;
-    const paths = hub.sections.flatMap((s) => s.settings).map((s) => s.path);
+  test("General exposes the Argus Hub URL (key not yet surfaced)", () => {
+    const general = describeSettings({}).categories.find((c) => c.id === "general")!;
+    const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
     expect(paths).toEqual(["hub.url"]);
     expect(paths).not.toContain("hub.key");
   });
