@@ -2,8 +2,22 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applySetting, describeSettings } from "../src/api/settings.ts";
+import { applySetting, describeSettings, testLlmConnection } from "../src/api/settings.ts";
 import { loadConfig } from "../src/config.ts";
+import { FileSecretStore } from "../src/secrets.ts";
+
+/** A fetch stub returning a single canned JSON response. */
+function fakeFetch(body: unknown): typeof fetch {
+  return (async () =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+}
+
+function tmpSecrets(): FileSecretStore {
+  return new FileSecretStore(join(mkdtempSync(join(tmpdir(), "argus-secrets-")), "secrets.json"));
+}
 
 function tmpConfig(contents = "{}"): string {
   const dir = mkdtempSync(join(tmpdir(), "argus-settings-"));
@@ -174,5 +188,38 @@ describe("applySetting", () => {
     applySetting("llm.model", "gpt-5", path);
     // The written file is valid JSON and complete.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ llm: { model: "gpt-5" } });
+  });
+});
+
+describe("testLlmConnection", () => {
+  test("succeeds when the provider returns a completion", async () => {
+    const configPath = tmpConfig('{"llm":{"provider":"openai","model":"gpt-5"}}');
+    const secrets = tmpSecrets();
+    await secrets.set("OPENAI_API_KEY", "sk-live-1234");
+    const result = await testLlmConnection({
+      configPath,
+      secrets,
+      fetch: fakeFetch({ choices: [{ message: { content: "OK" } }] }),
+    });
+    expect(result).toEqual({ ok: true, provider: "openai", model: "gpt-5" });
+  });
+
+  test("fails with a clear reason when the API key is missing", async () => {
+    const configPath = tmpConfig('{"llm":{"provider":"openai"}}');
+    const result = await testLlmConnection({
+      configPath,
+      secrets: tmpSecrets(), // no key stored
+      fetch: fakeFetch({ choices: [] }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.provider).toBe("openai");
+    expect(result.error).toBeTruthy(); // "No API key available…"
+  });
+
+  test("reports the provider being off rather than throwing", async () => {
+    const configPath = tmpConfig('{"llm":{"provider":"off"}}');
+    const result = await testLlmConnection({ configPath, secrets: tmpSecrets() });
+    expect(result.ok).toBe(false);
+    expect(result.provider).toBe("off");
   });
 });

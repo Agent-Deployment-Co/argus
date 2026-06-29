@@ -9,6 +9,7 @@ import {
   LLM_SETTINGS,
   present,
   resolveSetting,
+  resolveTaskExtraction,
   setPath,
   TASK_SETTINGS,
   writeConfigAtomic,
@@ -17,7 +18,8 @@ import {
   type Setting,
   type SettingUi,
 } from "../config.ts";
-import { getProvider, providersForConfigField } from "../llm/index.ts";
+import { complete, getProvider, providersForConfigField } from "../llm/index.ts";
+import { resolveApiKey, type SecretStore } from "../secrets.ts";
 import { CONFIG_FILE } from "../paths.ts";
 
 /** Where an effective value is coming from when it isn't the `argus.json` layer the UI edits — so the
@@ -61,12 +63,21 @@ export interface SecretFieldDescriptor {
   secretNames: Record<string, string>;
 }
 
+/** A "Test connection" action for a section — runs a tiny live completion through the configured
+ *  provider so the user can confirm their setup works. */
+export interface ConnectionTestDescriptor {
+  /** Gate: the action is disabled unless the boolean setting at this path is on (task extraction). */
+  activeWhen?: { path: string };
+}
+
 /** A labeled group of settings within a category (the right-pane sub-sections). */
 export interface SettingsSection {
   label?: string;
   settings: SettingDescriptor[];
   /** Secret-store-backed fields (e.g. the API key), rendered after the plain settings. */
   secretFields?: SecretFieldDescriptor[];
+  /** When set, the section offers a "Test connection" button. */
+  connectionTest?: ConnectionTestDescriptor;
 }
 
 /** A left-nav category and its sectioned settings. */
@@ -103,7 +114,12 @@ const API_KEY_FIELD: SecretFieldDescriptor = {
   ),
 };
 
-type LayoutSection = { label?: string; settings: Setting<unknown>[]; secrets?: SecretFieldDescriptor[] };
+type LayoutSection = {
+  label?: string;
+  settings: Setting<unknown>[];
+  secrets?: SecretFieldDescriptor[];
+  connectionTest?: ConnectionTestDescriptor;
+};
 
 const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
   { id: "general", label: "General", sections: [] },
@@ -122,6 +138,7 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
         // `llm.maxTokens`.
         settings: [LLM_SETTINGS.provider, LLM_SETTINGS.model, LLM_SETTINGS.command],
         secrets: [API_KEY_FIELD],
+        connectionTest: { activeWhen: { path: "taskExtraction.enabled" } },
       },
     ],
   },
@@ -162,6 +179,7 @@ export function describeSettings(file: ArgusConfig = loadConfig()): SettingsResp
         label: sec.label,
         settings: sec.settings.filter((s) => s.ui).map((s) => describe(s, file)),
         ...(sec.secrets ? { secretFields: sec.secrets } : {}),
+        ...(sec.connectionTest ? { connectionTest: sec.connectionTest } : {}),
       })),
     })),
   };
@@ -203,4 +221,45 @@ export function applySetting(path: string, raw: unknown, configPath: string = CO
   setPath(file as Record<string, unknown>, path, value);
   writeConfigAtomic(file, configPath);
   return { ok: true, setting: describe(setting, file) };
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  /** The provider that was tested (e.g. "openai"). */
+  provider: string;
+  /** The model the test ran against, when known. */
+  model?: string;
+  /** A diagnostic when the test failed (a missing key, an auth/network error, no completion). */
+  error?: string;
+}
+
+/**
+ * Run a tiny live completion through the currently-configured provider so the user can confirm their
+ * setup (provider + key + model) actually works. Resolves the LLM config from `argus.json` plus the
+ * API key from the secret store, sends a one-word prompt, and reports whether a completion came back.
+ * Never throws — the LLM client turns missing keys / auth / network errors into `ok:false`.
+ */
+export async function testLlmConnection(opts: {
+  configPath?: string;
+  secrets: SecretStore;
+  fetch?: typeof fetch;
+}): Promise<ConnectionTestResult> {
+  const file = loadConfig(opts.configPath ?? CONFIG_FILE);
+  const { llm } = resolveTaskExtraction({}, file);
+  const apiKey = await resolveApiKey(llm.apiKeyEnv, opts.secrets);
+  const result = await complete(
+    {
+      system: "You are a connectivity check. Reply with the single word: OK.",
+      prompt: "ping",
+      maxTokens: 16,
+    },
+    { ...llm, apiKey },
+    { fetch: opts.fetch },
+  );
+  return {
+    ok: result.ok,
+    provider: llm.provider,
+    model: llm.model,
+    error: result.ok ? undefined : result.error,
+  };
 }

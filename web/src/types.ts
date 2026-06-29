@@ -19,6 +19,8 @@ import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
 import type { SessionDetailResponse } from "../../src/api/serve";
 import type {
+  ConnectionTestDescriptor,
+  ConnectionTestResult,
   SecretFieldDescriptor,
   SettingDescriptor,
   SettingsCategory,
@@ -42,6 +44,8 @@ export type {
   SessionListResponse,
   SessionDetailResponse,
   SessionSort,
+  ConnectionTestDescriptor,
+  ConnectionTestResult,
   SecretFieldDescriptor,
   SecretStatus,
   SettingDescriptor,

@@ -26,7 +26,7 @@ import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { loadConfig, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, type SecretStatus, type SecretStore } from "../secrets.ts";
-import { applySetting, describeSettings, type SettingsResponse } from "./settings.ts";
+import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
 export interface ServeOptions {
@@ -413,6 +413,15 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     // Derive the masked status from the value we just wrote rather than reading it back, which on
     // macOS/Windows would launch a second `security`/PowerShell subprocess.
     return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
+  });
+
+  // Test the configured LLM provider end to end: a tiny live completion so the user can confirm their
+  // setup works. Mutating-ish (outbound network / a local subprocess for claude-cli/command, and it
+  // reads the stored key), so it carries the same CSRF + DNS-rebinding guards.
+  app.post("/api/settings/test-connection", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore() }));
   });
 
   // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards; returns
