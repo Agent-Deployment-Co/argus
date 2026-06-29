@@ -7,6 +7,7 @@ import {
   PROVIDER_API_KEY_ENVS,
   type LlmProvider,
 } from "../src/llm/index.ts";
+import { resolveClaudeBinary } from "../src/llm/providers/local.ts";
 import type { ResolvedLlmConfig } from "../src/llm/types.ts";
 
 /** A recording fake fetch that returns scripted responses in order. */
@@ -36,6 +37,33 @@ function json(body: unknown, init?: ResponseInit): Response {
 const cfg = (over: Partial<ResolvedLlmConfig> & { provider: LlmProvider }): ResolvedLlmConfig => ({
   apiKey: "test-key",
   ...over,
+});
+
+describe("resolveClaudeBinary", () => {
+  test("an explicit override wins (trimmed), bypassing all probes", () => {
+    const probes = { onPath: () => "/from/path", loginShell: () => "/from/shell", knownLocations: () => "/known" };
+    expect(resolveClaudeBinary("  /opt/claude/bin/claude  ", probes)).toBe("/opt/claude/bin/claude");
+  });
+
+  test("with no override, prefers $PATH, then the login shell, then known locations", () => {
+    expect(
+      resolveClaudeBinary(undefined, { onPath: () => "/path/claude", loginShell: () => "/shell/claude" }),
+    ).toBe("/path/claude");
+    expect(
+      resolveClaudeBinary(undefined, { onPath: () => undefined, loginShell: () => "/shell/claude" }),
+    ).toBe("/shell/claude");
+    expect(
+      resolveClaudeBinary(undefined, {
+        onPath: () => undefined,
+        loginShell: () => undefined,
+        knownLocations: () => "/usr/local/bin/claude",
+      }),
+    ).toBe("/usr/local/bin/claude");
+  });
+
+  test("falls back to bare \"claude\" when nothing resolves (spawn then surfaces a clear ENOENT)", () => {
+    expect(resolveClaudeBinary(undefined, { onPath: () => undefined })).toBe("claude");
+  });
 });
 
 describe("provider registry (single source of truth)", () => {

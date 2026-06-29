@@ -123,6 +123,11 @@ describe("resolveTaskExtraction", () => {
     expect(resolved.llm.command).toBeUndefined();
   });
 
+  test("resolves llm.claudeCliPath from the file (advanced override for the claude-cli binary)", () => {
+    const resolved = resolveTaskExtraction({}, { llm: { claudeCliPath: "/opt/claude/bin/claude" } });
+    expect(resolved.llm.claudeCliPath).toBe("/opt/claude/bin/claude");
+  });
+
   test("env var enables and overrides file provider", () => {
     process.env.ARGUS_TASK_ENABLED = "true";
     process.env.ARGUS_TASK_PROVIDER = "command";
