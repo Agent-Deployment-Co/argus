@@ -46,22 +46,28 @@ export interface SettingDescriptor {
   override?: SettingOverride;
 }
 
-/** An API-key field in the surface, backed by the secret store (#132), not `argus.json`. The actual
- *  key is written/read through the `/api/settings/secrets/:name` endpoints (masked status only, never
- *  the raw value), so it's treated like a password. The target secret name depends on the selected
- *  provider, so the field carries the provider → secret-name map and is shown only for those providers. */
+/** A secret-backed field in the surface (#132): the value is written/read through the
+ *  `/api/settings/secrets/:name` endpoints (masked status only, never the raw value), so it's treated
+ *  like a password — never `argus.json`. Two shapes:
+ *   - Fixed (`secretName`): one secret regardless of any other field — e.g. the Argus Hub key.
+ *   - Provider-keyed (`secretNames` + `providerPath`): the target secret depends on another field's
+ *     value (the LLM API key, whose name depends on the selected provider); shown only for the
+ *     values present in the map.
+ *  Either way it renders beneath the setting at `providerPath` (the anchor). */
 export interface SecretFieldDescriptor {
   /** Stable id for the UI (not a stored argus.json path). */
   key: string;
   label: string;
   description?: string;
-  /** Gate: inactive unless the boolean setting at this path is on (task extraction). */
+  /** Gate: inactive unless the boolean setting at this path is on (e.g. task extraction). */
   activeWhen?: { path: string };
-  /** The field whose selected value picks which secret to read/write (the provider select). */
+  /** The setting this field renders beneath. For the provider-keyed shape, its value also selects
+   *  which secret name to use. */
   providerPath: string;
-  /** provider value → the secret name (env var) the key is stored under. The field is shown only for
-   *  the providers present here (those that take an API key). */
-  secretNames: Record<string, string>;
+  /** Fixed secret name (env var), when the field maps to exactly one secret. */
+  secretName?: string;
+  /** anchor value → the secret name (env var). The field is shown only for the values present here. */
+  secretNames?: Record<string, string>;
 }
 
 /** A "Test connection" action for a section — runs a tiny live completion through the configured
@@ -115,6 +121,17 @@ const API_KEY_FIELD: SecretFieldDescriptor = {
   ),
 };
 
+/** The Argus Hub key, stored in the OS keychain (under `ARGUS_HUB_KEY`) via the secret endpoints —
+ *  never in `argus.json`. A fixed secret (no provider dimension); rendered beneath the Hub URL. A
+ *  legacy plaintext `hub.key` in argus.json is migrated into the keychain on serve start (secrets.ts). */
+const HUB_KEY_FIELD: SecretFieldDescriptor = {
+  key: "hub.key",
+  label: "Hub key",
+  description: "Stored securely on this machine (OS keychain); never written to argus.json or uploaded.",
+  providerPath: "hub.url",
+  secretName: HUB_SETTINGS.key.env!,
+};
+
 type LayoutSection = {
   label?: string;
   settings: Setting<unknown>[];
@@ -126,11 +143,11 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
   {
     // Appearance (the color theme) is a client-only preference rendered by the surface — it isn't an
     // `argus.json` setting, so it has no registry descriptor here. The Argus Hub connection lives here
-    // too (it used to be its own tab); `hub.key` (the shared API key) is intentionally not surfaced yet —
-    // it still resolves from argus.json/env and would need secret-store backing first.
+    // too (it used to be its own tab): the URL is a plain setting; the key is secret-store-backed
+    // (HUB_KEY_FIELD), like the LLM API keys.
     id: "general",
     label: "General",
-    sections: [{ label: "Argus Hub", settings: [HUB_SETTINGS.url] }],
+    sections: [{ label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] }],
   },
   {
     // Task extraction + the LLM that powers it live together: task extraction is the only consumer of

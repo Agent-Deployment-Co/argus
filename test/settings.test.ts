@@ -45,11 +45,16 @@ describe("describeSettings", () => {
     expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
   });
 
-  test("General exposes the Argus Hub URL (key not yet surfaced)", () => {
+  test("General exposes the Argus Hub URL plus a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
     expect(paths).toEqual(["hub.url"]);
+    // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
     expect(paths).not.toContain("hub.key");
+    const hubKey = general.sections.flatMap((s) => s.secretFields ?? []).find((f) => f.key === "hub.key")!;
+    expect(hubKey.secretName).toBe("ARGUS_HUB_KEY");
+    expect(hubKey.providerPath).toBe("hub.url");
+    expect(hubKey.secretNames).toBeUndefined(); // fixed secret, not provider-keyed
   });
 
   test("each setting carries its UI metadata, file value, and effective value", () => {
@@ -129,7 +134,7 @@ describe("describeSettings", () => {
       gemini: "GEMINI_API_KEY",
       openrouter: "OPENROUTER_API_KEY",
     });
-    expect(apiKey.secretNames["claude-cli"]).toBeUndefined();
+    expect(apiKey.secretNames!["claude-cli"]).toBeUndefined();
   });
 
   test("flags an env var that overrides the file layer", () => {

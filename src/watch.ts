@@ -17,7 +17,7 @@ import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions, ty
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { detectOrg, detectUser, hubErrorMessage, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
-import { resolveHubConfig } from "./config.ts";
+import { resolveHubConfig } from "./secrets.ts";
 import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
 
@@ -124,7 +124,7 @@ export async function resolveCredentials(endpoint: string, log: Log): Promise<Pu
  *  When hub.url + hub.key are configured, uploads the session data as JSON read from the local
  *  store instead of a Worker-aggregated snapshot; credentials are not used in that path. */
 export async function pushSnapshotForOpts(opts: PushLoopOptions, credentials: PushCredentials, log: Log): Promise<PushResult> {
-  const hubCfg = resolveHubConfig();
+  const hubCfg = await resolveHubConfig({ log });
   if (hubCfg) {
     log(`Uploading to Hub → ${hubCfg.url}`);
     const store = await openStore({ path: STORE_FILE });
@@ -220,8 +220,8 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
   const waitForToken = deps.waitForTokenChange ?? waitForTokenFileChange;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
 
-  // Hub mode: api key lives in config, no OAuth needed. Skip the credential preflight entirely.
-  const hubMode = !!resolveHubConfig();
+  // Hub mode: the key lives in the secret store, no OAuth needed. Skip the credential preflight entirely.
+  const hubMode = !!(await resolveHubConfig({ log }));
 
   // Startup auth preflight: fail fast for the standalone command rather than looping forever with no
   // hope of success. Mid-run staleness (below) is handled differently — it never crashes the loop.
