@@ -103,6 +103,21 @@ describe("describeSettings", () => {
     expect(visible("llm.model").in).not.toContain("off");
   });
 
+  test("provider-scoped fields are marked, valued per active provider, and the payload carries every provider's config", () => {
+    const providerConfigs = { openai: { model: "gpt-5.4-mini" }, "claude-api": { model: "claude-sonnet-4-6" } };
+    const resp = describeSettings({ llm: { provider: "openai", providerConfigs } });
+    const model = resp.categories.flatMap((c) => c.sections).flatMap((s) => s.settings).find((s) => s.path === "llm.model")!;
+    expect(model.providerScoped).toBe(true);
+    expect(model.fileValue).toBe("gpt-5.4-mini"); // the active provider's value (openai)
+    // The whole per-provider map ships so the UI can switch providers without a refetch.
+    expect(resp.providerConfigs).toEqual(providerConfigs);
+  });
+
+  test("a legacy flat llm.model is folded into the active provider's config for display", () => {
+    const resp = describeSettings({ llm: { provider: "claude-api", model: "legacy" } });
+    expect(resp.providerConfigs?.["claude-api"]).toEqual({ model: "legacy" });
+  });
+
   test("the Claude CLI path placeholder is the resolved binary passed in by the caller", () => {
     const find = (resp: ReturnType<typeof describeSettings>) =>
       resp.categories.flatMap((c) => c.sections).flatMap((s) => s.settings).find((s) => s.path === "llm.claudeCliPath")!;
@@ -162,6 +177,26 @@ describe("applySetting", () => {
     const result = applySetting("llm.provider", "openai", path);
     expect(result.ok).toBe(true);
     expect(loadConfig(path)).toEqual({ llm: { provider: "openai" } });
+  });
+
+  test("writes a provider-scoped field under llm.providerConfigs[provider]", () => {
+    const path = tmpConfig('{"llm":{"provider":"openai"}}');
+    const result = applySetting("llm.providerConfigs.openai.model", "gpt-5.4-mini", path);
+    expect(result.ok).toBe(true);
+    expect(loadConfig(path).llm?.providerConfigs?.openai?.model).toBe("gpt-5.4-mini");
+    // A different provider's model is untouched / independent.
+    applySetting("llm.providerConfigs.claude-api.model", "claude-sonnet-4-6", path);
+    const cfg = loadConfig(path);
+    expect(cfg.llm?.providerConfigs?.openai?.model).toBe("gpt-5.4-mini");
+    expect(cfg.llm?.providerConfigs?.["claude-api"]?.model).toBe("claude-sonnet-4-6");
+  });
+
+  test("rejects a provider-scoped write to an unknown provider with a 404", () => {
+    const path = tmpConfig();
+    const result = applySetting("llm.providerConfigs.nonsense.model", "x", path);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(404);
+    expect(loadConfig(path)).toEqual({});
   });
 
   test("coerces a toggle value", () => {
