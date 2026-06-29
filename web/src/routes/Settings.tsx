@@ -202,6 +202,9 @@ function SettingsCategoryPane({
   const isActive = (s: SettingDescriptor) => !s.ui.activeWhen || Boolean(values[s.ui.activeWhen.path]);
   const isVisible = (s: SettingDescriptor) =>
     !s.ui.visibleWhen || s.ui.visibleWhen.in.includes(condValue(s.ui.visibleWhen.path));
+  // A context-dependent placeholder (e.g. the Model field shows the selected provider's default model).
+  const placeholderFor = (s: SettingDescriptor): string | undefined =>
+    s.ui.placeholderByValue?.values[condValue(s.ui.placeholderByValue.path)];
   // A secret field targets the secret named for the currently-selected provider; it's shown only when
   // that provider takes a key, and inactive (like the other LLM fields) until its gate is on.
   const secretName = (f: SecretFieldDescriptor) => f.secretNames[condValue(f.providerPath)];
@@ -231,6 +234,7 @@ function SettingsCategoryPane({
                       descriptor={s}
                       value={values[s.path]}
                       disabled={!isActive(s)}
+                      placeholderOverride={placeholderFor(s)}
                       onChange={(v) => setValue(s.path, v)}
                       enqueue={enqueue}
                     />
@@ -445,12 +449,14 @@ function SettingRow({
   descriptor,
   value,
   disabled,
+  placeholderOverride,
   onChange,
   enqueue,
 }: {
   descriptor: SettingDescriptor;
   value: unknown;
   disabled: boolean;
+  placeholderOverride?: string;
   onChange: (v: unknown) => void;
   enqueue: SaveQueue["enqueue"];
 }) {
@@ -460,7 +466,9 @@ function SettingRow({
 
   const text = value == null ? "" : String(value);
   const checked = Boolean(value);
-  const placeholder = effectiveValue != null ? String(effectiveValue) : "Default";
+  // A context-dependent placeholder (e.g. the provider's default model) wins; otherwise the effective
+  // value, otherwise "Default".
+  const placeholder = placeholderOverride ?? (effectiveValue != null ? String(effectiveValue) : "Default");
 
   const saveText = () => {
     if (text === savedRef.current) return;

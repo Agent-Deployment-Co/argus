@@ -78,6 +78,14 @@ describe("describeSettings", () => {
     expect(visible("llm.model").in).not.toContain("off");
   });
 
+  test("the Model field placeholder is the selected provider's default model", () => {
+    const pb = findSetting({}, "llm.model").ui.placeholderByValue!;
+    expect(pb.path).toBe("llm.provider");
+    expect(pb.values["claude-cli"]).toBe("haiku"); // the local CLI's default
+    expect(typeof pb.values["openai"]).toBe("string"); // each HTTP provider with a default
+    expect(pb.values["openrouter"]).toBeUndefined(); // no default → falls back to a generic placeholder
+  });
+
   test("base URL, max tokens, and the API key env var are advanced/CLI only (not in the UI)", () => {
     const paths = describeSettings({})
       .categories.flatMap((c) => c.sections)
