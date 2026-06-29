@@ -58,26 +58,16 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 
 /* ── Type scale ───────────────────────────────────────────────────────────
    The single source of truth for heading typography (typeface, size, weight,
-   colour, casing). One rule per level; every heading — across the dashboard,
-   the detail views, and the settings surface — is one of these, so the
-   hierarchy can't drift. Each rule lists the `.t-*` utility (use it on new
-   markup) alongside the existing call sites that render at that level.
-   Layout (margins, sticky table headers, etc.) stays on the call site; only
-   the typographic identity lives here. */
-.t-title, .session-detail-title, .debug-head h2 {
-  margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25;
-}
-.t-eyebrow, section h2 {
-  margin: 0 0 14px; color: var(--accent); font-family: var(--font-ui);
-  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .14em;
-}
-.t-subhead, .panel h3, .task-panel-head h3, .debug h3, .session-detail-inner h3 {
-  margin: 0 0 10px; color: var(--heading); font-size: 15px; font-weight: 700;
-}
-.t-overline, th, .debug-table th, .card .label, .task-panel-label {
-  color: var(--muted); font-family: var(--font-ui);
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
-}
+   colour, casing). One class per level — apply it on the element in the
+   markup (class="t-title", etc.). Every heading across the dashboard, the
+   detail views, and the settings surface uses one of these, so the hierarchy
+   can't drift and there's no place to sprinkle a one-off. Margins here are the
+   level's default; a container that needs a different gap overrides it
+   locally (e.g. a flex header zeroes it). */
+.t-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
+.t-eyebrow { margin: 0 0 14px; color: var(--accent); font-family: var(--font-ui); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .14em; }
+.t-subhead { margin: 0 0 10px; color: var(--heading); font-size: 15px; font-weight: 700; }
+.t-overline { color: var(--muted); font-family: var(--font-ui); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
 /* App shell: persistent left nav rail + content region. The rail collapses to an icon-only
    strip (width driven by --rail-w) so wide views like the sessions split-pane get more canvas. */
 .app-shell { --rail-w: 184px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
@@ -204,11 +194,9 @@ main:has(.sessions-split) { padding: 0; }
 .eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
 .table-link { color: var(--link); }
 .table-link:hover { color: var(--link-hover); text-decoration: underline; }
-/* .session-detail-title — see the type scale (.t-title). */
 .session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
-/* .session-detail-inner h3 — see the type scale (.t-subhead). */
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .section-title-row h3 { margin: 0; }
 .task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
@@ -234,7 +222,6 @@ main:has(.sessions-split) { padding: 0; }
 .debug .kv-row { min-width: 0; }
 .debug .kv-v { min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
 .debug-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
-/* .debug-head h2 → .t-title; .debug h3 → .t-subhead; .debug-table th → .t-overline (see type scale). */
 .debug section { margin: 22px 0 0; }
 .debug-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .debug-table th { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); }
@@ -272,10 +259,9 @@ main:has(.sessions-split) { padding: 0; }
   .task-panel, .task-panel.closing, .task-panel-backdrop, .task-panel-backdrop.closing { animation-duration: 1ms; }
 }
 .task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.task-panel-head h3 { margin: 0; } /* .t-subhead + flex-header margin override (see type scale). */
+.task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
 .task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
 .task-panel-field { display: grid; gap: 4px; }
-/* .task-panel-label — see the type scale (.t-overline). */
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
 .task-panel-desc { white-space: pre-wrap; }
 .task-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -294,16 +280,14 @@ main:has(.sessions-split) { padding: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .task-action .spin { animation: spin 0.8s linear infinite; transform-origin: center; }
 
-section { margin: 0 0 42px; } /* section h2 → .t-eyebrow (see type scale). */
+section { margin: 0 0 42px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: 12px; padding: 15px 16px 16px; }
-/* .card .label — see the type scale (.t-overline). */
 .card .value { color: var(--heading); font-size: 25px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .card .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 @media (max-width: 880px) { .grid2 { grid-template-columns: 1fr; } }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
-/* .panel h3 — see the type scale (.t-subhead). */
 .chart-box { position: relative; }
 canvas { max-width: 100%; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

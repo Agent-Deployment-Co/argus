@@ -10,7 +10,7 @@ type Task = NonNullable<SessionRow["tasks"]>[number];
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="task-panel-field">
-      <div className="task-panel-label">{label}</div>
+      <div className="t-overline">{label}</div>
       <div className="task-panel-value">{children}</div>
     </div>
   );
@@ -125,7 +125,7 @@ export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; tas
         }}
       >
         <header className="task-panel-head">
-          <h3>Task details</h3>
+          <h3 className="t-subhead">Task details</h3>
           <button type="button" className="rail-icon-btn task-panel-close" onClick={requestClose} aria-label="Close">
             <X size={16} strokeWidth={1.75} />
           </button>

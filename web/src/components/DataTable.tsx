@@ -70,7 +70,7 @@ export function DataTable<T>({ columns, rows, initialSort, maxHeight = 510 }: Pr
                 return (
                   <th
                     key={h.id}
-                    className={cls(h.column.id)}
+                    className={`t-overline ${cls(h.column.id)}`.trim()}
                     onClick={sortable ? h.column.getToggleSortingHandler() : undefined}
                     style={sortable ? undefined : { cursor: "default" }}
                   >
