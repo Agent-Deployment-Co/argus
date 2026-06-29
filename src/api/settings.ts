@@ -136,8 +136,8 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     // Task extraction + the LLM that powers it live together: task extraction is the only consumer of
     // the LLM settings today, so they're one tab. Two (unlabeled) sections keep the task on/off + prompt
     // grouped apart from the model config; sub-section labels can be added back if this grows.
-    id: "interpretation",
-    label: "Session Interpretation",
+    id: "sessions",
+    label: "Sessions",
     sections: [
       // Custom prompt / prompt file are intentionally not exposed yet.
       { settings: [TASK_SETTINGS.enabled] },
