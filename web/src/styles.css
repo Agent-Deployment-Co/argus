@@ -347,7 +347,9 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .settings-cat-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .settings-pane { overflow-y: auto; padding: 40px 48px 80px; }
-.settings-content { max-width: 760px; margin: 0 auto; }
+/* --setting-control-w: the fixed width of the right-hand control column (inputs, selects, secret
+   widget) so they all line up; widen here to give longer values more room. */
+.settings-content { max-width: 760px; margin: 0 auto; --setting-control-w: 300px; }
 /* The category title and section headings use the shared type scale (.t-title / .t-eyebrow). */
 .settings-empty { color: var(--muted); padding: 24px 0; }
 .settings-section { margin-top: 28px; }
@@ -358,19 +360,19 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-name { color: var(--heading); font-weight: 600; font-size: 14px; }
 .setting-desc { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .setting-override { color: var(--accent); font-size: 12px; line-height: 1.45; margin-top: 2px; }
-.setting-control { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 220px; }
+.setting-control { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: var(--setting-control-w); }
 /* The settings control column is a fixed width so inputs and the shared <Select> line up. Text/number
    inputs match the .select__control height (32px) so they sit identically beside it. */
-.setting-input { box-sizing: border-box; width: 220px; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.setting-input { box-sizing: border-box; width: var(--setting-control-w); height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
 .setting-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
-.setting-textarea { width: 220px; height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.setting-textarea { width: var(--setting-control-w); height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* A textarea row stacks: label + description on top, a full-width control below. */
 .setting-row-stacked { flex-direction: column; align-items: stretch; gap: 10px; }
 .setting-row-stacked .setting-label { max-width: 100%; }
 .setting-row-stacked .setting-control { align-items: stretch; min-width: 0; }
 .setting-row-stacked .setting-textarea { width: 100%; min-height: 120px; }
 /* The provider dropdown is the shared <Select>; size its wrapper to the control column. */
-.setting-select { width: 220px; }
+.setting-select { width: var(--setting-control-w); }
 .setting-select .select__control { width: 100%; }
 
 .setting-toggle { position: relative; width: 42px; height: 24px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; background: var(--hover); cursor: pointer; transition: background .15s; }
@@ -384,9 +386,9 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-input:disabled, .select__control:disabled, .setting-toggle:disabled { opacity: .45; cursor: not-allowed; }
 
 /* API key (secret) field: a single-line widget — masked value or input, with icon-button actions to
-   the right, sized to the same 220px control column as the other rows. */
+   the right, sized to the same control column as the other rows. */
 .setting-name-icon { vertical-align: -2px; color: var(--muted); }
-.secret-line { display: flex; align-items: center; gap: 6px; width: 220px; }
+.secret-line { display: flex; align-items: center; gap: 6px; width: var(--setting-control-w); }
 .secret-line .secret-input { flex: 1 1 auto; width: auto; min-width: 0; }
 .secret-mask { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 6px 9px; border-radius: 8px; letter-spacing: .08em; }
 .secret-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
@@ -420,6 +422,6 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .settings-nav { display: none; }
   .setting-row { flex-direction: column; align-items: stretch; gap: 10px; }
   .setting-label { max-width: 100%; }
-  .setting-control { align-items: stretch; }
-  .setting-input, .setting-textarea, .setting-select { width: 100%; }
+  .setting-control { align-items: stretch; min-width: 0; }
+  .setting-input, .setting-textarea, .setting-select, .secret-line { width: 100%; }
 }
