@@ -61,7 +61,7 @@ export function Health() {
       </section>
 
       <section>
-        <h2>Friction by project</h2>
+        <h2 className="t-eyebrow">Friction by project</h2>
         {projects.length ? (
           <DataTable columns={projectColumns} rows={projects} initialSort="interruptions" />
         ) : (
