@@ -123,7 +123,15 @@ type LayoutSection = {
 };
 
 const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
-  { id: "general", label: "General", sections: [] },
+  {
+    // Appearance (the color theme) is a client-only preference rendered by the surface — it isn't an
+    // `argus.json` setting, so it has no registry descriptor here. The Argus Hub connection lives here
+    // too (it used to be its own tab); `hub.key` (the shared API key) is intentionally not surfaced yet —
+    // it still resolves from argus.json/env and would need secret-store backing first.
+    id: "general",
+    label: "General",
+    sections: [{ label: "Argus Hub", settings: [HUB_SETTINGS.url] }],
+  },
   {
     // Task extraction + the LLM that powers it live together: task extraction is the only consumer of
     // the LLM settings today, so they're one tab. Two (unlabeled) sections keep the task on/off + prompt
@@ -142,13 +150,6 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
         connectionTest: { activeWhen: { path: "taskExtraction.enabled" } },
       },
     ],
-  },
-  {
-    // The Hub connection. `hub.key` (the shared API key) is intentionally not here yet — it still
-    // resolves from argus.json/env and would need secret-store backing before being surfaced.
-    id: "hub",
-    label: "Argus Hub",
-    sections: [{ settings: [HUB_SETTINGS.url] }],
   },
 ];
 

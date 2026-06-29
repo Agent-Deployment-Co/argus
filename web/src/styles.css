@@ -123,6 +123,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .theme-choice:hover { background: var(--hover); color: var(--heading); }
 .theme-choice[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .theme-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Labeled variant (Settings → Appearance): icon + text per choice. */
+.theme-switcher-labeled .theme-choice { gap: 6px; padding: 6px 12px; font-size: 13px; }
 
 /* Collapsed rail: hide text, center icons. */
 .rail-collapsed .rail-wordmark, .rail-collapsed .rail-label { display: none; }

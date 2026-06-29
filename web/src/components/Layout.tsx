@@ -1,9 +1,8 @@
 import { Link, Outlet, useRouterState, useSearch } from "@tanstack/react-router";
-import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Folder, HeartPulse, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
-import { useTheme } from "../lib/theme";
 import { SettingsSurface } from "../routes/Settings";
 
 const BrandMark = () => (
@@ -19,42 +18,6 @@ const RAIL_KEY = "argus-rail-collapsed";
 
 function readCollapsed(): boolean {
   try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; }
-}
-
-function ThemeToggle({ collapsed }: { collapsed: boolean }) {
-  const { theme, setTheme } = useTheme();
-  if (collapsed) {
-    const next = theme === "dark" ? "light" : "dark";
-    return (
-      <button
-        className="rail-icon-btn"
-        type="button"
-        onClick={() => setTheme(next)}
-        title={`Switch to ${next} theme`}
-        aria-label={`Switch to ${next} theme`}
-      >
-        {theme === "dark" ? <Sun size={18} strokeWidth={1.75} /> : <Moon size={18} strokeWidth={1.75} />}
-      </button>
-    );
-  }
-  const choice = (value: "light" | "dark", Ico: LucideIcon, label: string) => (
-    <button
-      className="theme-choice"
-      type="button"
-      aria-pressed={theme === value}
-      onClick={() => setTheme(value)}
-      title={label}
-      aria-label={label}
-    >
-      <Ico size={15} strokeWidth={1.75} aria-hidden />
-    </button>
-  );
-  return (
-    <div className="theme-switcher" role="group" aria-label="Color theme">
-      {choice("light", Sun, "Light theme")}
-      {choice("dark", Moon, "Dark theme")}
-    </div>
-  );
 }
 
 const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }[] = [
@@ -120,8 +83,9 @@ export function Layout() {
             );
           })}
         </nav>
-        {/* Bottom controls. DOM order is settings, theme, expand — so the collapsed rail (stacked
-            top-to-bottom) reads settings, theme, expand; expanded, the toggle is pushed right. */}
+        {/* Bottom controls. DOM order is settings, expand — so the collapsed rail (stacked
+            top-to-bottom) reads settings, expand; expanded, the toggle is pushed right. The color
+            theme moved into Settings → General → Appearance. */}
         <div className="rail-footer">
           <Link
             to="/settings/$category"
@@ -132,7 +96,6 @@ export function Layout() {
           >
             <Settings size={18} strokeWidth={1.75} />
           </Link>
-          <ThemeToggle collapsed={collapsed} />
           <button
             className="rail-icon-btn rail-toggle"
             type="button"

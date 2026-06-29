@@ -439,7 +439,7 @@ describe("settings endpoints (#154)", () => {
     const res = await app.request("/api/settings");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { categories: { id: string }[] };
-    expect(body.categories.map((c) => c.id)).toEqual(["general", "interpretation", "hub"]);
+    expect(body.categories.map((c) => c.id)).toEqual(["general", "interpretation"]);
   });
 
   test("PUT validates and writes a setting", async () => {
