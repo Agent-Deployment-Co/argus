@@ -58,7 +58,7 @@ jobs:
       # --universal produces argus-aarch64-apple-darwin and argus-x86_64-apple-darwin, both
       # required when Tauri builds a universal-apple-darwin bundle.
       - name: Stage sidecar + web
-        run: bash scripts/stage-desktop-sidecar.sh --universal
+        run: bun run scripts/stage-desktop-sidecar.ts --universal
 
       - name: import Apple Developer Certificate
         # Prevents keychain from locking automatically for 3600 seconds.
@@ -122,3 +122,69 @@ jobs:
             echo "No macOS updater signature (*.app.tar.gz.sig) was produced." >&2
             exit 1
           fi
+
+  build-windows:
+    runs-on: windows-latest
+    env:
+      TAURI_UPDATER_ARGS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: bun install --frozen-lockfile
+      # Compile the CLI for the windows host and stage it (+ the web app) as the Tauri sidecar.
+      - name: Stage sidecar + web
+        run: bun run scripts/stage-desktop-sidecar.ts --build
+
+      # Authenticode signing — gated on the cert secrets. Until they're set this step is skipped and
+      # the build below produces an UNSIGNED installer. When present, import the .p12 into the
+      # current-user store and hand Tauri the thumbprint via a config override.
+      - name: Import Windows signing certificate
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          [IO.File]::WriteAllBytes("cert.p12", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $pwd = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath cert.p12 -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+          Remove-Item cert.p12
+          $conf = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://timestamp.digicert.com" } } }
+          $conf | ConvertTo-Json -Depth 5 | Set-Content -Path desktop/src-tauri/tauri.windows-signing.conf.json
+          "WINDOWS_SIGNING_ARGS=--config src-tauri/tauri.windows-signing.conf.json" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build (and sign, if secrets present) the desktop app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing. When absent, TAURI_UPDATER_ARGS stays empty and no updater
+          # artifacts are produced; the normal NSIS installer build still runs.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: argus-v__VERSION__
+          releaseName: Argus v__VERSION__
+          releaseDraft: true
+          prerelease: false
+          projectPath: desktop
+          # Run the repo's tauri devDependency via bun — portable on Windows (no extensionless shim).
+          tauriScript: bunx tauri
+          includeUpdaterJson: true
+          args: ${{ env.TAURI_UPDATER_ARGS }} ${{ env.WINDOWS_SIGNING_ARGS }}
+
+      - name: Verify updater artifacts
+        if: ${{ env.TAURI_UPDATER_ARGS != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archives = Get-ChildItem -Path desktop/src-tauri/target -Recurse -Filter "*-setup.nsis.zip" -ErrorAction SilentlyContinue
+          $signatures = Get-ChildItem -Path desktop/src-tauri/target -Recurse -Filter "*-setup.nsis.zip.sig" -ErrorAction SilentlyContinue
+          if (-not $archives) { Write-Error "No Windows updater archive (*-setup.nsis.zip) was produced." }
+          if (-not $signatures) { Write-Error "No Windows updater signature (*-setup.nsis.zip.sig) was produced." }
