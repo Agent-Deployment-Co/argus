@@ -415,6 +415,21 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
   });
 
+  // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards; returns
+  // the now-unconfigured status. Idempotent — deleting an absent key still reports not-configured.
+  app.delete("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+    try {
+      await secretStore().delete(name);
+    } catch {
+      return c.json({ error: "Couldn't remove the secret." }, 500);
+    }
+    return c.json({ configured: false } satisfies SecretStatus);
+  });
+
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
   // back to index.html so client-side routes resolve on a hard refresh.
   app.get("*", (c) => {
