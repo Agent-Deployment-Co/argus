@@ -171,7 +171,7 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     label: "Sessions",
     sections: [
       // Custom prompt / prompt file are intentionally not exposed yet.
-      { settings: [TASK_SETTINGS.enabled] },
+      { settings: [TASK_SETTINGS.enabled, TASK_SETTINGS.maxSessionsPerHour] },
       {
         // Advanced / CLI-only (not in the UI): `llm.apiKeyEnv` (the UI offers the key itself via
         // API_KEY_FIELD instead), `llm.baseUrl` (each provider sets its own endpoint), and
