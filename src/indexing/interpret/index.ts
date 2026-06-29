@@ -32,11 +32,14 @@ const INTERPRET_BATCH_PER_TICK = 5;
 // session that hit one of these must stay eligible (retry later), not be stamped as interpreted.
 const EXTRACTION_FAILURE_CODES = new Set(["task_extraction_failed", "task_extraction_bad_response"]);
 
-// Per-process failure cooldown: a session that fails repeatedly is skipped for the rest of this process
-// run so it can't sit at the front of the newest-first queue and starve healthy sessions. Reset when a
-// session finally interprets cleanly. Module-level so it persists across drain ticks within `--watch`.
-const SKIP_AFTER_FAILURES = 2;
-const failureCounts = new Map<string, number>();
+// Failure cooldown: after a failed interpret, a session is skipped only until this long has passed, so a
+// transiently-failing session can't sit at the front of the newest-first queue and get hammered (or
+// starve healthy sessions) every tick — but it always recovers on its own once the cooldown elapses.
+// This is a time-based backoff, NOT a permanent in-memory poison set: a session is never dropped for the
+// life of the process. Cleared immediately on success. Module-level so it survives drain ticks within
+// `--watch`. (`Date.now()` is fine here — the drain is ordinary runtime code, not a workflow script.)
+const RETRY_COOLDOWN_MS = 15 * 60_000;
+const retryAfterMs = new Map<string, number>();
 
 /** True when automatic task extraction should run for this call. */
 export function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined): boolean {
@@ -97,16 +100,17 @@ export async function runInterpretationDrain(
   if (maxPerHour <= 0) return;
   const note = (msg: string) => (collapser ? void collapser.note(msg) : log?.(msg));
 
-  // Over-fetch a little so the per-process skip set can filter out poison sessions without starving the
+  // Over-fetch a little so the cooldown filter can drop recently-failed sessions without starving the
   // batch, then cap at the per-tick batch size.
+  const now = Date.now();
   const candidates = (await store.readPendingInterpretationSessions(INTERPRET_BATCH_PER_TICK * 2))
-    .filter((id) => (failureCounts.get(id) ?? 0) < SKIP_AFTER_FAILURES)
+    .filter((id) => (retryAfterMs.get(id) ?? 0) <= now)
     .slice(0, INTERPRET_BATCH_PER_TICK);
   if (!candidates.length) return; // quiet when idle — no noise every tick
 
   const granted = await store.takeInterpretCredits(candidates.length, maxPerHour);
   if (granted <= 0) {
-    note(`Reached the hourly interpretation limit (${maxPerHour}/hr); resuming later.`);
+    note(`Reached the hourly task-extraction limit (${maxPerHour}/hr); resuming later.`);
     return;
   }
 
@@ -116,7 +120,7 @@ export async function runInterpretationDrain(
   // pass must never look hung. These lines are distinct per session, so they go straight to the log
   // (not the collapser); the collapser is only for the repeated throttle-pause / failure-summary lines.
   log?.(
-    `Interpreting ${batch.length} session${batch.length === 1 ? "" : "s"} this pass (up to ${maxPerHour}/hr) — running an AI model on each…`,
+    `Extracting tasks from ${batch.length} session${batch.length === 1 ? "" : "s"} this pass (up to ${maxPerHour}/hr) — running an AI model on each…`,
   );
   let done = 0;
   let failures = 0;
@@ -127,26 +131,27 @@ export async function runInterpretationDrain(
       const { interpreted } = await interpretSession(store, sessionId, resolved);
       if (interpreted) {
         done++;
-        failureCounts.delete(sessionId);
+        retryAfterMs.delete(sessionId);
       } else {
         failures++;
-        failureCounts.set(sessionId, (failureCounts.get(sessionId) ?? 0) + 1);
+        retryAfterMs.set(sessionId, now + RETRY_COOLDOWN_MS);
       }
     } catch {
       // Routine per-session failure (e.g. a transient provider error surfacing as a throw): leave the
-      // session eligible (unstamped), count it toward the skip cooldown, and keep draining.
+      // session eligible (unstamped) but back it off for the cooldown so the next tick isn't blocked on
+      // it, then keep draining. It recovers automatically once the cooldown elapses.
       failures++;
-      failureCounts.set(sessionId, (failureCounts.get(sessionId) ?? 0) + 1);
+      retryAfterMs.set(sessionId, now + RETRY_COOLDOWN_MS);
     }
   }
 
   if (done > 0) {
     const progress = await store.interpretationProgress();
     log?.(
-      `Interpreted ${done} session${done === 1 ? "" : "s"} this pass — ${progress.interpreted} done, ${progress.pending} remaining.`,
+      `Extracted tasks from ${done} session${done === 1 ? "" : "s"} this pass — ${progress.interpreted} done, ${progress.pending} remaining.`,
     );
   }
   if (failures > 0) {
-    note(`Couldn't interpret ${failures} session${failures === 1 ? "" : "s"} this pass; will retry later.`);
+    note(`Couldn't extract tasks for ${failures} session${failures === 1 ? "" : "s"} this pass; will retry later.`);
   }
 }

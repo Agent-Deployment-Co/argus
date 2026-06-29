@@ -33,6 +33,7 @@ import type {
   SessionAggregate,
   SourceCoverageRow,
   StoreStats,
+  TaskSeqInteraction,
   TranscriptIndex,
 } from "./store-contract.ts";
 import type {
@@ -517,6 +518,20 @@ function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+// The single definition of "eligible for (re)interpretation" (#153), shared by the drain's session
+// query and the `argus status` counts so "waiting" can never silently desync from what the drain
+// actually processes. Eligible = content indexed more recently than last interpreted (interpreted_at_ms
+// NULL → 0, so never-interpreted qualifies) AND a human-authored opening prompt whose text was retained
+// exists (no retained text → nothing to interpret from, which also subsumes the retain-text gate).
+// interpretation_version is deliberately NOT consulted: a version bump must not re-trigger the drain —
+// only a content change or an explicit refresh does. Assumes the table is aliased `s`.
+const INTERPRETATION_ELIGIBLE_SQL = `s.content_indexed_at_ms > COALESCE(s.interpreted_at_ms, 0)
+  AND EXISTS (
+    SELECT 1 FROM resolved_interaction_text t
+    JOIN resolved_interactions i ON i.session_id = t.session_id AND i.seq = t.interaction_seq
+    WHERE t.session_id = s.session_id AND t.type = 'prompt' AND i.initiator = 'human'
+  )`;
 
 interface ResolvedSessionSnapshot {
   metaJson: string;
@@ -1767,23 +1782,13 @@ export class SqliteStore implements Store {
   }
 
   // Canonical ids of sessions eligible for (re)interpretation (#153), newest-first, capped at `limit`.
-  // Eligible = content indexed more recently than last interpreted (interpreted_at_ms NULL → 0, so
-  // never-interpreted qualifies) AND a human-authored opening prompt whose text was retained exists
-  // (without retained text there's nothing to interpret from, which also subsumes the retain-text
-  // gate). interpretation_version is deliberately NOT consulted: bumping the interpreter must not
-  // re-trigger the background drain — only a content change or an explicit refresh does.
+  // The eligibility predicate is INTERPRETATION_ELIGIBLE_SQL, shared with interpretationProgress.
   readPendingInterpretationSessions(limit: number): Promise<string[]> {
     return this.schedule(async () => {
       const rows = await all<{ session_id: string }>(
         this.db,
         `SELECT s.session_id FROM resolved_sessions s
-         WHERE s.content_indexed_at_ms > COALESCE(s.interpreted_at_ms, 0)
-           AND EXISTS (
-             SELECT 1 FROM resolved_interaction_text t
-             JOIN resolved_interactions i
-               ON i.session_id = t.session_id AND i.seq = t.interaction_seq
-             WHERE t.session_id = s.session_id AND t.type = 'prompt' AND i.initiator = 'human'
-           )
+         WHERE ${INTERPRETATION_ELIGIBLE_SQL}
          ORDER BY s.last_ts DESC, s.session_id
          LIMIT ?`,
         [limit],
@@ -1819,17 +1824,26 @@ export class SqliteStore implements Store {
           "SELECT seq, ts FROM resolved_interactions WHERE session_id = ?",
           [sessionId],
         );
-        const interactions = interactionRows.map(
-          (row) => ({ seq: row.seq, timestampMs: row.ts ?? undefined }),
-        ) as unknown as InteractionFact[];
+        // The narrow TaskSeqInteraction type lets us pass these rebuilt-from-columns rows directly —
+        // no cast that would silently hide a future field the assigner starts depending on.
+        const interactions: TaskSeqInteraction[] = interactionRows.map((row) => ({
+          seq: row.seq,
+          timestampMs: row.ts ?? undefined,
+        }));
         const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, interactions);
-        await run(this.db, "UPDATE resolved_interactions SET task_seq = NULL WHERE session_id = ?", [sessionId]);
-        for (const [interactionSeq, taskSeq] of taskSeqByInteraction) {
+        // Re-derive every interaction's task_seq in ONE statement: a CASE maps assigned interactions to
+        // their task and the ELSE clears the rest — instead of N round-trips (a reset + one UPDATE per
+        // interaction), which a long session would pay on every interpret.
+        const assigned = [...taskSeqByInteraction.entries()];
+        if (assigned.length) {
+          const cases = assigned.map(() => "WHEN ? THEN ?").join(" ");
           await run(
             this.db,
-            "UPDATE resolved_interactions SET task_seq = ? WHERE session_id = ? AND seq = ?",
-            [taskSeq, sessionId, interactionSeq],
+            `UPDATE resolved_interactions SET task_seq = CASE seq ${cases} ELSE NULL END WHERE session_id = ?`,
+            [...assigned.flatMap(([seq, taskSeq]) => [seq, taskSeq]), sessionId],
           );
+        } else {
+          await run(this.db, "UPDATE resolved_interactions SET task_seq = NULL WHERE session_id = ?", [sessionId]);
         }
         await run(
           this.db,
@@ -1879,34 +1893,28 @@ export class SqliteStore implements Store {
     });
   }
 
-  // Backfill progress for `argus status` (#153). interpreted = sessions interpreted at least once;
-  // outdated = interpreted but content has changed since (the "new data, refresh?" signal); pending =
-  // eligible for the drain (never-or-outdated AND has retained human prompt text), matching
-  // readPendingInterpretationSessions so the number a user sees is the real remaining backlog.
+  // Backfill progress for `argus status` (#153). interpreted = sessions interpreted at least once.
+  // pending + outdated are both scoped to the SAME eligibility predicate the drain uses
+  // (INTERPRETATION_ELIGIBLE_SQL): pending = all eligible; outdated = the eligible subset that was
+  // already interpreted once (content has changed since — the "new data, refresh?" signal). Gating
+  // outdated on eligibility (incl. the retained-text check) means it's a subset of pending, so it always
+  // decreases as the drain works — a text-less session can't show as a permanently-stuck "outdated".
   interpretationProgress(): Promise<{ interpreted: number; pending: number; outdated: number }> {
     return this.schedule(async () => {
-      const counts = await get<{ interpreted: number; outdated: number }>(
+      const eligible = await get<{ pending: number; outdated: number }>(
         this.db,
-        `SELECT
-           COUNT(*) FILTER (WHERE interpreted_at_ms IS NOT NULL) AS interpreted,
-           COUNT(*) FILTER (WHERE interpreted_at_ms IS NOT NULL AND content_indexed_at_ms > interpreted_at_ms) AS outdated
-         FROM resolved_sessions`,
+        `SELECT COUNT(*) AS pending,
+                COUNT(*) FILTER (WHERE s.interpreted_at_ms IS NOT NULL) AS outdated
+         FROM resolved_sessions s WHERE ${INTERPRETATION_ELIGIBLE_SQL}`,
       );
-      const pendingRow = await get<{ n: number }>(
+      const interpretedRow = await get<{ n: number }>(
         this.db,
-        `SELECT COUNT(*) AS n FROM resolved_sessions s
-         WHERE s.content_indexed_at_ms > COALESCE(s.interpreted_at_ms, 0)
-           AND EXISTS (
-             SELECT 1 FROM resolved_interaction_text t
-             JOIN resolved_interactions i
-               ON i.session_id = t.session_id AND i.seq = t.interaction_seq
-             WHERE t.session_id = s.session_id AND t.type = 'prompt' AND i.initiator = 'human'
-           )`,
+        "SELECT COUNT(*) AS n FROM resolved_sessions WHERE interpreted_at_ms IS NOT NULL",
       );
       return {
-        interpreted: counts?.interpreted ?? 0,
-        pending: pendingRow?.n ?? 0,
-        outdated: counts?.outdated ?? 0,
+        interpreted: interpretedRow?.n ?? 0,
+        pending: eligible?.pending ?? 0,
+        outdated: eligible?.outdated ?? 0,
       };
     });
   }

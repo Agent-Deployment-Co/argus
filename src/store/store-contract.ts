@@ -860,9 +860,14 @@ export function buildPromptFact(args: {
  * unattributed (absent from the map -> NULL `resolved_interactions.task_seq`). Pure, so the store
  * (resolved_interactions.task_seq) and the Interpret stage (dialogue slicing) assign identically.
  */
+/** The minimal interaction shape `assignInteractionTaskSeqs` reads: its ordinal and (optional) start
+ *  time. Narrow on purpose so callers that rebuild interactions from a couple of columns (e.g. the
+ *  store's `writeSessionTasks`) pass a typed object instead of casting a partial to `InteractionFact`. */
+export type TaskSeqInteraction = Pick<InteractionFact, "seq" | "timestampMs">;
+
 export function assignInteractionTaskSeqs(
   tasks: TaskFact[],
-  interactions: InteractionFact[],
+  interactions: readonly TaskSeqInteraction[],
 ): Map<number, number> {
   const out = new Map<number, number>();
   // Dated tasks carrying their original index (= resolved_tasks.seq), oldest first.
@@ -875,7 +880,7 @@ export function assignInteractionTaskSeqs(
   // the latest task started at/before it — O(n log n + m log m), no per-interaction rescan. The helper
   // runs twice per session per index (Interpret + materialize), so the linear pass matters on long ones.
   const ordered = interactions
-    .filter((i): i is InteractionFact & { timestampMs: number } => i.timestampMs != null)
+    .filter((i): i is TaskSeqInteraction & { timestampMs: number } => i.timestampMs != null)
     .sort((a, b) => a.timestampMs - b.timestampMs);
   let t = -1;
   for (const interaction of ordered) {

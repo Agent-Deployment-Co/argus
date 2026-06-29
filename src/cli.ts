@@ -322,9 +322,9 @@ async function runStatus(log: Log): Promise<void> {
   // Interpretation backfill progress (#153): only meaningful once some sessions have been interpreted
   // or are waiting to be. Stay silent otherwise so a user who hasn't turned task extraction on sees nothing.
   if (interpretation && (interpretation.interpreted > 0 || interpretation.pending > 0)) {
-    const outdated = interpretation.outdated ? `, ${interpretation.outdated} outdated` : "";
+    const outdated = interpretation.outdated ? `, ${interpretation.outdated} with new activity` : "";
     log(
-      `Interpreted ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
+      `Extracted tasks from ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
         `(${interpretation.pending} waiting${outdated}).`,
     );
   }

@@ -229,8 +229,8 @@ describe("decoupled interpretation drain (#153)", () => {
     } finally {
       await store.close();
     }
-    expect(logs.some((l) => l.includes("Interpreting 1 session this pass"))).toBe(true);
-    expect(logs.some((l) => l.includes("Interpreted 1 session this pass"))).toBe(true);
+    expect(logs.some((l) => l.includes("Extracting tasks from 1 session this pass"))).toBe(true);
+    expect(logs.some((l) => l.includes("Extracted tasks from 1 session this pass"))).toBe(true);
   });
 });
 
