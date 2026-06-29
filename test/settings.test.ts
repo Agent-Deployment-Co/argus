@@ -40,9 +40,9 @@ function findSetting(file: Parameters<typeof describeSettings>[0], path: string)
 }
 
 describe("describeSettings", () => {
-  test("groups the registry into General + Session Interpretation categories", () => {
+  test("groups the registry into General + Sessions categories", () => {
     const { categories } = describeSettings({});
-    expect(categories.map((c) => c.id)).toEqual(["general", "interpretation"]);
+    expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
   });
 
   test("General exposes the Argus Hub URL (key not yet surfaced)", () => {
@@ -117,7 +117,7 @@ describe("describeSettings", () => {
 
   test("exposes an API key secret field for the BYO-key providers", () => {
     const section = describeSettings({})
-      .categories.find((c) => c.id === "interpretation")!
+      .categories.find((c) => c.id === "sessions")!
       .sections.find((s) => (s.secretFields?.length ?? 0) > 0)!;
     const apiKey = section.secretFields![0]!;
     expect(apiKey.providerPath).toBe("llm.provider");

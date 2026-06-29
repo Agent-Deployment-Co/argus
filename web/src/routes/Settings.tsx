@@ -35,7 +35,7 @@ import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCa
  *  only purely-presentational mapping the surface adds. Unknown ids fall back to the sliders icon. */
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
-  interpretation: Brain,
+  sessions: Brain,
   debug: Bug,
 };
 
