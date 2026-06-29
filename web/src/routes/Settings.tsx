@@ -697,6 +697,7 @@ function SettingRow({
             className="setting-input"
             value={text}
             placeholder={placeholder}
+            min={ui.min}
             disabled={disabled}
             onChange={(e) => onChange(e.target.value)}
             onBlur={saveText}

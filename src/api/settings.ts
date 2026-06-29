@@ -321,8 +321,12 @@ export function applySetting(path: string, raw: unknown, configPath: string = CO
       const values = (setting.ui?.options ?? [])
         .filter((o): o is SelectOption => o !== "separator" && o.value !== "")
         .map((o) => o.value);
-      const allowed = values.length ? ` (expected one of: ${values.join(", ")})` : "";
-      return { ok: false, status: 400, error: `Invalid value for ${setting.ui?.label ?? path}${allowed}.` };
+      const hint = values.length
+        ? ` (expected one of: ${values.join(", ")})`
+        : setting.ui?.min != null
+          ? ` (must be ${setting.ui.min} or more)`
+          : "";
+      return { ok: false, status: 400, error: `Invalid value for ${setting.ui?.label ?? path}${hint}.` };
     }
   }
 

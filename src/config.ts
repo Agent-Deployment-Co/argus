@@ -166,6 +166,9 @@ export interface SettingUi {
    *  by the (effective) value of the setting at `path`. E.g. the Model field shows the selected
    *  provider's default model. Falls back to the generic placeholder when there's no entry. */
   placeholderByValue?: { path: string; values: Record<string, string> };
+  /** For a `number` control: the minimum allowed value. Rendered as the input's `min`, and enforced on
+   *  write (a smaller value is rejected). */
+  min?: number;
 }
 
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
@@ -280,6 +283,13 @@ const RETENTION_SETTINGS = {
 function parseNumber(raw: unknown): number | undefined {
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/** A whole count of at least 1 — rejects 0, negatives, and non-numbers (returns undefined). Used for
+ *  the hourly interpretation cap, where 0 would silently disable the drain. */
+function parsePositiveInt(raw: unknown): number | undefined {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 1 ? n : undefined;
 }
 
 // Tolerant, like loadConfig: an invalid provider (a typo in argus.json or env) must not hard-exit an
@@ -521,8 +531,9 @@ export const TASK_SETTINGS = {
         "Cap on how many sessions are interpreted automatically each hour. Refreshing a session manually isn't limited.",
       control: "number",
       activeWhen: TASK_GATE,
+      min: 1,
     },
-    parse: parseNumber,
+    parse: parsePositiveInt,
   } satisfies Setting<OptionalNumber>,
 };
 
