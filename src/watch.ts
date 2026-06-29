@@ -13,13 +13,14 @@ import {
   saveAccessTokenCache,
 } from "./auth.ts";
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
-import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions, type Log } from "./reporting/dashboard-builder.ts";
+import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { detectOrg, detectUser, hubErrorMessage, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
 import { resolveHubConfig } from "./secrets.ts";
 import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
+import { logError, logWarn, type Log } from "./logger.ts";
 
 const MIN_INTERVAL_MIN = 1;
 
@@ -105,7 +106,7 @@ export async function resolveCredentials(endpoint: string, log: Log): Promise<Pu
         cached = await refreshManagedOAuthToken(cached);
         saveAccessTokenCache(ACCESS_TOKEN_FILE, cached);
       } catch (err) {
-        log(`! Login refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+        logWarn(log, `Login refresh failed: ${err instanceof Error ? err.message : String(err)}`);
         cached = undefined;
       }
     }
@@ -241,7 +242,7 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
         if (!cred) {
           // Log once, then park until the token file actually changes — no polling, no repeated
           // refresh attempts. `argus login` writes the token file, which wakes this wait.
-          collapser.note("Not logged in — pausing uploads until you run `argus login`.");
+          collapser.note("Not logged in. Pausing uploads until you run `argus login`.", "warn");
           await waitForToken(sig);
           continue;
         }
@@ -250,7 +251,7 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           res = await push(opts, cred, log);
         } catch (err) {
           // Network error — the normal case on a laptop that drops off Wi-Fi. Back off quietly.
-          collapser.note(`Upload failed: ${err instanceof Error ? err.message : String(err)} — retrying.`);
+          collapser.note(`Upload failed: ${err instanceof Error ? err.message : String(err)}. Retrying.`, "warn");
           await sleep(backoff.next(), sig);
           continue;
         }
@@ -262,20 +263,20 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           await sleep(intervalMs, sig);
         } else if (res.ok) {
           collapser.flush();
-          log(`✓ Uploaded (${res.status}).`);
+          log(`Uploaded (${res.status}).`);
           backoff.reset();
           await sleep(intervalMs, sig);
         } else if (res.status === 422) {
           // Schema version mismatch: permanent until one side is upgraded. The Hub's body states
           // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
-          log(`✗ Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
+          logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
           await sleep(Number.MAX_SAFE_INTEGER, sig);
         } else if (res.isAccessChallenge) {
           // Token went stale: the next pass re-reads the cache and tries a refresh. Back off meanwhile.
-          collapser.note("Upload needs a fresh login — run `argus login`. Retrying…");
+          collapser.note("Upload needs a fresh login. Run `argus login`. Retrying.", "warn");
           await sleep(backoff.next(), sig);
         } else {
-          collapser.note(`Upload failed (${res.status}). Retrying…`);
+          collapser.note(`Upload failed (${res.status}). Retrying.`, "warn");
           await sleep(backoff.next(), sig);
         }
       }

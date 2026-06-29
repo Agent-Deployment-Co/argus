@@ -12,6 +12,7 @@ import {
 import { complete } from "../../llm/index.ts";
 import type { LlmResult } from "../../llm/types.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
+import { logDebug } from "../../logger.ts";
 
 /** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
  *  interactions, in order — the projection of prompts+responses the session model describes (#122),
@@ -37,8 +38,6 @@ Rules:
 - Keep descriptions concise and specific.
 - messageIndexes must refer to the filtered user message indexes provided below.`;
 
-export type TaskExtractionDebugLog = (message: string) => void;
-
 export interface ExtractedTaskSpec {
   description: string;
   messageIndexes: number[];
@@ -48,7 +47,7 @@ export function logTaskExtractionDebug(
   options: ResolvedTaskExtraction | undefined,
   message: string,
 ): void {
-  options?.debugLog?.(`[task extraction] ${message}`);
+  logDebug(options?.log, `[task extraction] ${message}`);
 }
 
 function logTaskExtractionBlock(
@@ -56,11 +55,11 @@ function logTaskExtractionBlock(
   label: string,
   body: string,
 ): void {
-  if (!options?.debugLog) return;
+  if (!options?.log) return;
   logTaskExtractionDebug(options, `${label} begin`);
   const content = body.length ? body : "(empty)";
   for (const line of content.split(/\r?\n/)) {
-    options.debugLog(`[task extraction] ${line}`);
+    logDebug(options.log, `[task extraction] ${line}`);
   }
   logTaskExtractionDebug(options, `${label} end`);
 }

@@ -11,8 +11,7 @@ import { openSessionStore } from "../store/session-store.ts";
 import type { ParserDiagnostic } from "../store/store-contract.ts";
 import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
 import type { MessageRecord } from "../types.ts";
-
-export type Log = (s: string) => void;
+import { isLevelEnabled, logAt, type ArgusLogLevel, type Log } from "../logger.ts";
 
 /** Inputs buildDashboard needs — a narrow slice of the CLI flags so non-CLI callers (serve, argusd)
  *  don't have to construct the whole Flags object. */
@@ -80,6 +79,15 @@ function reportProblems(diagnostics: ParserDiagnostic[]): ParserDiagnostic[] {
     .slice(0, 5);
 }
 
+function diagnosticLevel(entry: ParserDiagnostic): ArgusLogLevel {
+  return entry.severity === "warning" ? "warn" : entry.severity;
+}
+
+function logDiagnostic(log: Log, entry: ParserDiagnostic): void {
+  const suffix = isLevelEnabled(log, "debug") ? ` (${entry.phase}/${entry.code})` : "";
+  logAt(log, diagnosticLevel(entry), `${entry.message}${suffix}`);
+}
+
 /** Parse transcripts, apply filters, summarize heuristically, and build the aggregate dashboard. */
 export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Promise<Dashboard> {
   log("Reading transcripts…");
@@ -97,7 +105,7 @@ export async function buildDashboard(opts: BuildDashboardOptions, log: Log): Pro
   }
   // Keep reports quiet: only call out problems that affect the result (and explain a degraded read).
   if (store.stats?.fallback) log(`  ${syncStatsSummary(store.stats)}`);
-  for (const entry of reportProblems(store.diagnostics)) log(`  ! ${entry.message}`);
+  for (const entry of reportProblems(store.diagnostics)) logDiagnostic(log, entry);
 
   log(`  ${parseResult.messages.length} assistant messages across ${parseResult.sessions.size} sessions.`);
 
@@ -133,7 +141,7 @@ export async function buildSnapshot(opts: BuildDashboardOptions, log: Log): Prom
     query: { since: opts.since, until: opts.until, projectSubstring: opts.project },
   });
   if (stats.fallback) log(`  ${syncStatsSummary(stats)}`);
-  for (const entry of reportProblems(diagnostics)) log(`  ! ${entry.message}`);
+  for (const entry of reportProblems(diagnostics)) logDiagnostic(log, entry);
 
   const dash = assembleDashboard(aggregates, loadPlugins());
   dash.generatedAtMs = Date.now();

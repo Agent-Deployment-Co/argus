@@ -26,6 +26,7 @@ import {
   SELECTABLE_PROVIDERS,
 } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
+import { logger, logWarn, normalizeLogLevel, type ArgusLogLevel, type Log } from "./logger.ts";
 
 /** The default LLM provider, preserved from before the generalization: with no provider configured,
  *  model-driven features use the local `claude` CLI. The single source of truth for this default —
@@ -89,6 +90,10 @@ export interface ArgusConfig {
     /** Shared API key for Hub authentication */
     key?: string;
   };
+  /** Terminal logging settings. */
+  log?: {
+    level?: ArgusLogLevel;
+  };
   /** Keep prompt/response text in the local store so interpretation can read it without re-reading
    *  transcripts from disk (#120). Stored text is local-only — never uploaded by `sync`. On by
    *  default; set to false to keep session text out of `argus.db` entirely. */
@@ -97,11 +102,15 @@ export interface ArgusConfig {
 
 export type ConfigWarn = (message: string) => void;
 
+function defaultConfigWarn(message: string): void {
+  logWarn(logger, message);
+}
+
 /**
  * Read and parse `argus.json`. Missing file → `{}` (defaults, no error). Malformed JSON → a clear
  * warning and `{}` (never throws) — mirrors the tolerant handling of `pricing.json`.
  */
-export function loadConfig(path: string = CONFIG_FILE, warn: ConfigWarn = console.warn): ArgusConfig {
+export function loadConfig(path: string = CONFIG_FILE, warn: ConfigWarn = defaultConfigWarn): ArgusConfig {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -232,6 +241,15 @@ function parseString(raw: unknown): string {
   return String(raw);
 }
 
+function parseLogLevel(raw: unknown): ArgusLogLevel {
+  const level = normalizeLogLevel(raw);
+  if (level) return level;
+  defaultConfigWarn(
+    `Ignoring invalid log level ${JSON.stringify(String(raw))} (expected error, warn, info, debug, or trace).`,
+  );
+  return "info";
+}
+
 const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
 
 export const HUB_SETTINGS = {
@@ -285,6 +303,16 @@ const RETENTION_SETTINGS = {
   } satisfies Setting<boolean>,
 };
 
+const LOG_SETTINGS = {
+  level: {
+    path: "log.level",
+    env: "ARGUS_LOG_LEVEL",
+    flag: "log-level",
+    default: "info" as ArgusLogLevel,
+    parse: parseLogLevel,
+  } satisfies Setting<ArgusLogLevel>,
+};
+
 function parseNumber(raw: unknown): number | undefined {
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
@@ -304,7 +332,7 @@ function parseProvider(raw: unknown): LlmProvider | undefined {
   const value = String(raw);
   const aliased = PROVIDER_ALIASES[value] ?? value;
   if (isLlmProvider(aliased)) return aliased;
-  console.warn(
+  defaultConfigWarn(
     `Ignoring invalid LLM provider ${JSON.stringify(value)} (expected ${LLM_PROVIDERS.join(", ")}).`,
   );
   return undefined;
@@ -552,6 +580,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
     ...Object.values(RETENTION_SETTINGS),
+    ...Object.values(LOG_SETTINGS),
   ].map((s) => [s.path, s as Setting<unknown>]),
 );
 
@@ -711,20 +740,20 @@ export interface ResolvedTaskExtraction {
   prompt?: string;
   /** Read a custom instruction prompt from this file. Takes precedence over `prompt`. */
   promptFile?: string;
-  /** Optional debug sink. Callers decide whether this goes to stdout/stderr. */
-  debugLog?: (message: string) => void;
+  /** Optional logger for task-extraction debug messages. */
+  log?: Log;
 }
 
 /**
  * Resolve the effective task-extraction settings. `flags` is the citty-parsed args object (keys are
  * kebab-case flag names); pass `{}` for commands that don't expose the flags. The deprecated
  * `taskExtraction.provider`/`model`/`command` keys resolve as the per-consumer override layer over the
- * shared `llm.*` block. `debugLog` is reattached after resolution since it isn't a persisted setting.
+ * shared `llm.*` block. `log` is reattached after resolution since it isn't a persisted setting.
  */
 export function resolveTaskExtraction(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
-  debugLog?: (message: string) => void,
+  log?: Log,
 ): ResolvedTaskExtraction {
   const overrides = {
     provider: resolveSetting(TASK_SETTINGS.provider, flags, file),
@@ -743,8 +772,20 @@ export function resolveTaskExtraction(
   const promptFile = resolveSetting(TASK_SETTINGS.promptFile, flags, file);
   if (prompt) resolved.prompt = prompt;
   if (promptFile) resolved.promptFile = promptFile;
-  if (debugLog) resolved.debugLog = debugLog;
+  if (log) resolved.log = log;
   return resolved;
+}
+
+/** Resolve terminal log verbosity. `--log-level` is explicit; `--quiet`, `--verbose`, and the legacy
+ *  task-extraction `--debug` flag are command-line shorthands above env and file settings. */
+export function resolveLogLevel(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): ArgusLogLevel {
+  if (flags["log-level"] != null && flags["log-level"] !== "") return parseLogLevel(flags["log-level"]);
+  if (flags.quiet === true) return "warn";
+  if (flags.verbose === true || flags.debug === true) return "debug";
+  return resolveSetting(LOG_SETTINGS.level, {}, file);
 }
 
 /** Automatic desktop update behavior. Defaults on. */

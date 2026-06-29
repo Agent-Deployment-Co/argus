@@ -9,11 +9,13 @@ import {
   migrateLlmFlatToProviderConfigs,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
+  resolveLogLevel,
   resolveRetainText,
   resolveSetting,
   resolveTaskExtraction,
   type Setting,
 } from "../src/config.ts";
+import { logger } from "../src/logger.ts";
 
 function tmpConfig(contents: string): string {
   const dir = mkdtempSync(join(tmpdir(), "argus-config-"));
@@ -32,6 +34,7 @@ const CONFIG_ENV = [
   "ARGUS_TASK_PROMPT_FILE",
   "ARGUS_TASK_COMMAND",
   "ARGUS_RETAIN_TEXT",
+  "ARGUS_LOG_LEVEL",
 ];
 
 afterEach(() => {
@@ -177,28 +180,28 @@ describe("resolveTaskExtraction", () => {
 
   test("an invalid provider warns and falls back instead of hard-exiting (#89 tolerant)", () => {
     const warnings: string[] = [];
-    const original = console.warn;
-    console.warn = (m?: unknown) => warnings.push(String(m));
+    const original = logger.warn;
+    logger.warn = (m?: unknown) => warnings.push(String(m));
     try {
       // A typo in argus.json must not kill an unrelated `index`/`serve`/`run`.
       const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "cluade" as never } });
       expect(resolved.llm.provider).toBe("claude-cli");
       expect(warnings.join("\n")).toContain("Ignoring invalid LLM provider");
     } finally {
-      console.warn = original;
+      logger.warn = original;
     }
   });
 
   test("legacy provider value 'claude' aliases to 'claude-cli' without warning", () => {
     const warnings: string[] = [];
-    const original = console.warn;
-    console.warn = (m?: unknown) => warnings.push(String(m));
+    const original = logger.warn;
+    logger.warn = (m?: unknown) => warnings.push(String(m));
     try {
       const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "claude" as never } });
       expect(resolved.llm.provider).toBe("claude-cli");
       expect(warnings).toHaveLength(0);
     } finally {
-      console.warn = original;
+      logger.warn = original;
     }
   });
 
@@ -208,9 +211,32 @@ describe("resolveTaskExtraction", () => {
     expect(resolveTaskExtraction({}, { taskExtraction: { provider: "command" } }).llm.provider).toBe("command");
   });
 
-  test("reattaches debugLog (not a persisted setting)", () => {
+  test("reattaches log (not a persisted setting)", () => {
     const sink = () => {};
-    expect(resolveTaskExtraction({}, {}, sink).debugLog).toBe(sink);
+    expect(resolveTaskExtraction({}, {}, sink).log).toBe(sink);
+  });
+});
+
+describe("resolveLogLevel", () => {
+  test("defaults to info", () => {
+    expect(resolveLogLevel({}, {})).toBe("info");
+  });
+
+  test("argus.json and env can set the level", () => {
+    expect(resolveLogLevel({}, { log: { level: "warn" } })).toBe("warn");
+    process.env.ARGUS_LOG_LEVEL = "debug";
+    expect(resolveLogLevel({}, { log: { level: "warn" } })).toBe("debug");
+  });
+
+  test("CLI shorthands win over env and file", () => {
+    process.env.ARGUS_LOG_LEVEL = "error";
+    expect(resolveLogLevel({ verbose: true }, { log: { level: "warn" } })).toBe("debug");
+    expect(resolveLogLevel({ quiet: true }, { log: { level: "debug" } })).toBe("warn");
+    expect(resolveLogLevel({ debug: true }, {})).toBe("debug");
+  });
+
+  test("--log-level wins over shorthand flags", () => {
+    expect(resolveLogLevel({ "log-level": "trace", quiet: true }, {})).toBe("trace");
   });
 });
 
