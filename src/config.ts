@@ -18,6 +18,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
 import {
+  defaultModelByProvider,
   getProvider,
   isLlmProvider,
   LLM_PROVIDERS,
@@ -145,6 +146,10 @@ export interface SettingUi {
   /** The value this control resolves to when unset — used to evaluate `visibleWhen` against another
    *  field's effective value (e.g. an unset provider resolves to its default). */
   effectiveDefault?: string;
+  /** A context-dependent placeholder shown when the field is blank: the placeholder is `values` keyed
+   *  by the (effective) value of the setting at `path`. E.g. the Model field shows the selected
+   *  provider's default model. Falls back to the generic placeholder when there's no entry. */
+  placeholderByValue?: { path: string; values: Record<string, string> };
 }
 
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
@@ -326,6 +331,8 @@ export const LLM_SETTINGS = {
       control: "text",
       activeWhen: TASK_GATE,
       visibleWhen: visibleForField("model"),
+      // Blank → show the selected provider's built-in default model as the placeholder.
+      placeholderByValue: { path: "llm.provider", values: defaultModelByProvider() },
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,

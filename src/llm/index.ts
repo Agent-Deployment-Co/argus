@@ -16,6 +16,7 @@ export {
   LLM_PROVIDERS,
   SELECTABLE_PROVIDERS,
   providersForConfigField,
+  defaultModelByProvider,
   PROVIDER_API_KEY_ENVS,
   PROVIDERS,
 } from "./registry.ts";

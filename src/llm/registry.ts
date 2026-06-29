@@ -61,6 +61,14 @@ export function providersForConfigField(field: LlmConfigField): readonly LlmProv
   return PROVIDERS.filter((p) => !p.reserved && p.configFields?.includes(field)).map((p) => p.name);
 }
 
+/** Each selectable provider's built-in default model, for the providers that declare one — used to
+ *  show the effective default as the Model field's placeholder in the settings UI. */
+export function defaultModelByProvider(): Record<string, string> {
+  return Object.fromEntries(
+    PROVIDERS.filter((p) => !p.reserved && p.defaultModel).map((p) => [p.name, p.defaultModel!]),
+  );
+}
+
 /** The standard API-key env vars across all providers — the basis for the secret allowlist. */
 export const PROVIDER_API_KEY_ENVS: readonly string[] = PROVIDERS.flatMap((p) =>
   p.apiKeyEnv ? [p.apiKeyEnv] : [],
