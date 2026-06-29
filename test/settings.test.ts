@@ -127,6 +127,14 @@ describe("describeSettings", () => {
     expect(find(describeSettings({})).placeholder).toBeUndefined();
   });
 
+  test("the hourly interpretation cap is a number field gated on task extraction", () => {
+    const s = findSetting({}, "taskExtraction.maxSessionsPerHour");
+    expect(s.ui.control).toBe("number");
+    expect(s.ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    // It's editable through the API (in the layout), unlike the advanced CLI-only settings.
+    expect(applySetting("taskExtraction.maxSessionsPerHour", "10", tmpConfig()).ok).toBe(true);
+  });
+
   test("the Model field placeholder is the selected provider's default model", () => {
     const pb = findSetting({}, "llm.model").ui.placeholderByValue!;
     expect(pb.path).toBe("llm.provider");

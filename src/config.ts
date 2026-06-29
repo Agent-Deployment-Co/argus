@@ -457,7 +457,7 @@ export const TASK_SETTINGS = {
     ui: {
       label: "Extract tasks",
       description:
-        "Run a model over each session at index time to segment and judge tasks. Off by default — it's a model call per session.",
+        "Use AI to interpret sessions and identify tasks. This process is relatively lighweight but will consume tokens with the specified LLM provider.",
       control: "toggle",
     },
     parse: parseBool,
@@ -515,6 +515,13 @@ export const TASK_SETTINGS = {
     env: "ARGUS_TASK_MAX_PER_HOUR",
     flag: "task-max-per-hour",
     default: DEFAULT_MAX_SESSIONS_PER_HOUR as OptionalNumber,
+    ui: {
+      label: "Max sessions per hour",
+      description:
+        "Cap on how many sessions are interpreted automatically each hour. Refreshing a session manually isn't limited.",
+      control: "number",
+      activeWhen: TASK_GATE,
+    },
     parse: parseNumber,
   } satisfies Setting<OptionalNumber>,
 };
