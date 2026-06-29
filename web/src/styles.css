@@ -371,7 +371,8 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-input:disabled, .select__control:disabled, .setting-toggle:disabled { opacity: .45; cursor: not-allowed; }
 
 /* API key (secret) field: a "key is set" indicator + Replace/Save actions. */
-.secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--sky-surge); }
+.setting-name-icon { vertical-align: -2px; color: var(--muted); }
+.secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .secret-actions { display: flex; gap: 8px; margin-top: 6px; }
 .secret-btn { padding: 5px 11px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
 .secret-btn:hover:not(:disabled) { border-color: var(--accent); }
