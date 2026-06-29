@@ -25,7 +25,7 @@ import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { loadConfig, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
-import { defaultSecretStore, isSecretName, maskSecret, type SecretStatus, type SecretStore } from "../secrets.ts";
+import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
@@ -458,6 +458,10 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
 
 export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
   const webRoot = findWebRoot();
+
+  // Move any legacy plaintext Hub key out of argus.json into the secret store, so the settings surface
+  // shows it as stored and the file no longer holds it. Idempotent; a no-op once migrated.
+  await migrateHubKeyToSecretStore({ log });
 
   // No server-side snapshot cache: each request builds its filtered slice fresh. The heavy work is
   // a store read + aggregation; the client (TanStack Query) holds a short staleTime so rapid page

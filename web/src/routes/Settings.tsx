@@ -269,7 +269,8 @@ function SettingsCategoryPane({
     s.ui.placeholderByValue?.values[condValue(s.ui.placeholderByValue.path)];
   // A secret field targets the secret named for the currently-selected provider; it's shown only when
   // that provider takes a key, and inactive (like the other LLM fields) until its gate is on.
-  const secretName = (f: SecretFieldDescriptor) => f.secretNames[condValue(f.providerPath)];
+  const secretName = (f: SecretFieldDescriptor) =>
+    f.secretName ?? (f.secretNames ? f.secretNames[condValue(f.providerPath)] : undefined);
   const secretActive = (f: SecretFieldDescriptor) => !f.activeWhen || Boolean(values[f.activeWhen.path]);
   const connTestActive = (ct: { activeWhen?: { path: string } }) =>
     !ct.activeWhen || Boolean(values[ct.activeWhen.path]);

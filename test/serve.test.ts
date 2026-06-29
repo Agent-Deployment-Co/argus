@@ -294,6 +294,13 @@ describe("secret settings endpoints (#132)", () => {
     expect(await res.json()).toEqual({ configured: false });
   });
 
+  test("the Argus Hub key is an allowed secret (write then masked read)", async () => {
+    const app = appWithSecrets();
+    const write = await app.request("/api/settings/secrets/ARGUS_HUB_KEY", post("hub-secret-WXYZ"));
+    expect(write.status).toBe(200);
+    expect(await write.json()).toEqual({ configured: true, hint: "…WXYZ" });
+  });
+
   test("rejects a non-allowlisted secret name", async () => {
     const app = appWithSecrets();
     const res = await app.request("/api/settings/secrets/HOME", post("x"));
