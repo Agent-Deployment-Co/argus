@@ -264,7 +264,12 @@ function SettingsCategoryPane({
                   ))}
               </div>
               {section.connectionTest && (
-                <ConnectionTest disabled={!connTestActive(section.connectionTest)} />
+                <ConnectionTest
+                  // Remount (reset the result) whenever a field in this section changes — a prior
+                  // "Connected" for provider A shouldn't linger after switching to provider B.
+                  key={section.settings.map((s) => `${s.path}=${values[s.path] ?? ""}`).join("|")}
+                  disabled={!connTestActive(section.connectionTest)}
+                />
               )}
             </section>
           );
