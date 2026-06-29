@@ -1,7 +1,5 @@
 import { defineConfig } from 'vitepress'
 
-const repoUrl = 'https://github.com/Agent-Deployment-Co/argus'
-
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: 'Argus',
@@ -9,6 +7,28 @@ export default defineConfig({
     'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.',
   cleanUrls: true,
   lastUpdated: true,
+  // Authoring guides for contributors/agents, not product docs — kept in the
+  // repo but excluded from the published site. See docs/contributing/.
+  srcExclude: ['contributing/**'],
+  markdown: {
+    // VitePress has no built-in Mermaid support. Turn ```mermaid fences into a
+    // placeholder div carrying the (base64-encoded) source; the theme renders
+    // them client-side with mermaid. base64 keeps the source out of reach of
+    // the Vue template compiler, so braces/pipes in the diagram stay intact.
+    config(md) {
+      const defaultFence = md.renderer.rules.fence
+      md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+        const token = tokens[idx]
+        if (token.info.trim() === 'mermaid') {
+          const encoded = Buffer.from(token.content, 'utf-8').toString('base64')
+          return `<div class="mermaid-diagram" data-mermaid="${encoded}"></div>\n`
+        }
+        return defaultFence
+          ? defaultFence(tokens, idx, options, env, self)
+          : self.renderToken(tokens, idx, options)
+      }
+    }
+  },
   head: [
     ['link', { rel: 'icon', href: '/favicon.ico', sizes: '48x48' }],
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
@@ -41,10 +61,11 @@ export default defineConfig({
   ],
   themeConfig: {
     logo: {
-      src: '/favicon.svg',
-      alt: 'The Agent Deployment Co. chevron'
+      light: '/wordmark-on-light.svg',
+      dark: '/wordmark-on-dark.svg',
+      alt: 'Argus'
     },
-    siteTitle: 'Argus',
+    siteTitle: false,
     outline: {
       label: 'On this page',
       level: [2, 3]
@@ -52,38 +73,22 @@ export default defineConfig({
     search: {
       provider: 'local'
     },
-    // https://vitepress.dev/reference/default-theme-config
-    nav: [
-      { text: 'Guide', link: '/architecture', activeMatch: '^/(architecture|configuration|session-model|task-interpretation|web-app)' },
-      { text: 'Examples', link: '/api-examples', activeMatch: '^/(api-examples|markdown-examples)' },
-      { text: 'GitHub', link: repoUrl }
-    ],
+    // One flat list of pages down the left side — no top nav menu; the
+    // logo, search, and GitHub icon live in the header.
+    nav: [],
 
     sidebar: [
-      {
-        text: 'Overview',
-        items: [
-          { text: 'Introduction', link: '/' },
-          { text: 'Architecture', link: '/architecture' },
-          { text: 'Configuration', link: '/configuration' },
-          { text: 'Session model', link: '/session-model' },
-          { text: 'Task interpretation', link: '/task-interpretation' },
-          { text: 'Web app', link: '/web-app' }
-        ]
-      },
-      {
-        text: 'Examples',
-        items: [
-          { text: 'API examples', link: '/api-examples' },
-          { text: 'Markdown examples', link: '/markdown-examples' }
-        ]
-      }
+      { text: 'Introduction', link: '/' },
+      { text: 'Installation', link: '/installation' },
+      { text: 'Architecture', link: '/architecture' },
+      { text: 'Session model', link: '/session-model' },
+      { text: 'Task interpretation', link: '/task-interpretation' },
+      { text: 'Web app', link: '/web-app' },
+      { text: 'Configuration', link: '/configuration' },
+      { text: 'Database schema', link: '/database-schema' },
+      { text: 'LLM providers', link: '/llm-providers' }
     ],
 
-    editLink: {
-      pattern: `${repoUrl}/edit/main/docs/:path`,
-      text: 'Edit this page on GitHub'
-    },
     lastUpdated: {
       text: 'Updated'
     },
@@ -92,12 +97,7 @@ export default defineConfig({
       next: 'Next'
     },
     footer: {
-      message: 'Built for local-first agent usage auditing.',
       copyright: 'Copyright © The Agent Deployment Company'
-    },
-
-    socialLinks: [
-      { icon: 'github', link: repoUrl }
-    ]
+    }
   }
 })
