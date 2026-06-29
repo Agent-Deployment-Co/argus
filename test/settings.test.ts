@@ -90,16 +90,26 @@ describe("describeSettings", () => {
     expect(provider.ui.effectiveDefault).toBe("claude-cli");
 
     // Every llm.* field shown in the UI is inactive until task extraction is on.
-    for (const path of ["llm.model", "llm.command"]) {
+    for (const path of ["llm.model", "llm.command", "llm.claudeCliPath"]) {
       expect(findSetting({}, path).ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
     }
 
-    // Field relevance comes from the provider registry: command is the command provider only, model
-    // spans most providers (but never "off").
+    // Field relevance comes from the provider registry: command is the command provider only, the
+    // Claude CLI path is the claude-cli provider only, model spans most providers (but never "off").
     const visible = (path: string) => findSetting({}, path).ui.visibleWhen!;
     expect(visible("llm.command")).toEqual({ path: "llm.provider", in: ["command"] });
+    expect(visible("llm.claudeCliPath")).toEqual({ path: "llm.provider", in: ["claude-cli"] });
     expect(visible("llm.model").in).toContain("claude-cli");
     expect(visible("llm.model").in).not.toContain("off");
+  });
+
+  test("the Claude CLI path placeholder is the resolved binary passed in by the caller", () => {
+    const find = (resp: ReturnType<typeof describeSettings>) =>
+      resp.categories.flatMap((c) => c.sections).flatMap((s) => s.settings).find((s) => s.path === "llm.claudeCliPath")!;
+    // Threaded in (as the serve route does) → shown as the placeholder.
+    expect(find(describeSettings({}, "/usr/local/bin/claude")).placeholder).toBe("/usr/local/bin/claude");
+    // Omitted (other callers) → no placeholder, and describing never resolves the binary itself.
+    expect(find(describeSettings({})).placeholder).toBeUndefined();
   });
 
   test("the Model field placeholder is the selected provider's default model", () => {
