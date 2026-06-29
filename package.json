@@ -1,9 +1,12 @@
 {
-  "name": "@agentdeploymentco/argus",
-  "version": "0.1.14",
+  "name": "@agentdeploymentco/argus-workspace",
+  "version": "0.1.15",
   "description": "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
   "type": "module",
   "private": true,
+  "bin": {
+    "argus": "npm/dev-launcher.cjs"
+  },
   "scripts": {
     "start": "bun run src/cli.ts",
     "dev": "bash scripts/dev.sh",
