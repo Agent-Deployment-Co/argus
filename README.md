@@ -180,3 +180,7 @@ launchd (`~/Library/LaunchAgents/co.agentdeployment.argus.plist`): set `ProgramA
   ```json
   { "gpt-5.5": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite5m": 0, "cacheWrite1h": 0 } }
   ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

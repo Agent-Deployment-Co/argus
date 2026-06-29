@@ -57,5 +57,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Agent-Deployment-Co/argus.git"
-  }
+  },
+  "license": "MIT"
 }
