@@ -668,6 +668,30 @@ export interface ReadModelStore {
   readInteractionText(sessionId: string): Promise<InteractionTextChunk[]>;
   /** Task facts for a resolved session, oldest to newest; tasks without timestamps sort last. */
   readSessionTasks(sessionId: string): Promise<TaskFact[]>;
+  /** The interaction spine for a session, rehydrated with its retained prompt/response text (#153) —
+   *  the single text source the Interpret stage reads (both the background drain and inline refresh).
+   *  interaction_json is text-free (#120); promptText/responseText are merged back from
+   *  resolved_interaction_text by interaction_seq. Interactions without retained text have neither. */
+  readSessionInteractions(sessionId: string): Promise<InteractionFact[]>;
+  /** Canonical ids of sessions eligible for (re)interpretation, newest-first, capped at `limit` (#153).
+   *  Eligible = content_indexed_at_ms > COALESCE(interpreted_at_ms, 0) AND a retained human opening
+   *  prompt exists. interpretation_version is intentionally NOT a factor (a version bump must not
+   *  re-trigger the drain — only content change or explicit refresh does). */
+  readPendingInterpretationSessions(limit: number): Promise<string[]>;
+  /** Sole writer of resolved_tasks + interpretation state (#153): replace a session's tasks (without
+   *  re-materializing messages/interactions/text), re-derive task↔interaction membership, and stamp
+   *  interpreted_at_ms + interpretation_version. Always stamps — even for an empty task list — so a
+   *  session with no extractable tasks de-queues instead of re-running every drain tick. */
+  writeSessionTasks(sessionId: string, tasks: TaskFact[], version: string): Promise<void>;
+  /** Take up to `want` credits from the persisted Interpret rate limiter (#153) — one credit = one
+   *  session's worth of interpretation (unrelated to LLM tokens). Refilled continuously at
+   *  `maxPerHour`/hour (capacity `maxPerHour`, fresh bucket full). Returns how many were granted,
+   *  decrementing by that amount. Persisted in store_metadata so the hourly ceiling holds across
+   *  process restarts and repeated one-shot index runs. The inline refresh path does not call this. */
+  takeInterpretCredits(want: number, maxPerHour: number): Promise<number>;
+  /** Backfill progress for `argus status` (#153): sessions interpreted at least once, the eligible
+   *  backlog (pending), and how many are interpreted-but-outdated (content changed since). */
+  interpretationProgress(): Promise<{ interpreted: number; pending: number; outdated: number }>;
   /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
    *  task id, oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
@@ -836,9 +860,14 @@ export function buildPromptFact(args: {
  * unattributed (absent from the map -> NULL `resolved_interactions.task_seq`). Pure, so the store
  * (resolved_interactions.task_seq) and the Interpret stage (dialogue slicing) assign identically.
  */
+/** The minimal interaction shape `assignInteractionTaskSeqs` reads: its ordinal and (optional) start
+ *  time. Narrow on purpose so callers that rebuild interactions from a couple of columns (e.g. the
+ *  store's `writeSessionTasks`) pass a typed object instead of casting a partial to `InteractionFact`. */
+export type TaskSeqInteraction = Pick<InteractionFact, "seq" | "timestampMs">;
+
 export function assignInteractionTaskSeqs(
   tasks: TaskFact[],
-  interactions: InteractionFact[],
+  interactions: readonly TaskSeqInteraction[],
 ): Map<number, number> {
   const out = new Map<number, number>();
   // Dated tasks carrying their original index (= resolved_tasks.seq), oldest first.
@@ -851,7 +880,7 @@ export function assignInteractionTaskSeqs(
   // the latest task started at/before it — O(n log n + m log m), no per-interaction rescan. The helper
   // runs twice per session per index (Interpret + materialize), so the linear pass matters on long ones.
   const ordered = interactions
-    .filter((i): i is InteractionFact & { timestampMs: number } => i.timestampMs != null)
+    .filter((i): i is TaskSeqInteraction & { timestampMs: number } => i.timestampMs != null)
     .sort((a, b) => a.timestampMs - b.timestampMs);
   let t = -1;
   for (const interaction of ordered) {

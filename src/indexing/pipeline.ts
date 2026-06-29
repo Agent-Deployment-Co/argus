@@ -34,7 +34,7 @@ import type { NativeProducer, ProducerContext } from "./producer.ts";
 import { NATIVE_PRODUCERS, nativeProducerForSource } from "./parse/producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "../types.ts";
 import type { TaskFact } from "../store/store-contract.ts";
-import { extractTasksForSessions, taskExtractionActive } from "./interpret/index.ts";
+import { interpretSession, taskExtractionActive } from "./interpret/index.ts";
 import type { ResolvedTaskExtraction } from "../config.ts";
 
 export interface SyncStats {
@@ -488,18 +488,10 @@ async function syncStore(
       });
       const materialize = toMaterializeSessions(output);
       logOrphanResults(output, opts.log);
-      // Opt-in (#91): re-extract tasks only for sessions whose files actually changed — the widened
-      // touched set (deletions / aux changes) re-materializes without new tasks, so the materializer
-      // preserves their stored tasks rather than paying for an LLM call per unchanged session.
-      if (taskExtractionActive(opts.taskExtraction)) {
-        await extractTasksForSessions(
-          materialize,
-          canonicalSessionIds(producer.capabilities, changedFragments),
-          opts.taskExtraction!,
-          diagnostics,
-          opts.log,
-        );
-      }
+      // Interpretation is decoupled from the structural index (#153): materialize writes only the
+      // deterministic structural data (and content_indexed_at_ms, which it bumps when content changed),
+      // never tasks. Task extraction runs afterwards as a throttled drain (runInterpretationDrain),
+      // reading retained text back from the store — so a normal index never stalls on model calls.
       // Marks these present (archived = 0); the store's don't-regress guard keeps the fuller stored
       // copy if a re-parse came back short (e.g. a file partly aged out or failed to parse this run).
       await store.materializeSessions(producer.id, materialize, { retainText: opts.retainText });
@@ -737,16 +729,20 @@ export async function reindexSession(
       canonicalIds: new Set([sessionId]),
     });
     const materialize = toMaterializeSessions(output);
-    if (taskExtractionActive(opts.taskExtraction)) {
-      await extractTasksForSessions(
-        materialize,
-        new Set([sessionId]),
-        opts.taskExtraction!,
-        diagnostics,
-      );
-    }
+    // Materialize-then-interpret (#153): persist the structural data + retained text first, then
+    // interpret from the store (the single text source) — never from the in-memory parse artifacts.
+    // Materialize carries the prior interpretation forward; when this session's content changed it is
+    // now marked outdated. An explicit refresh interprets immediately (bypassing the throttle) and
+    // brings it current.
     await store.materializeSessions(producer.id, materialize, { retainText: opts.retainText });
-    const tasks = materialize.find((session) => session.meta.sessionId === sessionId)?.tasks ?? [];
+    let tasks = await store.readSessionTasks(sessionId);
+    if (taskExtractionActive(opts.taskExtraction)) {
+      const result = await interpretSession(store, sessionId, opts.taskExtraction!);
+      diagnostics.push(...result.diagnostics);
+      // On a pass-1 failure the prior tasks (just read) stand and the session stays eligible; on
+      // success the fresh tasks replace them.
+      if (result.interpreted) tasks = result.tasks;
+    }
     return { ok: true, tasks, diagnostics };
   } finally {
     if (ownsStore && store) await store.close();

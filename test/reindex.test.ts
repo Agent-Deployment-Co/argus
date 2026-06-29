@@ -3,6 +3,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAllIncrementalDetailed, reindexSession } from "../src/indexing/pipeline.ts";
+import { runInterpretationDrain } from "../src/indexing/interpret/index.ts";
 import { runIndexRefresh } from "../src/index-ops.ts";
 import { openStore } from "../src/store/store.ts";
 import type { ResolvedTaskExtraction } from "../src/config.ts";
@@ -39,7 +40,7 @@ function fakeProviderCommand(root: string): string {
 }
 
 function commandExtraction(root: string): ResolvedTaskExtraction {
-  return { enabled: true, llm: { provider: "command", command: fakeProviderCommand(root) } };
+  return { enabled: true, maxSessionsPerHour: 30, llm: { provider: "command", command: fakeProviderCommand(root) } };
 }
 
 async function indexCodex(root: string): Promise<string> {
@@ -164,56 +165,72 @@ describe("reindexSession", () => {
   });
 });
 
-describe("index-time extraction hook", () => {
-  test("off by default: indexing produces no tasks", async () => {
+describe("decoupled interpretation drain (#153)", () => {
+  test("a bulk index does NOT extract tasks (interpretation is decoupled)", async () => {
     const root = tempRoot();
-    const storePath = await indexCodex(root);
+    // Even with extraction configured, the structural index alone must not fire model calls.
+    const codexSessionsDir = join(root, "codex-sessions");
+    cpSync(join(FIX, "codex-sessions"), codexSessionsDir, { recursive: true });
+    const storePath = join(root, "cache", "fragments.sqlite3");
+    await parseAllIncrementalDetailed({
+      codexSessionsDir,
+      sources: ["codex"] as AgentSource[],
+      storePath,
+      taskExtraction: commandExtraction(root),
+    });
     const store = await openStore({ path: storePath });
     try {
-      const tasks = await store.readSessionTasks("codex:codex-sess1");
-      expect(tasks).toEqual([]);
+      expect(await store.readSessionTasks("codex:codex-sess1")).toEqual([]);
     } finally {
       await store.close();
     }
   });
 
-  test("enabled: re-indexing the changed session extracts tasks during sync", async () => {
+  test("the throttled drain interprets eligible sessions from the store after indexing", async () => {
     const root = tempRoot();
     const codexSessionsDir = join(root, "codex-sessions");
     cpSync(join(FIX, "codex-sessions"), codexSessionsDir, { recursive: true });
     const storePath = join(root, "cache", "fragments.sqlite3");
-    // Fresh store with extraction enabled — the session is new (changed), so the hook runs for it.
+    // Structural index first (retains text by default), then drain — the decoupled order.
     await parseAllIncrementalDetailed({
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath,
-        taskExtraction: commandExtraction(root),
     });
     const store = await openStore({ path: storePath });
     try {
+      expect(await store.readSessionTasks("codex:codex-sess1")).toEqual([]); // not yet interpreted
+      await runInterpretationDrain(store, commandExtraction(root));
       const tasks = await store.readSessionTasks("codex:codex-sess1");
       expect(tasks).toHaveLength(1);
       expect(tasks[0]?.outcome).toBe("success");
+      // Idempotent: a second drain pass finds nothing eligible and changes nothing.
+      await runInterpretationDrain(store, commandExtraction(root));
+      expect(await store.readSessionTasks("codex:codex-sess1")).toHaveLength(1);
     } finally {
       await store.close();
     }
   });
 
-  test("emits a progress heartbeat while extracting during a bulk index", async () => {
+  test("the drain logs per-pass progress", async () => {
     const root = tempRoot();
     const codexSessionsDir = join(root, "codex-sessions");
     cpSync(join(FIX, "codex-sessions"), codexSessionsDir, { recursive: true });
     const storePath = join(root, "cache", "fragments.sqlite3");
-    const logs: string[] = [];
     await parseAllIncrementalDetailed({
       codexSessionsDir,
       sources: ["codex"] as AgentSource[],
       storePath,
-        taskExtraction: commandExtraction(root),
-      log: (s) => logs.push(s),
     });
-    expect(logs.some((l) => l.includes("Extracting tasks from 1 session"))).toBe(true);
-    expect(logs.some((l) => /\[1\/1\]/.test(l))).toBe(true);
+    const store = await openStore({ path: storePath });
+    const logs: string[] = [];
+    try {
+      await runInterpretationDrain(store, commandExtraction(root), (s) => logs.push(s));
+    } finally {
+      await store.close();
+    }
+    expect(logs.some((l) => l.includes("Extracting tasks from 1 session this pass"))).toBe(true);
+    expect(logs.some((l) => l.includes("Extracted tasks from 1 session this pass"))).toBe(true);
   });
 });
 
