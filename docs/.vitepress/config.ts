@@ -54,7 +54,7 @@ export default defineConfig({
     },
     // https://vitepress.dev/reference/default-theme-config
     nav: [
-      { text: 'Guide', link: '/architecture', activeMatch: '^/(architecture|configuration|session-model|task-interpretation|web-app)' },
+      { text: 'Guide', link: '/architecture', activeMatch: '^/(architecture|configuration|session-model|task-interpretation|web-app|building)' },
       { text: 'Examples', link: '/api-examples', activeMatch: '^/(api-examples|markdown-examples)' },
       { text: 'GitHub', link: repoUrl }
     ],
@@ -68,7 +68,8 @@ export default defineConfig({
           { text: 'Configuration', link: '/configuration' },
           { text: 'Session model', link: '/session-model' },
           { text: 'Task interpretation', link: '/task-interpretation' },
-          { text: 'Web app', link: '/web-app' }
+          { text: 'Web app', link: '/web-app' },
+          { text: 'Building', link: '/building' }
         ]
       },
       {
