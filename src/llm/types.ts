@@ -59,6 +59,8 @@ export interface ResolvedLlmConfig {
   maxTokens?: number;
   /** Command line for the `command` provider. */
   command?: string;
+  /** Explicit path to the `claude` CLI (claude-cli provider); auto-resolved when unset. */
+  claudeCliPath?: string;
   /** The resolved API key for an HTTP provider. The layer owns the transport, not the key store:
    *  consumers resolve this (env var → secret store) and pass it in. Absent → a "no key" diagnostic. */
   apiKey?: string;
@@ -78,6 +80,8 @@ export interface ProviderCall {
   baseUrl?: string;
   apiKey?: string;
   command?: string;
+  /** Explicit path to the `claude` CLI; the claude-cli provider auto-resolves when unset. */
+  claudeCliPath?: string;
   fetch: typeof fetch;
   signal?: AbortSignal;
 }
@@ -114,5 +118,7 @@ export interface LocalProviderContext {
   model?: string;
   /** Command line for the `command` provider. */
   command?: string;
+  /** Explicit path to the `claude` CLI; auto-resolved when unset. */
+  claudeCliPath?: string;
   signal?: AbortSignal;
 }

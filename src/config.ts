@@ -53,6 +53,8 @@ export interface ArgusConfig {
     maxTokens?: number;
     /** Command line for the `command` provider. */
     command?: string;
+    /** Full path to the `claude` CLI, when it can't be auto-resolved (e.g. a GUI app's minimal PATH). */
+    claudeCliPath?: string;
   };
   taskExtraction?: {
     /** Opt-in index-time extraction (#88). Off by default — it's an LLM call per session. */
@@ -398,6 +400,16 @@ export const LLM_SETTINGS = {
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,
+  // Advanced / CLI-only (not in the settings UI): an explicit path to the `claude` binary, for when
+  // it can't be auto-resolved — e.g. a GUI-launched app's minimal PATH (#159). Normally unset; the
+  // claude-cli provider auto-resolves the binary (PATH → login shell → known locations).
+  claudeCliPath: {
+    path: "llm.claudeCliPath",
+    env: "ARGUS_CLAUDE_CLI_PATH",
+    flag: "claude-cli-path",
+    default: undefined as OptionalString,
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
 };
 
 /** Task-extraction settings: the opt-in toggle, the consumer-specific prompt, and the deprecated
@@ -546,6 +558,7 @@ function resolveLlmConfig(
   const baseUrl = resolveSetting(LLM_SETTINGS.baseUrl, flags, file);
   const maxTokens = resolveSetting(LLM_SETTINGS.maxTokens, flags, file);
   const apiKeyEnv = resolveSetting(LLM_SETTINGS.apiKeyEnv, flags, file) ?? defaultApiKeyEnv(provider);
+  const claudeCliPath = resolveSetting(LLM_SETTINGS.claudeCliPath, flags, file);
 
   const llm: ResolvedLlmConfig = { provider };
   if (model) llm.model = model;
@@ -553,6 +566,7 @@ function resolveLlmConfig(
   if (maxTokens != null) llm.maxTokens = maxTokens;
   if (command) llm.command = command;
   if (apiKeyEnv) llm.apiKeyEnv = apiKeyEnv;
+  if (claudeCliPath) llm.claudeCliPath = claudeCliPath;
   return llm;
 }
 
