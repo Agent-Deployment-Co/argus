@@ -3,19 +3,21 @@
 Argus turns scattered local agent transcripts into one queryable, trusted dataset. The flow is
 one-directional:
 
-```
-  Claude / Codex / Gemini transcripts on disk
-                │
-        native producers
-                │
-                ▼
-      the coordinator (indexing)
-  reconcile → interpret (opt-in) → materialize per session
-                ▼
-      the store  (argus.db)
-                ▼
-       consumers (read only)
-          serve · sync · status
+```mermaid
+flowchart TD
+  disk["Claude / Codex / Gemini transcripts on disk"]
+  producers["native producers"]
+  coordinator["the coordinator (indexing)<br/>reconcile → interpret (opt-in) → materialize per session"]
+  store["the store (argus.db)"]
+  consumers["consumers (read only)"]
+  serve["serve"]
+  sync["sync"]
+  status["status"]
+
+  disk --> producers --> coordinator --> store --> consumers
+  consumers --> serve
+  consumers --> sync
+  consumers --> status
 ```
 
 Three ideas carry the whole design:
