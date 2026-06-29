@@ -549,8 +549,14 @@ function SettingRow({
     }
   })();
 
+  // A textarea is too wide for the right-hand control column, so its row stacks: label + description
+  // on top, the full-width control beneath.
+  const stacked = ui.control === "textarea";
+
   return (
-    <div className={`setting-row${disabled ? " setting-row-disabled" : ""}`}>
+    <div
+      className={`setting-row${stacked ? " setting-row-stacked" : ""}${disabled ? " setting-row-disabled" : ""}`}
+    >
       <div className="setting-label">
         <span className="setting-name">{ui.label}</span>
         {ui.description && <span className="setting-desc">{ui.description}</span>}
