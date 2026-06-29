@@ -62,7 +62,11 @@ export interface SettingsResponse {
 /** The category → section → setting layout for the surface. Categories and their order are the
  *  product's grouping of the `argus.json` surface; the settings themselves are the registry
  *  descriptors, so types/defaults/validation come from one place. General is intentionally empty
- *  for now (#154). */
+ *  for now (#154).
+ *
+ *  Only the settings listed here are editable in the UI. Some settings are deliberately CLI/config-file
+ *  only (advanced) and must NOT be added here — notably `retainText` (#120), which stays an
+ *  `argus config` / `ARGUS_RETAIN_TEXT` / `--retain-text` setting. */
 const LAYOUT: { id: string; label: string; sections: { label?: string; settings: Setting<unknown>[] }[] }[] = [
   { id: "general", label: "General", sections: [] },
   {
