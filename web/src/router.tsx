@@ -1,7 +1,6 @@
 import { createRootRoute, createRoute, createRouter, retainSearchParams } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
 import { Activity } from "./routes/Activity";
-import { Debug } from "./routes/Debug";
 import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
@@ -10,7 +9,7 @@ import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
 /** The global dashboard filters (date range + source). They live on a pathless layout route that
- *  parents only the data views — so /settings and /debug, which don't use them, stay out of scope and
+ *  parents only the data views — so /settings (incl. the Debug tab), which doesn't use them, stays out of scope and
  *  never carry these params in their URL. `retainSearchParams` keeps them in the URL as the user moves
  *  between the data views (so e.g. a date range survives switching tabs). */
 export interface RootSearch {
@@ -79,10 +78,9 @@ const routeTree = rootRoute.addChildren([
   // /settings defaults to the first category. Outside the dashboard layout route, so its URL carries
   // no date/source filters. The Layout root renders the surface full-screen, so the route components
   // here are placeholders.
+  // Diagnostics live in the settings surface as the "Debug" tab (/settings/debug).
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
-  // Hidden diagnostics page — no rail link; reachable by typing /debug.
-  createRoute({ getParentRoute: () => rootRoute, path: "/debug", component: Debug }),
 ]);
 
 export const router = createRouter({ routeTree });

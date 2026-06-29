@@ -66,13 +66,8 @@ const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }
 ];
 
 export function Layout() {
-  // /debug is diagnostics: it must render even when the snapshot fails to load, so it bypasses the
-  // snapshot gate below (it fetches its own data and never calls useSnapshot). Skip the snapshot
-  // fetch entirely there — otherwise a broken/slow /api/snapshot still fires in the background and
-  // undermines the page as a diagnostic surface.
-  const isDebug = useRouterState({ select: (s) => s.location.pathname === "/debug" });
-  // The settings surface takes over the whole view and reads its own data, so it bypasses the
-  // snapshot gate (and we skip the snapshot fetch while it's open).
+  // The settings surface (incl. the Debug tab) takes over the whole view and reads its own data, so
+  // it bypasses the snapshot gate (and we skip the snapshot fetch while it's open).
   const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
   // Remember the last screen the user was actually on (not a settings sub-route) so "Back to app"
   // closes settings and returns there — including when they navigated between settings categories or
@@ -81,7 +76,7 @@ export function Layout() {
   const lastAppHref = useRef("/");
   if (!isSettings) lastAppHref.current = href;
   const filters = useSearch({ strict: false, select: (s) => ({ since: s.since, until: s.until, source: s.source }) });
-  const query = useSnapshotQuery(filters, !isDebug && !isSettings);
+  const query = useSnapshotQuery(filters, !isSettings);
   const snap = query.data;
   const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
 
@@ -150,11 +145,9 @@ export function Layout() {
         </div>
       </aside>
       <div className="content">
-        {!isDebug && <FilterBar refreshing={query.isFetching} />}
+        <FilterBar refreshing={query.isFetching} />
         <main>
-          {isDebug ? (
-            <Outlet />
-          ) : query.isPending ? (
+          {query.isPending ? (
             <div className="center-state">Reading transcripts…</div>
           ) : query.isError ? (
             <div className="center-state">Couldn't load data: {(query.error as Error).message}</div>

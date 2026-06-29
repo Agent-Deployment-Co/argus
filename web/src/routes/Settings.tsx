@@ -2,6 +2,7 @@ import { Link, useParams, useRouter } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Brain,
+  Bug,
   Check,
   Loader2,
   Lock,
@@ -24,6 +25,7 @@ import {
   useSettingsQuery,
 } from "../lib/settings";
 import { Select } from "../components/Select";
+import { Debug } from "./Debug";
 import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
 
 /** Icon per category id. Categories themselves come from the server (registry-driven); this is the
@@ -32,7 +34,12 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
   interpretation: Brain,
   hub: Server,
+  debug: Bug,
 };
+
+/** A client-only nav entry: diagnostics live in the settings surface as the "Debug" tab, but it's a
+ *  read-only view (the /api/debug payload), not a registry-driven settings category. */
+const DEBUG_TAB = { id: "debug", label: "Debug" };
 
 /** Serializes setting writes (auto-save) into one queue: one request in flight at a time, so the
  *  server's read-modify-write of argus.json can't race, and the surface shows a single save state
@@ -125,8 +132,11 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
   const query = useSettingsQuery();
   const categories = query.data?.categories ?? [];
   const activeId = category ?? categories[0]?.id ?? "general";
+  const isDebug = activeId === DEBUG_TAB.id;
   const active = categories.find((c) => c.id === activeId);
   const save = useSaveQueue();
+  // The Debug tab is appended to whatever settings categories the API returns.
+  const navCategories = [...categories, DEBUG_TAB];
 
   return (
     <div className="settings-surface">
@@ -142,7 +152,7 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
         </button>
         <h1 className="settings-title">Settings</h1>
         <nav className="settings-categories" aria-label="Settings categories">
-          {categories.map((cat) => {
+          {navCategories.map((cat) => {
             const Ico = CATEGORY_ICONS[cat.id] ?? SlidersHorizontal;
             return (
               <Link
@@ -161,7 +171,10 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
       </aside>
 
       <main className="settings-pane">
-        {query.isPending ? (
+        {isDebug ? (
+          // Diagnostics — fetches its own /api/debug, independent of the settings query.
+          <Debug />
+        ) : query.isPending ? (
           <div className="center-state">Loading settings…</div>
         ) : query.isError ? (
           <div className="center-state">Couldn't load settings: {(query.error as Error).message}</div>
