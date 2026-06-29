@@ -378,8 +378,9 @@ export const LLM_SETTINGS = {
     default: undefined as OptionalString,
     ui: {
       label: "Command",
-      description: 'Command line to run for the "command" provider.',
-      control: "text",
+      description:
+        'Command line to run for the "command" provider. The prompt is sent on stdin and the completion read from stdout.',
+      control: "textarea",
       activeWhen: TASK_GATE,
       visibleWhen: visibleForField("command"),
     },

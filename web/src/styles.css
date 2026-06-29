@@ -356,6 +356,11 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-input { box-sizing: border-box; width: 220px; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
 .setting-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .setting-textarea { width: 220px; height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A textarea row stacks: label + description on top, a full-width control below. */
+.setting-row-stacked { flex-direction: column; align-items: stretch; gap: 10px; }
+.setting-row-stacked .setting-label { max-width: 100%; }
+.setting-row-stacked .setting-control { align-items: stretch; min-width: 0; }
+.setting-row-stacked .setting-textarea { width: 100%; min-height: 120px; }
 /* The provider dropdown is the shared <Select>; size its wrapper to the control column. */
 .setting-select { width: 220px; }
 .setting-select .select__control { width: 100%; }
