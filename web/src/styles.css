@@ -370,14 +370,17 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .setting-row-disabled .setting-name, .setting-row-disabled .setting-desc { opacity: .5; }
 .setting-input:disabled, .select__control:disabled, .setting-toggle:disabled { opacity: .45; cursor: not-allowed; }
 
-/* API key (secret) field: a "key is set" indicator + Replace/Save actions. */
+/* API key (secret) field: a single-line widget — masked value or input, with icon-button actions to
+   the right, sized to the same 220px control column as the other rows. */
 .setting-name-icon { vertical-align: -2px; color: var(--muted); }
-.secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
-.secret-actions { display: flex; gap: 8px; margin-top: 6px; }
-.secret-btn { padding: 5px 11px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
-.secret-btn:hover:not(:disabled) { border-color: var(--accent); }
-.secret-btn.ghost { color: var(--muted); }
-.secret-btn:disabled { opacity: .45; cursor: not-allowed; }
+.secret-line { display: flex; align-items: center; gap: 6px; width: 220px; }
+.secret-line .secret-input { flex: 1 1 auto; width: auto; min-width: 0; }
+.secret-mask { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 6px 9px; border-radius: 8px; letter-spacing: .08em; }
+.secret-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.secret-icon-btn:hover:not(:disabled) { color: var(--heading); border-color: var(--accent); }
+.secret-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.secret-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+.secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .setting-status.error { font-size: 12px; color: var(--racing-red); text-align: right; margin-top: 4px; }
 
 /* The single global save indicator, pinned to the top-right of the surface. */
