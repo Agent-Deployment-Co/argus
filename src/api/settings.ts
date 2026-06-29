@@ -170,13 +170,21 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     id: "sessions",
     label: "Sessions",
     sections: [
-      // Custom prompt / prompt file are intentionally not exposed yet.
-      { settings: [TASK_SETTINGS.enabled, TASK_SETTINGS.maxSessionsPerHour] },
+      // The Extract-tasks toggle stands alone; everything it gates lives in the section below, so the
+      // dependent settings read as a group.
+      { settings: [TASK_SETTINGS.enabled] },
       {
-        // Advanced / CLI-only (not in the UI): `llm.apiKeyEnv` (the UI offers the key itself via
-        // API_KEY_FIELD instead), `llm.baseUrl` (each provider sets its own endpoint), and
-        // `llm.maxTokens`. `claudeCliPath` shows only for the claude-cli provider (its configFields).
-        settings: [LLM_SETTINGS.provider, LLM_SETTINGS.model, LLM_SETTINGS.claudeCliPath, LLM_SETTINGS.command],
+        // Everything that only applies when extraction is on: the hourly cap, then the LLM provider and
+        // its provider-specific fields. (Custom prompt / prompt file aren't exposed yet; advanced /
+        // CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers the key itself via API_KEY_FIELD —
+        // `llm.baseUrl`, and `llm.maxTokens`. `claudeCliPath` shows only for claude-cli, per its configFields.)
+        settings: [
+          TASK_SETTINGS.maxSessionsPerHour,
+          LLM_SETTINGS.provider,
+          LLM_SETTINGS.model,
+          LLM_SETTINGS.claudeCliPath,
+          LLM_SETTINGS.command,
+        ],
         secrets: [API_KEY_FIELD],
         connectionTest: { activeWhen: { path: "taskExtraction.enabled" } },
       },
