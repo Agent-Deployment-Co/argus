@@ -127,12 +127,19 @@ describe("describeSettings", () => {
     expect(find(describeSettings({})).placeholder).toBeUndefined();
   });
 
-  test("the hourly interpretation cap is a number field gated on task extraction", () => {
+  test("the hourly interpretation cap is a number field gated on task extraction, min 1", () => {
     const s = findSetting({}, "taskExtraction.maxSessionsPerHour");
     expect(s.ui.control).toBe("number");
     expect(s.ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    expect(s.ui.min).toBe(1);
     // It's editable through the API (in the layout), unlike the advanced CLI-only settings.
     expect(applySetting("taskExtraction.maxSessionsPerHour", "10", tmpConfig()).ok).toBe(true);
+    // 0 (and negatives) are rejected — 0 would silently disable the drain.
+    const path = tmpConfig();
+    const zero = applySetting("taskExtraction.maxSessionsPerHour", "0", path);
+    expect(zero.ok).toBe(false);
+    if (!zero.ok) expect(zero.status).toBe(400);
+    expect(loadConfig(path)).toEqual({}); // not written
   });
 
   test("the Model field placeholder is the selected provider's default model", () => {
