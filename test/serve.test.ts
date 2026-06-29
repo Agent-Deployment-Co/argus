@@ -401,6 +401,23 @@ describe("secret settings endpoints (#132)", () => {
     const res = await app.request("/api/settings/secrets/HOME", del);
     expect(res.status).toBe(400);
   });
+
+  // The test-connection route reads config + the stored key and runs a live completion. We only check
+  // its guards + the no-network "off" path here; the completion logic is unit-tested in settings.test.
+  test("test-connection requires the same-origin app header (CSRF)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/test-connection", { method: "POST", headers: { Host: "localhost" } });
+    expect(res.status).toBe(403);
+  });
+
+  test("test-connection rejects a non-loopback Host (DNS rebinding)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/test-connection", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
 });
 
 describe("settings endpoints (#154)", () => {

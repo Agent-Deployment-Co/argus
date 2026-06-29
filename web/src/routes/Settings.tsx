@@ -6,6 +6,7 @@ import {
   Loader2,
   Lock,
   Pencil,
+  PlugZap,
   SlidersHorizontal,
   Trash2,
   TriangleAlert,
@@ -13,7 +14,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { deleteSecret, fetchSecretStatus, saveSecret, saveSetting, useSettingsQuery } from "../lib/settings";
+import {
+  deleteSecret,
+  fetchSecretStatus,
+  saveSecret,
+  saveSetting,
+  testConnection,
+  useSettingsQuery,
+} from "../lib/settings";
 import { Select } from "../components/Select";
 import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
 
@@ -209,6 +217,8 @@ function SettingsCategoryPane({
   // that provider takes a key, and inactive (like the other LLM fields) until its gate is on.
   const secretName = (f: SecretFieldDescriptor) => f.secretNames[condValue(f.providerPath)];
   const secretActive = (f: SecretFieldDescriptor) => !f.activeWhen || Boolean(values[f.activeWhen.path]);
+  const connTestActive = (ct: { activeWhen?: { path: string } }) =>
+    !ct.activeWhen || Boolean(values[ct.activeWhen.path]);
 
   return (
     <div className="settings-content">
@@ -253,9 +263,60 @@ function SettingsCategoryPane({
                     <SecretRow key={field.key} field={field} secretName={name} disabled={!secretActive(field)} />
                   ))}
               </div>
+              {section.connectionTest && (
+                <ConnectionTest disabled={!connTestActive(section.connectionTest)} />
+              )}
             </section>
           );
         })
+      )}
+    </div>
+  );
+}
+
+type TestState =
+  | { kind: "idle" }
+  | { kind: "testing" }
+  | { kind: "ok"; model?: string }
+  | { kind: "error"; message: string };
+
+/** "Test connection" action: sends a tiny live prompt through the configured provider and reports
+ *  whether a completion came back, so the user can confirm their setup works. */
+function ConnectionTest({ disabled }: { disabled: boolean }) {
+  const [state, setState] = useState<TestState>({ kind: "idle" });
+  const run = async () => {
+    setState({ kind: "testing" });
+    try {
+      const r = await testConnection();
+      setState(r.ok ? { kind: "ok", model: r.model } : { kind: "error", message: r.error ?? "No response." });
+    } catch (err) {
+      setState({ kind: "error", message: (err as Error).message });
+    }
+  };
+  return (
+    <div className="connection-test">
+      <button
+        type="button"
+        className="secret-btn"
+        disabled={disabled || state.kind === "testing"}
+        onClick={() => void run()}
+      >
+        {state.kind === "testing" ? (
+          <Loader2 size={14} className="spin" aria-hidden />
+        ) : (
+          <PlugZap size={14} aria-hidden />
+        )}
+        {state.kind === "testing" ? "Testing…" : "Test connection"}
+      </button>
+      {state.kind === "ok" && (
+        <span className="conn-result ok">
+          <Check size={14} aria-hidden /> Connected{state.model ? ` (${state.model})` : ""}
+        </span>
+      )}
+      {state.kind === "error" && (
+        <span className="conn-result error">
+          <TriangleAlert size={14} aria-hidden /> {state.message}
+        </span>
       )}
     </div>
   );

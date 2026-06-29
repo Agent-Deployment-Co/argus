@@ -387,6 +387,16 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .secret-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
 .secret-icon-btn.danger:hover:not(:disabled) { color: var(--racing-red); border-color: var(--racing-red); }
 .secret-confirm { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--racing-red); }
+
+/* "Test connection" action row, below the LLM settings. */
+.connection-test { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.secret-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font: 600 12.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.secret-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--heading); }
+.secret-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.secret-btn:disabled { opacity: .45; cursor: not-allowed; }
+.conn-result { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+.conn-result.ok { color: var(--sky-surge); }
+.conn-result.error { color: var(--racing-red); }
 .secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .setting-status.error { font-size: 12px; color: var(--racing-red); text-align: right; margin-top: 4px; }
 
