@@ -126,6 +126,24 @@ describe("interpretation eligibility + state (#153)", () => {
     }
   });
 
+  test("an interpreted session whose text is gone is not counted as stuck-outdated", async () => {
+    // Interpret with text, then re-index the (changed) session with retention OFF so its text is
+    // dropped. It's outdated by timestamp, but with no retained text the drain can never pick it up —
+    // so it must NOT show as "outdated"/"pending" (which would never decrease). Guards #153 review fix.
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [humanSession("claude:s1", 1000)]);
+      await tick();
+      await store.writeSessionTasks("claude:s1", [task("claude:s1", 1000)], INTERPRETER_VERSION);
+      await tick();
+      await store.materializeSessions("claude", [humanSession("claude:s1", 2000)], { retainText: false });
+      expect(await store.readPendingInterpretationSessions(10)).toEqual([]);
+      expect(await store.interpretationProgress()).toEqual({ interpreted: 1, pending: 0, outdated: 0 });
+    } finally {
+      await store.close();
+    }
+  });
+
   test("a session indexed without text retention is never eligible", async () => {
     const store = await openStore({ path: storePath() });
     try {
