@@ -1,10 +1,12 @@
 .PHONY: build test typecheck publish clean desktop dmg version bump help
 
+NPM_PUBLISH_FLAGS ?= --access public
+
 .DEFAULT_GOAL := help
 
 help:
 	@echo "Targets:"
-	@echo "  build      Build the project"
+	@echo "  build      Build the npm packages"
 	@echo "  test       Run tests"
 	@echo "  typecheck  Run TypeScript type checking"
 	@echo "  publish    Build and publish to npm"
@@ -24,7 +26,7 @@ endif
 	bun run bump-version $(VERSION)
 
 build:
-	bun run build
+	bun run build:npm
 
 test:
 	bun test
@@ -33,7 +35,18 @@ typecheck:
 	bun run typecheck
 
 publish: build
-	npm publish --access public
+	@set -eu; \
+	for dir in dist/npm/argus-* dist/npm/argus; do \
+		if [ -d "$$dir" ]; then \
+			name=$$(node -p "require('./$$dir/package.json').name"); \
+			version=$$(node -p "require('./$$dir/package.json').version"); \
+			if npm view "$$name@$$version" version >/dev/null 2>&1; then \
+				echo "Skipping $$name@$$version (already published)"; \
+			else \
+				(cd "$$dir" && npm publish $(NPM_PUBLISH_FLAGS)); \
+			fi; \
+		fi; \
+	done
 
 clean:
 	rm -rf dist/
