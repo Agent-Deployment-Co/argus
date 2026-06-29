@@ -5,8 +5,10 @@ import {
   Check,
   Loader2,
   Lock,
+  Pencil,
   SlidersHorizontal,
   TriangleAlert,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -292,6 +294,12 @@ function SecretRow({
     }
   };
 
+  const cancel = () => {
+    setEditing(false);
+    setValue("");
+    setError(null);
+  };
+
   const showInput = !status?.configured || editing;
 
   return (
@@ -308,48 +316,58 @@ function SecretRow({
             <Loader2 size={13} className="spin" aria-hidden /> Checking…
           </span>
         ) : showInput ? (
-          <>
+          <div className="secret-line">
             <input
               type="password"
-              className="setting-input"
+              className="setting-input secret-input"
               autoComplete="new-password"
               placeholder={status.configured ? "New API key" : "Paste API key"}
               value={value}
               disabled={disabled || saving}
+              autoFocus={editing}
               onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void save()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void save();
+                if (e.key === "Escape" && status.configured) cancel();
+              }}
             />
-            <div className="secret-actions">
-              <button type="button" className="secret-btn" disabled={disabled || saving || !value.trim()} onClick={() => void save()}>
-                {saving ? "Saving…" : "Save"}
+            <button
+              type="button"
+              className="secret-icon-btn"
+              title="Save key"
+              aria-label="Save key"
+              disabled={disabled || saving || !value.trim()}
+              onClick={() => void save()}
+            >
+              {saving ? <Loader2 size={15} className="spin" aria-hidden /> : <Check size={15} aria-hidden />}
+            </button>
+            {status.configured && (
+              <button
+                type="button"
+                className="secret-icon-btn"
+                title="Cancel"
+                aria-label="Cancel"
+                disabled={saving}
+                onClick={cancel}
+              >
+                <X size={15} aria-hidden />
               </button>
-              {status.configured && (
-                <button
-                  type="button"
-                  className="secret-btn ghost"
-                  disabled={saving}
-                  onClick={() => {
-                    setEditing(false);
-                    setValue("");
-                    setError(null);
-                  }}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </>
+            )}
+          </div>
         ) : (
-          <>
-            <span className="secret-set">
-              <code>****{status.hint}</code>
-            </span>
-            <div className="secret-actions">
-              <button type="button" className="secret-btn" disabled={disabled} onClick={() => setEditing(true)}>
-                Replace
-              </button>
-            </div>
-          </>
+          <div className="secret-line">
+            <code className="secret-mask">****{status.hint}</code>
+            <button
+              type="button"
+              className="secret-icon-btn"
+              title="Replace key"
+              aria-label="Replace key"
+              disabled={disabled}
+              onClick={() => setEditing(true)}
+            >
+              <Pencil size={15} aria-hidden />
+            </button>
+          </div>
         )}
         {error && <span className="setting-status error">{error}</span>}
       </div>
