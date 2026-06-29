@@ -170,9 +170,9 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     id: "sessions",
     label: "Sessions",
     sections: [
-      // The Extract-tasks toggle stands alone; everything it gates lives in the section below, so the
-      // dependent settings read as a group.
-      { settings: [TASK_SETTINGS.enabled] },
+      // The Extract-tasks toggle stands alone under the "Task Extraction" eyebrow; everything it gates
+      // lives in the section below, so the dependent settings read as a group.
+      { label: "Task Extraction", settings: [TASK_SETTINGS.enabled] },
       {
         // Everything that only applies when extraction is on: the hourly cap, then the LLM provider and
         // its provider-specific fields. (Custom prompt / prompt file aren't exposed yet; advanced /
