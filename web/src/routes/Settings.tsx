@@ -12,7 +12,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { deleteSecret, fetchSecretStatus, saveSecret, saveSetting, useSettingsQuery } from "../lib/settings";
 import { Select } from "../components/Select";
 import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
@@ -226,18 +226,28 @@ function SettingsCategoryPane({
               {section.label && <h3 className="settings-section-head">{section.label}</h3>}
               <div className="settings-rows">
                 {visibleSettings.map((s) => (
-                  <SettingRow
-                    key={s.path}
-                    descriptor={s}
-                    value={values[s.path]}
-                    disabled={!isActive(s)}
-                    onChange={(v) => setValue(s.path, v)}
-                    enqueue={enqueue}
-                  />
+                  <Fragment key={s.path}>
+                    <SettingRow
+                      descriptor={s}
+                      value={values[s.path]}
+                      disabled={!isActive(s)}
+                      onChange={(v) => setValue(s.path, v)}
+                      enqueue={enqueue}
+                    />
+                    {/* A secret field renders right after the setting it's anchored to (its provider). */}
+                    {visibleSecrets
+                      .filter(({ field }) => field.providerPath === s.path)
+                      .map(({ field, name }) => (
+                        <SecretRow key={field.key} field={field} secretName={name} disabled={!secretActive(field)} />
+                      ))}
+                  </Fragment>
                 ))}
-                {visibleSecrets.map(({ field, name }) => (
-                  <SecretRow key={field.key} field={field} secretName={name} disabled={!secretActive(field)} />
-                ))}
+                {/* Fallback: any secret whose anchor setting isn't shown renders at the end. */}
+                {visibleSecrets
+                  .filter(({ field }) => !visibleSettings.some((s) => s.path === field.providerPath))
+                  .map(({ field, name }) => (
+                    <SecretRow key={field.key} field={field} secretName={name} disabled={!secretActive(field)} />
+                  ))}
               </div>
             </section>
           );
