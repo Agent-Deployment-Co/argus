@@ -215,6 +215,27 @@ describe("applySetting", () => {
     expect(loadConfig(path)).toEqual({});
   });
 
+  test("rejects a provider-scoped write to a field the provider doesn't use", () => {
+    // openai doesn't read claudeCliPath/command — persisting them would be silent junk.
+    const path = tmpConfig();
+    for (const field of ["claudeCliPath", "command"]) {
+      const result = applySetting(`llm.providerConfigs.openai.${field}`, "/x", path);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.status).toBe(404);
+    }
+    expect(loadConfig(path)).toEqual({}); // untouched
+  });
+
+  test("rejects a provider-scoped write to a reserved or off provider", () => {
+    const path = tmpConfig();
+    for (const prov of ["off", "hub"]) {
+      const result = applySetting(`llm.providerConfigs.${prov}.model`, "x", path);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.status).toBe(404);
+    }
+    expect(loadConfig(path)).toEqual({});
+  });
+
   test("coerces a toggle value", () => {
     const path = tmpConfig();
     applySetting("taskExtraction.enabled", true, path);

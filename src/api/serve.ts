@@ -23,7 +23,7 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { loadConfig, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
+import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
@@ -121,6 +121,10 @@ interface AppOptions {
   /** Override the `argus.json` path the settings endpoints read/write. Defaults to CONFIG_FILE;
    *  injected by tests so they never touch the real config. */
   configPath?: string;
+  /** The auto-resolved `claude` binary path, used as the Claude CLI path placeholder in the settings
+   *  surface. Resolved once at serve startup (off the request path — resolution can spawn a login
+   *  shell) and passed in; omit it (tests, other callers) and the placeholder is simply not shown. */
+  claudeBinary?: string;
 }
 
 const MIME: Record<string, string> = {
@@ -362,7 +366,7 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     c.json(
       describeSettings(
         opts.configPath ? loadConfig(opts.configPath) : undefined,
-        resolveClaudeBinary(), // the Claude CLI path placeholder; memoized after the first resolve
+        opts.claudeBinary, // resolved once at startup, not per request (resolution can block on a shell)
       ) satisfies SettingsResponse,
     ),
   );
@@ -466,8 +470,23 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   const webRoot = findWebRoot();
 
   // Move any legacy plaintext Hub key out of argus.json into the secret store, so the settings surface
-  // shows it as stored and the file no longer holds it. Idempotent; a no-op once migrated.
+  // shows it as stored and the file no longer holds it. Idempotent; a no-op once migrated. Never throws
+  // (the migration guards its own keychain/file writes), so a locked keychain can't block startup.
   await migrateHubKeyToSecretStore({ log });
+  // Fold any legacy flat `llm.*` values under the provider they were written for, so switching the
+  // active provider in the settings UI no longer inherits the old provider's model/key-env (#154
+  // review). Idempotent; a no-op once migrated. Guarded so a write failure can't block startup.
+  try {
+    if (migrateLlmFlatToProviderConfigs()) log("Organized LLM settings by provider in argus.json.");
+  } catch (err) {
+    log(`Couldn't reorganize LLM settings by provider: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Resolve the `claude` CLI path once, here at startup — never on a request. The resolver may spawn a
+  // login shell (up to a few seconds when `claude` isn't on PATH, the GUI-launch case #159 targets),
+  // and spawnSync blocks the event loop, so doing it per `/api/settings` GET would stall the first
+  // Settings load. Computed eagerly and passed in as the field's placeholder.
+  const claudeBinary = resolveClaudeBinary();
 
   // No server-side snapshot cache: each request builds its filtered slice fresh. The heavy work is
   // a store read + aggregation; the client (TanStack Query) holds a short staleTime so rapid page
@@ -578,6 +597,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionDetail,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
+    claudeBinary,
   });
 
   let resolveClosed!: () => void;

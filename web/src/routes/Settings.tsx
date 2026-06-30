@@ -30,7 +30,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Select } from "../components/Select";
 import { useTheme, type ThemePref } from "../lib/theme";
 import { Debug } from "./Debug";
-import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory } from "../types";
+import type { SecretFieldDescriptor, SecretStatus, SettingDescriptor, SettingsCategory, SettingsResponse } from "../types";
 
 /** Icon per category id. Categories themselves come from the server (registry-driven); this is the
  *  only purely-presentational mapping the surface adds. Unknown ids fall back to the sliders icon. */
@@ -49,6 +49,50 @@ const DEBUG_TAB = { id: "debug", label: "Debug" };
  *  web bundle can't import config.ts (it pulls in node:fs), so this is the single client-side
  *  definition of the per-provider path scheme. */
 const providerConfigKey = (provider: string, field: string) => `llm.providerConfigs.${provider}.${field}`;
+
+/** Apply just-saved `[path, value]` writes to the cached settings response, so the cache stays current
+ *  without refetching `/api/settings`. A flat path updates its descriptor's file/effective value (an
+ *  env override stays authoritative for the effective value); a provider-scoped path
+ *  (`llm.providerConfigs.<provider>.<field>`) updates the `providerConfigs` map. Clearing (null/"")
+ *  drops the value so it re-seeds as unset. Mirrors the server's write, just on the cached copy. */
+function patchSettings(resp: SettingsResponse, entries: Array<[string, unknown]>): SettingsResponse {
+  const providerConfigs: Record<string, Record<string, unknown>> = { ...(resp.providerConfigs ?? {}) };
+  const flat = new Map<string, unknown>();
+  for (const [path, value] of entries) {
+    const m = /^llm\.providerConfigs\.([^.]+)\.([^.]+)$/.exec(path);
+    if (!m) {
+      flat.set(path, value);
+      continue;
+    }
+    const [, prov, field] = m as unknown as [string, string, string];
+    const block = { ...(providerConfigs[prov] ?? {}) };
+    if (value == null || value === "") delete block[field];
+    else block[field] = value;
+    if (Object.keys(block).length) providerConfigs[prov] = block;
+    else delete providerConfigs[prov];
+  }
+  const categories = !flat.size
+    ? resp.categories
+    : resp.categories.map((cat) => ({
+        ...cat,
+        sections: cat.sections.map((sec) => ({
+          ...sec,
+          settings: sec.settings.map((s) => {
+            if (!flat.has(s.path)) return s;
+            const value = flat.get(s.path);
+            const cleared = value == null || value === "";
+            return {
+              ...s,
+              fileValue: cleared ? null : value,
+              // Keep an env override authoritative; otherwise the effective value follows the write
+              // (null when cleared, so it re-seeds from the default on next mount).
+              effectiveValue: s.override ? s.effectiveValue : cleared ? null : value,
+            };
+          }),
+        })),
+      }));
+  return { ...resp, categories, providerConfigs };
+}
 
 /** Serializes setting writes (auto-save) into one queue: one request in flight at a time, so the
  *  server's read-modify-write of argus.json can't race, and the surface shows a single save state
@@ -77,11 +121,13 @@ function useSaveQueue(): SaveQueue {
     setJustSaved(false);
     setError(null);
     let hadError = false;
+    const applied: Array<[string, unknown]> = [];
     while (queue.current.size) {
       const [path, value] = queue.current.entries().next().value as [string, unknown];
       queue.current.delete(path);
       try {
         await saveSetting(path, value);
+        applied.push([path, value]);
       } catch (err) {
         hadError = true;
         setError((err as Error).message);
@@ -89,10 +135,13 @@ function useSaveQueue(): SaveQueue {
     }
     running.current = false;
     setSaving(false);
-    // Refresh the cached settings so a later remount (e.g. switching category tabs and back) re-seeds
-    // from the saved values, not the pre-edit cache. The live pane keeps its own local state, so this
-    // doesn't disturb the current view.
-    void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    // Patch the cached settings in place from what we just saved, so a later remount (e.g. switching
+    // category tabs and back) re-seeds from the saved values, not the pre-edit cache — without a full
+    // /api/settings refetch per save (which would also re-run the server-side claude-binary probe). The
+    // live pane keeps its own local state, so this doesn't disturb the current view.
+    if (applied.length) {
+      queryClient.setQueryData<SettingsResponse>(["settings"], (prev) => (prev ? patchSettings(prev, applied) : prev));
+    }
     if (!hadError) {
       setJustSaved(true);
       savedTimer.current = setTimeout(() => setJustSaved(false), 1800);
@@ -214,10 +263,17 @@ export function SettingsSurface({
 }
 
 /** Seed the editable value for a setting from the file layer (toggles hold a boolean, the rest a
- *  string). Conditions read live from these values, so they react as the user edits. */
+ *  string). Conditions read live from these values, so they react as the user edits.
+ *
+ *  A select seeds from the *effective* value, not just the file value: a provider chosen via env
+ *  (e.g. ARGUS_LLM_PROVIDER) has no `argus.json` entry, so seeding from `fileValue` alone would show
+ *  "Default" and — worse — make the provider-driven fields (writePath, secretName, visibleWhen) target
+ *  the wrong provider while another is actually in effect. A text input still seeds from the file value
+ *  only, so an env override stays surfaced as a separate badge rather than masquerading as edited text. */
 function seedValue(s: SettingDescriptor): unknown {
   if (s.ui.control === "toggle") return Boolean(s.fileValue ?? s.effectiveValue);
-  return s.fileValue != null ? String(s.fileValue) : "";
+  const value = s.ui.control === "select" ? (s.fileValue ?? s.effectiveValue) : s.fileValue;
+  return value != null ? String(value) : "";
 }
 
 /** The color theme picker: a tri-state segmented control (System / Light / Dark) modeled after the
@@ -287,12 +343,16 @@ function SettingsCategoryPane({
   });
   const setValue = (path: string, v: unknown) => setValues((prev) => ({ ...prev, [path]: v }));
 
-  // The value used to evaluate a condition against `path`: the live value, or the referenced setting's
-  // effectiveDefault when unset (e.g. an unset provider resolves to its default, claude-cli).
+  // The value used to evaluate a condition against `path`: the live value, then the referenced
+  // setting's effective value (so an env-provided provider with no argus.json entry still drives the
+  // conditions), then its effectiveDefault when nothing is set (e.g. an unset provider resolves to its
+  // default, claude-cli).
   const condValue = (path: string): string => {
     const v = values[path];
     if (v != null && v !== "") return String(v);
-    return byPath.get(path)?.ui.effectiveDefault ?? "";
+    const d = byPath.get(path);
+    if (d?.effectiveValue != null && d.effectiveValue !== "") return String(d.effectiveValue);
+    return d?.ui.effectiveDefault ?? "";
   };
   // Where a field's value is read/written: a provider-scoped field targets the *selected* provider's
   // block (using the server-supplied `field`); everything else uses its flat path.

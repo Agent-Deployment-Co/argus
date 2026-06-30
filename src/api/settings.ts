@@ -21,7 +21,7 @@ import {
   type Setting,
   type SettingUi,
 } from "../config.ts";
-import { complete, getProvider, isLlmProvider, providersForConfigField } from "../llm/index.ts";
+import { complete, getProvider, providersForConfigField } from "../llm/index.ts";
 import { resolveApiKey, type SecretStore } from "../secrets.ts";
 import { CONFIG_FILE } from "../paths.ts";
 
@@ -288,7 +288,14 @@ export function applySetting(path: string, raw: unknown, configPath: string = CO
   const scoped = PROVIDER_CONFIG_PATH.exec(path);
   if (scoped) {
     const [, prov, field] = scoped;
-    if (!isLlmProvider(prov!)) return { ok: false, status: 404, error: `Unknown provider "${prov}".` };
+    // Gate the write on the *target* provider's own registry descriptor — not just "is a known
+    // provider" — so we can't persist a field the provider never reads (e.g. claudeCliPath/command on
+    // openai), which would be silent junk in argus.json the UI never surfaces. This rejects reserved
+    // providers (no configFields offered) and "off" (no configFields) too, matching what the UI offers.
+    const provider = getProvider(prov!);
+    if (!provider || provider.reserved || !provider.configFields?.some((f) => f === field)) {
+      return { ok: false, status: 404, error: `Provider "${prov}" has no "${field}" setting.` };
+    }
     setting = EDITABLE_PROVIDER_FIELDS.get(field!);
   } else {
     setting = EDITABLE.get(path);
