@@ -93,6 +93,7 @@ export function createLogger(opts: CreateLoggerOptions = {}): Log {
     level: LEVEL_NUMBERS[currentLevel],
     reporters: [timestampReporter(stream)],
     formatOptions: { colors: false, date: false },
+    throttle: 0,
   });
 
   const logger = ((message: string, ...args: unknown[]) => base.info(message, ...args)) as Log;

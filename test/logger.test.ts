@@ -50,4 +50,16 @@ describe("logger", () => {
     expect(lines[0]).toMatch(/ INFO\s one$/);
     expect(lines[1]).toMatch(/ INFO\s two$/);
   });
+
+  test("does not collapse rapid identical lines", () => {
+    const { chunks, stream } = memoryStream();
+    const log = createLogger({ level: "info", stream });
+
+    for (let i = 0; i < 8; i++) log("[task extraction] prompt line");
+
+    const lines = chunks.join("").trimEnd().split("\n");
+    expect(lines).toHaveLength(8);
+    expect(lines.every((line) => line.endsWith("INFO  [task extraction] prompt line"))).toBe(true);
+    expect(chunks.join("")).not.toContain("repeated");
+  });
 });
