@@ -5,6 +5,7 @@
 // whose items map onto the CLI's command surface. Logs are written to rotating files. "Open Argus"
 // opens the user's default browser at the served URL; the only embedded webview is the bundled About
 // screen.
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -85,7 +86,37 @@ fn sidecar_log_file(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("locating the sidecar log file: {e}"))
 }
 
+fn rotated_sidecar_log_file(path: &Path) -> PathBuf {
+    let mut rotated = path.to_path_buf();
+    let mut file_name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| OsString::from("argus.log"));
+    file_name.push(".1");
+    rotated.set_file_name(file_name);
+    rotated
+}
+
+fn rotate_sidecar_log(path: &Path) -> std::io::Result<()> {
+    let rotated = rotated_sidecar_log_file(path);
+    match std::fs::remove_file(&rotated) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    match std::fs::rename(path, rotated) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    Ok(())
+}
+
 fn append_sidecar_log(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    append_sidecar_log_with_limit(path, bytes, DESKTOP_LOG_MAX_BYTES)
+}
+
+fn append_sidecar_log_with_limit(path: &Path, bytes: &[u8], max_bytes: u64) -> std::io::Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
@@ -95,10 +126,10 @@ fn append_sidecar_log(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let incoming = bytes.len() as u64;
     if path
         .metadata()
-        .map(|meta| meta.len() != 0 && meta.len().saturating_add(incoming) > DESKTOP_LOG_MAX_BYTES)
+        .map(|meta| meta.len() != 0 && meta.len().saturating_add(incoming) > max_bytes)
         .unwrap_or(false)
     {
-        std::fs::remove_file(path)?;
+        rotate_sidecar_log(path)?;
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -117,6 +148,55 @@ fn mirror_sidecar_log(bytes: &[u8]) {
 
 #[cfg(not(debug_assertions))]
 fn mirror_sidecar_log(_bytes: &[u8]) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{append_sidecar_log_with_limit, rotated_sidecar_log_file};
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+    fn test_log_path() -> PathBuf {
+        std::env::temp_dir()
+            .join(format!(
+                "argus-sidecar-log-test-{}-{}",
+                std::process::id(),
+                NEXT_TEST_DIR.fetch_add(1, Ordering::SeqCst)
+            ))
+            .join("argus.log")
+    }
+
+    #[test]
+    fn sidecar_log_appends_below_the_size_limit() -> io::Result<()> {
+        let path = test_log_path();
+        append_sidecar_log_with_limit(&path, b"hello", 10)?;
+        append_sidecar_log_with_limit(&path, b"!", 10)?;
+
+        assert_eq!(std::fs::read(&path)?, b"hello!");
+        assert!(!rotated_sidecar_log_file(&path).exists());
+
+        std::fs::remove_dir_all(path.parent().unwrap())?;
+        Ok(())
+    }
+
+    #[test]
+    fn sidecar_log_keeps_one_rotated_copy_at_the_size_limit() -> io::Result<()> {
+        let path = test_log_path();
+        let rotated = rotated_sidecar_log_file(&path);
+        append_sidecar_log_with_limit(&path, b"recent", 10)?;
+        std::fs::write(&rotated, b"older")?;
+
+        append_sidecar_log_with_limit(&path, b"incoming", 10)?;
+
+        assert_eq!(std::fs::read(&rotated)?, b"recent");
+        assert_eq!(std::fs::read(&path)?, b"incoming");
+
+        std::fs::remove_dir_all(path.parent().unwrap())?;
+        Ok(())
+    }
+}
 
 /// Reflect the running/stopped state in the tray menu: status label text and which of Start/Stop
 /// is selectable.
