@@ -1,13 +1,12 @@
 # Introduction
 
-**Argus shows you how you use your AI [agents](/glossary#agent).** It reads the
-[transcripts](/glossary#transcript) that Claude Code, Codex, Claude Cowork, and
-Gemini leave on your computer and turns them into a clear picture of how you work
-with them.
+**Argus finds and indexes the [sessions](/glossary#session) from your AI
+[agents](/glossary#agent) on your computer**, and turns them into a clear picture
+of how you use them.
 
-Everything stays local. Argus reads your transcripts on your own machine, and
-nothing is uploaded unless you choose to [sync](/glossary#sync) it to an
-[Argus Hub](/glossary#argus-hub).
+Everything stays local. Argus builds its [index](/glossary#index) on your own
+machine, and nothing is uploaded unless you choose to [sync](/glossary#sync) it to
+an [Argus Hub](/glossary#argus-hub).
 
 ## Get started
 
