@@ -273,11 +273,17 @@ export const HUB_SETTINGS = {
   } satisfies Setting<string | undefined>,
 };
 
-const AUTO_UPDATE_SETTINGS = {
+export const AUTO_UPDATE_SETTINGS = {
   enabled: {
     path: "autoUpdate.enabled",
     env: "ARGUS_AUTO_UPDATE_ENABLED",
     default: true,
+    ui: {
+      label: "Install updates automatically",
+      description:
+        "Download and install new versions of the desktop app in the background. When off, you're notified an update is ready and can install it from the menu.",
+      control: "toggle",
+    },
     parse: parseBool,
   } satisfies Setting<boolean>,
   checkIntervalMinutes: {

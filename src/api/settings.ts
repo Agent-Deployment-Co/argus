@@ -4,6 +4,7 @@
 // UI metadata), so the web surface stays in sync with the config surface rather than hand-listing
 // fields. This module only *groups* and *serializes* — the value contract stays in `config.ts`.
 import {
+  AUTO_UPDATE_SETTINGS,
   getPath,
   HUB_SETTINGS,
   llmFieldName,
@@ -162,7 +163,10 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     // (HUB_KEY_FIELD), like the LLM API keys.
     id: "general",
     label: "General",
-    sections: [{ label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] }],
+    sections: [
+      { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled] },
+      { label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] },
+    ],
   },
   {
     // Sessions = task extraction + the LLM that powers it (its only consumer today). One group: the
