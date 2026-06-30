@@ -91,7 +91,7 @@ describe("task extraction", () => {
 
   test("emits debug logs through the configured sink", async () => {
     const logs: string[] = [];
-    const result = await extractTasksForSession("codex:one", candidates, te({ llm: { provider: "off" }, debugLog: (message) => logs.push(message) }));
+    const result = await extractTasksForSession("codex:one", candidates, te({ llm: { provider: "off" }, log: (message) => logs.push(message) }));
     expect(result).toEqual({ tasks: [], diagnostics: [] });
     expect(logs.join("\n")).toContain("[task extraction] starting extraction for codex:one");
     expect(logs.join("\n")).toContain("provider=off");

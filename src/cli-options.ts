@@ -6,6 +6,10 @@ import type { BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
 
 export type Source = "all" | TranscriptSource;
 
+export class CliUsageError extends Error {
+  readonly exitCode = 2;
+}
+
 /** The store-selection slice shared by `index`, its subcommands, and `index delete --archived`. */
 export interface SyncOptions {
   source: Source;
@@ -42,8 +46,7 @@ export function toSource(value: string): Source {
   ) {
     return value;
   }
-  console.error(`Invalid --source: ${value} (expected claude, codex, gemini, cowork, claude-chat, or all)`);
-  process.exit(2);
+  throw new CliUsageError(`Invalid --source: ${value} (expected claude, codex, gemini, cowork, claude-chat, or all)`);
 }
 
 /** The source-selection citty args shared by every store-reading command. */

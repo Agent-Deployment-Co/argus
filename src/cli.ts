@@ -6,41 +6,75 @@ import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
 import { scanStore } from "./indexing/pipeline.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
-import { ALL_SOURCES, type Log, type BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
+import { ALL_SOURCES } from "./reporting/dashboard-builder.ts";
 import { startServer } from "./api/serve.ts";
 import { openStore } from "./store/store.ts";
-import { runIndex, runIndexDelete, runIndexRebuild, runIndexRefresh } from "./index-ops.ts";
-import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type PushLoopOptions } from "./watch.ts";
+import {
+  runIndex,
+  runIndexDelete,
+  runIndexRebuild,
+  runIndexRefresh,
+} from "./index-ops.ts";
+import {
+  pushSnapshotForOpts,
+  resolveCredentials,
+  watchIndex,
+  watchSync,
+  type PushLoopOptions,
+} from "./watch.ts";
 import { runRun } from "./run.ts";
 import { hubErrorMessage } from "./push.ts";
-import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import { loadConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS, type ResolvedTaskExtraction } from "./config.ts";
-import { defaultSecretStore, isSecretName, maskSecret, resolveHubConfig, SECRET_NAMES } from "./secrets.ts";
+import { CliUsageError, syncOptions, toSource } from "./cli-options.ts";
+import {
+  loadConfig,
+  resolveLogLevel,
+  resolveTaskExtraction,
+  getPath,
+  setPath,
+  writeConfig,
+  ALL_SETTINGS,
+  type ResolvedTaskExtraction,
+} from "./config.ts";
+import {
+  defaultSecretStore,
+  resolveHubConfig,
+  isSecretName,
+  maskSecret,
+  SECRET_NAMES,
+} from "./secrets.ts";
+import { logger as log, logError, type Log } from "./logger.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
 const DEFAULT_PORT = Number(process.env.ARGUS_PORT) || 4242;
 
-// `buildDashboard` takes `BuildDashboardOptions` (from dashboard-builder); the command-specific
-// option shapes below layer each subcommand's own flags on top of it. The shared store-selection
-// (`SyncOptions`) and build (`buildOptions`) shapes live in cli-options.ts so the extracted command
-// bodies and the long-running loops can reuse them.
+// The command-specific option shapes below layer each subcommand's own flags on top of the shared
+// store-selection helpers used by extracted command bodies and long-running loops.
 interface ServeOptions {
   port: number;
   open: boolean;
 }
 
-const log: Log = (s) => process.stderr.write(s + "\n");
+function configureLog(args: Record<string, unknown> = {}): void {
+  log.setLevel?.(resolveLogLevel(args, loadConfig()));
+}
+
+function printResultLine(message: string): void {
+  process.stderr.write(message + "\n");
+}
 
 /** Parse a tri-state boolean override flag (e.g. `--extract-tasks`, `--retain-text`): unset → undefined
  *  (defer to argus.json/env), else the explicit boolean. Anything other than true/false is a usage
  *  error. One place so the accepted vocabulary and exit code don't drift across flags. */
-function toBoolOverride(value: string | undefined, flagName: string): boolean | undefined {
+function toBoolOverride(
+  value: string | undefined,
+  flagName: string,
+): boolean | undefined {
   if (value == null) return undefined;
   const v = value.trim().toLowerCase();
   if (v === "true") return true;
   if (v === "false") return false;
-  console.error(`Invalid --${flagName}: ${value} (expected true or false)`);
+  logError(log, `Invalid --${flagName}: ${value} (expected true or false)`);
   process.exit(2);
 }
 
@@ -57,12 +91,16 @@ function abortOnSignals(): AbortController {
  *  citty's own runner prints unexpected errors with a full stack; routing expected operational
  *  failures (e.g. an unreadable store) through here keeps user-facing output plain. Argument
  *  errors are raised by citty before the body runs and keep its usage-aware handling. */
-async function guard(body: () => Promise<void>): Promise<void> {
+async function guard(
+  body: () => Promise<void>,
+  args: Record<string, unknown> = {},
+): Promise<void> {
+  configureLog(args);
   try {
     await body();
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    logError(log, err instanceof Error ? err.message : String(err));
+    process.exit(err instanceof CliUsageError ? err.exitCode : 1);
   }
 }
 
@@ -73,13 +111,19 @@ async function guard(body: () => Promise<void>): Promise<void> {
 
 const BUILTIN_FLAGS = new Set(["help", "h", "version", "v"]);
 
-const kebab = (name: string): string => name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
-const camel = (name: string): string => name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+const kebab = (name: string): string =>
+  name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+const camel = (name: string): string =>
+  name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 /** A flag name plus the camelCase/kebab-case spellings citty also accepts for it. */
-const nameVariants = (name: string): string[] => [name, kebab(name), camel(name)];
+const nameVariants = (name: string): string[] => [
+  name,
+  kebab(name),
+  camel(name),
+];
 
 function failArg(message: string): never {
-  console.error(message);
+  logError(log, message);
   process.exit(2);
 }
 
@@ -96,11 +140,16 @@ function validateArgs(ctx: CommandContext<any>): void {
       acceptsPositional = true;
       continue;
     }
-    const aliases = Array.isArray(spec.alias) ? spec.alias : spec.alias ? [spec.alias] : [];
+    const aliases = Array.isArray(spec.alias)
+      ? spec.alias
+      : spec.alias
+        ? [spec.alias]
+        : [];
     for (const variant of [name, ...aliases].flatMap(nameVariants)) {
       allowed.add(variant);
       if (spec.type === "boolean") allowed.add(`no-${variant}`);
-      if (spec.type === "string" || spec.type === "enum") stringFlags.add(variant);
+      if (spec.type === "string" || spec.type === "enum")
+        stringFlags.add(variant);
     }
   }
 
@@ -116,7 +165,13 @@ function validateArgs(ctx: CommandContext<any>): void {
     if (!allowed.has(name)) failArg(`Unknown option: ${tok}`);
     // A string flag written as `--flag value` consumes the next token; skip it so a value isn't
     // re-read as a flag. An *omitted* value (the next token is itself a flag) is caught just below.
-    if (eq === -1 && stringFlags.has(name) && i + 1 < raw.length && raw[i + 1] !== "--") i++;
+    if (
+      eq === -1 &&
+      stringFlags.has(name) &&
+      i + 1 < raw.length &&
+      raw[i + 1] !== "--"
+    )
+      i++;
   }
 
   // A string flag whose parsed value is itself a flag means its value was omitted and the following
@@ -125,7 +180,11 @@ function validateArgs(ctx: CommandContext<any>): void {
   for (const [name, spec] of Object.entries(def)) {
     if (spec.type !== "string" && spec.type !== "enum") continue;
     const value = parsed[name];
-    if (typeof value === "string" && value.length > 1 && value.startsWith("-")) {
+    if (
+      typeof value === "string" &&
+      value.length > 1 &&
+      value.startsWith("-")
+    ) {
       failArg(`Missing value for --${name} (got "${value}")`);
     }
   }
@@ -141,7 +200,7 @@ function handler<T extends ArgsDef>(
 ): (ctx: CommandContext<T>) => Promise<void> {
   return (ctx) => {
     validateArgs(ctx);
-    return guard(() => body(ctx.args));
+    return guard(() => body(ctx.args), ctx.args as Record<string, unknown>);
   };
 }
 
@@ -157,8 +216,13 @@ function dispatchedSubcommand(ctx: CommandContext<any>): string | undefined {
   for (const [name, rawSpec] of Object.entries(def)) {
     const spec = rawSpec as { type?: string; alias?: string | string[] };
     if (spec.type !== "string" && spec.type !== "enum") continue;
-    const aliases = Array.isArray(spec.alias) ? spec.alias : spec.alias ? [spec.alias] : [];
-    for (const variant of [name, ...aliases].flatMap(nameVariants)) valueFlags.add(variant);
+    const aliases = Array.isArray(spec.alias)
+      ? spec.alias
+      : spec.alias
+        ? [spec.alias]
+        : [];
+    for (const variant of [name, ...aliases].flatMap(nameVariants))
+      valueFlags.add(variant);
   }
   const raw = ctx.rawArgs;
   for (let i = 0; i < raw.length; i++) {
@@ -213,9 +277,12 @@ async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
   try {
     const cache = await loginWithManagedOAuth(endpoint, { log });
     saveAccessTokenCache(ACCESS_TOKEN_FILE, cache);
-    log("✓ Successfully authenticated and cached the OAuth tokens!");
+    log("Successfully authenticated and cached the OAuth tokens.");
   } catch (err) {
-    log(`✗ Login failed: ${err instanceof Error ? err.message : String(err)}`);
+    logError(
+      log,
+      `Login failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     process.exit(1);
   }
 }
@@ -226,12 +293,12 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
   if (hubCfg) {
     const res = await pushSnapshotForOpts(opts, {}, log);
     if (res.ok) {
-      log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
+      log(`Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
     } else if (res.status === 422) {
-      log(`✗ Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
+      logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
       process.exit(1);
     } else {
-      log(`✗ Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
+      logError(log, `Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
       process.exit(1);
     }
     return;
@@ -239,8 +306,12 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
 
   const credentials = await resolveCredentials(opts.endpoint, log);
   if (!credentials) {
-    log("Not logged in. Run `argus login` first to upload to the team dashboard.");
-    log("  If your team runs Argus Hub, set ARGUS_HUB_URL and ARGUS_HUB_KEY instead — no login required.");
+    log(
+      "Not logged in. Run `argus login` first to upload to the team dashboard.",
+    );
+    log(
+      "  If your team runs Argus Hub, set ARGUS_HUB_URL and ARGUS_HUB_KEY instead — no login required.",
+    );
     process.exit(1);
   }
 
@@ -248,37 +319,46 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
   if (res.skipped) {
     log(res.body); // nothing was uploaded (e.g. a local-only source); not an error
   } else if (res.ok) {
-    log(`✓ Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
+    log(`Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
   } else if (res.isAccessChallenge) {
-    log(`✗ Upload failed (${res.status}): you're signed out or your session expired.`);
+    logError(
+      log,
+      `Upload failed (${res.status}): you're signed out or your session expired.`,
+    );
     log("  Run `argus login`, then try again.");
     process.exit(1);
   } else {
-    log(`✗ Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
+    logError(log, `Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
     process.exit(1);
   }
 }
 
-async function runStatus(log: Log): Promise<void> {
-  log(`Store path: ${STORE_FILE}`);
+async function runStatus(): Promise<void> {
+  printResultLine(`Store path: ${STORE_FILE}`);
   try {
-    log(`Store size: ${formatBytes(statSync(STORE_FILE).size)}`);
+    printResultLine(`Store size: ${formatBytes(statSync(STORE_FILE).size)}`);
   } catch {
-    log("Store size: unavailable");
+    printResultLine("Store size: unavailable");
   }
   let scans;
   try {
     scans = await scanStore({ sources: ALL_SOURCES });
   } catch (err) {
-    log(`Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`);
-    log("Run `argus index rebuild --force` to rebuild it from your transcripts.");
+    printResultLine(
+      `Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    printResultLine(
+      "Run `argus index rebuild --force` to rebuild it from your transcripts.",
+    );
     process.exit(1);
   }
 
   // Count every session the store actually holds, grouped by where it came from, so the per-source
   // lines and the total reconcile with what `argus index` reports (which counts the whole store).
   let counts: Array<{ owner: string; present: number; archived: number }> = [];
-  let interpretation: { interpreted: number; pending: number; outdated: number } | undefined;
+  let interpretation:
+    | { interpreted: number; pending: number; outdated: number }
+    | undefined;
   try {
     const store = await openStore();
     try {
@@ -299,36 +379,54 @@ async function runStatus(log: Log): Promise<void> {
 
   // Native sources the user actually uses (transcripts on disk, a prior sync, or archived sessions).
   for (const scan of scans) {
-    const c = byOwner.get(scan.source) ?? { owner: scan.source, present: 0, archived: 0 };
+    const c = byOwner.get(scan.source) ?? {
+      owner: scan.source,
+      present: 0,
+      archived: 0,
+    };
     if (!scan.inUse && c.present + c.archived === 0) continue;
     total += c.present + c.archived;
     totalArchived += c.archived;
     if (!scan.upToDate) pending = true;
-    const when = scan.lastSyncAtMs ? new Date(scan.lastSyncAtMs).toISOString() : "never";
+    const when = scan.lastSyncAtMs
+      ? new Date(scan.lastSyncAtMs).toISOString()
+      : "never";
     const state = scan.upToDate ? "up to date" : "pending changes";
     const archived = c.archived ? ` (+${c.archived} archived)` : "";
-    lines.push(`  ${scan.source}: ${c.present} sessions${archived} · last synced ${when} · ${state}`);
+    lines.push(
+      `  ${scan.source}: ${c.present} sessions${archived} · last synced ${when} · ${state}`,
+    );
   }
 
   if (!lines.length) {
-    log("No sessions yet. Run `argus index` once you've used Claude Code, Claude Cowork, Codex, or Gemini.");
+    printResultLine(
+      "No sessions yet. Run `argus index` once you've used Claude Code, Claude Cowork, Codex, or Gemini.",
+    );
     return;
   }
-  for (const line of lines) log(line);
-  if (lines.length > 1) log(`Total: ${total} sessions`);
+  for (const line of lines) printResultLine(line);
+  if (lines.length > 1) printResultLine(`Total: ${total} sessions`);
   if (totalArchived) {
-    log(`Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus index delete --archived\``);
+    printResultLine(
+      `Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus index delete --archived\``,
+    );
   }
   // Interpretation backfill progress (#153): only meaningful once some sessions have been interpreted
   // or are waiting to be. Stay silent otherwise so a user who hasn't turned task extraction on sees nothing.
-  if (interpretation && (interpretation.interpreted > 0 || interpretation.pending > 0)) {
-    const outdated = interpretation.outdated ? `, ${interpretation.outdated} with new activity` : "";
-    log(
+  if (
+    interpretation &&
+    (interpretation.interpreted > 0 || interpretation.pending > 0)
+  ) {
+    const outdated = interpretation.outdated
+      ? `, ${interpretation.outdated} with new activity`
+      : "";
+    printResultLine(
       `Extracted tasks from ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
         `(${interpretation.pending} waiting${outdated}).`,
     );
   }
-  if (pending) log("Run `argus index` to pick up new and changed sessions.");
+  if (pending)
+    printResultLine("Run `argus index` to pick up new and changed sessions.");
 }
 
 // ---------------------------------------------------------------------------
@@ -350,23 +448,29 @@ function flattenObject(obj: unknown, prefix = ""): [string, unknown][] {
   return result;
 }
 
-async function runConfigGet(key: string, log: Log, json = false): Promise<void> {
+async function runConfigGet(key: string, json = false): Promise<void> {
   const value = getPath(loadConfig(), key);
   if (json) {
     process.stdout.write(JSON.stringify(value ?? null) + "\n");
     return;
   }
   if (value === undefined) {
-    log("(not set)");
+    printResultLine("(not set)");
   } else {
     process.stdout.write(String(value) + "\n");
   }
 }
 
-async function runConfigSet(key: string, rawValue: string, log: Log): Promise<void> {
+async function runConfigSet(
+  key: string,
+  rawValue: string,
+  log: Log,
+): Promise<void> {
   const setting = ALL_SETTINGS[key];
   if (!setting) {
-    throw new Error(`Unknown key: ${JSON.stringify(key)}\nKnown keys: ${Object.keys(ALL_SETTINGS).join(", ")}`);
+    throw new Error(
+      `Unknown key: ${JSON.stringify(key)}\nKnown keys: ${Object.keys(ALL_SETTINGS).join(", ")}`,
+    );
   }
   const parsed = setting.parse(rawValue);
   const cfg = loadConfig();
@@ -375,7 +479,9 @@ async function runConfigSet(key: string, rawValue: string, log: Log): Promise<vo
   log(`${key} = ${JSON.stringify(parsed)}`);
 }
 
-async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, log: Log): Promise<void> {
+async function runConfigList(
+  opts: { showSecrets?: boolean; asJson?: boolean },
+): Promise<void> {
   const cfg = loadConfig();
   if (opts.asJson) {
     process.stdout.write(JSON.stringify(cfg, null, 2) + "\n");
@@ -383,7 +489,7 @@ async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, 
   }
   const pairs = flattenObject(cfg);
   if (pairs.length === 0) {
-    log("(no settings in argus.json)");
+    printResultLine("(no settings in argus.json)");
     return;
   }
   let hasRedacted = false;
@@ -397,7 +503,9 @@ async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, 
     }
   }
   if (hasRedacted) {
-    process.stderr.write("(use --show-secrets to reveal secret values, or --json for machine-readable output)\n");
+    printResultLine(
+      "(use --show-secrets to reveal secret values, or --json for machine-readable output)",
+    );
   }
 }
 
@@ -407,9 +515,21 @@ async function runConfigList(opts: { showSecrets?: boolean; asJson?: boolean }, 
 // ---------------------------------------------------------------------------
 
 const filterArgs = {
-  since: { type: "string", description: "Only include messages on/after this date", valueHint: "YYYY-MM-DD" },
-  until: { type: "string", description: "Only include messages on/before this date", valueHint: "YYYY-MM-DD" },
-  project: { type: "string", description: "Only include sessions whose directory contains this text", valueHint: "substr" },
+  since: {
+    type: "string",
+    description: "Only include messages on/after this date",
+    valueHint: "YYYY-MM-DD",
+  },
+  until: {
+    type: "string",
+    description: "Only include messages on/before this date",
+    valueHint: "YYYY-MM-DD",
+  },
+  project: {
+    type: "string",
+    description: "Only include sessions whose directory contains this text",
+    valueHint: "substr",
+  },
 } as const;
 
 /** Source selection — shared by `run` and the `index` commands.
@@ -419,7 +539,8 @@ const sourceArg = {
   source: {
     type: "string",
     default: "all",
-    description: "Transcript source: claude, codex, gemini, cowork, claude-chat, or all",
+    description:
+      "Transcript source: claude, codex, gemini, cowork, claude-chat, or all",
     valueHint: "claude|codex|gemini|cowork|claude-chat|all",
   },
 } as const;
@@ -430,12 +551,14 @@ const sourceArg = {
 const taskArgs = {
   "task-provider": {
     type: "string",
-    description: "Task extractor: claude, command, or off (env ARGUS_TASK_PROVIDER)",
+    description:
+      "Task extractor: claude, command, or off (env ARGUS_TASK_PROVIDER)",
     valueHint: "claude|command|off",
   },
   "task-model": {
     type: "string",
-    description: "Model for task extraction when the provider supports it (env ARGUS_TASK_MODEL)",
+    description:
+      "Model for task extraction when the provider supports it (env ARGUS_TASK_MODEL)",
     valueHint: "id",
   },
   "task-prompt": {
@@ -445,12 +568,14 @@ const taskArgs = {
   },
   "task-prompt-file": {
     type: "string",
-    description: "Read the task extraction prompt from a file (env ARGUS_TASK_PROMPT_FILE)",
+    description:
+      "Read the task extraction prompt from a file (env ARGUS_TASK_PROMPT_FILE)",
     valueHint: "path",
   },
   "task-command": {
     type: "string",
-    description: "Command provider; reads prompt on stdin and writes task JSON to stdout (env ARGUS_TASK_COMMAND)",
+    description:
+      "Command provider; reads prompt on stdin and writes task JSON to stdout (env ARGUS_TASK_COMMAND)",
     valueHint: "cmd",
   },
 } as const;
@@ -460,7 +585,8 @@ const taskArgs = {
 const extractTasksArg = {
   "extract-tasks": {
     type: "string",
-    description: "Extract tasks this run: true|false (overrides argus.json). Omit to use the config setting.",
+    description:
+      "Extract tasks this run: true|false (overrides argus.json). Omit to use the config setting.",
     valueHint: "true|false",
   },
 } as const;
@@ -470,14 +596,34 @@ const extractTasksArg = {
 const retainTextArg = {
   "retain-text": {
     type: "string",
-    description: "Keep prompt/response text in the local store this run: true|false (local-only, never synced; overrides argus.json).",
+    description:
+      "Keep prompt/response text in the local store this run: true|false (local-only, never synced; overrides argus.json).",
     valueHint: "true|false",
   },
 } as const;
 
-/** Print the full task-extraction debug stream to stdout (one-off runs; not applied under --watch). */
+const logArgs = {
+  "log-level": {
+    type: "string",
+    description:
+      "Log level: error, warn, info, debug, or trace (env ARGUS_LOG_LEVEL)",
+    valueHint: "level",
+  },
+  quiet: {
+    type: "boolean",
+    default: false,
+    description: "Only print warnings and errors",
+  },
+  verbose: { type: "boolean", default: false, description: "Print debug logs" },
+} as const;
+
+/** Include the task-extraction debug stream in the shared debug logs. */
 const debugArg = {
-  debug: { type: "boolean", default: false, description: "Print full task-extraction debug output to stdout" },
+  debug: {
+    type: "boolean",
+    default: false,
+    description: "Print task-extraction debug logs",
+  },
 } as const;
 
 /** Inputs shared by serve and sync (everything `buildDashboard` reads). */
@@ -486,21 +632,33 @@ const buildArgs = {
   ...filterArgs,
 } as const;
 
-
 /** Resolve the effective task-extraction options for serve/run through the config chain (flag > env
  *  > argus.json > default). The `enabled` toggle is unused here — these commands extract on demand. */
 function taskExtractionOptions(
   args: Record<string, unknown>,
-  debugLog?: (message: string) => void,
 ): ResolvedTaskExtraction {
-  return resolveTaskExtraction(args, loadConfig(), debugLog);
+  return resolveTaskExtraction(args, loadConfig(), log);
 }
 
 const serve = defineCommand({
-  meta: { name: "serve", description: "serve the interactive dashboard at a local web address" },
+  meta: {
+    name: "serve",
+    description: "serve the interactive dashboard at a local web address",
+  },
   args: {
-    port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
-    open: { type: "boolean", default: false, description: "Open the dashboard in your browser once it's ready (macOS)" },
+    ...logArgs,
+    port: {
+      type: "string",
+      alias: "p",
+      default: String(DEFAULT_PORT),
+      description: "Local port to listen on (env ARGUS_PORT)",
+      valueHint: "N",
+    },
+    open: {
+      type: "boolean",
+      default: false,
+      description: "Open the dashboard in your browser once it's ready (macOS)",
+    },
   },
   run: handler((args) =>
     runServe(
@@ -516,13 +674,22 @@ const serve = defineCommand({
 // `argus index` — the local store maintenance group. The bare command does an incremental read;
 // `--watch` keeps it running on an interval; the subcommands cover the destructive/scoped operations.
 const indexRebuild = defineCommand({
-  meta: { name: "rebuild", description: "rebuild the store from your transcripts (drops sessions no longer on disk)" },
+  meta: {
+    name: "rebuild",
+    description:
+      "rebuild the store from your transcripts (drops sessions no longer on disk)",
+  },
   args: {
     ...sourceArg,
     ...extractTasksArg,
     ...retainTextArg,
     ...debugArg,
-    force: { type: "boolean", default: false, description: "Skip the confirmation prompt (for scripts/CI)" },
+    ...logArgs,
+    force: {
+      type: "boolean",
+      default: false,
+      description: "Skip the confirmation prompt (for scripts/CI)",
+    },
   },
   run: handler((args) =>
     runIndexRebuild(
@@ -536,13 +703,23 @@ const indexRebuild = defineCommand({
 });
 
 const indexRefresh = defineCommand({
-  meta: { name: "refresh", description: "re-read transcripts from disk; pass session id(s) to refresh only those" },
+  meta: {
+    name: "refresh",
+    description:
+      "re-read transcripts from disk; pass session id(s) to refresh only those",
+  },
   args: {
-    id: { type: "positional", required: false, description: "session id(s) to refresh (space-separated); omit to refresh all" },
+    id: {
+      type: "positional",
+      required: false,
+      description:
+        "session id(s) to refresh (space-separated); omit to refresh all",
+    },
     ...sourceArg,
     ...extractTasksArg,
     ...retainTextArg,
     ...debugArg,
+    ...logArgs,
   },
   run: handler((args) =>
     runIndexRefresh(
@@ -559,72 +736,188 @@ const indexRefresh = defineCommand({
 });
 
 const indexDelete = defineCommand({
-  meta: { name: "delete", description: "permanently remove sessions from the local store" },
-  args: {
-    id: { type: "positional", required: false, description: "session id(s) to remove" },
-    ...sourceArg,
-    archived: { type: "boolean", default: false, description: "Remove all sessions no longer on disk, optionally scoped by --source" },
+  meta: {
+    name: "delete",
+    description: "permanently remove sessions from the local store",
   },
-  run: handler((args) => runIndexDelete({ source: toSource(args.source), archived: args.archived, ids: args._ }, log)),
+  args: {
+    id: {
+      type: "positional",
+      required: false,
+      description: "session id(s) to remove",
+    },
+    ...sourceArg,
+    ...logArgs,
+    archived: {
+      type: "boolean",
+      default: false,
+      description:
+        "Remove all sessions no longer on disk, optionally scoped by --source",
+    },
+  },
+  run: handler((args) =>
+    runIndexDelete(
+      { source: toSource(args.source), archived: args.archived, ids: args._ },
+      log,
+    ),
+  ),
 });
 
 const index = defineCommand({
-  meta: { name: "index", description: "read new and changed sessions into the local store" },
+  meta: {
+    name: "index",
+    description: "read new and changed sessions into the local store",
+  },
   args: {
     ...sourceArg,
     ...extractTasksArg,
     ...retainTextArg,
     ...debugArg,
-    watch: { type: "boolean", default: false, description: "Keep reading new and changed sessions on an interval" },
-    interval: { type: "string", default: "5", description: "Minutes between reads (with --watch)", valueHint: "N" },
+    ...logArgs,
+    watch: {
+      type: "boolean",
+      default: false,
+      description: "Keep reading new and changed sessions on an interval",
+    },
+    interval: {
+      type: "string",
+      default: "5",
+      description: "Minutes between reads (with --watch)",
+      valueHint: "N",
+    },
   },
-  subCommands: { rebuild: indexRebuild, refresh: indexRefresh, delete: indexDelete },
+  subCommands: {
+    rebuild: indexRebuild,
+    refresh: indexRefresh,
+    delete: indexDelete,
+  },
   run: (ctx) => {
     // citty also runs this parent `run` after a subcommand handled the call — bail in that case.
     if (dispatchedSubcommand(ctx) !== undefined) return Promise.resolve();
     validateArgs(ctx);
-    return guard(async () => {
-      const args = ctx.args;
-      const extractTasks = toBoolOverride(args["extract-tasks"], "extract-tasks");
-      const retainText = toBoolOverride(args["retain-text"], "retain-text");
-      if (args.watch) {
-        const ac = abortOnSignals();
-        await watchIndex({ ...syncOptions(args), intervalMin: Number(args.interval) || 5, extractTasks, retainText }, log, ac.signal);
-      } else {
-        await runIndex(syncOptions(args), log, extractTasks, !!args.debug, retainText);
-      }
-    });
+    return guard(
+      async () => {
+        const args = ctx.args;
+        const extractTasks = toBoolOverride(
+          args["extract-tasks"],
+          "extract-tasks",
+        );
+        const retainText = toBoolOverride(args["retain-text"], "retain-text");
+        if (args.watch) {
+          const ac = abortOnSignals();
+          await watchIndex(
+            {
+              ...syncOptions(args),
+              intervalMin: Number(args.interval) || 5,
+              extractTasks,
+              retainText,
+            },
+            log,
+            ac.signal,
+          );
+        } else {
+          await runIndex(
+            syncOptions(args),
+            log,
+            extractTasks,
+            !!args.debug,
+            retainText,
+          );
+        }
+      },
+      ctx.args as Record<string, unknown>,
+    );
   },
 });
 
 const status = defineCommand({
-  meta: { name: "status", description: "show the local store path + per-source counts" },
-  run: handler(() => runStatus(log)),
+  meta: {
+    name: "status",
+    description: "show the local store path + per-source counts",
+  },
+  args: { ...logArgs },
+  run: handler(() => runStatus()),
 });
 
 const login = defineCommand({
-  meta: { name: "login", description: "login via Cloudflare Access SSO in your browser (not needed when using Argus Hub — set ARGUS_HUB_URL and ARGUS_HUB_KEY instead)" },
+  meta: {
+    name: "login",
+    description:
+      "login via Cloudflare Access SSO in your browser (not needed when using Argus Hub — set ARGUS_HUB_URL and ARGUS_HUB_KEY instead)",
+  },
   args: {
-    endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for login (env ARGUS_ENDPOINT)", valueHint: "url" },
+    ...logArgs,
+    endpoint: {
+      type: "string",
+      default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT,
+      description: "Service URL for login (env ARGUS_ENDPOINT)",
+      valueHint: "url",
+    },
   },
   run: handler((args) => runLogin({ endpoint: args.endpoint }, log)),
 });
 
 const sync = defineCommand({
-  meta: { name: "sync", description: "upload usage data to a team dashboard or Hub" },
+  meta: {
+    name: "sync",
+    description: "upload usage data to a team dashboard or Hub",
+  },
   args: {
-    endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
-    user: { type: "string", description: "Override the user id (default: git email, else $USER@host)", valueHint: "id" },
-    org: { type: "string", default: process.env.ARGUS_ORG, description: "Override the org (env ARGUS_ORG)", valueHint: "id" },
-    watch: { type: "boolean", default: false, description: "Keep uploading on an interval" },
-    interval: { type: "string", default: "5", description: "Minutes between uploads (with --watch)", valueHint: "N" },
-    all: { type: "boolean", default: false, description: "Hub mode: re-upload every session, skipping local cursor filtering" },
+    ...logArgs,
+    endpoint: {
+      type: "string",
+      default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT,
+      description: "Service URL for uploads (env ARGUS_ENDPOINT)",
+      valueHint: "url",
+    },
+    user: {
+      type: "string",
+      description: "Override the user id (default: git email, else $USER@host)",
+      valueHint: "id",
+    },
+    org: {
+      type: "string",
+      default: process.env.ARGUS_ORG,
+      description: "Override the org (env ARGUS_ORG)",
+      valueHint: "id",
+    },
+    watch: {
+      type: "boolean",
+      default: false,
+      description: "Keep uploading on an interval",
+    },
+    interval: {
+      type: "string",
+      default: "5",
+      description: "Minutes between uploads (with --watch)",
+      valueHint: "N",
+    },
+    all: {
+      type: "boolean",
+      default: false,
+      description:
+        "Hub mode: re-upload every session, skipping local cursor filtering",
+    },
   },
   run: handler(async (args) => {
-    const base: PushLoopOptions = { source: "all", endpoint: args.endpoint, user: args.user, org: args.org, all: !!args.all };
+    const base: PushLoopOptions = {
+      source: "all",
+      endpoint: args.endpoint,
+      user: args.user,
+      org: args.org,
+      all: !!args.all,
+    };
     if (args.watch) {
       const ac = abortOnSignals();
-      await watchSync({ ...base, intervalMin: Number(args.interval) || 5, onUnauthenticated: "fail" }, log, ac.signal);
+      await watchSync(
+        {
+          ...base,
+          intervalMin: Number(args.interval) || 5,
+          onUnauthenticated: "fail",
+        },
+        log,
+        ac.signal,
+      );
     } else {
       await runPushOnce(base, log);
     }
@@ -632,21 +925,52 @@ const sync = defineCommand({
 });
 
 const runCmd = defineCommand({
-  meta: { name: "run", description: "keep the dashboard live: index, serve, and upload in one process" },
+  meta: {
+    name: "run",
+    description:
+      "keep the dashboard live: index, serve, and upload in one process",
+  },
   args: {
     ...sourceArg,
     ...taskArgs,
-    port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
-    "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
-    "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
-    endpoint: { type: "string", default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT, description: "Service URL for uploads (env ARGUS_ENDPOINT)", valueHint: "url" },
-    "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
-    debug: { type: "boolean", default: false, description: "Print task extraction debug logs to stdout" },
+    ...logArgs,
+    port: {
+      type: "string",
+      alias: "p",
+      default: String(DEFAULT_PORT),
+      description: "Local port to listen on (env ARGUS_PORT)",
+      valueHint: "N",
+    },
+    "index-interval": {
+      type: "string",
+      default: "5",
+      description: "Minutes between transcript reads",
+      valueHint: "N",
+    },
+    "sync-interval": {
+      type: "string",
+      default: "5",
+      description: "Minutes between uploads",
+      valueHint: "N",
+    },
+    endpoint: {
+      type: "string",
+      default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT,
+      description: "Service URL for uploads (env ARGUS_ENDPOINT)",
+      valueHint: "url",
+    },
+    "no-sync": {
+      type: "boolean",
+      default: false,
+      description: "Skip uploads (index and serve only)",
+    },
+    debug: {
+      type: "boolean",
+      default: false,
+      description: "Print task extraction debug logs",
+    },
   },
   run: handler((args) => {
-    const debugLog = args.debug
-      ? (message: string) => process.stdout.write(message + "\n")
-      : undefined;
     return runRun(
       {
         ...syncOptions(args),
@@ -655,7 +979,7 @@ const runCmd = defineCommand({
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
         noSync: !!args["no-sync"],
-        taskExtraction: taskExtractionOptions(args, debugLog),
+        taskExtraction: taskExtractionOptions(args),
       },
       log,
     );
@@ -665,19 +989,33 @@ const runCmd = defineCommand({
 const configGet = defineCommand({
   meta: { name: "get", description: "print a setting from argus.json" },
   args: {
-    key: { type: "positional", required: true, description: "dotted key, e.g. taskExtraction.enabled" },
-    json: { type: "boolean", default: false, description: "print the value as JSON (null when unset)" },
+    key: {
+      type: "positional",
+      required: true,
+      description: "dotted key, e.g. taskExtraction.enabled",
+    },
+    ...logArgs,
+    json: {
+      type: "boolean",
+      default: false,
+      description: "print the value as JSON (null when unset)",
+    },
   },
   run: handler((args) => {
     if (args._.length !== 1) failArg("Usage: argus config get <key>");
-    return runConfigGet(args._[0]!, log, args.json);
+    return runConfigGet(args._[0]!, args.json);
   }),
 });
 
 const configSet = defineCommand({
   meta: { name: "set", description: "write a setting to argus.json" },
   args: {
-    key: { type: "positional", required: true, description: "dotted key and value, e.g. taskExtraction.enabled true" },
+    key: {
+      type: "positional",
+      required: true,
+      description: "dotted key and value, e.g. taskExtraction.enabled true",
+    },
+    ...logArgs,
   },
   run: handler((args) => {
     if (args._.length !== 2) failArg("Usage: argus config set <key> <value>");
@@ -686,23 +1024,39 @@ const configSet = defineCommand({
 });
 
 const configList = defineCommand({
-  meta: { name: "list", description: "list all settings currently in argus.json" },
-  args: {
-    "show-secrets": { type: "boolean", default: false, description: "Print secret values (e.g. hub.key) in plain text" },
-    json: { type: "boolean", default: false, description: "Output settings as JSON (unredacted; for programmatic use)" },
+  meta: {
+    name: "list",
+    description: "list all settings currently in argus.json",
   },
-  run: handler((args) => runConfigList({ showSecrets: !!args["show-secrets"], asJson: !!args.json }, log)),
+  args: {
+    "show-secrets": {
+      type: "boolean",
+      default: false,
+      description: "Print secret values (e.g. hub.key) in plain text",
+    },
+    ...logArgs,
+    json: {
+      type: "boolean",
+      default: false,
+      description: "Output settings as JSON (unredacted; for programmatic use)",
+    },
+  },
+  run: handler((args) =>
+    runConfigList({ showSecrets: !!args["show-secrets"], asJson: !!args.json }),
+  ),
 });
 
 const config = defineCommand({
-  meta: { name: "config", description: "read and write settings in argus.json" },
+  meta: {
+    name: "config",
+    description: "read and write settings in argus.json",
+  },
   subCommands: { get: configGet, set: configSet, list: configList },
   run: async (ctx) => {
     if (dispatchedSubcommand(ctx) !== undefined) return;
     await showUsage(ctx.cmd);
   },
 });
-
 
 // --- `argus secret`: manage stored LLM API keys (#132) ---
 
@@ -770,16 +1124,30 @@ async function readSecretValue(name: string): Promise<string> {
 }
 
 function requireSecretName(args: Record<string, unknown>): string {
-  const name = String(args.name ?? (Array.isArray(args._) ? args._[0] : "") ?? "");
+  const name = String(
+    args.name ?? (Array.isArray(args._) ? args._[0] : "") ?? "",
+  );
   if (!isSecretName(name)) {
-    throw new Error(`Unknown secret "${name}". Known secrets: ${SECRET_NAMES.join(", ")}.`);
+    throw new Error(
+      `Unknown secret "${name}". Known secrets: ${SECRET_NAMES.join(", ")}.`,
+    );
   }
   return name;
 }
 
 const secretSet = defineCommand({
-  meta: { name: "set", description: "store a secret (read from stdin, or prompted if interactive)" },
-  args: { name: { type: "positional", required: true, description: "secret name (e.g. ANTHROPIC_API_KEY, ARGUS_HUB_KEY)" } },
+  meta: {
+    name: "set",
+    description: "store a secret (read from stdin, or prompted if interactive)",
+  },
+  args: {
+    name: {
+      type: "positional",
+      required: true,
+      description: "secret name (e.g. ANTHROPIC_API_KEY, ARGUS_HUB_KEY)",
+    },
+    ...logArgs,
+  },
   run: handler(async (args) => {
     const name = requireSecretName(args);
     const value = await readSecretValue(name);
@@ -796,7 +1164,14 @@ const secretSet = defineCommand({
 
 const secretRm = defineCommand({
   meta: { name: "rm", description: "remove a stored secret" },
-  args: { name: { type: "positional", required: true, description: "secret name to remove" } },
+  args: {
+    name: {
+      type: "positional",
+      required: true,
+      description: "secret name to remove",
+    },
+    ...logArgs,
+  },
   run: handler(async (args) => {
     const name = requireSecretName(args);
     const removed = await defaultSecretStore().delete(name);
@@ -805,18 +1180,28 @@ const secretRm = defineCommand({
 });
 
 const secretStatus = defineCommand({
-  meta: { name: "status", description: "show which secrets are stored (masked)" },
+  meta: {
+    name: "status",
+    description: "show which secrets are stored (masked)",
+  },
+  args: { ...logArgs },
   run: handler(async () => {
     const store = defaultSecretStore();
     for (const name of SECRET_NAMES) {
       const status = await store.describe(name);
-      log(`  ${name}: ${status.configured ? (status.hint ?? "set") : "not set"}`);
+      log(
+        `  ${name}: ${status.configured ? (status.hint ?? "set") : "not set"}`,
+      );
     }
   }),
 });
 
 const secret = defineCommand({
-  meta: { name: "secret", description: "manage stored secrets — LLM API keys and the Argus Hub key (kept in your OS keychain where available)" },
+  meta: {
+    name: "secret",
+    description:
+      "manage stored secrets — LLM API keys and the Argus Hub key (kept in your OS keychain where available)",
+  },
   subCommands: { set: secretSet, rm: secretRm, status: secretStatus },
   run: (ctx) => {
     if (dispatchedSubcommand(ctx) !== undefined) return Promise.resolve();
@@ -828,12 +1213,22 @@ const main = defineCommand({
   meta: {
     name: "argus",
     version: pkg.version,
-    description: "audit your Claude Code, Claude Cowork, Codex, and Gemini CLI usage",
+    description:
+      "audit your Claude Code, Claude Cowork, Codex, and Gemini CLI usage",
   },
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, login, config, secret },
+  subCommands: {
+    serve,
+    index,
+    sync,
+    run: runCmd,
+    status,
+    login,
+    config,
+    secret,
+  },
 });
 
 async function run() {
@@ -859,6 +1254,6 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
+  logError(log, err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

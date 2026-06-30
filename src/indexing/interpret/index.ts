@@ -10,10 +10,10 @@
 //   - the immediate inline path (`interpretSession`), for an explicit per-session refresh.
 import type { ParserDiagnostic, Store, TaskFact } from "../../store/store-contract.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
-import type { Log } from "../../reporting/dashboard-builder.ts";
 import type { RepeatCollapser } from "../../backoff.ts";
 import { resolveApiKey } from "../../secrets.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
+import { logWarn, type ArgusLogLevel, type Log } from "../../logger.ts";
 
 // The interpreter's own implementation version (#153) — provenance for "what produced this
 // interpretation", stamped on each session it interprets. Content-independent: bump it when the
@@ -98,7 +98,13 @@ export async function runInterpretationDrain(
   if (!taskExtractionActive(taskExtraction)) return;
   const maxPerHour = taskExtraction.maxSessionsPerHour;
   if (maxPerHour <= 0) return;
-  const note = (msg: string) => (collapser ? void collapser.note(msg) : log?.(msg));
+  const note = (msg: string, level: ArgusLogLevel = "info") => {
+    if (collapser) {
+      collapser.note(msg, level);
+    } else if (log) {
+      level === "warn" ? logWarn(log, msg) : log(msg);
+    }
+  };
 
   // Over-fetch a little so the cooldown filter can drop recently-failed sessions without starving the
   // batch, then cap at the per-tick batch size.
@@ -152,6 +158,6 @@ export async function runInterpretationDrain(
     );
   }
   if (failures > 0) {
-    note(`Couldn't extract tasks for ${failures} session${failures === 1 ? "" : "s"} this pass; will retry later.`);
+    note(`Couldn't extract tasks for ${failures} session${failures === 1 ? "" : "s"} this pass; will retry later.`, "warn");
   }
 }
