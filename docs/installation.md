@@ -1,8 +1,9 @@
 # Installation
 
 Argus ships as a native macOS app that lives in your menu bar. It bundles the
-Argus CLI, keeps your local session data current, and opens the dashboard in
-your browser — no separate setup required.
+command-line tool, keeps your local [session](/glossary#session) data current, and
+opens the [dashboard](/glossary#dashboard) in your browser, with no separate setup
+required.
 
 <DownloadMac />
 
@@ -34,8 +35,8 @@ recent build from this page or from the
 
 ## Prefer the command line?
 
-You don't need the app to use Argus. If you'd rather run it directly, the CLI
-works through `npx` (Node.js 20.17 or newer):
+You don't need the app to use Argus. If you'd rather run it directly, the
+command-line tool works through `npx` (Node.js 20.17 or newer):
 
 ```bash
 npx @agentdeploymentco/argus serve --open

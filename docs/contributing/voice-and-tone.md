@@ -38,9 +38,16 @@ These always hold.
 These come from the repo's own rules (`CLAUDE.md`, "User-facing messages") and
 apply to docs as much as to terminal output.
 
-- **Plain language for a moderately technical reader.** The reader understands
-  agents and computers generally, but hasn't read the code. Use words they already
-  know: file, directory, session, transcript, project, source.
+- **Plain language for a go-to-market reader.** Argus is for people using AI agents
+  to do sales, marketing, revops, and AI-ops work, not to write software. They span
+  a wide technical range, from people who never open a terminal to fairly technical
+  non-developers. Assume light familiarity with the language of agents, not fluency.
+  Use plain words: file, folder, session, transcript, project, source.
+- **Never talk down.** Don't over-explain, and don't pad a term with a definition
+  the reader may not need. Explain a term once, then trust the reader. For the
+  language-of-agents terms, link to the [Glossary](/glossary) on first use instead
+  of defining inline (see the technical-writing guide), so the unfamiliar can learn
+  and the familiar can move on.
 - **Don't name code internals.** Describe the effect the reader observes, not the
   implementation. "Re-reads your transcripts from disk," not "clears the structural
   index." Internal vocabulary (table names, layer numbers, fragments, fact rows)

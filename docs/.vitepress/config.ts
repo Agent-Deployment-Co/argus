@@ -82,7 +82,8 @@ export default defineConfig({
       { text: 'Introduction', link: '/' },
       { text: 'Installation', link: '/installation' },
       { text: 'Configuration', link: '/configuration' },
-      { text: 'Argus Hub', link: '/argus-hub' }
+      { text: 'Argus Hub', link: '/argus-hub' },
+      { text: 'Glossary', link: '/glossary' }
     ],
 
     lastUpdated: {
