@@ -148,6 +148,11 @@ export interface ReadHubUploadOptions extends HubUploadFilters {
   onlySessionIds?: Set<string>;
 }
 
+/** Sources that must never appear in Hub uploads regardless of the source filter.
+ *  Mirrors LOCAL_ONLY_SOURCES in reporting/dashboard-builder.ts; kept here so push.ts
+ *  has no dependency on the reporting layer. */
+const LOCAL_ONLY_HUB_SOURCES = ["claude-chat"] as const;
+
 /** Build a SQL WHERE clause fragment (with leading space + AND if needed) and its parameter list
  *  from the upload filters. The session table must be aliased as `s` in the outer query. */
 function buildSessionWhere(filters: HubUploadFilters): { where: string; params: (string | number)[] } {
@@ -157,6 +162,10 @@ function buildSessionWhere(filters: HubUploadFilters): { where: string; params: 
     clauses.push("s.source = ?");
     params.push(filters.source);
   }
+  // Always exclude local-only sources — they are indexed locally but must never reach Hub
+  // regardless of what `source` filter was passed.
+  clauses.push(`s.source NOT IN (${LOCAL_ONLY_HUB_SOURCES.map(() => "?").join(", ")})`);
+  params.push(...LOCAL_ONLY_HUB_SOURCES);
   if (filters.project) {
     clauses.push("(s.project LIKE ? OR s.cwd LIKE ?)");
     params.push(`%${filters.project}%`, `%${filters.project}%`);

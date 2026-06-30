@@ -111,22 +111,15 @@ The local web app shows the transcripts currently available on your machine. The
 [Argus dashboard](https://argus.agentdeployment.co) stores pushed snapshots so you can
 analyze usage over time, compare users, filter the organization view, and review trends.
 
-Sign in once, then upload your current usage with `sync`:
+Configure Argus Hub, then upload your current usage with `sync`:
 
 ```bash
-npx @agentdeploymentco/argus login
 npx @agentdeploymentco/argus sync
 ```
 
-Argus identifies you from your configured git email, falling back to `$USER@host`. Override
-the user id when needed:
-
-```bash
-npx @agentdeploymentco/argus sync --user alice
-```
-
-`sync` uploads the syncable data in the local store. Run it regularly to keep the dashboard current
-and build a useful history for analysis.
+`sync` uploads the syncable data already in the local store. If the store is stale, run `index`
+first, or use `argus run` to keep indexing and uploads current automatically.
+Run it regularly to keep the dashboard current and build a useful history for analysis.
 Uploading the same snapshot again does not double-count it. To upload continuously, add `--watch`
 (every N minutes, default 5) — it retries quietly through network drops and resumes once you're back
 online:
@@ -147,8 +140,8 @@ npx @agentdeploymentco/argus run --port 8080 --index-interval 10 --sync-interval
 
 It runs in the **foreground** and logs to standard output, so a service manager can supervise it,
 capture its logs, and restart it. Each job is supervised independently: if one hiccups it restarts on
-its own without stopping the others, and the upload job stays dormant (rather than failing) until you
-`argus login`. `Ctrl-C` or `SIGTERM` shuts it down cleanly.
+its own without stopping the others. If Hub is not configured, the upload job explains what is
+missing and stops retrying. `Ctrl-C` or `SIGTERM` shuts it down cleanly.
 
 Point your OS service manager at it. systemd (`~/.config/systemd/user/argus.service`):
 

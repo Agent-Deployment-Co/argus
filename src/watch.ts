@@ -2,7 +2,7 @@
 // `argus run`. Each takes an AbortSignal so the caller owns shutdown, and each is built on the
 // backoff primitives so a flaky laptop (sleep/wake, dropped Wi-Fi) never busy-waits or floods logs.
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
-import { type BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
+import { type BuildDashboardOptions, sourcesFor } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { STORE_FILE } from "./paths.ts";
 import { hubErrorMessage, pushHubJson, type PushResult } from "./push.ts";
@@ -69,6 +69,15 @@ export interface WatchSyncOptions extends PushLoopOptions {
 
 /** POST session data to Argus Hub. Returns a non-ok result when Hub is not configured. */
 export async function pushSnapshotForOpts(opts: PushLoopOptions, log: Log): Promise<PushResult> {
+  // Check source eligibility before any hub config lookup — local-only sources are never uploaded.
+  if (sourcesFor(opts.source, { forWire: true }).length === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      status: 0,
+      body: `Nothing to upload: "${opts.source}" is a local-only source, not synced to Hub.`,
+    };
+  }
   const hubCfg = await resolveHubConfig({ log });
   if (!hubCfg) {
     return { ok: false, status: 0, body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data." };
@@ -89,6 +98,11 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, log: Log): Prom
 /** Test seam: override the upload (defaults to the real implementation). */
 export interface WatchSyncDeps {
   push?: (opts: PushLoopOptions, log: Log) => Promise<PushResult>;
+}
+
+function waitUntilAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
 }
 
 /**
@@ -130,7 +144,10 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           // Schema version mismatch: permanent until one side is upgraded. The Hub's body states
           // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
           logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
-          await sleep(Number.MAX_SAFE_INTEGER, sig);
+          await waitUntilAbort(sig);
+        } else if (res.status === 0) {
+          logError(log, res.body);
+          await waitUntilAbort(sig);
         } else {
           collapser.note(`Upload failed (${res.status}). Retrying.`, "warn");
           await sleep(backoff.next(), sig);
