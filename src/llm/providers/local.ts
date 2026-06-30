@@ -194,6 +194,10 @@ function spawnWithStdin(
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
+    // A child that spawns but exits before draining a large stdin write makes the write emit EPIPE on
+    // the stdin pipe; without a listener Node/Bun turns that into a fatal unhandled 'error' and exits
+    // the whole process. Absorb it — the close/error handlers below still produce the failure result.
+    child.stdin.on("error", () => {});
     child.stdin.end(input, "utf8");
 
     child.on("close", (code) => {

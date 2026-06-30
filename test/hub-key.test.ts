@@ -60,6 +60,23 @@ describe("hub key secret storage", () => {
     expect(await migrateHubKeyToSecretStore({ store: exploding, configPath: tmpConfig("{}") })).toBe(false);
   });
 
+  test("never throws when the keychain write fails: leaves the plaintext key in place and returns false", async () => {
+    // A locked/denied keychain (the macOS case) must not crash serve startup (#154 review).
+    const configPath = tmpConfig('{"hub":{"url":"http://hub.example:4242","key":"hub-secret-1234"}}');
+    const logs: string[] = [];
+    const failingSet: SecretStore = {
+      get: async () => undefined,
+      set: async () => {
+        throw new Error("keychain is locked");
+      },
+      delete: async () => false,
+      describe: async () => ({ configured: false }),
+    };
+    expect(await migrateHubKeyToSecretStore({ store: failingSet, configPath, log: (m) => logs.push(m) })).toBe(false);
+    expect(loadConfig(configPath).hub?.key).toBe("hub-secret-1234"); // left untouched — hub mode still works
+    expect(logs.some((l) => /secure storage/.test(l))).toBe(true);
+  });
+
   test("resolveHubConfig returns url + stored key, migrating en route", async () => {
     const configPath = tmpConfig('{"hub":{"url":"http://hub.example:4242","key":"hub-secret-1234"}}');
     const secrets = tmpSecrets();

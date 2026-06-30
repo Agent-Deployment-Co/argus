@@ -329,10 +329,19 @@ export async function migrateHubKeyToSecretStore(
   if (typeof plaintext !== "string" || plaintext === "") return false;
 
   const store = opts.store ?? defaultSecretStore();
-  // Keep an existing stored value (e.g. set later via `argus secret`) authoritative.
-  if (!(await store.describe(HUB_KEY_ENV)).configured) await store.set(HUB_KEY_ENV, plaintext);
-  setPath(file, "hub.key", undefined); // JSON.stringify omits undefined → the key is dropped from the file
-  writeConfigAtomic(file, configPath);
+  // Never let migration failure crash startup: the keychain can be locked/denied (macOS), unwritable
+  // (headless Linux), or unavailable (Windows DPAPI). On failure we leave the plaintext key in place
+  // (hub mode keeps working) and log — a no-op for everyone without a legacy plaintext key. Callers
+  // (serve startup, resolveHubConfig) therefore don't need their own try/catch.
+  try {
+    // Keep an existing stored value (e.g. set later via `argus secret`) authoritative.
+    if (!(await store.describe(HUB_KEY_ENV)).configured) await store.set(HUB_KEY_ENV, plaintext);
+    setPath(file, "hub.key", undefined); // JSON.stringify omits undefined → the key is dropped from the file
+    writeConfigAtomic(file, configPath);
+  } catch (err) {
+    opts.log?.(`Couldn't move the Argus Hub key into secure storage; leaving it in argus.json. (${err instanceof Error ? err.message : String(err)})`);
+    return false;
+  }
   opts.log?.("Moved the Argus Hub key into secure storage and removed it from argus.json.");
   return true;
 }

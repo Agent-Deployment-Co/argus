@@ -6,6 +6,7 @@ import {
   ALL_SETTINGS,
   getPath,
   loadConfig,
+  migrateLlmFlatToProviderConfigs,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
   resolveRetainText,
@@ -355,5 +356,58 @@ describe("llm block (#132)", () => {
     const resolved = resolveTaskExtraction({}, { llm: { provider: "openrouter" } });
     expect(resolved.llm.provider).toBe("openrouter");
     expect(resolved.llm.apiKeyEnv).toBe("OPENROUTER_API_KEY");
+  });
+});
+
+describe("migrateLlmFlatToProviderConfigs (#154 review)", () => {
+  test("folds legacy flat llm.* under the file's configured provider and drops the flat keys", () => {
+    const path = tmpConfig(JSON.stringify({ llm: { provider: "openai", model: "gpt-5", apiKeyEnv: "MY_OPENAI_KEY" } }));
+    expect(migrateLlmFlatToProviderConfigs(path)).toBe(true);
+    const cfg = loadConfig(path);
+    expect(cfg.llm?.model).toBeUndefined(); // flat keys removed
+    expect(cfg.llm?.apiKeyEnv).toBeUndefined();
+    expect(cfg.llm?.providerConfigs?.openai).toEqual({ model: "gpt-5", apiKeyEnv: "MY_OPENAI_KEY" });
+    expect(cfg.llm?.provider).toBe("openai"); // the active provider selector is left in place
+  });
+
+  test("stops the cross-provider bleed: after migrating, switching providers picks up the new provider's default key env", () => {
+    // Pre-migration, the flat apiKeyEnv leaks into whatever provider is active.
+    const path = tmpConfig(JSON.stringify({ llm: { provider: "claude-api", apiKeyEnv: "ANTHROPIC_API_KEY", model: "claude-x" } }));
+    migrateLlmFlatToProviderConfigs(path);
+    const file = loadConfig(path);
+    // The original provider keeps its values…
+    expect(resolveTaskExtraction({}, file).llm).toMatchObject({ provider: "claude-api", apiKeyEnv: "ANTHROPIC_API_KEY", model: "claude-x" });
+    // …but gemini now resolves its own default, not the stale flat ANTHROPIC_API_KEY.
+    expect(resolveTaskExtraction({}, { ...file, llm: { ...file.llm!, provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
+  });
+
+  test("targets the file's persisted provider, not an env override", () => {
+    const path = tmpConfig(JSON.stringify({ llm: { provider: "claude-api", model: "claude-x" } }));
+    process.env.ARGUS_LLM_PROVIDER = "gemini"; // a runtime override must not capture the flat values
+    try {
+      migrateLlmFlatToProviderConfigs(path);
+      const cfg = loadConfig(path);
+      expect(cfg.llm?.providerConfigs?.["claude-api"]).toEqual({ model: "claude-x" });
+      expect(cfg.llm?.providerConfigs?.gemini).toBeUndefined();
+    } finally {
+      delete process.env.ARGUS_LLM_PROVIDER;
+    }
+  });
+
+  test("an already-scoped value wins over the flat one", () => {
+    const path = tmpConfig(JSON.stringify({ llm: { provider: "openai", model: "flat", providerConfigs: { openai: { model: "scoped" } } } }));
+    migrateLlmFlatToProviderConfigs(path);
+    expect(loadConfig(path).llm?.providerConfigs?.openai?.model).toBe("scoped");
+  });
+
+  test("no flat values: a no-op that doesn't rewrite the file", () => {
+    const path = tmpConfig(JSON.stringify({ llm: { provider: "openai", providerConfigs: { openai: { model: "gpt-5" } } } }));
+    expect(migrateLlmFlatToProviderConfigs(path)).toBe(false);
+  });
+
+  test("unset provider folds flat values under the default provider", () => {
+    const path = tmpConfig(JSON.stringify({ llm: { model: "haiku" } }));
+    expect(migrateLlmFlatToProviderConfigs(path)).toBe(true);
+    expect(loadConfig(path).llm?.providerConfigs?.["claude-cli"]).toEqual({ model: "haiku" });
   });
 });

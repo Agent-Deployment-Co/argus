@@ -585,10 +585,15 @@ export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): vo
  * startup (#154). `rename` is atomic within a filesystem, and the temp file is a sibling so it always
  * is. This is durability, not concurrency — the web server is the only writer.
  */
+let atomicWriteSeq = 0;
+
 export function writeConfigAtomic(config: ArgusConfig, path: string = CONFIG_FILE): void {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
-  const tmp = join(dir, `.argus.json.${process.pid}.tmp`);
+  // Unique per call (pid + a process-local counter), not just per pid: under `argus run` two legs in
+  // the same process (the server and the sync watcher's hub-key migration) can write concurrently, and
+  // a shared temp path would let one's rename() hit the other's already-renamed file → ENOENT crash.
+  const tmp = join(dir, `.argus.json.${process.pid}.${atomicWriteSeq++}.tmp`);
   writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
   renameSync(tmp, path);
 }
@@ -640,6 +645,34 @@ export function resolveActiveProvider(
   flags: Record<string, unknown> = {},
 ): LlmProvider {
   return resolveSetting(LLM_SETTINGS.provider, flags, file) ?? DEFAULT_TASK_PROVIDER;
+}
+
+/**
+ * One-time, idempotent migration: relocate any legacy flat `llm.<field>` values (model, apiKeyEnv,
+ * command, …) into `llm.providerConfigs[<configured provider>].<field>`, then drop the flat keys.
+ *
+ * Pre-`providerConfigs` those fields lived flat and applied to whatever provider was active. The scoped
+ * resolver still reads them as a fallback for *any* active provider (`resolveProviderScoped`), so once
+ * the user switches providers the new provider inherits the old one's model/key-env (#154 review). We
+ * fold them under the provider they were written for — the file's persisted `llm.provider`, NOT the
+ * env-resolved active provider (an env override is a runtime choice, not what the flat values describe)
+ * — so each provider keeps its own values and the cross-provider bleed stops. A no-op (no write) when
+ * there are no flat values. An already-scoped value wins (never clobbered). Returns true if it moved
+ * anything. Called on serve start, mirroring the Hub-key migration.
+ */
+export function migrateLlmFlatToProviderConfigs(configPath: string = CONFIG_FILE): boolean {
+  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+  const scoped = Object.values(LLM_SETTINGS).filter((s) => (s as Setting<unknown>).providerScoped) as Setting<unknown>[];
+  const flat = scoped.filter((s) => present(getPath(file, s.path)));
+  if (!flat.length) return false;
+  const provider = parseProvider(getPath(file, "llm.provider")) ?? DEFAULT_TASK_PROVIDER;
+  for (const s of flat) {
+    const dest = providerConfigPath(provider, llmFieldName(s));
+    if (!present(getPath(file, dest))) setPath(file, dest, getPath(file, s.path)); // scoped value wins
+    setPath(file, s.path, undefined); // drop the flat key (JSON.stringify omits undefined)
+  }
+  writeConfigAtomic(file, configPath);
+  return true;
 }
 
 function resolveLlmConfig(
