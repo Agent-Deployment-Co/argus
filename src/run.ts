@@ -88,7 +88,9 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
 
   log(
     `Running: reading transcripts every ${opts.indexIntervalMin} min, serving on ` +
-      `http://localhost:${opts.port}, uploading every ${opts.syncIntervalMin} min. Press Ctrl-C to stop.`,
+      `http://localhost:${opts.port}` +
+      (opts.noSync ? "" : `, uploading every ${opts.syncIntervalMin} min`) +
+      `. Press Ctrl-C to stop.`,
   );
 
   try {
