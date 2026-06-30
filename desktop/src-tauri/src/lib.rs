@@ -239,6 +239,12 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
         command = command.env("ARGUS_WEB_ROOT", root);
     }
     let sidecar_log = sidecar_log_file(app)?;
+    // Tell the sidecar where its output is being logged, so the web app's Debug view can show the
+    // path. The desktop shell captures stdout/stderr below and writes it here; the CLI never opens
+    // this file itself.
+    if let Some(log_path) = sidecar_log.to_str() {
+        command = command.env("ARGUS_LOG_FILE", log_path);
+    }
     let (mut rx, child) = command
         .spawn()
         .map_err(|e| format!("starting the argus sidecar: {e}"))?;

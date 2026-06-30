@@ -81,6 +81,7 @@ const ENV_VARS = [
   "ARGUS_HOME",
   "ARGUS_DATA_DIR",
   "ARGUS_CONFIG_DIR",
+  "ARGUS_LOG_FILE",
   "ARGUS_PORT",
   "ARGUS_TASK_ENABLED",
   "ARGUS_TASK_PROVIDER",
@@ -167,6 +168,9 @@ export async function collectDebugInfo(opts: { serveReadOnly: boolean }): Promis
       pathEntry("GEMINI_DIR", GEMINI_DIR),
       pathEntry("Cowork sessions", COWORK_SESSIONS_DIR),
       pathEntry("Claude chat cache", CLAUDE_CHAT_CACHE_DIR),
+      // Set by the desktop app, which captures the background service's output to this file. Unset
+      // when running the CLI directly (output goes to the terminal, not a file).
+      pathEntry("Log file", process.env.ARGUS_LOG_FILE),
     ],
     env: ENV_VARS.map((name) => ({ name, value: process.env[name] ?? null })),
     config,
