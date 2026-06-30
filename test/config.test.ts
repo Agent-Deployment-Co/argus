@@ -116,12 +116,25 @@ describe("resolveTaskExtraction", () => {
     expect(resolved.llm.provider).toBe("claude-cli");
   });
 
-  test("empty config → today's defaults (disabled, provider claude-cli, no extras)", () => {
+  test("empty config → today's defaults (enabled, provider claude-cli, no extras)", () => {
     const resolved = resolveTaskExtraction({}, {});
-    expect(resolved.enabled).toBe(false);
+    expect(resolved.enabled).toBe(true);
     expect(resolved.llm.provider).toBe("claude-cli");
     expect(resolved.llm.model).toBeUndefined();
     expect(resolved.llm.command).toBeUndefined();
+  });
+
+  test("taskExtraction.enabled: false in config stays false", () => {
+    expect(resolveTaskExtraction({}, { taskExtraction: { enabled: false } }).enabled).toBe(false);
+  });
+
+  test("taskExtraction.enabled: true in config stays true", () => {
+    expect(resolveTaskExtraction({}, { taskExtraction: { enabled: true } }).enabled).toBe(true);
+  });
+
+  test("no taskExtraction.enabled in config defaults to true", () => {
+    expect(resolveTaskExtraction({}, {}).enabled).toBe(true);
+    expect(resolveTaskExtraction({}, { taskExtraction: {} }).enabled).toBe(true);
   });
 
   test("resolves llm.claudeCliPath from the file (advanced override for the claude-cli binary)", () => {

@@ -72,7 +72,7 @@ export interface ArgusConfig {
     claudeCliPath?: string;
   };
   taskExtraction?: {
-    /** Opt-in index-time extraction (#88). Off by default — it's an LLM call per session. */
+    /** Index-time extraction (#88). On by default. */
     enabled?: boolean;
     prompt?: string;
     promptFile?: string;
@@ -469,7 +469,7 @@ export const TASK_SETTINGS = {
     path: "taskExtraction.enabled",
     env: "ARGUS_TASK_ENABLED",
     flag: "extract-tasks",
-    default: false,
+    default: true,
     ui: {
       label: "Extract tasks",
       description:
