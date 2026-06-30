@@ -45,10 +45,10 @@ describe("describeSettings", () => {
     expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
   });
 
-  test("General exposes the Argus Hub URL plus a secret-backed Hub key field", () => {
+  test("General exposes auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
-    expect(paths).toEqual(["hub.url"]);
+    expect(paths).toEqual(["autoUpdate.enabled", "hub.url"]);
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
     expect(paths).not.toContain("hub.key");
     const hubKey = general.sections.flatMap((s) => s.secretFields ?? []).find((f) => f.key === "hub.key")!;
