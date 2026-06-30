@@ -538,7 +538,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   }
 
   const resolveRefreshTaskExtraction: TaskExtractionResolver =
-    opts.taskExtraction ?? (() => resolveTaskExtraction({}, opts.configPath ? loadConfig(opts.configPath) : loadConfig(), log));
+    opts.taskExtraction ?? (() => resolveTaskExtraction({}, loadConfig(), log));
 
   const reindex: SessionReindexer = async (sessionId) => {
     // Honor the local text-retention opt-out (#120) on the web Refresh path: resolve it from config

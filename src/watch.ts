@@ -17,7 +17,7 @@ import { buildDashboard, sourcesFor, summaryLine, type BuildDashboardOptions } f
 import { runIndex } from "./index-ops.ts";
 import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
 import { detectOrg, detectUser, hubErrorMessage, pushHubJson, pushSnapshot, SCHEMA_VERSION, type PushCredentials, type PushResult } from "./push.ts";
-import { resolveHubConfig } from "./secrets.ts";
+import { resolveHubConfig, type ResolvedHubConfig } from "./secrets.ts";
 import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
 import { logError, logWarn, type Log } from "./logger.ts";
@@ -131,6 +131,8 @@ export interface WatchSyncOptions extends PushLoopOptions {
   /** What to do when there's no usable credential: standalone `sync --watch` fails fast at startup;
    *  the run-embedded leg stays dormant and recovers once the user logs in. */
   onUnauthenticated: OnUnauthenticated;
+  /** Desktop mode: only upload when Argus Hub is configured; never fall back to Cloudflare Access. */
+  hubOnly?: boolean;
   /** Wakes the loop before the normal interval, e.g. after web Settings writes. */
   wakeSignal?: LoopWakeSignal;
 }
@@ -259,6 +261,7 @@ function waitForTokenFileChange(signal: AbortSignal): Promise<void> {
  */
 /** Test seam: override credential resolution and the upload (default to the real implementations). */
 export interface WatchSyncDeps {
+  resolveHubConfig?: (log: Log) => Promise<ResolvedHubConfig | undefined>;
   resolveCredentials?: (endpoint: string, log: Log) => Promise<PushCredentials | null>;
   push?: (opts: PushLoopOptions, credentials: PushCredentials, log: Log) => Promise<PushResult>;
   waitForTokenChange?: (signal: AbortSignal) => Promise<void>;
@@ -290,19 +293,27 @@ async function waitForTokenChangeOrWake(
 }
 
 export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortSignal, deps: WatchSyncDeps = {}): Promise<void> {
+  const resolveHub = deps.resolveHubConfig ?? ((logger: Log) => resolveHubConfig({ log: logger }));
   const resolveCreds = deps.resolveCredentials ?? resolveCredentials;
   const push = deps.push ?? pushSnapshotForOpts;
   const waitForToken = deps.waitForTokenChange ?? waitForTokenFileChange;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
 
-  // Hub mode: the key lives in the secret store, no OAuth needed. Skip the credential preflight entirely.
-  const hubMode = !!(await resolveHubConfig({ log }));
-
   // Startup auth preflight: fail fast for the standalone command rather than looping forever with no
   // hope of success. Mid-run staleness (below) is handled differently — it never crashes the loop.
-  const initial = hubMode ? ({} as PushCredentials) : await resolveCreds(opts.endpoint, log);
+  // Hub config is re-resolved on every pass so Settings changes apply without restarting the service.
+  const initialHub = await resolveHub(log);
+  const initial = initialHub
+    ? ({} as PushCredentials)
+    : opts.hubOnly
+      ? null
+      : await resolveCreds(opts.endpoint, log);
   if (!initial && opts.onUnauthenticated === "fail") {
-    throw new Error("Not logged in. Run `argus login` first to upload to the team dashboard.");
+    throw new Error(
+      opts.hubOnly
+        ? "Argus Hub is not configured. Set the Hub URL and key first."
+        : "Not logged in. Run `argus login` first to upload to the team dashboard.",
+    );
   }
 
   const backoff = new Backoff();
@@ -312,12 +323,22 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
     "upload",
     async (sig) => {
       while (!sig.aborted) {
-        const cred = hubMode ? ({} as PushCredentials) : await resolveCreds(opts.endpoint, log);
+        const hub = await resolveHub(log);
+        const cred = hub
+          ? ({} as PushCredentials)
+          : opts.hubOnly
+            ? null
+            : await resolveCreds(opts.endpoint, log);
         if (!cred) {
-          // Log once, then park until the token file actually changes — no polling, no repeated
-          // refresh attempts. `argus login` writes the token file, and Settings writes wake this wait.
-          collapser.note("Not logged in. Pausing uploads until you run `argus login`.", "warn");
-          await waitForTokenChangeOrWake(waitForToken, opts.wakeSignal, sig);
+          if (opts.hubOnly) {
+            collapser.note("Hub uploads are paused until the Hub URL and key are configured.", "warn");
+            await waitForNextLoop(intervalMs, sig, opts.wakeSignal);
+          } else {
+            // Log once, then park until the token file actually changes — no polling, no repeated
+            // refresh attempts. `argus login` writes the token file, and Settings writes wake this wait.
+            collapser.note("Not logged in. Pausing uploads until you run `argus login`.", "warn");
+            await waitForTokenChangeOrWake(waitForToken, opts.wakeSignal, sig);
+          }
           continue;
         }
         let res: PushResult;

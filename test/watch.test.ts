@@ -96,6 +96,63 @@ describe("watchSync", () => {
     expect(lines.filter((l) => l.includes("Not logged in")).length).toBe(1);
   });
 
+  test("dormant mode wakes into Hub mode after settings change", async () => {
+    const ac = new AbortController();
+    const wake = createLoopWake();
+    const lines: string[] = [];
+    let hubConfigured = false;
+    let pushed = 0;
+    const p = watchSync(syncOpts({ onUnauthenticated: "dormant", wakeSignal: wake.signal }), (s) => lines.push(s), ac.signal, {
+      resolveHubConfig: async () => (hubConfigured ? { url: "http://hub.local", key: "hub-key" } : undefined),
+      resolveCredentials: async () => null,
+      push: async (_opts, credentials) => {
+        pushed++;
+        expect(credentials).toEqual({});
+        return ok();
+      },
+      waitForTokenChange: async (signal) => {
+        await sleep(60_000, signal);
+      },
+    });
+    while (!lines.some((l) => l.includes("Not logged in"))) await sleep(5);
+    hubConfigured = true;
+    wake.wake();
+    while (pushed === 0) await sleep(5);
+    ac.abort();
+    await p;
+    expect(pushed).toBe(1);
+  });
+
+  test("hub-only mode waits for Hub config without resolving OAuth credentials", async () => {
+    const ac = new AbortController();
+    const wake = createLoopWake();
+    const lines: string[] = [];
+    let hubConfigured = false;
+    let credentialCalls = 0;
+    let pushed = 0;
+    const p = watchSync(syncOpts({ hubOnly: true, wakeSignal: wake.signal }), (s) => lines.push(s), ac.signal, {
+      resolveHubConfig: async () => (hubConfigured ? { url: "http://hub.local", key: "hub-key" } : undefined),
+      resolveCredentials: async () => {
+        credentialCalls++;
+        return { bearerToken: "oauth-token" };
+      },
+      push: async (_opts, credentials) => {
+        pushed++;
+        expect(credentials).toEqual({});
+        return ok();
+      },
+    });
+    while (!lines.some((l) => l.includes("Hub uploads are paused"))) await sleep(5);
+    expect(credentialCalls).toBe(0);
+    hubConfigured = true;
+    wake.wake();
+    while (pushed === 0) await sleep(5);
+    ac.abort();
+    await p;
+    expect(pushed).toBe(1);
+    expect(credentialCalls).toBe(0);
+  });
+
   test("a skipped push (local-only source) is not reported as an upload", async () => {
     const ac = new AbortController();
     const lines: string[] = [];

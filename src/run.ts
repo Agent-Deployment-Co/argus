@@ -17,6 +17,7 @@ export interface RunOptions extends SyncOptions {
   syncIntervalMin: number;
   endpoint: string;
   noSync: boolean;
+  hubOnlySync: boolean;
   taskExtraction: TaskExtractionResolver;
 }
 
@@ -119,6 +120,7 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
             endpoint: opts.endpoint,
             intervalMin: opts.syncIntervalMin,
             onUnauthenticated: "dormant",
+            hubOnly: opts.hubOnlySync,
             wakeSignal: settingsWake.signal,
           },
           log,
