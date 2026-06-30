@@ -138,9 +138,15 @@ function SaveIndicator({ saving, error, justSaved }: SaveQueue) {
 
 /** The full settings surface (#154): a Codex-style take-over with a left category nav and a right
  *  pane of sectioned settings. Reached at /settings/$category and deep-linkable. `backTo` is the app
- *  screen to return to on close — the Layout supplies the last non-settings location; it defaults to
- *  the dashboard for a cold deep-link (the route renders this with no props). */
-export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
+ *  location to return to on close (pathname + its search) — the Layout supplies the last non-settings
+ *  location; it defaults to the dashboard root for a cold deep-link (the route renders this with no
+ *  props). "Back to app" navigates via the router so the route's validateSearch re-applies the default
+ *  date range when no search is carried. */
+export function SettingsSurface({
+  backTo = { pathname: "/", search: {} },
+}: {
+  backTo?: { pathname: string; search?: Record<string, unknown> };
+}) {
   const { category } = useParams({ strict: false }) as { category?: string };
   const router = useRouter();
   const query = useSettingsQuery();
@@ -159,7 +165,7 @@ export function SettingsSurface({ backTo = "/" }: { backTo?: string }) {
         <button
           type="button"
           className="settings-back"
-          onClick={() => router.history.push(backTo)}
+          onClick={() => router.navigate({ to: backTo.pathname, search: backTo.search ?? {} })}
         >
           <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
           <span>Back to app</span>
