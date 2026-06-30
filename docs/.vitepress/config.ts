@@ -7,9 +7,10 @@ export default defineConfig({
     'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.',
   cleanUrls: true,
   lastUpdated: true,
-  // Authoring guides for contributors/agents, not product docs — kept in the
-  // repo but excluded from the published site. See docs/contributing/.
-  srcExclude: ['contributing/**'],
+  // Contributor/agent material kept in the repo but excluded from the published
+  // site: authoring guides (docs/contributing/) and the internal/architecture
+  // reference (docs/internals/).
+  srcExclude: ['contributing/**', 'internals/**'],
   markdown: {
     // VitePress has no built-in Mermaid support. Turn ```mermaid fences into a
     // placeholder div carrying the (base64-encoded) source; the theme renders
@@ -80,13 +81,7 @@ export default defineConfig({
     sidebar: [
       { text: 'Introduction', link: '/' },
       { text: 'Installation', link: '/installation' },
-      { text: 'Architecture', link: '/architecture' },
-      { text: 'Session model', link: '/session-model' },
-      { text: 'Task interpretation', link: '/task-interpretation' },
-      { text: 'Web app', link: '/web-app' },
       { text: 'Configuration', link: '/configuration' },
-      { text: 'Database schema', link: '/database-schema' },
-      { text: 'LLM providers', link: '/llm-providers' },
       { text: 'Argus Hub', link: '/argus-hub' }
     ],
 
