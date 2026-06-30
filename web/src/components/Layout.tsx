@@ -5,12 +5,35 @@ import { FilterBar } from "./FilterBar";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
 import { SettingsSurface } from "../routes/Settings";
 
-const BrandMark = () => (
-  <svg className="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="6 0 128 100" role="img" aria-label="The Agent Deployment Co. chevron">
-    <path d="M6 0 L30 0 L62 50 L30 100 L6 100 L38 50 Z" fill="#e2302c" />
-    <path d="M30 0 L54 0 L86 50 L54 100 L30 100 L62 50 Z" fill="#ef8920" />
-    <path d="M54 0 L78 0 L110 50 L78 100 L54 100 L86 50 Z" fill="#5dbcdf" />
-    <path d="M78 0 L102 0 L134 50 L102 100 L78 100 L110 50 Z" fill="#286992" />
+// The Argus arch mark — the ADC chevron un-bent into a rounded archway (a proto-"A"), four bands
+// in the ADC accent colors. Shown alone when the rail is collapsed; otherwise it's the symbol at the
+// head of the wordmark below. Colors are fixed (brand), so the mark reads the same in either theme.
+const ArchMark = () => (
+  <svg className="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Argus">
+    <path d="M46 466 L46 256 A210 210 0 0 1 466 256 L466 466 L426 466 L426 256 A170 170 0 0 0 86 256 L86 466 Z" fill="#e2302c" />
+    <path d="M92 466 L92 256 A164 164 0 0 1 420 256 L420 466 L380 466 L380 256 A124 124 0 0 0 132 256 L132 466 Z" fill="#ef8920" />
+    <path d="M138 466 L138 256 A118 118 0 0 1 374 256 L374 466 L334 466 L334 256 A78 78 0 0 0 178 256 L178 466 Z" fill="#5dbcdf" />
+    <path d="M184 466 L184 256 A72 72 0 0 1 328 256 L328 466 L288 466 L288 256 A32 32 0 0 0 224 256 L224 466 Z" fill="#286992" />
+  </svg>
+);
+
+// The Argus wordmark — the arch plus "ARGUS" in Poppins SemiBold (text as vector outlines). Shown
+// when the rail is expanded. The letterforms use currentColor so the lockup recolors per theme
+// (Coffee Bean on light, Soft Apricot on dark) via .brand-wordmark in styles.css; the arch keeps its
+// four brand colors on both. Geometry mirrors the canonical wordmark asset (kb Identity/logos).
+const Wordmark = () => (
+  <svg className="brand-wordmark" xmlns="http://www.w3.org/2000/svg" viewBox="-0.50 -18.44 98.60 19.11" role="img" aria-label="Argus">
+    <g transform="translate(0 -17.734) scale(0.042224) translate(-46 -46)">
+      <path d="M46 466 L46 256 A210 210 0 0 1 466 256 L466 466 L426 466 L426 256 A170 170 0 0 0 86 256 L86 466 Z" fill="#e2302c" />
+      <path d="M92 466 L92 256 A164 164 0 0 1 420 256 L420 466 L380 466 L380 256 A124 124 0 0 0 132 256 L132 466 Z" fill="#ef8920" />
+      <path d="M138 466 L138 256 A118 118 0 0 1 374 256 L374 466 L334 466 L334 256 A78 78 0 0 0 178 256 L178 466 Z" fill="#5dbcdf" />
+      <path d="M184 466 L184 256 A72 72 0 0 1 328 256 L328 466 L288 466 L288 256 A32 32 0 0 0 224 256 L224 466 Z" fill="#286992" />
+    </g>
+    <g transform="translate(20.000 0.000) scale(0.025334 -0.025334)"><path d="M497 133L219 133L173 0L26 0L277 699L440 699L691 0L543 0L497 133ZM459 245L358 537L257 245L459 245Z" fill="currentColor" /></g>
+    <g transform="translate(36.139 0.000) scale(0.025334 -0.025334)"><path d="M429 0L275 272L209 272L209 0L69 0L69 698L331 698Q412 698 469 669Q526 641 554 592Q583 544 583 484Q583 415 543 359Q503 304 424 283L591 0L429 0ZM209 377L326 377Q383 377 411 404Q439 432 439 481Q439 529 411 555Q383 582 326 582L209 582L209 377Z" fill="currentColor" /></g>
+    <g transform="translate(50.378 0.000) scale(0.025334 -0.025334)"><path d="M555 488Q531 532 489 555Q447 578 391 578Q329 578 281 550Q233 522 206 470Q179 418 179 350Q179 280 206 228Q234 176 283 148Q332 120 397 120Q477 120 528 162Q579 205 595 281L355 281L355 388L733 388L733 266Q719 193 673 131Q627 69 554 31Q482 -6 392 -6Q291 -6 209 39Q128 85 81 166Q35 247 35 350Q35 453 81 534Q128 616 209 661Q291 707 391 707Q509 707 596 649Q683 592 716 488L555 488Z" fill="currentColor" /></g>
+    <g transform="translate(67.835 0.000) scale(0.025334 -0.025334)"><path d="M207 698L207 266Q207 195 244 157Q281 120 348 120Q416 120 453 157Q490 195 490 266L490 698L631 698L631 267Q631 178 592 116Q554 55 489 24Q425 -7 346 -7Q268 -7 204 24Q141 55 104 116Q67 178 67 267L67 698L207 698Z" fill="currentColor" /></g>
+    <g transform="translate(83.493 0.000) scale(0.025334 -0.025334)"><path d="M310 -7Q237 -7 178 18Q120 43 86 90Q52 137 51 201L201 201Q204 158 231 133Q259 108 307 108Q356 108 384 131Q412 155 412 193Q412 224 393 244Q374 264 345 275Q317 287 267 301Q199 321 156 340Q114 360 83 399Q53 439 53 505Q53 567 84 613Q115 659 171 683Q227 708 299 708Q407 708 474 655Q542 603 549 509L395 509Q393 545 364 568Q336 592 289 592Q248 592 223 571Q199 550 199 510Q199 482 217 463Q236 445 263 433Q291 422 341 407Q409 387 452 367Q495 347 526 307Q557 267 557 202Q557 146 528 98Q499 50 443 21Q387 -7 310 -7Z" fill="currentColor" /></g>
   </svg>
 );
 
@@ -62,8 +85,8 @@ export function Layout() {
     <div className={`app-shell${collapsed ? " rail-collapsed" : ""}`}>
       <aside className="rail">
         <div className="rail-brand">
-          <BrandMark />
-          <span className="rail-wordmark">Argus</span>
+          <ArchMark />
+          <Wordmark />
         </div>
         <nav className="rail-nav" aria-label="Dashboard sections">
           {NAV.map((item) => {
