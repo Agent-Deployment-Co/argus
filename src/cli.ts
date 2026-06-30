@@ -38,6 +38,8 @@ import { logger as log, logError, type Log } from "./logger.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_PORT = Number(process.env.ARGUS_PORT) || 4242;
+const DEFAULT_INDEX_INTERVAL_MIN = 1;
+const DEFAULT_SYNC_INTERVAL_MIN = 5;
 
 // The command-specific option shapes below layer each subcommand's own flags on top of the shared
 // store-selection helpers used by extracted command bodies and long-running loops.
@@ -725,7 +727,7 @@ const index = defineCommand({
     },
     interval: {
       type: "string",
-      default: "5",
+      default: String(DEFAULT_INDEX_INTERVAL_MIN),
       description: "Minutes between reads (with --watch)",
       valueHint: "N",
     },
@@ -752,7 +754,7 @@ const index = defineCommand({
           await watchIndex(
             {
               ...syncOptions(args),
-              intervalMin: Number(args.interval) || 5,
+              intervalMin: Number(args.interval) || DEFAULT_INDEX_INTERVAL_MIN,
               extractTasks,
               retainText,
             },
@@ -788,14 +790,14 @@ const sync = defineCommand({
   args: {
     ...logArgs,
     watch: { type: "boolean", default: false, description: "Keep uploading on an interval" },
-    interval: { type: "string", default: "5", description: "Minutes between uploads (with --watch)", valueHint: "N" },
+    interval: { type: "string", default: String(DEFAULT_SYNC_INTERVAL_MIN), description: "Minutes between uploads (with --watch)", valueHint: "N" },
     all: { type: "boolean", default: false, description: "Re-upload every session, skipping local cursor filtering" },
   },
   run: handler(async (args) => {
     const base: PushLoopOptions = { source: "all", all: !!args.all };
     if (args.watch) {
       const ac = abortOnSignals();
-      await watchSync({ ...base, intervalMin: Number(args.interval) || 5 }, log, ac.signal);
+      await watchSync({ ...base, intervalMin: Number(args.interval) || DEFAULT_SYNC_INTERVAL_MIN }, log, ac.signal);
     } else {
       await runPushOnce(base, log);
     }
@@ -813,8 +815,8 @@ const runCmd = defineCommand({
     ...taskArgs,
     ...logArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
-    "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
-    "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
+    "index-interval": { type: "string", default: String(DEFAULT_INDEX_INTERVAL_MIN), description: "Minutes between transcript reads", valueHint: "N" },
+    "sync-interval": { type: "string", default: String(DEFAULT_SYNC_INTERVAL_MIN), description: "Minutes between uploads", valueHint: "N" },
     "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
     debug: { type: "boolean", default: false, description: "Print task extraction debug logs" },
   },
@@ -823,8 +825,8 @@ const runCmd = defineCommand({
       {
         ...syncOptions(args),
         port: Number(args.port) || DEFAULT_PORT,
-        indexIntervalMin: Number(args["index-interval"]) || 5,
-        syncIntervalMin: Number(args["sync-interval"]) || 5,
+        indexIntervalMin: Number(args["index-interval"]) || DEFAULT_INDEX_INTERVAL_MIN,
+        syncIntervalMin: Number(args["sync-interval"]) || DEFAULT_SYNC_INTERVAL_MIN,
         noSync: !!args["no-sync"],
         taskExtraction: taskExtractionOptions(args),
       },
