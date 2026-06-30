@@ -263,8 +263,9 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
       // /api/sessions resource, so it's omitted from the bulk /api/snapshot payload.
       build: { source: "all", readOnly: true, includeSessions: false },
       // Per-session reindex (POST /api/sessions/:id/reindex) honors the argus.json task-extraction
-      // setting (flag > env > argus.json > default), resolved here from config rather than a CLI flag.
-      taskExtraction: taskExtractionOptions({}),
+      // setting (flag > env > argus.json > default), resolved at refresh time so Settings changes
+      // made while serving take effect without a restart.
+      taskExtraction: () => taskExtractionOptions({}),
     },
     log,
   );
@@ -979,7 +980,7 @@ const runCmd = defineCommand({
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
         noSync: !!args["no-sync"],
-        taskExtraction: taskExtractionOptions(args),
+        taskExtraction: () => taskExtractionOptions(args),
       },
       log,
     );
