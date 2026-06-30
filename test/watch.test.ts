@@ -4,7 +4,7 @@
 import "./helpers/isolated-config.ts";
 import { describe, expect, test } from "bun:test";
 import { sleep } from "../src/backoff.ts";
-import { watchIndex, watchSync, type WatchSyncOptions } from "../src/watch.ts";
+import { createLoopWake, watchIndex, watchSync, type WatchSyncOptions } from "../src/watch.ts";
 import type { PushCredentials, PushResult } from "../src/push.ts";
 
 const ok = (status = 200): PushResult => ({ ok: true, status, body: "ok" });
@@ -45,6 +45,22 @@ describe("watchIndex", () => {
     ac.abort();
     await p;
     expect(calls).toBeGreaterThan(1);
+  });
+
+  test("a wake signal starts the next index pass before the interval", async () => {
+    const ac = new AbortController();
+    const wake = createLoopWake();
+    let calls = 0;
+    const p = watchIndex({ source: "claude", intervalMin: 1, wakeSignal: wake.signal }, () => {}, ac.signal, {
+      index: async () => {
+        calls++;
+        if (calls === 1) setTimeout(() => wake.wake(), 0);
+      },
+    });
+    while (calls < 2) await sleep(5);
+    ac.abort();
+    await p;
+    expect(calls).toBe(2);
   });
 });
 

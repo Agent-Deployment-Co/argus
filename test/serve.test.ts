@@ -263,10 +263,10 @@ describe("serve API", () => {
 
 describe("secret settings endpoints (#132)", () => {
   // A file-backed store in a temp dir so the test never touches the real keychain.
-  function appWithSecrets() {
+  function appWithSecrets(opts: { onSettingsChanged?: () => void } = {}) {
     const dir = mkdtempSync(join(tmpdir(), "argus-serve-secrets-"));
     const store = new FileSecretStore(join(dir, "secrets.json"));
-    return createApp(async () => fixtureSnapshot(), null, { secrets: store });
+    return createApp(async () => fixtureSnapshot(), null, { secrets: store, ...opts });
   }
   // A same-origin POST carrying a JSON body (the app header + loopback Host).
   const post = (value: unknown) => ({
@@ -299,6 +299,18 @@ describe("secret settings endpoints (#132)", () => {
     const write = await app.request("/api/settings/secrets/ARGUS_HUB_KEY", post("hub-secret-WXYZ"));
     expect(write.status).toBe(200);
     expect(await write.json()).toEqual({ configured: true, hint: "…WXYZ" });
+  });
+
+  test("successful secret writes and deletes notify the running service", async () => {
+    let changes = 0;
+    const app = appWithSecrets({ onSettingsChanged: () => changes++ });
+    const write = await app.request("/api/settings/secrets/ARGUS_HUB_KEY", post("hub-secret-WXYZ"));
+    expect(write.status).toBe(200);
+    expect(changes).toBe(1);
+
+    const removed = await app.request("/api/settings/secrets/ARGUS_HUB_KEY", del);
+    expect(removed.status).toBe(200);
+    expect(changes).toBe(2);
   });
 
   test("rejects a non-allowlisted secret name", async () => {
@@ -429,11 +441,11 @@ describe("secret settings endpoints (#132)", () => {
 
 describe("settings endpoints (#154)", () => {
   // A temp argus.json so the test never touches the real config.
-  function appWithConfig(contents = "{}") {
+  function appWithConfig(contents = "{}", opts: { onSettingsChanged?: () => void } = {}) {
     const dir = mkdtempSync(join(tmpdir(), "argus-serve-settings-"));
     const configPath = join(dir, "argus.json");
     writeFileSync(configPath, contents, "utf8");
-    return { app: createApp(async () => fixtureSnapshot(), null, { configPath }), configPath };
+    return { app: createApp(async () => fixtureSnapshot(), null, { configPath, ...opts }), configPath };
   }
   const put = (value: unknown) => ({
     method: "PUT",
@@ -456,6 +468,18 @@ describe("settings endpoints (#154)", () => {
     const body = (await res.json()) as { setting: { fileValue: unknown } };
     expect(body.setting.fileValue).toBe("openai");
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({ llm: { provider: "openai" } });
+  });
+
+  test("successful setting writes notify the running service", async () => {
+    let changes = 0;
+    const { app } = appWithConfig("{}", { onSettingsChanged: () => changes++ });
+    const ok = await app.request("/api/settings/llm.provider", put("openai"));
+    expect(ok.status).toBe(200);
+    expect(changes).toBe(1);
+
+    const invalid = await app.request("/api/settings/llm.provider", put("nonsense"));
+    expect(invalid.status).toBe(400);
+    expect(changes).toBe(1);
   });
 
   test("PUT rejects an invalid value with 400", async () => {

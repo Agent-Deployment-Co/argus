@@ -31,6 +31,53 @@ export interface WatchIndexOptions extends SyncOptions {
   extractTasks?: boolean;
   /** Tri-state `--retain-text` override threaded to each pass (undefined = defer to argus.json/env, #120). */
   retainText?: boolean;
+  /** Wakes the loop before the normal interval, e.g. after web Settings writes. */
+  wakeSignal?: LoopWakeSignal;
+}
+
+export interface LoopWakeSignal {
+  wait(timeoutMs: number | undefined, signal: AbortSignal): Promise<void>;
+}
+
+export interface LoopWakeController {
+  signal: LoopWakeSignal;
+  wake(): void;
+}
+
+/** A tiny in-process wake signal for supervised loops. It is edge-triggered: callers that are already
+ *  sleeping wake immediately, and callers that start waiting after the wake just wait for the next one. */
+export function createLoopWake(): LoopWakeController {
+  const waiters = new Set<() => void>();
+  const signal: LoopWakeSignal = {
+    wait(timeoutMs, abortSignal) {
+      if (abortSignal.aborted) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          waiters.delete(done);
+          abortSignal.removeEventListener("abort", done);
+          resolve();
+        };
+        waiters.add(done);
+        abortSignal.addEventListener("abort", done, { once: true });
+        if (timeoutMs !== undefined) timer = setTimeout(done, timeoutMs);
+      });
+    },
+  };
+  return {
+    signal,
+    wake() {
+      for (const waiter of [...waiters]) waiter();
+    },
+  };
+}
+
+function waitForNextLoop(intervalMs: number, signal: AbortSignal, wakeSignal?: LoopWakeSignal): Promise<void> {
+  return wakeSignal ? wakeSignal.wait(intervalMs, signal) : sleep(intervalMs, signal);
 }
 
 /** Test seam: override the one-shot index pass (defaults to the real `runIndex`). */
@@ -61,7 +108,7 @@ export async function watchIndex(opts: WatchIndexOptions, log: Log, signal: Abor
     async (sig) => {
       while (!sig.aborted) {
         await indexPass(opts, log, opts.extractTasks, false, opts.retainText, interpretCollapser);
-        await sleep(intervalMs, sig);
+        await waitForNextLoop(intervalMs, sig, opts.wakeSignal);
       }
     },
     { signal, log },
@@ -84,6 +131,8 @@ export interface WatchSyncOptions extends PushLoopOptions {
   /** What to do when there's no usable credential: standalone `sync --watch` fails fast at startup;
    *  the run-embedded leg stays dormant and recovers once the user logs in. */
   onUnauthenticated: OnUnauthenticated;
+  /** Wakes the loop before the normal interval, e.g. after web Settings writes. */
+  wakeSignal?: LoopWakeSignal;
 }
 
 /**
@@ -215,6 +264,31 @@ export interface WatchSyncDeps {
   waitForTokenChange?: (signal: AbortSignal) => Promise<void>;
 }
 
+async function waitForTokenChangeOrWake(
+  waitForToken: (signal: AbortSignal) => Promise<void>,
+  wakeSignal: LoopWakeSignal | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  if (!wakeSignal) {
+    await waitForToken(signal);
+    return;
+  }
+  const tokenAc = new AbortController();
+  const wakeAc = new AbortController();
+  const onAbort = () => {
+    tokenAc.abort();
+    wakeAc.abort();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([waitForToken(tokenAc.signal), wakeSignal.wait(undefined, wakeAc.signal)]);
+  } finally {
+    tokenAc.abort();
+    wakeAc.abort();
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
 export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortSignal, deps: WatchSyncDeps = {}): Promise<void> {
   const resolveCreds = deps.resolveCredentials ?? resolveCredentials;
   const push = deps.push ?? pushSnapshotForOpts;
@@ -241,9 +315,9 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
         const cred = hubMode ? ({} as PushCredentials) : await resolveCreds(opts.endpoint, log);
         if (!cred) {
           // Log once, then park until the token file actually changes — no polling, no repeated
-          // refresh attempts. `argus login` writes the token file, which wakes this wait.
+          // refresh attempts. `argus login` writes the token file, and Settings writes wake this wait.
           collapser.note("Not logged in. Pausing uploads until you run `argus login`.", "warn");
-          await waitForToken(sig);
+          await waitForTokenChangeOrWake(waitForToken, opts.wakeSignal, sig);
           continue;
         }
         let res: PushResult;
@@ -260,12 +334,12 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           // interval. Routed through the collapser so the same line doesn't repeat every cycle.
           collapser.note(res.body);
           backoff.reset();
-          await sleep(intervalMs, sig);
+          await waitForNextLoop(intervalMs, sig, opts.wakeSignal);
         } else if (res.ok) {
           collapser.flush();
           log(`Uploaded (${res.status}).`);
           backoff.reset();
-          await sleep(intervalMs, sig);
+          await waitForNextLoop(intervalMs, sig, opts.wakeSignal);
         } else if (res.status === 422) {
           // Schema version mismatch: permanent until one side is upgraded. The Hub's body states
           // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
