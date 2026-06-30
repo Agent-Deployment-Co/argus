@@ -6,9 +6,9 @@
 import { superviseLoop } from "./backoff.ts";
 import type { BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
 import { startServer } from "./api/serve.ts";
-import { watchIndex, watchSync } from "./watch.ts";
+import { createLoopWake, watchIndex, watchSync } from "./watch.ts";
 import type { SyncOptions } from "./cli-options.ts";
-import type { ResolvedTaskExtraction } from "./config.ts";
+import type { TaskExtractionResolver } from "./api/serve.ts";
 import type { Log } from "./logger.ts";
 
 export interface RunOptions extends SyncOptions {
@@ -17,7 +17,8 @@ export interface RunOptions extends SyncOptions {
   syncIntervalMin: number;
   endpoint: string;
   noSync: boolean;
-  taskExtraction: ResolvedTaskExtraction;
+  hubOnlySync: boolean;
+  taskExtraction: TaskExtractionResolver;
 }
 
 /**
@@ -41,7 +42,12 @@ export function assertHomeResolved(log: Log): void {
 
 /** The web-server leg: run the server until shutdown, restarting with backoff if it errors. */
 async function serveLeg(
-  opts: { port: number; build: BuildDashboardOptions; taskExtraction: ResolvedTaskExtraction },
+  opts: {
+    port: number;
+    build: BuildDashboardOptions;
+    taskExtraction: TaskExtractionResolver;
+    onSettingsChanged?: () => void;
+  },
   log: Log,
   signal: AbortSignal,
 ): Promise<void> {
@@ -54,6 +60,7 @@ async function serveLeg(
           open: false,
           build: opts.build,
           taskExtraction: opts.taskExtraction,
+          onSettingsChanged: opts.onSettingsChanged,
           installSignalHandlers: false,
           signal: sig,
         },
@@ -96,14 +103,26 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
   try {
     // Each leg is independently supervised, so a serve crash never stops indexing and an index hiccup
     // never stops serving. The sync leg stays dormant (rather than failing) when not logged in.
+    const settingsWake = createLoopWake();
     const legs: Promise<void>[] = [
-      watchIndex({ ...src, intervalMin: opts.indexIntervalMin }, log, ac.signal),
-      serveLeg({ port: opts.port, build, taskExtraction: opts.taskExtraction }, log, ac.signal),
+      watchIndex({ ...src, intervalMin: opts.indexIntervalMin, wakeSignal: settingsWake.signal }, log, ac.signal),
+      serveLeg(
+        { port: opts.port, build, taskExtraction: opts.taskExtraction, onSettingsChanged: settingsWake.wake },
+        log,
+        ac.signal,
+      ),
     ];
     if (!opts.noSync) {
       legs.push(
         watchSync(
-          { ...build, endpoint: opts.endpoint, intervalMin: opts.syncIntervalMin, onUnauthenticated: "dormant" },
+          {
+            ...build,
+            endpoint: opts.endpoint,
+            intervalMin: opts.syncIntervalMin,
+            onUnauthenticated: "dormant",
+            hubOnly: opts.hubOnlySync,
+            wakeSignal: settingsWake.signal,
+          },
           log,
           ac.signal,
         ),
