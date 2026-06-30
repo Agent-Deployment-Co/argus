@@ -78,6 +78,27 @@ describe("version flag", () => {
   }
 });
 
+describe("banner", () => {
+  test("bare `argus` shows usage without the banner", () => {
+    const { status, stdout, stderr } = runCli([]);
+    expect(status).toBe(0);
+    expect(stdout + stderr).toContain("USAGE");
+    expect(stdout + stderr).not.toContain("Argus by ADC");
+  });
+
+  test("ordinary commands do not print the banner", () => {
+    const { status, stdout, stderr } = runCli(["status"]);
+    expect(status).toBe(0);
+    expect(stdout + stderr).not.toContain("Argus by ADC");
+  });
+
+  test("`run` prints the banner", () => {
+    const { status, stdout, stderr } = runCli(["run", "--help"]);
+    expect(status).toBe(0);
+    expect(stdout + stderr).toContain("Argus by ADC");
+  });
+});
+
 describe("cli argument validation", () => {
   test("rejects an unknown flag instead of silently ignoring it", () => {
     const { status, stderr } = runCli(["sync", "--opne"]);
