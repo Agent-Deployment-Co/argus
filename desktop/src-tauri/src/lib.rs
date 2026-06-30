@@ -2,9 +2,10 @@
 //
 // On launch it starts `argus run` (index + serve, plus sync when a Hub URL + key are configured —
 // otherwise `--no-sync`, all supervised in one process) on a free local port and exposes a tray menu
-// whose items map onto the CLI's command surface. Logs are written to a rotating file. "Open Argus"
+// whose items map onto the CLI's command surface. Logs are written to rotating files. "Open Argus"
 // opens the user's default browser at the served URL; the only embedded webview is the bundled About
 // screen.
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{
@@ -51,6 +52,7 @@ const INSTALL_UPDATE_LABEL: &str = "Install Update";
 const CHECKING_FOR_UPDATES_LABEL: &str = "Checking for updates...";
 const INSTALLING_UPDATE_LABEL: &str = "Installing Update...";
 const DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES: u64 = 60;
+const DESKTOP_LOG_MAX_BYTES: u64 = 5_000_000;
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -75,6 +77,46 @@ fn web_root(app: &AppHandle) -> Option<String> {
     let dir = app.path().resource_dir().ok()?.join("web");
     dir.to_str().map(|s| s.to_string())
 }
+
+fn sidecar_log_file(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_log_dir()
+        .map(|dir| dir.join("argus.log"))
+        .map_err(|e| format!("locating the sidecar log file: {e}"))
+}
+
+fn append_sidecar_log(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let incoming = bytes.len() as u64;
+    if path
+        .metadata()
+        .map(|meta| meta.len() != 0 && meta.len().saturating_add(incoming) > DESKTOP_LOG_MAX_BYTES)
+        .unwrap_or(false)
+    {
+        std::fs::remove_file(path)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.flush()
+}
+
+#[cfg(debug_assertions)]
+fn mirror_sidecar_log(bytes: &[u8]) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(bytes);
+    let _ = stdout.flush();
+}
+
+#[cfg(not(debug_assertions))]
+fn mirror_sidecar_log(_bytes: &[u8]) {}
 
 /// Reflect the running/stopped state in the tray menu: status label text and which of Start/Stop
 /// is selectable.
@@ -116,6 +158,7 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     if let Some(root) = web_root(app) {
         command = command.env("ARGUS_WEB_ROOT", root);
     }
+    let sidecar_log = sidecar_log_file(app)?;
     let (mut rx, child) = command
         .spawn()
         .map_err(|e| format!("starting the argus sidecar: {e}"))?;
@@ -124,11 +167,11 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
-                CommandEvent::Stdout(line) => {
-                    log::info!("[argus] {}", String::from_utf8_lossy(&line).trim_end())
-                }
-                CommandEvent::Stderr(line) => {
-                    log::warn!("[argus] {}", String::from_utf8_lossy(&line).trim_end())
+                CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
+                    if let Err(err) = append_sidecar_log(&sidecar_log, &bytes) {
+                        log::warn!("writing argus sidecar output: {err}");
+                    }
+                    mirror_sidecar_log(&bytes);
                 }
                 CommandEvent::Terminated(payload) => {
                     log::warn!("[argus] sidecar exited: {:?}", payload.code);
@@ -731,15 +774,15 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            // Write the sidecar's forwarded output (and our own log lines) to a rotating file so a
-            // synced install keeps a durable record to troubleshoot uploads from. In dev, also mirror
-            // to stdout.
+            // The sidecar writes its own timestamped log lines directly to argus.log. Keep the
+            // desktop shell's own diagnostics in a separate rotating file so those Rust-formatted
+            // lines don't wrap the CLI's log format. In dev, also mirror desktop lines to stdout.
             let mut log_builder = tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
                 .rotation_strategy(RotationStrategy::KeepOne)
-                .max_file_size(5_000_000)
+                .max_file_size(DESKTOP_LOG_MAX_BYTES.into())
                 .target(Target::new(TargetKind::LogDir {
-                    file_name: Some("argus".into()),
+                    file_name: Some("argus-desktop".into()),
                 }));
             if cfg!(debug_assertions) {
                 log_builder = log_builder.target(Target::new(TargetKind::Stdout));
