@@ -27,9 +27,10 @@ import {
 } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
-/** The task-extraction provider default, preserved from before the generalization: enabling task
- *  extraction with no provider configured uses the local `claude` CLI. */
-const DEFAULT_TASK_PROVIDER: LlmProvider = "claude-cli";
+/** The default LLM provider, preserved from before the generalization: with no provider configured,
+ *  model-driven features use the local `claude` CLI. The single source of truth for this default —
+ *  `resolveActiveProvider` and the provider setting's `ui.effectiveDefault` both derive from it. */
+export const DEFAULT_TASK_PROVIDER: LlmProvider = "claude-cli";
 
 /** Back-compat aliases for provider values that were released under older names, so existing
  *  argus.json / env values keep resolving without a warning. */
@@ -627,14 +628,21 @@ export function resolveProviderScoped<T>(
   return setting.default;
 }
 
+/** The active LLM provider: `llm.provider` (flag > env > file), or the built-in default when unset.
+ *  The one place the "what provider is in effect" question is answered. */
+export function resolveActiveProvider(
+  file: ArgusConfig = loadConfig(),
+  flags: Record<string, unknown> = {},
+): LlmProvider {
+  return resolveSetting(LLM_SETTINGS.provider, flags, file) ?? DEFAULT_TASK_PROVIDER;
+}
+
 function resolveLlmConfig(
   flags: Record<string, unknown>,
   file: ArgusConfig,
   overrides: { provider?: LlmProvider; model?: string; command?: string },
-  defaultProvider: LlmProvider,
 ): ResolvedLlmConfig {
-  const provider =
-    overrides.provider ?? resolveSetting(LLM_SETTINGS.provider, flags, file) ?? defaultProvider;
+  const provider = overrides.provider ?? resolveActiveProvider(file, flags);
   // Provider-scoped fields resolve against the active provider's own block, so switching providers
   // never picks up another provider's model/command/etc.
   const model = overrides.model ?? resolveProviderScoped(LLM_SETTINGS.model, flags, file, provider);
@@ -685,7 +693,7 @@ export function resolveTaskExtraction(
     model: resolveSetting(TASK_SETTINGS.model, flags, file),
     command: resolveSetting(TASK_SETTINGS.command, flags, file),
   };
-  const llm = resolveLlmConfig(flags, file, overrides, DEFAULT_TASK_PROVIDER);
+  const llm = resolveLlmConfig(flags, file, overrides);
 
   const maxPerHour = resolveSetting(TASK_SETTINGS.maxSessionsPerHour, flags, file);
   const resolved: ResolvedTaskExtraction = {

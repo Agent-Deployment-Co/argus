@@ -11,6 +11,7 @@ import {
   LLM_SETTINGS,
   present,
   providerConfigPath,
+  resolveActiveProvider,
   resolveProviderScoped,
   resolveSetting,
   resolveTaskExtraction,
@@ -206,16 +207,6 @@ const EDITABLE_PROVIDER_FIELDS: Map<string, Setting<unknown>> = new Map(
 /** Match a provider-scoped write path: `llm.providerConfigs.<provider>.<field>`. */
 const PROVIDER_CONFIG_PATH = /^llm\.providerConfigs\.([^.]+)\.([^.]+)$/;
 
-/** The active provider for a config file: `llm.provider`, or its effective default (claude-cli) when
- *  unset — so provider-scoped fields describe against the provider whose block actually resolves. */
-function activeProvider(file: ArgusConfig): string {
-  return (
-    resolveSetting(LLM_SETTINGS.provider, {}, file) ??
-    (LLM_SETTINGS.provider.ui?.effectiveDefault as string | undefined) ??
-    "claude-cli"
-  );
-}
-
 /** Build the JSON-safe descriptor for one setting. For a provider-scoped setting, file/effective values
  *  are read against `opts.provider` (the active provider). `claudeBinary` (the auto-resolved `claude`
  *  path) is threaded in only by the serve route, so the resolution (which may spawn a login shell) is an
@@ -225,7 +216,7 @@ function describe(
   file: ArgusConfig,
   opts: { claudeBinary?: string; provider?: string } = {},
 ): SettingDescriptor {
-  const provider = opts.provider ?? activeProvider(file);
+  const provider = opts.provider ?? resolveActiveProvider(file);
   const scoped = setting.providerScoped === true;
   // Provider-scoped: read the active provider's block (legacy flat value is the fallback). Otherwise the
   // flat path. Resolve with no flags — the serve process carries none, so only an env var can override.
@@ -259,7 +250,7 @@ function buildProviderConfigs(file: ArgusConfig): Record<string, Record<string, 
   for (const [prov, cfg] of Object.entries(stored)) out[prov] = { ...cfg };
   // Fold legacy flat fields into the active provider (scoped values win), so an old `llm.model` etc.
   // still pre-populates its field instead of looking unset.
-  const prov = activeProvider(file);
+  const prov = resolveActiveProvider(file);
   const legacy: Record<string, unknown> = {};
   for (const s of EDITABLE.values()) {
     if (!s.providerScoped) continue;
@@ -274,7 +265,7 @@ function buildProviderConfigs(file: ArgusConfig): Record<string, Record<string, 
  *  is the auto-resolved `claude` path used as the Claude CLI path placeholder; the serve route passes
  *  it (via `resolveClaudeBinary()`) and other callers can omit it. */
 export function describeSettings(file: ArgusConfig = loadConfig(), claudeBinary?: string): SettingsResponse {
-  const provider = activeProvider(file);
+  const provider = resolveActiveProvider(file);
   return {
     categories: LAYOUT.map((cat) => ({
       id: cat.id,
