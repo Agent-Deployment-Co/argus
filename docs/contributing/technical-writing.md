@@ -7,8 +7,9 @@ How to structure and format the docs in this repo. This pairs with
 
 People evaluating or running Argus: moderately technical, comfortable in a
 terminal and with the language of agents, but new to Argus and not reading the
-source. Write for that reader. The architecture, session-model, and
-database-schema pages go deeper for contributors; everything else stays at the
+source. Write for that reader. The contributor-depth reference (the indexing
+pipeline, session model, store schema, and the like) lives in `docs/internals/`,
+which is excluded from the published site; everything published stays at the
 user's altitude.
 
 ## Page shape
@@ -30,6 +31,11 @@ Drop a `.md` in `docs/`, then register it in the `sidebar` array in
 nothing links to it. Reference other pages with a root-absolute link
 (`/configuration`), matching the existing pages.
 
+A contributor-only page (architecture or store internals, not for end users) goes
+in `docs/internals/` instead. That directory is excluded from the published site,
+so don't add it to the sidebar, and link between internal pages with relative
+links (`./session-model.md`) since they're read in the repo, not on the site.
+
 ## Code and commands
 
 - Fence every snippet with its language (` ```bash `, ` ```ts `, ` ```json `).
@@ -50,8 +56,8 @@ Use the product's words, consistently.
   sources.
 - `serve`, `index`, `sync`, `run` for the commands. `sync` is the upload (it was
   formerly `push`); don't call it "push" in docs.
-- Keep internal names (producer, reconcile, fragment, fact row) off user-facing
-  pages. They're fine on the architecture and database-schema pages.
+- Keep internal names (producer, reconcile, fragment, fact row) off published
+  pages. They're fine in `docs/internals/`, which documents internals on purpose.
 
 ## Formatting
 

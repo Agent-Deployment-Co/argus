@@ -36,10 +36,6 @@ to stop. Nothing leaves your machine — it reads your local transcripts and ser
 
 ## Where to go next
 
-- **[Architecture](/architecture)** — the one-way pipeline, from transcripts to dashboard.
-- **[Session model](/session-model)** — how raw transcripts become normalized sessions.
-- **[Task interpretation](/task-interpretation)** — the optional, model-driven task pass.
-- **[Web app](/web-app)** — the interactive local dashboard in depth.
+- **[Installation](/installation)** — install the macOS menu bar app, or run the CLI through `npx`.
 - **[Configuration](/configuration)** — settings, flags, and environment variables.
-- **[Database schema](/database-schema)** — the local store's tables and relationships.
-- **[LLM providers](/llm-providers)** — the shared LLM access layer.
+- **[Argus Hub](/argus-hub)** — collect usage across a team and view an org-wide dashboard.

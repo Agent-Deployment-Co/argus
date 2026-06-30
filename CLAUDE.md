@@ -24,7 +24,7 @@ When you need example data, synthesize it. Use redacted, obviously-fake fixtures
 Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
 local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, …) and
 presents them two ways: an interactive local web app (`serve` — the preferred UI; see
-`docs/web-app.md`), or a per-(org, user) snapshot uploaded to a private Cloudflare Worker backend
+`docs/internals/web-app.md`), or a per-(org, user) snapshot uploaded to a private Cloudflare Worker backend
 (`sync`, formerly `push`). `argus run` ties the long-running pieces together: it keeps the local
 store current (`index --watch`), serves the web app, and uploads on a schedule (`sync --watch`) in
 one supervised foreground process. Nothing is uploaded during `serve`/`index`; all parsing is local.
@@ -106,7 +106,7 @@ particular: no em-dashes, and don't surface code internals on user-facing pages.
 
 ## Architecture
 
-The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/architecture.md`):
+The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/internals/architecture.md`):
 **`src/indexing/`** (the pipeline: `pipeline.ts` coordinator, `discover.ts`, `producer.ts`,
 `reconcile.ts`, `friction.ts`, `parse/producers/*`, `interpret/*`), **`src/store/`** (`store.ts`,
 `store-contract.ts`, `session-store.ts`), **`src/reporting/`** (`aggregate.ts`,
@@ -163,7 +163,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
   Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `$ARGUS_CONFIG_DIR/pricing.json`.
 
-- **`src/llm/`** — The shared LLM access layer (#132; design in `docs/llm-providers.md`). `registry.ts`
+- **`src/llm/`** — The shared LLM access layer (#132; design in `docs/internals/llm-providers.md`). `registry.ts`
   is the single source of truth: a list of `ProviderDescriptor`s (`providers/*` — `local.ts` =
   `claude-cli`/`command`; `claude-api`/`openai`/`gemini` = direct HTTP over `http.ts`, which owns
   429/5xx retry + a size cap; `openrouter` = a preset over the openai transport). `index.ts`'s
@@ -203,7 +203,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   **devDependencies only** — bundled into `dist/web` at build, never installed by end users; only
   `hono`+`@hono/node-server` are runtime deps. `web/src/types.ts` imports the CLI `Dashboard` types
   **type-only** from `src/` (incl. `src/api/`), so the API payload and UI can't drift. The preferred
-  UI; full design + rationale in **`docs/web-app.md`**. `serve` takes only `--port`/`-p` and `--open`
+  UI; full design + rationale in **`docs/internals/web-app.md`**. `serve` takes only `--port`/`-p` and `--open`
   (the date/source filters are per-request query params, not CLI flags) and resolves per-session-reindex
   task extraction from `argus.json`. New `/api/sessions`+`/api/session/:id` response shapes are
   local-only (not on the `@agentdeploymentco/argus-schema` sync wire).
@@ -225,7 +225,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 
 - **`indexing/interpret/` (`index.ts`, `task-extraction.ts`, `task-candidates.ts`, `dialogue.ts`, `summarize.ts`)** —
   The Interpret stage: the one model-driven, opt-in step (#88/#91; full design in
-  `docs/task-interpretation.md`). `interpret/index.ts` is the stage entry (`extractTasksForSessions`,
+  `docs/internals/task-interpretation.md`). `interpret/index.ts` is the stage entry (`extractTasksForSessions`,
   `taskExtractionActive`) the pipeline calls. `task-candidates.ts`
   filters user-authored text into `TaskCandidateFact`s and recognizes Argus's own `claude -p` prompts
   so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments

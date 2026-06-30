@@ -44,8 +44,8 @@ apply to docs as much as to terminal output.
 - **Don't name code internals.** Describe the effect the reader observes, not the
   implementation. "Re-reads your transcripts from disk," not "clears the structural
   index." Internal vocabulary (table names, layer numbers, fragments, fact rows)
-  stays off user-facing pages. The architecture and database-schema pages are the
-  exception: they document internals on purpose.
+  stays off published pages. The `docs/internals/` pages are the exception: they
+  document internals on purpose and are excluded from the published site.
 - **Product names.** Anthropic styles it **Claude Cowork** (lowercase "w"). Use that
   exact casing. The other sources are Claude Code, Codex, and Gemini.
 - **Never use real data.** This is a public repo. Synthesize obviously-fake

@@ -140,7 +140,7 @@ multiple models, so pricing combined token totals once would produce incorrect r
 ## Web app
 
 `argus serve` (`src/serve.ts`) serves an interactive React app from `web/`. See
-[docs/web-app.md](docs/web-app.md) for the full design and rationale. The essentials for working
+[docs/internals/web-app.md](docs/internals/web-app.md) for the full design and rationale. The essentials for working
 on it:
 
 - **Dependencies.** Runtime deps add only `hono` + `@hono/node-server`. The frontend stack
