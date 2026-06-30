@@ -457,25 +457,70 @@ fn auto_update_check_interval_minutes() -> u64 {
         .unwrap_or(DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES)
 }
 
-/// True when both `hub.url` and `hub.key` are configured (env or `argus.json`), the same condition
-/// the CLI's `resolveHubConfig` uses to switch on Hub uploads. When true the tray runs `argus run`
-/// with sync on (no `--no-sync`). Tolerant: a missing or malformed config simply reads as "not
-/// configured", so the service still starts (index + serve only).
+/// True when both the Hub URL and key are configured — the same condition the CLI's
+/// `resolveHubConfig` uses to switch on Hub uploads. When true the tray runs `argus run` with sync on
+/// (no `--no-sync`). Tolerant: a missing or malformed config simply reads as "not configured", so the
+/// service still starts (index + serve only).
 fn hub_configured() -> bool {
-    if non_empty_env("ARGUS_HUB_URL").is_some() && non_empty_env("ARGUS_HUB_KEY").is_some() {
+    hub_url_present() && hub_key_present()
+}
+
+/// True when a non-empty Hub URL is set in the env or `argus.json`. The URL is not a secret, so it
+/// stays in `argus.json` (it's never moved into the keychain).
+fn hub_url_present() -> bool {
+    if non_empty_env("ARGUS_HUB_URL").is_some() {
         return true;
     }
-    let Some(json) = read_argus_config_json() else {
-        return false;
-    };
-    let non_empty = |value: Option<&serde_json::Value>| {
-        value
-            .and_then(|v| v.as_str())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false)
-    };
-    let hub = json.get("hub");
-    non_empty(hub.and_then(|h| h.get("url"))) && non_empty(hub.and_then(|h| h.get("key")))
+    read_argus_config_json()
+        .and_then(|json| {
+            json.get("hub")
+                .and_then(|hub| hub.get("url"))
+                .and_then(|value| value.as_str())
+                .map(|value| !value.trim().is_empty())
+        })
+        .unwrap_or(false)
+}
+
+/// Resolve the Hub key the same way the CLI's `resolveHubKey` does: the `ARGUS_HUB_KEY` env var wins,
+/// then the OS secret store. On macOS that store is the login keychain — read via the system
+/// `security` tool using the same `(service, account)` identity the CLI writes (`secrets.ts`'s
+/// `KEYCHAIN_SERVICE`). Reading through `/usr/bin/security` (as the CLI also does) keeps the item's
+/// ACL satisfied, so this never raises a keychain prompt. A legacy plaintext `hub.key` still in
+/// `argus.json` (pre-migration) also counts, which doubles as the fallback on platforms whose secret
+/// store we don't read here. Without this, a key the CLI has already migrated into the keychain would
+/// read as "not configured" and the tray would wrongly launch with `--no-sync`.
+fn hub_key_present() -> bool {
+    if non_empty_env("ARGUS_HUB_KEY").is_some() {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // `security find-generic-password -w` prints just the secret and exits nonzero when the item
+        // is absent; command_stdout maps both "nonzero" and "empty" to None.
+        if command_stdout(
+            "/usr/bin/security",
+            &[
+                "find-generic-password",
+                "-s",
+                "co.agentdeployment.argus",
+                "-a",
+                "ARGUS_HUB_KEY",
+                "-w",
+            ],
+        )
+        .is_some()
+        {
+            return true;
+        }
+    }
+    read_argus_config_json()
+        .and_then(|json| {
+            json.get("hub")
+                .and_then(|hub| hub.get("key"))
+                .and_then(|value| value.as_str())
+                .map(|value| !value.trim().is_empty())
+        })
+        .unwrap_or(false)
 }
 
 /// Read the per-install client id out of the store's `store_metadata` bag. Opens `argus.db`
