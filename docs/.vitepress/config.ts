@@ -86,7 +86,8 @@ export default defineConfig({
       { text: 'Web app', link: '/web-app' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Database schema', link: '/database-schema' },
-      { text: 'LLM providers', link: '/llm-providers' }
+      { text: 'LLM providers', link: '/llm-providers' },
+      { text: 'Argus Hub', link: '/argus-hub' }
     ],
 
     lastUpdated: {
