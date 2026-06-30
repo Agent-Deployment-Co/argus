@@ -40,10 +40,10 @@ export function Activity() {
       <Recommendations recs={recommendations} />
 
       <section>
-        <h2>Trends</h2>
+        <h2 className="t-eyebrow">Trends</h2>
         <div className="grid2">
           <div className="panel">
-            <h3>Tokens per day</h3>
+            <h3 className="t-subhead">Tokens per day</h3>
             <ChartCanvas
               type="bar"
               height={220}
@@ -63,7 +63,7 @@ export function Activity() {
             />
           </div>
           <div className="panel">
-            <h3>Cost per day (USD)</h3>
+            <h3 className="t-subhead">Cost per day (USD)</h3>
             <ChartCanvas
               type="line"
               height={220}
@@ -85,10 +85,10 @@ export function Activity() {
       </section>
 
       <section>
-        <h2>Sources</h2>
+        <h2 className="t-eyebrow">Sources</h2>
         <div className="grid2">
           <div className="panel">
-            <h3>Tokens by source</h3>
+            <h3 className="t-subhead">Tokens by source</h3>
             <ChartCanvas
               type="doughnut"
               height={220}
@@ -107,7 +107,7 @@ export function Activity() {
             />
           </div>
           <div className="panel">
-            <h3>Est. cost by source</h3>
+            <h3 className="t-subhead">Est. cost by source</h3>
             <ChartCanvas
               type="bar"
               height={220}
@@ -127,10 +127,10 @@ export function Activity() {
 
       {d.byUser && d.byUser.length > 0 && (
         <section>
-          <h2>By user</h2>
+          <h2 className="t-eyebrow">By user</h2>
           <div className="grid2">
             <div className="panel">
-              <h3>Tokens by user</h3>
+              <h3 className="t-subhead">Tokens by user</h3>
               <ChartCanvas
                 type="bar"
                 height={240}
@@ -139,7 +139,7 @@ export function Activity() {
               />
             </div>
             <div className="panel">
-              <h3>Est. cost by user</h3>
+              <h3 className="t-subhead">Est. cost by user</h3>
               <ChartCanvas
                 type="bar"
                 height={240}
@@ -155,9 +155,9 @@ export function Activity() {
       )}
 
       <section>
-        <h2>Models</h2>
+        <h2 className="t-eyebrow">Models</h2>
         <div className="panel">
-          <h3>Tokens by model</h3>
+          <h3 className="t-subhead">Tokens by model</h3>
           <ChartCanvas
             type="bar"
             height={260}

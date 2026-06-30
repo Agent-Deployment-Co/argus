@@ -1,3 +1,7 @@
+// Must be first: point ARGUS_CONFIG_DIR at an empty temp dir before paths.ts captures it, so the
+// developer's real hub.url/hub.key can't flip watchSync into hub mode (and resolveHubConfig stays
+// short-circuited before any keychain access).
+import "./helpers/isolated-config.ts";
 import { describe, expect, test } from "bun:test";
 import { sleep } from "../src/backoff.ts";
 import { watchIndex, watchSync, type WatchSyncOptions } from "../src/watch.ts";

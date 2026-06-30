@@ -14,6 +14,9 @@ export {
   getProvider,
   isLlmProvider,
   LLM_PROVIDERS,
+  SELECTABLE_PROVIDERS,
+  providersForConfigField,
+  defaultModelByProvider,
   PROVIDER_API_KEY_ENVS,
   PROVIDERS,
 } from "./registry.ts";
@@ -72,6 +75,7 @@ export async function complete(
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     command: config.command,
+    claudeCliPath: config.claudeCliPath,
     fetch: deps.fetch ?? fetch,
     signal: request.signal,
   });

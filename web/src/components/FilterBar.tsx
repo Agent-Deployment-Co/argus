@@ -2,6 +2,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { FilterX, Loader2 } from "lucide-react";
 import { KNOWN_SOURCES } from "../lib/snapshot";
 import { daysAgo, type RootSearch } from "../router";
+import { Select } from "./Select";
 
 const SOURCE_LABELS: Record<string, string> = {
   claude: "Claude Code",
@@ -69,21 +70,18 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
           onChange={(e) => setUntil(e.target.value)}
         />
       </span>
-      <span className="select-wrap">
-        <select
-          className="filter-input"
-          aria-label="Source"
-          value={source ?? ""}
-          onChange={(e) => set({ source: e.target.value || undefined })}
-        >
-          <option value="">All sources</option>
-          {SORTED_SOURCES.map((s) => (
-            <option key={s} value={s}>
-              {sourceLabel(s)}
-            </option>
-          ))}
-        </select>
-      </span>
+      <Select
+        aria-label="Source"
+        value={source ?? ""}
+        onChange={(e) => set({ source: e.target.value || undefined })}
+      >
+        <option value="">All sources</option>
+        {SORTED_SOURCES.map((s) => (
+          <option key={s} value={s}>
+            {sourceLabel(s)}
+          </option>
+        ))}
+      </Select>
       <button
         type="button"
         className="filter-reset"

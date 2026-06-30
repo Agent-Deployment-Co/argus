@@ -7,7 +7,7 @@ import { openaiProvider } from "./providers/openai.ts";
 import { geminiProvider } from "./providers/gemini.ts";
 import { openrouterProvider } from "./providers/openrouter.ts";
 import { claudeCliProvider, commandProvider } from "./providers/local.ts";
-import type { LlmProvider, ProviderDescriptor } from "./types.ts";
+import type { LlmConfigField, LlmProvider, ProviderDescriptor } from "./types.ts";
 
 /** `off`: the default "no LLM" state. The client returns this descriptor's clear, non-fatal reason. */
 const offProvider: ProviderDescriptor = {
@@ -15,9 +15,11 @@ const offProvider: ProviderDescriptor = {
   complete: async () => ({ ok: false, text: "", error: "No LLM provider is configured." }),
 };
 
-/** `hub`: reserved extension point for a future org-managed-key proxy (not implemented here). */
+/** `hub`: reserved extension point for a future org-managed-key proxy (not implemented here). Marked
+ *  `reserved` so it stays a valid config value but isn't offered as a user-selectable provider. */
 const hubProvider: ProviderDescriptor = {
   name: "hub",
+  reserved: true,
   complete: async () => ({ ok: false, text: "", error: "The hub provider is not implemented yet." }),
 };
 
@@ -42,8 +44,29 @@ export function getProvider(name: string): ProviderDescriptor | undefined {
 /** Every provider name the layer recognizes — used by `config.ts` to validate `llm.provider`. */
 export const LLM_PROVIDERS: readonly LlmProvider[] = PROVIDERS.map((p) => p.name);
 
+/** The user-selectable providers — `LLM_PROVIDERS` minus the reserved/unimplemented ones (e.g. `hub`).
+ *  This is what the settings UI offers; reserved providers stay valid as a config value but aren't
+ *  presented as a choice. */
+export const SELECTABLE_PROVIDERS: readonly LlmProvider[] = PROVIDERS.filter((p) => !p.reserved).map(
+  (p) => p.name,
+);
+
 export function isLlmProvider(value: string): value is LlmProvider {
   return BY_NAME.has(value);
+}
+
+/** The selectable providers that use a given `llm.*` config field — drives which providers a field is
+ *  shown for in the settings UI. Reserved providers are excluded (they aren't offered anyway). */
+export function providersForConfigField(field: LlmConfigField): readonly LlmProvider[] {
+  return PROVIDERS.filter((p) => !p.reserved && p.configFields?.includes(field)).map((p) => p.name);
+}
+
+/** Each selectable provider's built-in default model, for the providers that declare one — used to
+ *  show the effective default as the Model field's placeholder in the settings UI. */
+export function defaultModelByProvider(): Record<string, string> {
+  return Object.fromEntries(
+    PROVIDERS.filter((p) => !p.reserved && p.defaultModel).map((p) => [p.name, p.defaultModel!]),
+  );
 }
 
 /** The standard API-key env vars across all providers — the basis for the secret allowlist. */

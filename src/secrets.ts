@@ -14,13 +14,18 @@
 import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { SECRETS_FILE } from "./paths.ts";
+import { CONFIG_FILE, SECRETS_FILE } from "./paths.ts";
 import { PROVIDER_API_KEY_ENVS } from "./llm/index.ts";
+import { getPath, HUB_SETTINGS, loadConfig, resolveSetting, setPath, writeConfigAtomic, type ArgusConfig } from "./config.ts";
 
-/** The secret names Argus stores: the providers' standard API-key env vars, derived from the provider
- *  registry so a new provider's key is automatically storable. Keyed to the env-var names so the value
- *  resolves through `apiKeyEnv` and (on the desktop) needs no argus.json parsing on the native side. */
-export const SECRET_NAMES: readonly string[] = PROVIDER_API_KEY_ENVS;
+/** The env-var name the Argus Hub key is stored under (and resolved from). */
+const HUB_KEY_ENV = HUB_SETTINGS.key.env!;
+
+/** The secret names Argus stores: the providers' standard API-key env vars (derived from the provider
+ *  registry so a new provider's key is automatically storable) plus the Argus Hub key. Keyed to the
+ *  env-var names so the value resolves through `apiKeyEnv`/`ARGUS_HUB_KEY` and (on the desktop) needs no
+ *  argus.json parsing on the native side. */
+export const SECRET_NAMES: readonly string[] = [...PROVIDER_API_KEY_ENVS, HUB_KEY_ENV];
 
 export function isSecretName(name: string): boolean {
   return SECRET_NAMES.includes(name);
@@ -293,4 +298,68 @@ export async function resolveApiKey(
   const fromEnv = process.env[apiKeyEnv];
   if (fromEnv) return fromEnv;
   return store.get(apiKeyEnv);
+}
+
+// --- Argus Hub connection (url from settings, key from the secret store) ---
+
+export interface ResolvedHubConfig {
+  url: string;
+  key: string;
+}
+
+/** Resolve the Hub key: the `ARGUS_HUB_KEY` env var wins, then the secret store, then undefined. */
+export async function resolveHubKey(store: SecretStore = defaultSecretStore()): Promise<string | undefined> {
+  const fromEnv = process.env[HUB_KEY_ENV];
+  if (fromEnv) return fromEnv;
+  return store.get(HUB_KEY_ENV);
+}
+
+/**
+ * One-time, idempotent migration: if a legacy plaintext `hub.key` is still sitting in `argus.json`,
+ * move it into the secret store (the keychain) and strip it from the file — so the key stops living in
+ * plaintext. A no-op (no store access, no write) when the file has no `hub.key`, so it's cheap to call
+ * on every resolve. Doesn't clobber a value already in the store. Returns true if it migrated.
+ */
+export async function migrateHubKeyToSecretStore(
+  opts: { store?: SecretStore; configPath?: string; log?: (msg: string) => void } = {},
+): Promise<boolean> {
+  const configPath = opts.configPath ?? CONFIG_FILE;
+  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+  const plaintext = getPath(file, "hub.key");
+  if (typeof plaintext !== "string" || plaintext === "") return false;
+
+  const store = opts.store ?? defaultSecretStore();
+  // Never let migration failure crash startup: the keychain can be locked/denied (macOS), unwritable
+  // (headless Linux), or unavailable (Windows DPAPI). On failure we leave the plaintext key in place
+  // (hub mode keeps working) and log — a no-op for everyone without a legacy plaintext key. Callers
+  // (serve startup, resolveHubConfig) therefore don't need their own try/catch.
+  try {
+    // Keep an existing stored value (e.g. set later via `argus secret`) authoritative.
+    if (!(await store.describe(HUB_KEY_ENV)).configured) await store.set(HUB_KEY_ENV, plaintext);
+    setPath(file, "hub.key", undefined); // JSON.stringify omits undefined → the key is dropped from the file
+    writeConfigAtomic(file, configPath);
+  } catch (err) {
+    opts.log?.(`Couldn't move the Argus Hub key into secure storage; leaving it in argus.json. (${err instanceof Error ? err.message : String(err)})`);
+    return false;
+  }
+  opts.log?.("Moved the Argus Hub key into secure storage and removed it from argus.json.");
+  return true;
+}
+
+/**
+ * Resolve the Hub connection: `hub.url` from settings (env > argus.json) and the key from the secret
+ * store (env > keychain). Returns the config only when both are present; undefined otherwise. First
+ * migrates any legacy plaintext `hub.key` out of argus.json into the store. Short-circuits before any
+ * keychain access when no Hub URL is configured (the common case), so it never prompts needlessly.
+ */
+export async function resolveHubConfig(
+  opts: { flags?: Record<string, unknown>; store?: SecretStore; configPath?: string; log?: (msg: string) => void } = {},
+): Promise<ResolvedHubConfig | undefined> {
+  const store = opts.store ?? defaultSecretStore();
+  await migrateHubKeyToSecretStore({ store, configPath: opts.configPath, log: opts.log });
+  const file = loadConfig(opts.configPath ?? CONFIG_FILE);
+  const url = resolveSetting(HUB_SETTINGS.url, opts.flags ?? {}, file);
+  if (!url) return undefined;
+  const key = await resolveHubKey(store);
+  return key ? { url, key } : undefined;
 }

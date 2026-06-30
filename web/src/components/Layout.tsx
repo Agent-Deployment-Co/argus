@@ -1,9 +1,9 @@
 import { Link, Outlet, useRouterState, useSearch } from "@tanstack/react-router";
-import { Activity, Folder, HeartPulse, MessagesSquare, Moon, PanelLeftClose, PanelLeftOpen, Sun, Wrench, type LucideIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Activity, Folder, HeartPulse, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
-import { useTheme } from "../lib/theme";
+import { SettingsSurface } from "../routes/Settings";
 
 const BrandMark = () => (
   <svg className="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="6 0 128 100" role="img" aria-label="The Agent Deployment Co. chevron">
@@ -20,42 +20,6 @@ function readCollapsed(): boolean {
   try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; }
 }
 
-function ThemeToggle({ collapsed }: { collapsed: boolean }) {
-  const { theme, setTheme } = useTheme();
-  if (collapsed) {
-    const next = theme === "dark" ? "light" : "dark";
-    return (
-      <button
-        className="rail-icon-btn"
-        type="button"
-        onClick={() => setTheme(next)}
-        title={`Switch to ${next} theme`}
-        aria-label={`Switch to ${next} theme`}
-      >
-        {theme === "dark" ? <Sun size={18} strokeWidth={1.75} /> : <Moon size={18} strokeWidth={1.75} />}
-      </button>
-    );
-  }
-  const choice = (value: "light" | "dark", Ico: LucideIcon, label: string) => (
-    <button
-      className="theme-choice"
-      type="button"
-      aria-pressed={theme === value}
-      onClick={() => setTheme(value)}
-      title={label}
-      aria-label={label}
-    >
-      <Ico size={15} strokeWidth={1.75} aria-hidden />
-    </button>
-  );
-  return (
-    <div className="theme-switcher" role="group" aria-label="Color theme">
-      {choice("light", Sun, "Light theme")}
-      {choice("dark", Moon, "Dark theme")}
-    </div>
-  );
-}
-
 const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }[] = [
   { to: "/", label: "Activity", icon: Activity },
   { to: "/sessions", label: "Sessions", icon: MessagesSquare },
@@ -65,13 +29,19 @@ const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }
 ];
 
 export function Layout() {
-  // /debug is diagnostics: it must render even when the snapshot fails to load, so it bypasses the
-  // snapshot gate below (it fetches its own data and never calls useSnapshot). Skip the snapshot
-  // fetch entirely there — otherwise a broken/slow /api/snapshot still fires in the background and
-  // undermines the page as a diagnostic surface.
-  const isDebug = useRouterState({ select: (s) => s.location.pathname === "/debug" });
+  // The settings surface (incl. the Debug tab) takes over the whole view and reads its own data, so
+  // it bypasses the snapshot gate (and we skip the snapshot fetch while it's open).
+  const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
+  // Remember the last screen the user was actually on (not a settings sub-route) so "Back to app"
+  // closes settings and returns there — including when they navigated between settings categories or
+  // deep-linked straight into /settings. We keep the pathname + its validated search so "Back to app"
+  // can navigate through the router (which re-applies the route's validateSearch — a raw history push
+  // would skip it, landing on / with no default date range). Defaults to the dashboard root.
+  const location = useRouterState({ select: (s) => s.location });
+  const lastApp = useRef<{ pathname: string; search: Record<string, unknown> }>({ pathname: "/", search: {} });
+  if (!isSettings) lastApp.current = { pathname: location.pathname, search: location.search as Record<string, unknown> };
   const filters = useSearch({ strict: false, select: (s) => ({ since: s.since, until: s.until, source: s.source }) });
-  const query = useSnapshotQuery(filters, !isDebug);
+  const query = useSnapshotQuery(filters, !isSettings);
   const snap = query.data;
   const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
 
@@ -83,6 +53,10 @@ export function Layout() {
       return next;
     });
   }, []);
+
+  // Full-screen take-over: the settings surface renders its own two-pane layout (its own nav + a
+  // "Back to app" affordance), replacing the app shell entirely. Deep-linkable via /settings.
+  if (isSettings) return <SettingsSurface backTo={lastApp.current} />;
 
   return (
     <div className={`app-shell${collapsed ? " rail-collapsed" : ""}`}>
@@ -111,8 +85,19 @@ export function Layout() {
             );
           })}
         </nav>
+        {/* Bottom controls. DOM order is settings, expand — so the collapsed rail (stacked
+            top-to-bottom) reads settings, expand; expanded, the toggle is pushed right. The color
+            theme moved into Settings → General → Appearance. */}
         <div className="rail-footer">
-          <ThemeToggle collapsed={collapsed} />
+          <Link
+            to="/settings/$category"
+            params={{ category: "general" }}
+            className="rail-icon-btn"
+            title="Settings"
+            aria-label="Settings"
+          >
+            <Settings size={18} strokeWidth={1.75} />
+          </Link>
           <button
             className="rail-icon-btn rail-toggle"
             type="button"
@@ -125,11 +110,9 @@ export function Layout() {
         </div>
       </aside>
       <div className="content">
-        {!isDebug && <FilterBar refreshing={query.isFetching} />}
+        <FilterBar refreshing={query.isFetching} />
         <main>
-          {isDebug ? (
-            <Outlet />
-          ) : query.isPending ? (
+          {query.isPending ? (
             <div className="center-state">Reading transcripts…</div>
           ) : query.isError ? (
             <div className="center-state">Couldn't load data: {(query.error as Error).message}</div>

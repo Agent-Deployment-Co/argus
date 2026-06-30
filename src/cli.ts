@@ -14,8 +14,8 @@ import { pushSnapshotForOpts, resolveCredentials, watchIndex, watchSync, type Pu
 import { runRun } from "./run.ts";
 import { hubErrorMessage } from "./push.ts";
 import { buildOptions, syncOptions, toSource } from "./cli-options.ts";
-import { loadConfig, resolveHubConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS, type ResolvedTaskExtraction } from "./config.ts";
-import { defaultSecretStore, isSecretName, maskSecret, SECRET_NAMES } from "./secrets.ts";
+import { loadConfig, resolveTaskExtraction, getPath, setPath, writeConfig, ALL_SETTINGS, type ResolvedTaskExtraction } from "./config.ts";
+import { defaultSecretStore, isSecretName, maskSecret, resolveHubConfig, SECRET_NAMES } from "./secrets.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
@@ -222,7 +222,7 @@ async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
 
 /** One-shot upload of the current snapshot to the team dashboard (the bare `argus sync`). */
 async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
-  const hubCfg = resolveHubConfig();
+  const hubCfg = await resolveHubConfig({ log });
   if (hubCfg) {
     const res = await pushSnapshotForOpts(opts, {}, log);
     if (res.ok) {
@@ -778,8 +778,8 @@ function requireSecretName(args: Record<string, unknown>): string {
 }
 
 const secretSet = defineCommand({
-  meta: { name: "set", description: "store an API key (read from stdin, or prompted if interactive)" },
-  args: { name: { type: "positional", required: true, description: "secret name (e.g. ANTHROPIC_API_KEY)" } },
+  meta: { name: "set", description: "store a secret (read from stdin, or prompted if interactive)" },
+  args: { name: { type: "positional", required: true, description: "secret name (e.g. ANTHROPIC_API_KEY, ARGUS_HUB_KEY)" } },
   run: handler(async (args) => {
     const name = requireSecretName(args);
     const value = await readSecretValue(name);
@@ -795,7 +795,7 @@ const secretSet = defineCommand({
 });
 
 const secretRm = defineCommand({
-  meta: { name: "rm", description: "remove a stored API key" },
+  meta: { name: "rm", description: "remove a stored secret" },
   args: { name: { type: "positional", required: true, description: "secret name to remove" } },
   run: handler(async (args) => {
     const name = requireSecretName(args);
@@ -805,7 +805,7 @@ const secretRm = defineCommand({
 });
 
 const secretStatus = defineCommand({
-  meta: { name: "status", description: "show which API keys are stored (masked)" },
+  meta: { name: "status", description: "show which secrets are stored (masked)" },
   run: handler(async () => {
     const store = defaultSecretStore();
     for (const name of SECRET_NAMES) {
@@ -816,7 +816,7 @@ const secretStatus = defineCommand({
 });
 
 const secret = defineCommand({
-  meta: { name: "secret", description: "manage stored LLM API keys (kept in your OS keychain where available)" },
+  meta: { name: "secret", description: "manage stored secrets — LLM API keys and the Argus Hub key (kept in your OS keychain where available)" },
   subCommands: { set: secretSet, rm: secretRm, status: secretStatus },
   run: (ctx) => {
     if (dispatchedSubcommand(ctx) !== undefined) return Promise.resolve();

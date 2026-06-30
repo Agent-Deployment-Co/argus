@@ -1,15 +1,17 @@
 import { createRootRoute, createRoute, createRouter, retainSearchParams } from "@tanstack/react-router";
 import { Layout } from "./components/Layout";
 import { Activity } from "./routes/Activity";
-import { Debug } from "./routes/Debug";
 import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
+import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
-/** Global dashboard filters live on the root so every view reflects them, and `retainSearchParams`
- *  keeps them in the URL across navigations (so e.g. a date range survives switching tabs). */
+/** The global dashboard filters (date range + source). They live on a pathless layout route that
+ *  parents only the data views — so /settings (incl. the Debug tab), which doesn't use them, stays out of scope and
+ *  never carry these params in their URL. `retainSearchParams` keeps them in the URL as the user moves
+ *  between the data views (so e.g. a date range survives switching tabs). */
 export interface RootSearch {
   since?: string;
   until?: string;
@@ -23,8 +25,13 @@ export function daysAgo(n: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const rootRoute = createRootRoute({
-  component: Layout,
+const rootRoute = createRootRoute({ component: Layout });
+
+/** Pathless layout route owning the date/source filters. Its children are the data views; settings
+ *  and debug sit directly under the root, so they have no since/until/source in their URL. */
+const dashboardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: "dashboard",
   // Default the view to the last 30 days (from = today−30, to = today) when no date is in the URL.
   // Both bounds are local YYYY-MM-DD, compared whole-day in the store (date >= from AND date <= to),
   // so the range is inclusive of every message on both the start and end day. Widen by editing the bar.
@@ -39,10 +46,11 @@ const rootRoute = createRootRoute({
 const SESSION_SORTS = ["recent", "tokens", "cost"] as const;
 
 const sessionsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/sessions",
   component: Sessions,
-  // `source` and the date range are global (root); these are the Sessions-local refinements.
+  // `source` and the date range are global (the dashboard layout route); these are the
+  // Sessions-local refinements.
   validateSearch: (
     search: Record<string, unknown>,
   ): { project?: string; showGenerated?: boolean; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
@@ -56,16 +64,23 @@ const sessionsRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-  createRoute({ getParentRoute: () => rootRoute, path: "/", component: Activity }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/projects", component: Projects }),
-  sessionsRoute.addChildren([
-    createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
-    createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
+  dashboardRoute.addChildren([
+    createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: Activity }),
+    createRoute({ getParentRoute: () => dashboardRoute, path: "/projects", component: Projects }),
+    sessionsRoute.addChildren([
+      createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
+      createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
+    ]),
+    createRoute({ getParentRoute: () => dashboardRoute, path: "/tools", component: Tools }),
+    createRoute({ getParentRoute: () => dashboardRoute, path: "/health", component: Health }),
   ]),
-  createRoute({ getParentRoute: () => rootRoute, path: "/tools", component: Tools }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/health", component: Health }),
-  // Hidden diagnostics page — no rail link; reachable by typing /debug.
-  createRoute({ getParentRoute: () => rootRoute, path: "/debug", component: Debug }),
+  // The settings take-over surface (#154). Deep-linkable per category (/settings/$category); bare
+  // /settings defaults to the first category. Outside the dashboard layout route, so its URL carries
+  // no date/source filters. The Layout root renders the surface full-screen, so the route components
+  // here are placeholders.
+  // Diagnostics live in the settings surface as the "Debug" tab (/settings/debug).
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
 ]);
 
 export const router = createRouter({ routeTree });

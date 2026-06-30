@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
@@ -294,6 +294,13 @@ describe("secret settings endpoints (#132)", () => {
     expect(await res.json()).toEqual({ configured: false });
   });
 
+  test("the Argus Hub key is an allowed secret (write then masked read)", async () => {
+    const app = appWithSecrets();
+    const write = await app.request("/api/settings/secrets/ARGUS_HUB_KEY", post("hub-secret-WXYZ"));
+    expect(write.status).toBe(200);
+    expect(await write.json()).toEqual({ configured: true, hint: "…WXYZ" });
+  });
+
   test("rejects a non-allowlisted secret name", async () => {
     const app = appWithSecrets();
     const res = await app.request("/api/settings/secrets/HOME", post("x"));
@@ -351,5 +358,135 @@ describe("secret settings endpoints (#132)", () => {
     const app = appWithSecrets();
     const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("   "));
     expect(res.status).toBe(400);
+  });
+
+  const del = { method: "DELETE", headers: { "X-Argus-App": "1", Host: "localhost" } } as const;
+
+  test("DELETE removes a stored key and reports not configured", async () => {
+    const app = appWithSecrets();
+    await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", post("sk-to-remove-1234"));
+    expect(await (await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", getHeaders)).json()).toEqual({
+      configured: true,
+      hint: "…1234",
+    });
+    const removed = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", del);
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ configured: false });
+    // Reading it back confirms it's gone.
+    expect(await (await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", getHeaders)).json()).toEqual({
+      configured: false,
+    });
+  });
+
+  test("DELETE on an absent key is idempotent (still not configured)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/OPENAI_API_KEY", del);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ configured: false });
+  });
+
+  test("DELETE requires the same-origin app header (CSRF)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "DELETE",
+      headers: { Host: "localhost" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("DELETE rejects a non-loopback Host (DNS rebinding)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", {
+      method: "DELETE",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("DELETE rejects a non-allowlisted secret name", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/secrets/HOME", del);
+    expect(res.status).toBe(400);
+  });
+
+  // The test-connection route reads config + the stored key and runs a live completion. We only check
+  // its guards + the no-network "off" path here; the completion logic is unit-tested in settings.test.
+  test("test-connection requires the same-origin app header (CSRF)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/test-connection", { method: "POST", headers: { Host: "localhost" } });
+    expect(res.status).toBe(403);
+  });
+
+  test("test-connection rejects a non-loopback Host (DNS rebinding)", async () => {
+    const app = appWithSecrets();
+    const res = await app.request("/api/settings/test-connection", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("settings endpoints (#154)", () => {
+  // A temp argus.json so the test never touches the real config.
+  function appWithConfig(contents = "{}") {
+    const dir = mkdtempSync(join(tmpdir(), "argus-serve-settings-"));
+    const configPath = join(dir, "argus.json");
+    writeFileSync(configPath, contents, "utf8");
+    return { app: createApp(async () => fixtureSnapshot(), null, { configPath }), configPath };
+  }
+  const put = (value: unknown) => ({
+    method: "PUT",
+    headers: { "X-Argus-App": "1", Host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+
+  test("GET returns the registry-driven categories", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { categories: { id: string }[] };
+    expect(body.categories.map((c) => c.id)).toEqual(["general", "sessions"]);
+  });
+
+  test("PUT validates and writes a setting", async () => {
+    const { app, configPath } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", put("openai"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { setting: { fileValue: unknown } };
+    expect(body.setting.fileValue).toBe("openai");
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({ llm: { provider: "openai" } });
+  });
+
+  test("PUT rejects an invalid value with 400", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", put("nonsense"));
+    expect(res.status).toBe(400);
+  });
+
+  test("PUT rejects a non-editable setting with 404", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/hub.key", put("secret"));
+    expect(res.status).toBe(404);
+  });
+
+  test("PUT requires the same-origin app header (CSRF)", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", {
+      method: "PUT",
+      headers: { Host: "localhost", "content-type": "application/json" },
+      body: JSON.stringify({ value: "openai" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("PUT rejects a non-loopback Host (DNS rebinding)", async () => {
+    const { app } = appWithConfig();
+    const res = await app.request("/api/settings/llm.provider", {
+      method: "PUT",
+      headers: { "X-Argus-App": "1", Host: "evil.example.com", "content-type": "application/json" },
+      body: JSON.stringify({ value: "openai" }),
+    });
+    expect(res.status).toBe(403);
   });
 });

@@ -6,13 +6,14 @@ import { openaiCompatibleComplete } from "./openai-compatible.ts";
 import type { ProviderCall, ProviderDescriptor } from "../types.ts";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_OPENAI_MODEL = "gpt-5";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4-nano";
 
 export const openaiProvider: ProviderDescriptor = {
   name: "openai",
   apiKeyEnv: "OPENAI_API_KEY",
   defaultModel: DEFAULT_OPENAI_MODEL,
   requiresApiKey: true,
+  configFields: ["model", "baseUrl", "apiKeyEnv", "maxTokens"],
   complete: (call: ProviderCall) =>
     openaiCompatibleComplete(call, {
       baseUrl: call.baseUrl || DEFAULT_OPENAI_BASE_URL,

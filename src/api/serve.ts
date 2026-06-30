@@ -23,9 +23,11 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
+import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
-import { defaultSecretStore, isSecretName, maskSecret, type SecretStatus, type SecretStore } from "../secrets.ts";
+import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
+import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
+import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 
 export interface ServeOptions {
@@ -116,6 +118,13 @@ interface AppOptions {
   debugInfo?: DebugInfoReader;
   /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
   secrets?: SecretStore;
+  /** Override the `argus.json` path the settings endpoints read/write. Defaults to CONFIG_FILE;
+   *  injected by tests so they never touch the real config. */
+  configPath?: string;
+  /** The auto-resolved `claude` binary path, used as the Claude CLI path placeholder in the settings
+   *  surface. Resolved once at serve startup (off the request path — resolution can spawn a login
+   *  shell) and passed in; omit it (tests, other callers) and the placeholder is simply not shown. */
+  claudeBinary?: string;
 }
 
 const MIME: Record<string, string> = {
@@ -348,6 +357,35 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json(await opts.debugInfo());
   });
 
+  // Settings surface (#154): the registry-driven view of everything in `argus.json`, plus a
+  // validated, atomic single-setting write. Read is open (like /api/debug — it exposes no secret
+  // values; the surfaced settings carry none). The write is mutating and persists to disk, so it
+  // gets the same hardening as the secret endpoints: CSRF (rejectCrossSite) + DNS-rebinding
+  // (rejectUnsafeHost).
+  app.get("/api/settings", (c) =>
+    c.json(
+      describeSettings(
+        opts.configPath ? loadConfig(opts.configPath) : undefined,
+        opts.claudeBinary, // resolved once at startup, not per request (resolution can block on a shell)
+      ) satisfies SettingsResponse,
+    ),
+  );
+
+  app.put("/api/settings/:path", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const path = c.req.param("path");
+    let value: unknown;
+    try {
+      value = (await c.req.json())?.value;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a "value".' }, 400);
+    }
+    const result = applySetting(path, value, opts.configPath);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ setting: result.setting });
+  });
+
   // BYO LLM API keys (#132). Both routes are guarded against CSRF (rejectCrossSite) and
   // DNS-rebinding (rejectUnsafeHost), accept only allowlisted secret names, and NEVER return or log
   // the raw value — GET reports masked status only, POST echoes back masked status after writing.
@@ -387,6 +425,30 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
   });
 
+  // Test the configured LLM provider end to end: a tiny live completion so the user can confirm their
+  // setup works. Mutating-ish (outbound network / a local subprocess for claude-cli/command, and it
+  // reads the stored key), so it carries the same CSRF + DNS-rebinding guards.
+  app.post("/api/settings/test-connection", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore() }));
+  });
+
+  // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards; returns
+  // the now-unconfigured status. Idempotent — deleting an absent key still reports not-configured.
+  app.delete("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+    try {
+      await secretStore().delete(name);
+    } catch {
+      return c.json({ error: "Couldn't remove the secret." }, 500);
+    }
+    return c.json({ configured: false } satisfies SecretStatus);
+  });
+
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
   // back to index.html so client-side routes resolve on a hard refresh.
   app.get("*", (c) => {
@@ -406,6 +468,25 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
 
 export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
   const webRoot = findWebRoot();
+
+  // Move any legacy plaintext Hub key out of argus.json into the secret store, so the settings surface
+  // shows it as stored and the file no longer holds it. Idempotent; a no-op once migrated. Never throws
+  // (the migration guards its own keychain/file writes), so a locked keychain can't block startup.
+  await migrateHubKeyToSecretStore({ log });
+  // Fold any legacy flat `llm.*` values under the provider they were written for, so switching the
+  // active provider in the settings UI no longer inherits the old provider's model/key-env (#154
+  // review). Idempotent; a no-op once migrated. Guarded so a write failure can't block startup.
+  try {
+    if (migrateLlmFlatToProviderConfigs()) log("Organized LLM settings by provider in argus.json.");
+  } catch (err) {
+    log(`Couldn't reorganize LLM settings by provider: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Resolve the `claude` CLI path once, here at startup — never on a request. The resolver may spawn a
+  // login shell (up to a few seconds when `claude` isn't on PATH, the GUI-launch case #159 targets),
+  // and spawnSync blocks the event loop, so doing it per `/api/settings` GET would stall the first
+  // Settings load. Computed eagerly and passed in as the field's placeholder.
+  const claudeBinary = resolveClaudeBinary();
 
   // No server-side snapshot cache: each request builds its filtered slice fresh. The heavy work is
   // a store read + aggregation; the client (TanStack Query) holds a short staleTime so rapid page
@@ -516,6 +597,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionDetail,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
+    claudeBinary,
   });
 
   let resolveClosed!: () => void;

@@ -4,7 +4,7 @@ import { httpComplete } from "../http.ts";
 import type { ProviderCall, ProviderDescriptor } from "../types.ts";
 
 export const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 
 function extractText(body: unknown): string {
   const candidates = (body as { candidates?: unknown } | null)?.candidates;
@@ -22,6 +22,7 @@ export const geminiProvider: ProviderDescriptor = {
   apiKeyEnv: "GEMINI_API_KEY",
   defaultModel: DEFAULT_GEMINI_MODEL,
   requiresApiKey: true,
+  configFields: ["model", "apiKeyEnv", "maxTokens"],
   complete(call: ProviderCall) {
     return httpComplete(
       () => ({

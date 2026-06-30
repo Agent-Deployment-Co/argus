@@ -20,6 +20,10 @@ export type LlmProvider =
   | "openrouter"
   | "hub";
 
+/** The `llm.*` config fields a provider can meaningfully use. Drives which fields the settings UI
+ *  shows for a selected provider (e.g. an API provider needs a key env var; the local CLI doesn't). */
+export type LlmConfigField = "model" | "baseUrl" | "apiKeyEnv" | "maxTokens" | "command" | "claudeCliPath";
+
 /** A consumer-agnostic completion request. `system` carries instructions, `prompt` carries the data;
  *  the single-blob callers map everything to `prompt` with no `system`. */
 export interface LlmRequest {
@@ -55,6 +59,8 @@ export interface ResolvedLlmConfig {
   maxTokens?: number;
   /** Command line for the `command` provider. */
   command?: string;
+  /** Explicit path to the `claude` CLI (claude-cli provider); auto-resolved when unset. */
+  claudeCliPath?: string;
   /** The resolved API key for an HTTP provider. The layer owns the transport, not the key store:
    *  consumers resolve this (env var → secret store) and pass it in. Absent → a "no key" diagnostic. */
   apiKey?: string;
@@ -74,6 +80,8 @@ export interface ProviderCall {
   baseUrl?: string;
   apiKey?: string;
   command?: string;
+  /** Explicit path to the `claude` CLI; the claude-cli provider auto-resolves when unset. */
+  claudeCliPath?: string;
   fetch: typeof fetch;
   signal?: AbortSignal;
 }
@@ -92,6 +100,13 @@ export interface ProviderDescriptor {
   defaultModel?: string;
   /** When true, the client short-circuits with a clear "no key" diagnostic if `apiKey` is missing. */
   requiresApiKey?: boolean;
+  /** Registered for forward-compatibility but not a real, user-selectable provider (e.g. `hub`, a
+   *  reserved extension point that isn't implemented). Such providers still validate so an existing
+   *  config value doesn't error, but they're excluded from user-facing choices like the settings UI. */
+  reserved?: boolean;
+  /** The `llm.*` config fields this provider actually uses — drives which fields the settings UI shows
+   *  when this provider is selected. Omitted/empty → none (e.g. `off`). */
+  configFields?: readonly LlmConfigField[];
   complete(call: ProviderCall): Promise<LlmResult>;
 }
 
@@ -103,5 +118,7 @@ export interface LocalProviderContext {
   model?: string;
   /** Command line for the `command` provider. */
   command?: string;
+  /** Explicit path to the `claude` CLI; auto-resolved when unset. */
+  claudeCliPath?: string;
   signal?: AbortSignal;
 }

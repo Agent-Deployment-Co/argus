@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createContext, useContext, type ReactNode } from "react";
 import type { Dashboard, DebugInfo, SessionRow, Snapshot, TaskMetrics } from "../types";
+import { APP_HEADER, jsonOrThrow } from "./http";
 
 /** Global dashboard filters, threaded into /api/snapshot's query string (the server pushes them down
  *  to the store read). Only date-range + source are server-side; `project` stays a client-side refine
@@ -51,19 +52,9 @@ async function fetchSnapshot(filters: SnapshotFilters): Promise<Snapshot> {
 export async function reindexSession(sessionId: string): Promise<ReindexResponse> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/reindex`, {
     method: "POST",
-    // Same-origin marker: a cross-origin page can't set this without a CORS preflight the server
-    // never grants, so it blocks CSRF against this mutating endpoint. Keep in sync with serve.ts.
-    headers: { "X-Argus-App": "1" },
+    headers: { ...APP_HEADER },
   });
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const message =
-      body && typeof body === "object" && "error" in body && typeof body.error === "string"
-        ? body.error
-        : `Failed to refresh (${res.status})`;
-    throw new Error(message);
-  }
-  return body as ReindexResponse;
+  return jsonOrThrow<ReindexResponse>(res, "Failed to refresh");
 }
 
 /** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
@@ -73,15 +64,7 @@ export async function fetchSessionTaskMetrics(
   sessionId: string,
 ): Promise<Record<string, TaskMetrics>> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-metrics`);
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const message =
-      body && typeof body === "object" && "error" in body && typeof body.error === "string"
-        ? body.error
-        : `Failed to load task metrics (${res.status})`;
-    throw new Error(message);
-  }
-  return (body as { metrics: Record<string, TaskMetrics> }).metrics;
+  return (await jsonOrThrow<{ metrics: Record<string, TaskMetrics> }>(res, "Failed to load task metrics")).metrics;
 }
 
 /** Fetch the /debug payload (settings, env, paths, store/index status). Hidden diagnostics page. */
