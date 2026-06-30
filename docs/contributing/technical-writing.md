@@ -76,12 +76,22 @@ When you do show commands:
 Use the product's words, consistently.
 
 - **session, transcript, project, source, store** for the user-facing concepts.
-- **Claude Cowork** (lowercase "w"), **Claude Code**, **Codex**, **Gemini** for the
-  sources.
+- **Claude Code**, **Claude Cowork** (lowercase "w"), **Claude Chat**, **Codex**,
+  and **Gemini CLI** for the agents.
 - `serve`, `index`, `sync`, `run` for the commands. `sync` is the upload (it was
   formerly `push`); don't call it "push" in docs.
 - Keep internal names (producer, reconcile, fragment, fact row) off published
   pages. They're fine in `docs/internals/`, which documents internals on purpose.
+
+### Supported agents come from the code
+
+The list of agents Argus supports is defined in code, not prose: the `AgentSource`
+type in `src/types.ts` and the producer registry in
+`src/indexing/parse/producers/`. That's the source of truth. The published
+[Supported agents](/supported-agents) page must match it exactly, including the
+user-facing names above. When a producer is added or removed, update that page in
+the same change. Don't describe a source the code doesn't have, and don't drop one
+it does.
 
 ### Link terms on first use
 
