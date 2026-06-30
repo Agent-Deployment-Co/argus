@@ -280,6 +280,7 @@ describe("run command", () => {
     while (!stderr.includes("Listening on") && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
+    expect(stderr).toContain("Building web app...");
     expect(stderr).toContain("Listening on");
 
     child.kill("SIGTERM");
@@ -299,6 +300,7 @@ describe("serve command", () => {
     try {
       const { status, stderr } = runCli(["serve", "--port", String(port)]);
       expect(status).not.toBe(0);
+      expect(stderr).toContain("Building web app...");
       expect(stderr).toContain("web server");
     } finally {
       await new Promise<void>((resolve) => occupied.close(() => resolve()));
