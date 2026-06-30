@@ -92,10 +92,10 @@ describe("cli argument validation", () => {
   });
 
   test("a value-less string flag does not eat the following flag", () => {
-    // `--endpoint` has no value, so citty would otherwise parse endpoint="--org" and drop the real --org.
-    const { status, stderr } = runCli(["sync", "--endpoint", "--org", "acme"]);
+    // `--interval` has no value, so citty would otherwise parse interval="--all" and drop --all.
+    const { status, stderr } = runCli(["sync", "--interval", "--all"]);
     expect(status).toBe(2);
-    expect(stderr).toContain("Missing value for --endpoint");
+    expect(stderr).toContain("Missing value for --interval");
   });
 
   test("sync rejects removed source/date/project filters", () => {
