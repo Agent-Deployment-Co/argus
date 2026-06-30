@@ -24,13 +24,13 @@ all into one [dashboard](/glossary#dashboard).
 Argus reads each agent's sessions from wherever that agent already stores them on
 your computer. You don't point Argus at anything; it checks these locations:
 
-| Agent | Default location |
-|---|---|
-| Claude Code | `~/.claude/projects` |
-| Claude Cowork | `~/Library/Application Support/Claude/local-agent-mode-sessions` (macOS) |
-| Claude Chat | The Claude desktop app's local cache (see below) |
-| Codex | `~/.codex/sessions` |
-| Gemini CLI | `~/.gemini` |
+| Agent | macOS | Windows |
+|---|---|---|
+| Claude Code | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` |
+| Claude Cowork | `~/Library/Application Support/Claude/local-agent-mode-sessions` | macOS only |
+| Claude Chat | `~/Library/Application Support/Claude/Cache/Cache_Data` | `%APPDATA%\Claude\Cache\Cache_Data` |
+| Codex | `~/.codex/sessions` | `%USERPROFILE%\.codex\sessions` |
+| Gemini CLI | `~/.gemini` | `%USERPROFILE%\.gemini` |
 
 If you've moved an agent's data with its own setting (for example
 `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GEMINI_CLI_HOME`), Argus follows that same
