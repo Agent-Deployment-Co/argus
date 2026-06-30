@@ -34,6 +34,25 @@ the resolver walks them. Precedence, coercion, and naming live in exactly one pl
 
 ## Settings today
 
+### Logging
+
+Logs go to stderr. Every log line includes an ISO timestamp and a level, so output from `run`,
+`index --watch`, or `sync --watch` can be saved to a file and searched by severity.
+
+| Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
+|---|---|---|---|
+| log level | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` |
+
+Levels are `error`, `warn`, `info`, `debug`, and `trace`. The default is `info`. Most commands also
+accept `--quiet` as a shortcut for warnings and errors only, and `--verbose` as a shortcut for debug
+logs. The task-extraction `--debug` flag now writes debug logs through the same stderr logger.
+
+```json
+{
+  "log": { "level": "debug" }
+}
+```
+
 ### Desktop updates
 
 The desktop tray app checks for signed updates on an interval. Automatic installs are enabled by

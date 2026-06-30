@@ -95,7 +95,7 @@ describe("watchSync", () => {
     ac.abort();
     await p;
     expect(pushed).toBeGreaterThanOrEqual(1);
-    // The skipped result must NOT fall into the "✓ Uploaded" arm.
+    // The skipped result must NOT fall into the "Uploaded" arm.
     expect(lines.some((l) => l.includes("Uploaded"))).toBe(false);
   });
 

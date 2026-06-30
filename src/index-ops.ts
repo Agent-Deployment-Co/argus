@@ -1,7 +1,7 @@
 // The `argus index` command bodies, extracted from cli.ts so both the CLI command table and the
 // long-running watch loop (watch.ts) can call them. These are the only writers to the local store.
 import { createInterface } from "node:readline";
-import { sourcesFor, type Log } from "./reporting/dashboard-builder.ts";
+import { sourcesFor } from "./reporting/dashboard-builder.ts";
 import { syncStatsSummary, reindexSession } from "./indexing/pipeline.ts";
 import { runInterpretationDrain, taskExtractionActive } from "./indexing/interpret/index.ts";
 import type { RepeatCollapser } from "./backoff.ts";
@@ -9,6 +9,7 @@ import { openSessionStore } from "./store/session-store.ts";
 import { openStore, rebuildStore } from "./store/store.ts";
 import { loadConfig, resolveRetainText, resolveTaskExtraction, type ArgusConfig, type ResolvedTaskExtraction } from "./config.ts";
 import type { DeleteOptions, RefreshOptions, SyncOptions } from "./cli-options.ts";
+import { logAt, logWarn, type Log } from "./logger.ts";
 
 /** Resolve task-extraction settings for an indexing run: the `--extract-tasks` override (when set)
  *  wins over argus.json, which wins over the built-in default (off) — the uniform #89 chain, with
@@ -16,14 +17,13 @@ import type { DeleteOptions, RefreshOptions, SyncOptions } from "./cli-options.t
 function resolveExtraction(
   extractTasks: boolean | undefined,
   file: ArgusConfig,
-  debug = false,
+  log: Log,
 ): ResolvedTaskExtraction {
-  // `--debug` wires the task-extraction debug sink to stdout (the same stream `argus run --debug` prints).
-  const debugLog = debug ? (message: string) => process.stdout.write(message + "\n") : undefined;
+  // Task-extraction debug goes through the shared logger and is emitted when the level includes debug.
   return resolveTaskExtraction(
     extractTasks === undefined ? {} : { "extract-tasks": extractTasks },
     file,
-    debugLog,
+    log,
   );
 }
 
@@ -48,7 +48,8 @@ export async function runIndex(
 ): Promise<void> {
   // Read argus.json once and thread it into both resolvers (avoid a double parse per pass / watch tick).
   const config = loadConfig();
-  const taskExtraction = resolveExtraction(extractTasks, config, debug);
+  if (debug) log.setLevel?.("debug");
+  const taskExtraction = resolveExtraction(extractTasks, config, log);
   const store = openSessionStore({
     sources: sourcesFor(opts.source),
     taskExtraction,
@@ -126,7 +127,7 @@ export async function runIndexRebuild(
       return;
     }
   } else if (archived.length) {
-    log(`! --force will permanently delete ${archived.length} archived session(s) no longer on disk.`);
+    logWarn(log, `--force will permanently delete ${archived.length} archived session(s) no longer on disk.`);
   }
 
   const rebuilt = await rebuildStore();
@@ -157,7 +158,8 @@ export async function runIndexRefresh(opts: RefreshOptions, log: Log): Promise<v
  *  transcript has left disk reports a clear error and changes nothing for that session. */
 async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
   const config = loadConfig();
-  const taskExtraction = resolveExtraction(opts.extractTasks, config, opts.debug);
+  if (opts.debug) log.setLevel?.("debug");
+  const taskExtraction = resolveExtraction(opts.extractTasks, config, log);
   const retainText = resolveRetention(opts.retainText, config);
   const extracting = taskExtraction.enabled && taskExtraction.llm.provider !== "off";
   const store = await openStore(opts.storePath ? { path: opts.storePath } : undefined);
@@ -184,7 +186,9 @@ async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
           : " (no tasks found)";
       log(`Refreshed ${id}${note}.`);
       // Surface any extraction warnings (e.g. the provider failed) rather than swallowing them.
-      for (const diag of result.diagnostics) log(`  ! ${diag.message}`);
+      for (const diag of result.diagnostics) {
+        logAt(log, diag.severity === "warning" ? "warn" : diag.severity, diag.message);
+      }
     }
   } finally {
     await store.close();
