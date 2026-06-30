@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { spawnSync } from "node:child_process";
-import { hostname, userInfo } from "node:os";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "./store/store.ts";
 import { PARSED_FRAGMENT_CONTRACT_VERSION } from "./store/store-contract.ts";
 // Wire contract from the shared schema package (single source of truth). SCHEMA_VERSION comes
@@ -25,39 +23,10 @@ export function hubErrorMessage(body: string): string {
   return body.slice(0, 400);
 }
 
-/**
- * Resolve the user id for a snapshot: explicit override wins, else `git config user.email`,
- * else $USER@hostname. Used to tag whose sessions are whose in the team dashboard.
- */
-export function detectUser(override?: string): string {
-  if (override && override.trim()) return override.trim();
-  const git = spawnSync("git", ["config", "user.email"], { encoding: "utf8" });
-  if (git.status === 0 && git.stdout.trim()) return git.stdout.trim();
-  try {
-    return `${userInfo().username}@${hostname()}`;
-  } catch {
-    return process.env.USER || "unknown";
-  }
-}
-
-/** Resolve an explicit org override; otherwise let the server use the authenticated Access org. */
-export function detectOrg(override?: string): string | undefined {
-  if (override && override.trim()) return override.trim();
-  return undefined;
-}
-
-export interface PushCredentials {
-  bearerToken?: string;
-  jwt?: string;
-  clientId?: string;
-  clientSecret?: string;
-}
-
 export interface PushResult {
   ok: boolean;
   status: number;
   body: string;
-  isAccessChallenge?: boolean;
   /** No upload was attempted because there was nothing eligible to send (e.g. the requested source is
    *  local-only). Distinct from a successful upload so callers don't report "Uploaded". */
   skipped?: boolean;
@@ -179,6 +148,11 @@ export interface ReadHubUploadOptions extends HubUploadFilters {
   onlySessionIds?: Set<string>;
 }
 
+/** Sources that must never appear in Hub uploads regardless of the source filter.
+ *  Mirrors LOCAL_ONLY_SOURCES in reporting/dashboard-builder.ts; kept here so push.ts
+ *  has no dependency on the reporting layer. */
+const LOCAL_ONLY_HUB_SOURCES = ["claude-chat"] as const;
+
 /** Build a SQL WHERE clause fragment (with leading space + AND if needed) and its parameter list
  *  from the upload filters. The session table must be aliased as `s` in the outer query. */
 function buildSessionWhere(filters: HubUploadFilters): { where: string; params: (string | number)[] } {
@@ -188,6 +162,10 @@ function buildSessionWhere(filters: HubUploadFilters): { where: string; params: 
     clauses.push("s.source = ?");
     params.push(filters.source);
   }
+  // Always exclude local-only sources — they are indexed locally but must never reach Hub
+  // regardless of what `source` filter was passed.
+  clauses.push(`s.source NOT IN (${LOCAL_ONLY_HUB_SOURCES.map(() => "?").join(", ")})`);
+  params.push(...LOCAL_ONLY_HUB_SOURCES);
   if (filters.project) {
     clauses.push("(s.project LIKE ? OR s.cwd LIKE ?)");
     params.push(`%${filters.project}%`, `%${filters.project}%`);
@@ -676,37 +654,3 @@ export async function fetchUnknownSessionIds(
 }
 
 export { STORE_SCHEMA_VERSION };
-
-/** POST a per-user snapshot to the Worker ingest endpoint using Cloudflare Access. */
-export async function pushSnapshot(
-  endpoint: string,
-  credentials: PushCredentials,
-  payload: PushPayload,
-): Promise<PushResult> {
-  const url = endpoint.replace(/\/+$/, "") + "/ingest";
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-  };
-
-  if (credentials.clientId && credentials.clientSecret) {
-    headers["cf-access-client-id"] = credentials.clientId;
-    headers["cf-access-client-secret"] = credentials.clientSecret;
-  } else if (credentials.bearerToken) {
-    headers.authorization = `Bearer ${credentials.bearerToken}`;
-  } else if (credentials.jwt) {
-    headers["cf-access-token"] = credentials.jwt;
-  }
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
-  const body = await res.text();
-  const contentType = res.headers.get("content-type") || "";
-  const authenticate = res.headers.get("www-authenticate") || "";
-  const isAccessChallenge =
-    contentType.includes("text/html") ||
-    (res.status === 401 && authenticate.toLowerCase().includes("resource_metadata"));
-  return { ok: res.ok && !isAccessChallenge, status: res.status, body, isAccessChallenge };
-}

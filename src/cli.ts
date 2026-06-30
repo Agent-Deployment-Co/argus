@@ -2,10 +2,9 @@
 import { statSync } from "node:fs";
 import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
-import { loginWithManagedOAuth, saveAccessTokenCache } from "./auth.ts";
 import { printBanner } from "./banner.ts";
 import { scanStore } from "./indexing/pipeline.ts";
-import { ACCESS_TOKEN_FILE, STORE_FILE } from "./paths.ts";
+import { STORE_FILE } from "./paths.ts";
 import { ALL_SOURCES } from "./reporting/dashboard-builder.ts";
 import { startServer } from "./api/serve.ts";
 import { openStore } from "./store/store.ts";
@@ -17,7 +16,6 @@ import {
 } from "./index-ops.ts";
 import {
   pushSnapshotForOpts,
-  resolveCredentials,
   watchIndex,
   watchSync,
   type PushLoopOptions,
@@ -35,17 +33,10 @@ import {
   ALL_SETTINGS,
   type ResolvedTaskExtraction,
 } from "./config.ts";
-import {
-  defaultSecretStore,
-  resolveHubConfig,
-  isSecretName,
-  maskSecret,
-  SECRET_NAMES,
-} from "./secrets.ts";
+import { defaultSecretStore, isSecretName, maskSecret, SECRET_NAMES } from "./secrets.ts";
 import { logger as log, logError, type Log } from "./logger.ts";
 import pkg from "../package.json" with { type: "json" };
 
-const DEFAULT_ENDPOINT = "https://argus.agentdeployment.co";
 const DEFAULT_PORT = Number(process.env.ARGUS_PORT) || 4242;
 
 // The command-specific option shapes below layer each subcommand's own flags on top of the shared
@@ -270,62 +261,15 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
   );
 }
 
-async function runLogin(opts: { endpoint: string }, log: Log): Promise<void> {
-  const endpoint = opts.endpoint || DEFAULT_ENDPOINT;
-  log(`Logging in to Cloudflare Access for ${endpoint}…`);
-
-  try {
-    const cache = await loginWithManagedOAuth(endpoint, { log });
-    saveAccessTokenCache(ACCESS_TOKEN_FILE, cache);
-    log("Successfully authenticated and cached the OAuth tokens.");
-  } catch (err) {
-    logError(
-      log,
-      `Login failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    process.exit(1);
-  }
-}
-
-/** One-shot upload of the current snapshot to the team dashboard (the bare `argus sync`). */
+/** One-shot upload of the current snapshot to Argus Hub (the bare `argus sync`). */
 async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
-  const hubCfg = await resolveHubConfig({ log });
-  if (hubCfg) {
-    const res = await pushSnapshotForOpts(opts, {}, log);
-    if (res.ok) {
-      log(`Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
-    } else if (res.status === 422) {
-      logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
-      process.exit(1);
-    } else {
-      logError(log, `Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
-      process.exit(1);
-    }
-    return;
-  }
-
-  const credentials = await resolveCredentials(opts.endpoint, log);
-  if (!credentials) {
-    log(
-      "Not logged in. Run `argus login` first to upload to the team dashboard.",
-    );
-    log(
-      "  If your team runs Argus Hub, set ARGUS_HUB_URL and ARGUS_HUB_KEY instead — no login required.",
-    );
-    process.exit(1);
-  }
-
-  const res = await pushSnapshotForOpts(opts, credentials, log);
+  const res = await pushSnapshotForOpts(opts, log);
   if (res.skipped) {
     log(res.body); // nothing was uploaded (e.g. a local-only source); not an error
   } else if (res.ok) {
     log(`Uploaded (${res.status}). ${res.body.slice(0, 200)}`);
-  } else if (res.isAccessChallenge) {
-    logError(
-      log,
-      `Upload failed (${res.status}): you're signed out or your session expired.`,
-    );
-    log("  Run `argus login`, then try again.");
+  } else if (res.status === 422) {
+    logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
     process.exit(1);
   } else {
     logError(log, `Upload failed (${res.status}): ${res.body.slice(0, 400)}`);
@@ -839,85 +783,19 @@ const status = defineCommand({
   run: handler(() => runStatus()),
 });
 
-const login = defineCommand({
-  meta: {
-    name: "login",
-    description:
-      "login via Cloudflare Access SSO in your browser (not needed when using Argus Hub — set ARGUS_HUB_URL and ARGUS_HUB_KEY instead)",
-  },
-  args: {
-    ...logArgs,
-    endpoint: {
-      type: "string",
-      default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT,
-      description: "Service URL for login (env ARGUS_ENDPOINT)",
-      valueHint: "url",
-    },
-  },
-  run: handler((args) => runLogin({ endpoint: args.endpoint }, log)),
-});
-
 const sync = defineCommand({
-  meta: {
-    name: "sync",
-    description: "upload usage data to a team dashboard or Hub",
-  },
+  meta: { name: "sync", description: "upload usage data to Argus Hub" },
   args: {
     ...logArgs,
-    endpoint: {
-      type: "string",
-      default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT,
-      description: "Service URL for uploads (env ARGUS_ENDPOINT)",
-      valueHint: "url",
-    },
-    user: {
-      type: "string",
-      description: "Override the user id (default: git email, else $USER@host)",
-      valueHint: "id",
-    },
-    org: {
-      type: "string",
-      default: process.env.ARGUS_ORG,
-      description: "Override the org (env ARGUS_ORG)",
-      valueHint: "id",
-    },
-    watch: {
-      type: "boolean",
-      default: false,
-      description: "Keep uploading on an interval",
-    },
-    interval: {
-      type: "string",
-      default: "5",
-      description: "Minutes between uploads (with --watch)",
-      valueHint: "N",
-    },
-    all: {
-      type: "boolean",
-      default: false,
-      description:
-        "Hub mode: re-upload every session, skipping local cursor filtering",
-    },
+    watch: { type: "boolean", default: false, description: "Keep uploading on an interval" },
+    interval: { type: "string", default: "5", description: "Minutes between uploads (with --watch)", valueHint: "N" },
+    all: { type: "boolean", default: false, description: "Re-upload every session, skipping local cursor filtering" },
   },
   run: handler(async (args) => {
-    const base: PushLoopOptions = {
-      source: "all",
-      endpoint: args.endpoint,
-      user: args.user,
-      org: args.org,
-      all: !!args.all,
-    };
+    const base: PushLoopOptions = { source: "all", all: !!args.all };
     if (args.watch) {
       const ac = abortOnSignals();
-      await watchSync(
-        {
-          ...base,
-          intervalMin: Number(args.interval) || 5,
-          onUnauthenticated: "fail",
-        },
-        log,
-        ac.signal,
-      );
+      await watchSync({ ...base, intervalMin: Number(args.interval) || 5 }, log, ac.signal);
     } else {
       await runPushOnce(base, log);
     }
@@ -934,41 +812,11 @@ const runCmd = defineCommand({
     ...sourceArg,
     ...taskArgs,
     ...logArgs,
-    port: {
-      type: "string",
-      alias: "p",
-      default: String(DEFAULT_PORT),
-      description: "Local port to listen on (env ARGUS_PORT)",
-      valueHint: "N",
-    },
-    "index-interval": {
-      type: "string",
-      default: "5",
-      description: "Minutes between transcript reads",
-      valueHint: "N",
-    },
-    "sync-interval": {
-      type: "string",
-      default: "5",
-      description: "Minutes between uploads",
-      valueHint: "N",
-    },
-    endpoint: {
-      type: "string",
-      default: process.env.ARGUS_ENDPOINT || DEFAULT_ENDPOINT,
-      description: "Service URL for uploads (env ARGUS_ENDPOINT)",
-      valueHint: "url",
-    },
-    "no-sync": {
-      type: "boolean",
-      default: false,
-      description: "Skip uploads (index and serve only)",
-    },
-    debug: {
-      type: "boolean",
-      default: false,
-      description: "Print task extraction debug logs",
-    },
+    port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
+    "index-interval": { type: "string", default: "5", description: "Minutes between transcript reads", valueHint: "N" },
+    "sync-interval": { type: "string", default: "5", description: "Minutes between uploads", valueHint: "N" },
+    "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
+    debug: { type: "boolean", default: false, description: "Print task extraction debug logs" },
   },
   run: handler((args) => {
     return runRun(
@@ -977,7 +825,6 @@ const runCmd = defineCommand({
         port: Number(args.port) || DEFAULT_PORT,
         indexIntervalMin: Number(args["index-interval"]) || 5,
         syncIntervalMin: Number(args["sync-interval"]) || 5,
-        endpoint: args.endpoint,
         noSync: !!args["no-sync"],
         taskExtraction: taskExtractionOptions(args),
       },
@@ -1219,16 +1066,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: {
-    serve,
-    index,
-    sync,
-    run: runCmd,
-    status,
-    login,
-    config,
-    secret,
-  },
+  subCommands: { serve, index, sync, run: runCmd, status, config, secret },
 });
 
 async function run() {
