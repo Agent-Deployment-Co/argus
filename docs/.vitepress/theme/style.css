@@ -73,7 +73,7 @@
 
   --vp-layout-max-width: 1320px;
   --vp-nav-height: 68px;
-  --vp-nav-logo-height: 30px;
+  --vp-nav-logo-height: 24px;
   --vp-nav-bg-color: rgba(249, 235, 220, 0.92);
   --vp-nav-screen-bg-color: var(--adc-antique-white);
   --vp-sidebar-bg-color: rgba(243, 215, 186, 0.46);
@@ -431,4 +431,77 @@ body {
   .VPFeature .details {
     overflow-wrap: break-word;
   }
+}
+
+/*
+ * Keep the search box compact on the right, next to the theme switcher,
+ * instead of letting it stretch across the nav (the default gives it
+ * flex-grow: 1). The scoped rule carries a [data-v-*] attribute, so the
+ * override needs !important to win.
+ */
+@media (min-width: 768px) {
+  .VPNavBarSearch {
+    flex-grow: 0 !important;
+    margin-right: 8px;
+  }
+}
+
+/*
+ * Every page now has a sidebar, and the default theme hides the global
+ * footer whenever a sidebar is present. Show it anyway, and pad it left
+ * to line up with the content column (mirrors VPContent.has-sidebar).
+ */
+.VPFooter.has-sidebar {
+  /* override VitePress's scoped `.has-sidebar { display: none }` (it carries a
+     [data-v-*] attribute, so it outranks a plain class selector) */
+  display: block !important;
+}
+
+@media (min-width: 960px) {
+  .VPFooter.has-sidebar {
+    padding-left: var(--vp-sidebar-width);
+  }
+}
+
+@media (min-width: 1440px) {
+  .VPFooter.has-sidebar {
+    padding-left: calc(
+      (100% - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width)
+    );
+  }
+}
+
+/*
+ * Code blocks use the dark Coffee Bean background in both light and dark
+ * mode. VitePress, in light mode, colors syntax tokens with Shiki's
+ * light-theme palette (dark tokens meant for a light background), which is
+ * unreadable on our dark block. Use the dark-theme palette in light mode too.
+ */
+html:not(.dark) .shiki span {
+  color: var(--shiki-dark, inherit);
+}
+
+/*
+ * Mermaid diagrams (e.g. the database-schema ER diagram). The theme renders
+ * the SVG into .mermaid-diagram client-side; center it and let wide diagrams
+ * scroll horizontally rather than overflow the page.
+ */
+.mermaid-diagram {
+  margin: 24px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid-diagram svg {
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-diagram.mermaid-error {
+  white-space: pre-wrap;
+  color: var(--vp-c-danger-1);
+  font-family: var(--vp-font-family-mono);
+  text-align: left;
 }

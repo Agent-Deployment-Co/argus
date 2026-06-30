@@ -14,6 +14,7 @@ import { join } from "node:path";
 import pkg from "../package.json";
 
 const SCOPE = "@agentdeploymentco";
+const PACKAGE_NAME = `${SCOPE}/argus`;
 const OUT = "dist/npm";
 const VERSION = pkg.version;
 
@@ -83,7 +84,7 @@ writeFileSync(
   join(mainDir, "package.json"),
   JSON.stringify(
     {
-      name: pkg.name,
+      name: PACKAGE_NAME,
       version: VERSION,
       description: pkg.description,
       type: "commonjs",
@@ -97,4 +98,4 @@ writeFileSync(
 );
 
 console.log(`\nBuilt ${targets.length + 1} package(s) in ${OUT}/`);
-console.log(`Publish with: for d in ${OUT}/*/; do (cd "$d" && npm publish --access public); done`);
+console.log("Publish with: make publish");

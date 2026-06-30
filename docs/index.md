@@ -1,37 +1,45 @@
----
-# https://vitepress.dev/reference/default-theme-home-page
-layout: home
+# Introduction
 
-hero:
-  name: "Argus"
-  text: "Local agent usage, made legible"
-  tagline: Audit Claude Code, Codex, Gemini, and Claude Cowork sessions from your own machine, then explore usage, cost, tools, skills, and session health in one local view.
-  image:
-    src: /favicon.svg
-    alt: The Agent Deployment Co. chevron
-  actions:
-    - theme: brand
-      text: Configure Argus
-      link: /configuration
-    - theme: alt
-      text: Read the architecture
-      link: /architecture
+**Argus audits how you use Claude Code, Codex, and Gemini CLI.** It reads your local
+session transcripts and makes them legible — usage, cost, tools, skills, and session
+health — in one place. Everything is local-first: parsing happens on your machine, and
+nothing is uploaded unless you explicitly run `sync`.
 
-features:
-  - title: Local by default
-    details: Serve and index read your transcripts on your machine. Uploads happen only through sync.
-    link: /architecture
-    linkText: Follow the data flow
-  - title: Source-aware parsing
-    details: Native producers normalize Claude Code, Codex, Gemini, and Claude Cowork transcripts without flattening away source-specific behavior.
-    link: /session-model
-    linkText: See the session model
-  - title: Interactive dashboard
-    details: The web app brings activity, projects, tools, health, and session detail into a browser UI served by the CLI.
-    link: /web-app
-    linkText: Explore the web app
-  - title: Configured explicitly
-    details: Settings resolve through flags, environment variables, argus.json, and defaults, with tolerant loading for everyday CLI use.
-    link: /configuration
-    linkText: Review configuration
----
+Argus can:
+
+- **Serve an interactive dashboard** at a local web address (`serve`) — the preferred way to
+  explore your usage.
+- **Upload usage snapshots** to the [Argus dashboard](https://argus.agentdeployment.co), where
+  you can keep and analyze your data over time (`sync`).
+- **Run all of it as one always-on process** (`run`) — keep the local data current, serve the
+  web app, and upload on a schedule, so the dashboard is live whenever you want it.
+
+## Quick start
+
+Argus's published CLI requires Node.js 20.17 or newer. Run it directly with `npx` — open the
+interactive dashboard in your browser:
+
+```bash
+npx @agentdeploymentco/argus serve --open
+```
+
+This starts a local web server (default `http://localhost:4242`) and opens it. Press `Ctrl-C`
+to stop. Nothing leaves your machine — it reads your local transcripts and serves them locally.
+
+## What the web app shows
+
+- Tokens and estimated cost over time
+- Claude, Codex, and Gemini source breakdowns
+- Skill, tool, MCP server, plugin, model, and project attribution
+- Tools that return the most content to your context
+- Per-session duration, tokens, cost, prompts, and summaries
+
+## Where to go next
+
+- **[Architecture](/architecture)** — the one-way pipeline, from transcripts to dashboard.
+- **[Session model](/session-model)** — how raw transcripts become normalized sessions.
+- **[Task interpretation](/task-interpretation)** — the optional, model-driven task pass.
+- **[Web app](/web-app)** — the interactive local dashboard in depth.
+- **[Configuration](/configuration)** — settings, flags, and environment variables.
+- **[Database schema](/database-schema)** — the local store's tables and relationships.
+- **[LLM providers](/llm-providers)** — the shared LLM access layer.
