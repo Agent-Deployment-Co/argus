@@ -44,6 +44,12 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
  *  read-only view (the /api/debug payload), not a registry-driven settings category. */
 const DEBUG_TAB = { id: "debug", label: "Debug" };
 
+/** The pane's state key — and the PUT path — for a provider-scoped field's value, built from the
+ *  server-supplied `field` and the selected provider. Mirrors the server's `providerConfigPath`; the
+ *  web bundle can't import config.ts (it pulls in node:fs), so this is the single client-side
+ *  definition of the per-provider path scheme. */
+const providerConfigKey = (provider: string, field: string) => `llm.providerConfigs.${provider}.${field}`;
+
 /** Serializes setting writes (auto-save) into one queue: one request in flight at a time, so the
  *  server's read-modify-write of argus.json can't race, and the surface shows a single save state
  *  instead of per-field status. Repeated edits to the same setting collapse to the latest value. */
@@ -268,7 +274,7 @@ function SettingsCategoryPane({
     const seed: Record<string, unknown> = Object.fromEntries(all.map((s) => [s.path, seedValue(s)]));
     for (const [prov, cfg] of Object.entries(providerConfigs ?? {})) {
       for (const [field, val] of Object.entries(cfg)) {
-        seed[`llm.providerConfigs.${prov}.${field}`] = val == null ? "" : String(val);
+        seed[providerConfigKey(prov, field)] = val == null ? "" : String(val);
       }
     }
     return seed;
@@ -283,9 +289,9 @@ function SettingsCategoryPane({
     return byPath.get(path)?.ui.effectiveDefault ?? "";
   };
   // Where a field's value is read/written: a provider-scoped field targets the *selected* provider's
-  // block; everything else uses its flat path.
+  // block (using the server-supplied `field`); everything else uses its flat path.
   const writePath = (s: SettingDescriptor): string =>
-    s.providerScoped ? `llm.providerConfigs.${condValue("llm.provider")}.${s.path.slice("llm.".length)}` : s.path;
+    s.providerScoped && s.field ? providerConfigKey(condValue("llm.provider"), s.field) : s.path;
   const isActive = (s: SettingDescriptor) => !s.ui.activeWhen || Boolean(values[s.ui.activeWhen.path]);
   const isVisible = (s: SettingDescriptor) =>
     !s.ui.visibleWhen || s.ui.visibleWhen.in.includes(condValue(s.ui.visibleWhen.path));

@@ -103,12 +103,13 @@ describe("describeSettings", () => {
     expect(visible("llm.model").in).not.toContain("off");
   });
 
-  test("provider-scoped fields are marked, valued per active provider, and the payload carries every provider's config", () => {
+  test("provider-scoped fields carry their field id (not a value); values ship in providerConfigs", () => {
     const providerConfigs = { openai: { model: "gpt-5.4-mini" }, "claude-api": { model: "claude-sonnet-4-6" } };
     const resp = describeSettings({ llm: { provider: "openai", providerConfigs } });
     const model = resp.categories.flatMap((c) => c.sections).flatMap((s) => s.settings).find((s) => s.path === "llm.model")!;
     expect(model.providerScoped).toBe(true);
-    expect(model.fileValue).toBe("gpt-5.4-mini"); // the active provider's value (openai)
+    expect(model.field).toBe("model"); // the UI builds llm.providerConfigs.<provider>.model from this
+    expect(model.fileValue).toBeNull(); // no single value on the descriptor — the map is the source
     // The whole per-provider map ships so the UI can switch providers without a refetch.
     expect(resp.providerConfigs).toEqual(providerConfigs);
   });
