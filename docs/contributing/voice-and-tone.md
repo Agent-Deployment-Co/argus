@@ -25,8 +25,10 @@ reader should feel informed, never courted.
 
 - No hero taglines, no feature-benefit pitches, no calls to action ("get started
   today," "supercharge your workflow").
-- No social proof or growth-funnel language: "trusted by teams," "join thousands
-  of users," "enterprise-grade."
+- No vague or aspirational social proof: "trusted by teams," "join thousands of
+  users," "enterprise-grade." Real, verifiable proof is fine when it exists (a
+  genuine "used by" list, an actual GitHub star count), but none of that exists
+  today, so don't write it yet. Never invent or inflate it.
 - Don't sell the outcome. State what Argus does and what the reader sees, and let
   them decide if it's useful. A plain capability beats a promised benefit.
 - Confident, not promotional. "Argus reads your transcripts locally" is confident.
