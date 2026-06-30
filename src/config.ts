@@ -14,19 +14,39 @@
 // LLM access (#132) is a top-level `llm` block consumed by any model-driven feature. Task extraction
 // is the first consumer: it references `llm.*` and may override `provider`/`model`/`command` under its
 // own `taskExtraction.*` block (the historical keys, kept working with a deprecation note).
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
-import { getProvider, isLlmProvider, LLM_PROVIDERS } from "./llm/index.ts";
+import {
+  defaultModelByProvider,
+  getProvider,
+  isLlmProvider,
+  LLM_PROVIDERS,
+  providersForConfigField,
+  SELECTABLE_PROVIDERS,
+} from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
 
-/** The task-extraction provider default, preserved from before the generalization: enabling task
- *  extraction with no provider configured uses the local `claude` CLI. */
-const DEFAULT_TASK_PROVIDER: LlmProvider = "claude-cli";
+/** The default LLM provider, preserved from before the generalization: with no provider configured,
+ *  model-driven features use the local `claude` CLI. The single source of truth for this default —
+ *  `resolveActiveProvider` and the provider setting's `ui.effectiveDefault` both derive from it. */
+export const DEFAULT_TASK_PROVIDER: LlmProvider = "claude-cli";
 
 /** Back-compat aliases for provider values that were released under older names, so existing
  *  argus.json / env values keep resolving without a warning. */
 const PROVIDER_ALIASES: Record<string, LlmProvider> = { claude: "claude-cli" };
+
+/** One provider's own LLM settings (lives under `llm.providerConfigs[provider]`). Every field is the
+ *  provider-scoped counterpart of an `llm.*` setting; which ones are meaningful depends on the provider
+ *  (e.g. `command` for the command provider, `claudeCliPath` for claude-cli). */
+export interface LlmProviderConfig {
+  model?: string;
+  baseUrl?: string;
+  apiKeyEnv?: string;
+  maxTokens?: number;
+  command?: string;
+  claudeCliPath?: string;
+}
 
 /** The typed shape of `argus.json`. Designed to grow; task extraction is the first LLM consumer. */
 export interface ArgusConfig {
@@ -37,15 +57,19 @@ export interface ArgusConfig {
   };
   /** General LLM access settings, shared by every model-driven feature (#132). */
   llm?: {
+    /** The active provider. Its own settings live under `providerConfigs[provider]`. */
     provider?: LlmProvider;
+    /** Per-provider settings, so each provider keeps its own model/command/etc. and nothing goes
+     *  stale when you switch providers. The active provider's block is what resolves. */
+    providerConfigs?: Partial<Record<LlmProvider, LlmProviderConfig>>;
+    // Legacy flat fields (pre-providerConfigs): still read as a fallback for the active provider, but
+    // the UI now writes under `providerConfigs`. Kept so existing argus.json files keep working.
     model?: string;
-    /** OpenAI-compatible / self-hosted base URL (openai provider). */
     baseUrl?: string;
-    /** Env var the API key is read from (also the secret-store key). Defaults per provider. */
     apiKeyEnv?: string;
     maxTokens?: number;
-    /** Command line for the `command` provider. */
     command?: string;
+    claudeCliPath?: string;
   };
   taskExtraction?: {
     /** Opt-in index-time extraction (#88). Off by default — it's an LLM call per session. */
@@ -107,6 +131,51 @@ export function getPath(obj: unknown, dotted: string): unknown {
   return cur;
 }
 
+/** One option in a `select` control: the stored value plus its display label. An empty `value` is the
+ *  "unset" choice (clears the setting so it falls back through env/default). */
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+/** An item in a select's option list: a real option, or a visual "separator" (rendered as a divider).
+ *  The list is presented in the exact order given — pinned/special items first, then the rest. */
+export type SelectItem = SelectOption | "separator";
+
+/** How a setting is presented as an editable control in the web settings surface (#154). The control
+ *  follows from the setting's type: boolean → toggle, fixed-choice → select, free number → number, the
+ *  rest → text/textarea. UI-only metadata; the value contract still lives in `parse()`/`default`. */
+export interface SettingUi {
+  /** Human-facing field name, e.g. "Provider". */
+  label: string;
+  /** One-line explanation shown beside the control. */
+  description?: string;
+  control: "toggle" | "text" | "textarea" | "number" | "select";
+  /** The full ordered option list for a `select` control, including the unset choice and any
+   *  separators. Presented verbatim, so order it deliberately (see the UI ordering rules in CLAUDE.md). */
+  options?: readonly SelectItem[];
+  /** Gate: the control is inactive (disabled) unless the boolean setting at this path is on. E.g. the
+   *  LLM fields are inactive until task extraction is enabled. */
+  activeWhen?: { path: string };
+  /** Gate: the control is hidden unless the (effective) value of the setting at `path` is one of `in`.
+   *  E.g. a provider-specific field is shown only for the providers that use it. */
+  visibleWhen?: { path: string; in: readonly string[] };
+  /** The value this control resolves to when unset — used to evaluate `visibleWhen` against another
+   *  field's effective value (e.g. an unset provider resolves to its default). */
+  effectiveDefault?: string;
+  /** A context-dependent placeholder shown when the field is blank: the placeholder is `values` keyed
+   *  by the (effective) value of the setting at `path`. E.g. the Model field shows the selected
+   *  provider's default model. Falls back to the generic placeholder when there's no entry. */
+  placeholderByValue?: { path: string; values: Record<string, string> };
+  /** For a `number` control: the minimum allowed value. Rendered as the input's `min`, and enforced on
+   *  write (a smaller value is rejected). */
+  min?: number;
+  /** A server-computed placeholder source: the settings API fills the descriptor's `placeholder` from
+   *  this when building the response (e.g. `"claudeBinary"` → the auto-resolved `claude` path). Keeps
+   *  the API generic instead of special-casing a specific setting path. */
+  placeholderFrom?: "claudeBinary";
+}
+
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
 export interface Setting<T> {
   /** argus.json location, dotted camelCase — e.g. "llm.provider". */
@@ -118,6 +187,12 @@ export interface Setting<T> {
   default: T;
   /** When true, `argus config list` redacts the value in human output to avoid leaking secrets. */
   secret?: boolean;
+  /** When true, the value is stored per-provider under `llm.providerConfigs[provider].<field>` (the
+   *  field is `path` minus its `llm.` prefix) rather than at `path`, so each provider keeps its own.
+   *  `path` is still the legacy flat fallback location. */
+  providerScoped?: boolean;
+  /** Presentation metadata for the web settings surface (#154). Absent → not shown in the UI. */
+  ui?: SettingUi;
   /** Coerce a raw value (string from env/flag, typed from file) to T, validating as needed. */
   parse(raw: unknown): T;
 }
@@ -125,7 +200,7 @@ export interface Setting<T> {
 /** A layer is "present" only when set to a non-empty value — so `ARGUS_TASK_PROVIDER=""` (an exported
  *  but blank env var) or a blank flag/file value falls through to the next layer rather than being
  *  parsed as a real setting. */
-function present(value: unknown): boolean {
+export function present(value: unknown): boolean {
   return value != null && value !== "";
 }
 
@@ -159,11 +234,16 @@ function parseString(raw: unknown): string {
 
 const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
 
-const HUB_SETTINGS = {
+export const HUB_SETTINGS = {
   url: {
     path: "hub.url",
     env: "ARGUS_HUB_URL",
     default: undefined as string | undefined,
+    ui: {
+      label: "Hub URL",
+      description: "Argus Hub server to connect to, e.g. http://hub.internal:4242.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<string | undefined>,
   key: {
@@ -210,6 +290,13 @@ function parseNumber(raw: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** A whole count of at least 1 — rejects 0, negatives, and non-numbers (returns undefined). Used for
+ *  the hourly interpretation cap, where 0 would silently disable the drain. */
+function parsePositiveInt(raw: unknown): number | undefined {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 1 ? n : undefined;
+}
+
 // Tolerant, like loadConfig: an invalid provider (a typo in argus.json or env) must not hard-exit an
 // unrelated `index`/`serve`/`run`. Warn and fall through (return undefined) so the next layer — and
 // ultimately the consumer's default — applies.
@@ -232,13 +319,45 @@ type OptionalString = string | undefined;
 type OptionalProvider = LlmProvider | undefined;
 type OptionalNumber = number | undefined;
 
+/** The provider dropdown's option list. Pinned at the top: the unset choice (labeled with the default
+ *  provider it resolves to). Then a separator, then every selectable provider in alpha order. There's
+ *  no "Off" choice — the Extract-tasks toggle is the on/off, so an "off" provider while extraction is on
+ *  would be contradictory ("off" stays a valid CLI/config value, just not offered here). */
+const PROVIDER_OPTIONS: SelectItem[] = [
+  { value: "", label: `Default (${DEFAULT_TASK_PROVIDER})` },
+  "separator",
+  ...SELECTABLE_PROVIDERS.filter((p) => p !== "off")
+    .map((p) => p as string)
+    .sort()
+    .map((p) => ({ value: p, label: p })),
+];
+
+/** All `llm.*` settings are inactive until task extraction (their only consumer today) is enabled. */
+const TASK_GATE = { path: "taskExtraction.enabled" } as const;
+
+/** A provider-specific field is shown only for the providers that actually use it (from the registry),
+ *  evaluated against the selected `llm.provider`. */
+const visibleForField = (field: Parameters<typeof providersForConfigField>[0]) => ({
+  path: "llm.provider",
+  in: providersForConfigField(field) as readonly string[],
+});
+
 /** The shared `llm.*` settings. */
-const LLM_SETTINGS = {
+export const LLM_SETTINGS = {
   provider: {
     path: "llm.provider",
     env: "ARGUS_LLM_PROVIDER",
     flag: "llm-provider",
     default: undefined as OptionalProvider,
+    ui: {
+      label: "LLM Provider",
+      description: "Which model backend Argus's AI features use.",
+      control: "select",
+      options: PROVIDER_OPTIONS,
+      activeWhen: TASK_GATE,
+      // An unset provider resolves to the default, so provider-specific fields show for it too.
+      effectiveDefault: DEFAULT_TASK_PROVIDER,
+    },
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,
   model: {
@@ -246,6 +365,16 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_MODEL",
     flag: "llm-model",
     default: undefined as OptionalString,
+    providerScoped: true,
+    ui: {
+      label: "Model",
+      description: "Model name to request. Leave blank to use the provider's default.",
+      control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("model"),
+      // Blank → show the selected provider's built-in default model as the placeholder.
+      placeholderByValue: { path: "llm.provider", values: defaultModelByProvider() },
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   baseUrl: {
@@ -253,6 +382,14 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_BASE_URL",
     flag: "llm-base-url",
     default: undefined as OptionalString,
+    providerScoped: true,
+    ui: {
+      label: "Base URL",
+      description: "OpenAI-compatible API endpoint, for the OpenAI provider or a self-hosted server.",
+      control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("baseUrl"),
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   apiKeyEnv: {
@@ -260,6 +397,14 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_API_KEY_ENV",
     flag: "llm-api-key-env",
     default: undefined as OptionalString,
+    providerScoped: true,
+    ui: {
+      label: "API key variable",
+      description: "Environment variable the API key is read from. Defaults per provider.",
+      control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("apiKeyEnv"),
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   maxTokens: {
@@ -267,6 +412,14 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_MAX_TOKENS",
     flag: "llm-max-tokens",
     default: undefined as OptionalNumber,
+    providerScoped: true,
+    ui: {
+      label: "Max output tokens",
+      description: "Cap on the number of tokens generated per request.",
+      control: "number",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("maxTokens"),
+    },
     parse: parseNumber,
   } satisfies Setting<OptionalNumber>,
   command: {
@@ -274,6 +427,34 @@ const LLM_SETTINGS = {
     env: "ARGUS_LLM_COMMAND",
     flag: "llm-command",
     default: undefined as OptionalString,
+    providerScoped: true,
+    ui: {
+      label: "Command",
+      description:
+        'Command line to run for the "command" provider. The prompt is sent on stdin and the completion read from stdout.',
+      control: "textarea",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("command"),
+    },
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
+  // An explicit path to the `claude` binary, for when it can't be auto-resolved — e.g. a GUI-launched
+  // app's minimal PATH (#159). Normally unset; the claude-cli provider auto-resolves the binary
+  // (PATH → login shell → known locations), and the UI shows that resolved path as the placeholder.
+  claudeCliPath: {
+    path: "llm.claudeCliPath",
+    env: "ARGUS_CLAUDE_CLI_PATH",
+    flag: "claude-cli-path",
+    default: undefined as OptionalString,
+    providerScoped: true,
+    ui: {
+      label: "Claude CLI path",
+      description: "Full path to the claude binary. Leave blank to auto-detect.",
+      control: "text",
+      activeWhen: TASK_GATE,
+      visibleWhen: visibleForField("claudeCliPath"),
+      placeholderFrom: "claudeBinary",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
 };
@@ -283,12 +464,18 @@ const LLM_SETTINGS = {
 /** Default hourly ceiling for the background interpretation drain (#153). */
 export const DEFAULT_MAX_SESSIONS_PER_HOUR = 30;
 
-const TASK_SETTINGS = {
+export const TASK_SETTINGS = {
   enabled: {
     path: "taskExtraction.enabled",
     env: "ARGUS_TASK_ENABLED",
     flag: "extract-tasks",
     default: false,
+    ui: {
+      label: "Extract tasks",
+      description:
+        "Use AI to interpret sessions and identify tasks. This process is relatively lighweight but will consume tokens with the specified LLM provider.",
+      control: "toggle",
+    },
     parse: parseBool,
   } satisfies Setting<boolean>,
   provider: {
@@ -310,6 +497,11 @@ const TASK_SETTINGS = {
     env: "ARGUS_TASK_PROMPT",
     flag: "task-prompt",
     default: undefined as OptionalString,
+    ui: {
+      label: "Custom prompt",
+      description: "Override the built-in instructions. The session data is appended after it.",
+      control: "textarea",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   promptFile: {
@@ -317,6 +509,11 @@ const TASK_SETTINGS = {
     env: "ARGUS_TASK_PROMPT_FILE",
     flag: "task-prompt-file",
     default: undefined as OptionalString,
+    ui: {
+      label: "Prompt file",
+      description: "Read the custom instructions from this file. Takes precedence over the prompt above.",
+      control: "text",
+    },
     parse: parseString,
   } satisfies Setting<OptionalString>,
   command: {
@@ -334,13 +531,23 @@ const TASK_SETTINGS = {
     env: "ARGUS_TASK_MAX_PER_HOUR",
     flag: "task-max-per-hour",
     default: DEFAULT_MAX_SESSIONS_PER_HOUR as OptionalNumber,
-    parse: parseNumber,
+    ui: {
+      label: "Max sessions per hour",
+      description:
+        "Cap on how many sessions are interpreted automatically each hour. Refreshing a session manually isn't limited.",
+      control: "number",
+      activeWhen: TASK_GATE,
+      min: 1,
+    },
+    parse: parsePositiveInt,
   } satisfies Setting<OptionalNumber>,
 };
 
-/** All known settings keyed by dotted argus.json path — used by `argus config get/set/list`. */
+/** All known settings keyed by dotted argus.json path — used by `argus config get/set/list` and the
+ *  web settings surface (#154). */
 export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries(
   [
+    ...Object.values(LLM_SETTINGS),
     ...Object.values(TASK_SETTINGS),
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
@@ -372,6 +579,25 @@ export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): vo
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf8");
 }
 
+/**
+ * Write `config` atomically: serialize to a sibling temp file, then `rename()` over the target so a
+ * crash or kill mid-write can never leave a truncated/corrupt `argus.json` that breaks the next
+ * startup (#154). `rename` is atomic within a filesystem, and the temp file is a sibling so it always
+ * is. This is durability, not concurrency — the web server is the only writer.
+ */
+let atomicWriteSeq = 0;
+
+export function writeConfigAtomic(config: ArgusConfig, path: string = CONFIG_FILE): void {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+  // Unique per call (pid + a process-local counter), not just per pid: under `argus run` two legs in
+  // the same process (the server and the sync watcher's hub-key migration) can write concurrently, and
+  // a shared temp path would let one's rename() hit the other's already-renamed file → ENOENT crash.
+  const tmp = join(dir, `.argus.json.${process.pid}.${atomicWriteSeq++}.tmp`);
+  writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
+  renameSync(tmp, path);
+}
+
 
 /**
  * Resolve the shared `llm.*` block into a `ResolvedLlmConfig`. `overrides` carries a consumer's own
@@ -379,19 +605,90 @@ export function writeConfig(config: ArgusConfig, path: string = CONFIG_FILE): vo
  * which wins over the built-in default. The API key itself is not resolved here (that's an async
  * secret-store read the consumer performs); `apiKeyEnv` names where to find it.
  */
+/** The bare field name of a provider-scoped `llm.*` setting (`llm.model` → `model`). */
+export function llmFieldName(setting: Setting<unknown>): string {
+  return setting.path.slice("llm.".length);
+}
+
+/** Dotted path to a provider-scoped field's stored value: `llm.providerConfigs.<provider>.<field>`. */
+export function providerConfigPath(provider: string, field: string): string {
+  return `llm.providerConfigs.${provider}.${field}`;
+}
+
+/**
+ * Resolve a provider-scoped `llm.*` setting for the active provider:
+ *   flag > env > `llm.providerConfigs[provider].<field>` > legacy flat `llm.<field>` > default.
+ * The flag/env layers stay global overrides of whichever provider is active; the legacy flat value is
+ * the pre-`providerConfigs` location, kept so existing argus.json files keep resolving.
+ */
+export function resolveProviderScoped<T>(
+  setting: Setting<T>,
+  flags: Record<string, unknown>,
+  file: ArgusConfig,
+  provider: string,
+): T {
+  const fromFlag = setting.flag ? flags[setting.flag] : undefined;
+  if (present(fromFlag)) return setting.parse(fromFlag);
+  const fromEnv = setting.env ? process.env[setting.env] : undefined;
+  if (present(fromEnv)) return setting.parse(fromEnv);
+  const scoped = getPath(file, providerConfigPath(provider, llmFieldName(setting)));
+  if (present(scoped)) return setting.parse(scoped);
+  const legacy = getPath(file, setting.path);
+  if (present(legacy)) return setting.parse(legacy);
+  return setting.default;
+}
+
+/** The active LLM provider: `llm.provider` (flag > env > file), or the built-in default when unset.
+ *  The one place the "what provider is in effect" question is answered. */
+export function resolveActiveProvider(
+  file: ArgusConfig = loadConfig(),
+  flags: Record<string, unknown> = {},
+): LlmProvider {
+  return resolveSetting(LLM_SETTINGS.provider, flags, file) ?? DEFAULT_TASK_PROVIDER;
+}
+
+/**
+ * One-time, idempotent migration: relocate any legacy flat `llm.<field>` values (model, apiKeyEnv,
+ * command, …) into `llm.providerConfigs[<configured provider>].<field>`, then drop the flat keys.
+ *
+ * Pre-`providerConfigs` those fields lived flat and applied to whatever provider was active. The scoped
+ * resolver still reads them as a fallback for *any* active provider (`resolveProviderScoped`), so once
+ * the user switches providers the new provider inherits the old one's model/key-env (#154 review). We
+ * fold them under the provider they were written for — the file's persisted `llm.provider`, NOT the
+ * env-resolved active provider (an env override is a runtime choice, not what the flat values describe)
+ * — so each provider keeps its own values and the cross-provider bleed stops. A no-op (no write) when
+ * there are no flat values. An already-scoped value wins (never clobbered). Returns true if it moved
+ * anything. Called on serve start, mirroring the Hub-key migration.
+ */
+export function migrateLlmFlatToProviderConfigs(configPath: string = CONFIG_FILE): boolean {
+  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+  const scoped = Object.values(LLM_SETTINGS).filter((s) => (s as Setting<unknown>).providerScoped) as Setting<unknown>[];
+  const flat = scoped.filter((s) => present(getPath(file, s.path)));
+  if (!flat.length) return false;
+  const provider = parseProvider(getPath(file, "llm.provider")) ?? DEFAULT_TASK_PROVIDER;
+  for (const s of flat) {
+    const dest = providerConfigPath(provider, llmFieldName(s));
+    if (!present(getPath(file, dest))) setPath(file, dest, getPath(file, s.path)); // scoped value wins
+    setPath(file, s.path, undefined); // drop the flat key (JSON.stringify omits undefined)
+  }
+  writeConfigAtomic(file, configPath);
+  return true;
+}
+
 function resolveLlmConfig(
   flags: Record<string, unknown>,
   file: ArgusConfig,
   overrides: { provider?: LlmProvider; model?: string; command?: string },
-  defaultProvider: LlmProvider,
 ): ResolvedLlmConfig {
-  const provider =
-    overrides.provider ?? resolveSetting(LLM_SETTINGS.provider, flags, file) ?? defaultProvider;
-  const model = overrides.model ?? resolveSetting(LLM_SETTINGS.model, flags, file);
-  const command = overrides.command ?? resolveSetting(LLM_SETTINGS.command, flags, file);
-  const baseUrl = resolveSetting(LLM_SETTINGS.baseUrl, flags, file);
-  const maxTokens = resolveSetting(LLM_SETTINGS.maxTokens, flags, file);
-  const apiKeyEnv = resolveSetting(LLM_SETTINGS.apiKeyEnv, flags, file) ?? defaultApiKeyEnv(provider);
+  const provider = overrides.provider ?? resolveActiveProvider(file, flags);
+  // Provider-scoped fields resolve against the active provider's own block, so switching providers
+  // never picks up another provider's model/command/etc.
+  const model = overrides.model ?? resolveProviderScoped(LLM_SETTINGS.model, flags, file, provider);
+  const command = overrides.command ?? resolveProviderScoped(LLM_SETTINGS.command, flags, file, provider);
+  const baseUrl = resolveProviderScoped(LLM_SETTINGS.baseUrl, flags, file, provider);
+  const maxTokens = resolveProviderScoped(LLM_SETTINGS.maxTokens, flags, file, provider);
+  const apiKeyEnv = resolveProviderScoped(LLM_SETTINGS.apiKeyEnv, flags, file, provider) ?? defaultApiKeyEnv(provider);
+  const claudeCliPath = resolveProviderScoped(LLM_SETTINGS.claudeCliPath, flags, file, provider);
 
   const llm: ResolvedLlmConfig = { provider };
   if (model) llm.model = model;
@@ -399,6 +696,7 @@ function resolveLlmConfig(
   if (maxTokens != null) llm.maxTokens = maxTokens;
   if (command) llm.command = command;
   if (apiKeyEnv) llm.apiKeyEnv = apiKeyEnv;
+  if (claudeCliPath) llm.claudeCliPath = claudeCliPath;
   return llm;
 }
 
@@ -433,7 +731,7 @@ export function resolveTaskExtraction(
     model: resolveSetting(TASK_SETTINGS.model, flags, file),
     command: resolveSetting(TASK_SETTINGS.command, flags, file),
   };
-  const llm = resolveLlmConfig(flags, file, overrides, DEFAULT_TASK_PROVIDER);
+  const llm = resolveLlmConfig(flags, file, overrides);
 
   const maxPerHour = resolveSetting(TASK_SETTINGS.maxSessionsPerHour, flags, file);
   const resolved: ResolvedTaskExtraction = {
@@ -473,21 +771,6 @@ export function resolveRetainText(
   return resolveSetting(RETENTION_SETTINGS.retainText, flags, file);
 }
 
-export interface ResolvedHubConfig {
-  url: string;
-  key: string;
-}
-
-/**
- * Resolve Hub connection settings from env > argus.json. Returns the config only when both
- * `hub.url` and `hub.key` are present; undefined otherwise.
- */
-export function resolveHubConfig(
-  flags: Record<string, unknown> = {},
-  file: ArgusConfig = loadConfig(),
-): ResolvedHubConfig | undefined {
-  const url = resolveSetting(HUB_SETTINGS.url, flags, file);
-  const key = resolveSetting(HUB_SETTINGS.key, flags, file);
-  if (url && key) return { url, key };
-  return undefined;
-}
+// Resolving the Hub connection needs the secret store (the Hub key lives in the OS keychain, like the
+// LLM API keys), so `resolveHubConfig` lives in `secrets.ts` — this module stays pure of secret access.
+// `hub.url` is resolved there via `resolveSetting(HUB_SETTINGS.url, …)`; the key comes from the store.

@@ -18,6 +18,18 @@ import type { TaskMetrics } from "../../src/api/task-metrics";
 import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
 import type { SessionDetailResponse } from "../../src/api/serve";
+import type {
+  ConnectionTestDescriptor,
+  ConnectionTestResult,
+  SecretFieldDescriptor,
+  SettingDescriptor,
+  SettingsCategory,
+  SettingsResponse,
+  SettingsSection,
+  SettingOverride,
+} from "../../src/api/settings";
+import type { SettingUi } from "../../src/config";
+import type { SecretStatus } from "../../src/secrets";
 
 export type {
   Dashboard,
@@ -32,6 +44,16 @@ export type {
   SessionListResponse,
   SessionDetailResponse,
   SessionSort,
+  ConnectionTestDescriptor,
+  ConnectionTestResult,
+  SecretFieldDescriptor,
+  SecretStatus,
+  SettingDescriptor,
+  SettingsCategory,
+  SettingsResponse,
+  SettingsSection,
+  SettingOverride,
+  SettingUi,
   TaskMetrics,
   ToolCategoryStat,
   ToolStat,

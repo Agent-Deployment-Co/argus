@@ -23,6 +23,7 @@ export const claudeApiProvider: ProviderDescriptor = {
   apiKeyEnv: "ANTHROPIC_API_KEY",
   defaultModel: DEFAULT_ANTHROPIC_MODEL,
   requiresApiKey: true,
+  configFields: ["model", "apiKeyEnv", "maxTokens"],
   complete(call: ProviderCall) {
     return httpComplete(
       () => ({

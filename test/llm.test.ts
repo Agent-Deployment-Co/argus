@@ -7,6 +7,7 @@ import {
   PROVIDER_API_KEY_ENVS,
   type LlmProvider,
 } from "../src/llm/index.ts";
+import { resolveClaudeBinary, runCommandProvider } from "../src/llm/providers/local.ts";
 import type { ResolvedLlmConfig } from "../src/llm/types.ts";
 
 /** A recording fake fetch that returns scripted responses in order. */
@@ -36,6 +37,44 @@ function json(body: unknown, init?: ResponseInit): Response {
 const cfg = (over: Partial<ResolvedLlmConfig> & { provider: LlmProvider }): ResolvedLlmConfig => ({
   apiKey: "test-key",
   ...over,
+});
+
+describe("resolveClaudeBinary", () => {
+  test("an explicit override wins (trimmed), bypassing all probes", () => {
+    const probes = { onPath: () => "/from/path", loginShell: () => "/from/shell", knownLocations: () => "/known" };
+    expect(resolveClaudeBinary("  /opt/claude/bin/claude  ", probes)).toBe("/opt/claude/bin/claude");
+  });
+
+  test("with no override, prefers $PATH, then the login shell, then known locations", () => {
+    expect(
+      resolveClaudeBinary(undefined, { onPath: () => "/path/claude", loginShell: () => "/shell/claude" }),
+    ).toBe("/path/claude");
+    expect(
+      resolveClaudeBinary(undefined, { onPath: () => undefined, loginShell: () => "/shell/claude" }),
+    ).toBe("/shell/claude");
+    expect(
+      resolveClaudeBinary(undefined, {
+        onPath: () => undefined,
+        loginShell: () => undefined,
+        knownLocations: () => "/usr/local/bin/claude",
+      }),
+    ).toBe("/usr/local/bin/claude");
+  });
+
+  test("falls back to bare \"claude\" when nothing resolves (spawn then surfaces a clear ENOENT)", () => {
+    expect(resolveClaudeBinary(undefined, { onPath: () => undefined })).toBe("claude");
+  });
+});
+
+describe("local provider stdin (#154 review)", () => {
+  test("a child that exits before draining a large prompt fails cleanly, never crashing the process", async () => {
+    // `false` exits immediately without reading stdin; a multi-MB prompt makes the write outlive the
+    // child, so the stdin pipe emits EPIPE. Without the stdin 'error' listener that's an unhandled
+    // error that takes down the whole process; with it, we just get a clean failure result.
+    const huge = "x".repeat(8 * 1024 * 1024);
+    const result = await runCommandProvider({ prompt: huge, command: "false" });
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe("provider registry (single source of truth)", () => {

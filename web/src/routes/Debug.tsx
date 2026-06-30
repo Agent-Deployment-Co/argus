@@ -41,12 +41,12 @@ export function Debug() {
   return (
     <div className="debug">
       <header className="debug-head">
-        <h2>Debug</h2>
+        <h2 className="t-title">Debug</h2>
         <span className="muted">generated {dtAmPm(d.generatedAtMs)}</span>
       </header>
 
       <section>
-        <h3>Version &amp; runtime</h3>
+        <h3 className="t-subhead">Version &amp; runtime</h3>
         <div className="kv">
           <Row k="Argus version" v={d.version.argus} />
           <Row k="Store schema (expected)" v={d.version.storeSchema} />
@@ -60,7 +60,7 @@ export function Debug() {
       </section>
 
       <section>
-        <h3>Store &amp; index</h3>
+        <h3 className="t-subhead">Store &amp; index</h3>
         {d.store.error && <div className="task-error" role="alert">{d.store.error}</div>}
         <div className="kv">
           <Row k="Store path" v={<code>{d.store.path}</code>} />
@@ -84,7 +84,7 @@ export function Debug() {
         {d.store.sources.length > 0 && (
           <table className="debug-table">
             <thead>
-              <tr><th>Source</th><th>Sessions</th><th>Archived</th><th>Last sync</th><th>Up to date</th></tr>
+              <tr><th className="t-overline">Source</th><th className="t-overline">Sessions</th><th className="t-overline">Archived</th><th className="t-overline">Last sync</th><th className="t-overline">Up to date</th></tr>
             </thead>
             <tbody>
               {d.store.sources.map((s) => (
@@ -102,9 +102,9 @@ export function Debug() {
       </section>
 
       <section>
-        <h3>Paths</h3>
+        <h3 className="t-subhead">Paths</h3>
         <table className="debug-table">
-          <thead><tr><th>Name</th><th>Path</th><th>Exists</th></tr></thead>
+          <thead><tr><th className="t-overline">Name</th><th className="t-overline">Path</th><th className="t-overline">Exists</th></tr></thead>
           <tbody>
             {d.paths.map((p) => (
               <tr key={p.name}>
@@ -118,9 +118,9 @@ export function Debug() {
       </section>
 
       <section>
-        <h3>Environment</h3>
+        <h3 className="t-subhead">Environment</h3>
         <table className="debug-table">
-          <thead><tr><th>Variable</th><th>Value</th></tr></thead>
+          <thead><tr><th className="t-overline">Variable</th><th className="t-overline">Value</th></tr></thead>
           <tbody>
             {d.env.map((e) => (
               <tr key={e.name}>
@@ -133,7 +133,7 @@ export function Debug() {
       </section>
 
       <section>
-        <h3>Task extraction</h3>
+        <h3 className="t-subhead">Task extraction</h3>
         <div className="kv">
           <Row k="Enabled" v={<Bool value={d.taskExtraction.enabled} />} />
           <Row k="Provider" v={d.taskExtraction.provider} />
@@ -142,7 +142,7 @@ export function Debug() {
       </section>
 
       <section>
-        <h3>Settings (argus.json)</h3>
+        <h3 className="t-subhead">Settings (argus.json)</h3>
         <pre className="debug-json">{JSON.stringify(d.config, null, 2)}</pre>
       </section>
     </div>

@@ -26,6 +26,8 @@
   --pill-cool: var(--sky-surge); --pill-cool-line: var(--cornflower-ocean);
   --code-bg: rgba(249,235,220,.07); --code-text: var(--porcelain);
   --sel-bg: var(--tiger-orange); --sel-text: var(--coffee-bean);
+  /* The UI/label typeface (everything that isn't running serif body text). */
+  --font-ui: "Poppins", "Avenir Next", Arial, sans-serif;
 }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="light"] {
@@ -53,6 +55,19 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Aleo", Georgia, serif; -webkit-font-smoothing: antialiased; }
+
+/* ── Type scale ───────────────────────────────────────────────────────────
+   The single source of truth for heading typography (typeface, size, weight,
+   colour, casing). One class per level — apply it on the element in the
+   markup (class="t-title", etc.). Every heading across the dashboard, the
+   detail views, and the settings surface uses one of these, so the hierarchy
+   can't drift and there's no place to sprinkle a one-off. Margins here are the
+   level's default; a container that needs a different gap overrides it
+   locally (e.g. a flex header zeroes it). */
+.t-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
+.t-eyebrow { margin: 0 0 14px; color: var(--accent); font-family: var(--font-ui); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .14em; }
+.t-subhead { margin: 0 0 10px; color: var(--heading); font-size: 15px; font-weight: 700; }
+.t-overline { color: var(--muted); font-family: var(--font-ui); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
 /* App shell: persistent left nav rail + content region. The rail collapses to an icon-only
    strip (width driven by --rail-w) so wide views like the sessions split-pane get more canvas. */
 .app-shell { --rail-w: 184px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
@@ -65,17 +80,32 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .filter-dates { display: inline-flex; align-items: center; gap: 8px; }
 .filter-dash { color: var(--muted); }
 /* Fixed height (padding-free vertically) so date inputs and the source select are identical — date
-   inputs otherwise render taller than a select from UA styling. box-sizing:border-box is global. */
+   inputs otherwise render taller than a select from UA styling. box-sizing:border-box is global. The
+   select itself is the shared .select component below, sized to the same 32px height. */
 .filter-input { box-sizing: border-box; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
 /* Fixed width so the from/to date inputs are identical regardless of value vs. placeholder text. */
 .filter-input[type="date"] { width: 150px; }
-
-/* Custom select caret: the native arrow can't be inset from the right edge, so we drop it and draw
-   our own chevron in a relative wrapper, positioned to match the date inputs' calendar-icon inset. */
-.select-wrap { position: relative; display: inline-flex; align-items: center; }
-.select-wrap > select { appearance: none; -webkit-appearance: none; padding-right: 28px; }
-.select-wrap::after { content: ""; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Shared <select> (use the <Select> component) ──────────────────────────────
+   One consistent dropdown everywhere. The native arrow can't be inset from the right edge across
+   platforms, so we reset the UA appearance and draw our own chevron in a relative wrapper. Variants
+   (default box, pill) live here so per-screen selects can't drift apart. */
+.select { position: relative; display: inline-flex; align-items: center; }
+.select__control {
+  box-sizing: border-box; height: 32px; appearance: none; -webkit-appearance: none;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0 30px 0 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; cursor: pointer;
+}
+.select__control:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.select::after {
+  content: ""; position: absolute; right: 12px; top: 50%; width: 6px; height: 6px;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-70%) rotate(45deg); pointer-events: none;
+}
+/* Pill variant: compact + rounded, to sit among the filter pills (Sessions sort). */
+.select--pill .select__control { height: auto; padding: 3px 26px 3px 12px; border-radius: 999px; font: 600 11.5px var(--font-ui); }
+.select--pill::after { right: 11px; }
 .filter-reset { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
 .filter-reset:hover:not(:disabled) { color: var(--heading); border-color: var(--accent); }
 .filter-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -86,18 +116,20 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .rail { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
 .rail-brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 14px; }
 .brand-mark { display: block; width: auto; height: 20px; flex: 0 0 auto; }
-.rail-wordmark { color: var(--heading); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 22px; line-height: 1; font-weight: 700; letter-spacing: -0.05em; }
+.rail-wordmark { color: var(--heading); font-family: var(--font-ui); font-size: 22px; line-height: 1; font-weight: 700; letter-spacing: -0.05em; }
 
 .rail-nav { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; }
-.rail-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px "Poppins", "Avenir Next", Arial, sans-serif; letter-spacing: .01em; white-space: nowrap; }
+.rail-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px var(--font-ui); letter-spacing: .01em; white-space: nowrap; }
 .rail-link:hover { background: var(--hover); color: var(--heading); }
 .rail-link[aria-current="page"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .rail-link[aria-disabled="true"] { opacity: .4; cursor: not-allowed; pointer-events: none; }
 .rail-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rail-icon { flex: 0 0 auto; }
 
-.rail-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--line); }
-.rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.rail-footer { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--line); }
+/* Settings + theme cluster on the left; the collapse toggle is pushed to the right. */
+.rail-footer .rail-toggle { margin-left: auto; }
+.rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; text-decoration: none; }
 .rail-icon-btn:hover { color: var(--heading); border-color: var(--muted); }
 .rail-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -106,12 +138,16 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .theme-choice:hover { background: var(--hover); color: var(--heading); }
 .theme-choice[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .theme-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Labeled variant (Settings → Appearance): icon + text per choice. */
+.theme-switcher-labeled .theme-choice { gap: 6px; padding: 6px 12px; font-size: 13px; }
 
 /* Collapsed rail: hide text, center icons. */
 .rail-collapsed .rail-wordmark, .rail-collapsed .rail-label { display: none; }
 .rail-collapsed .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
 .rail-collapsed .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
-.rail-collapsed .rail-footer { flex-direction: column-reverse; }
+/* Stacked top-to-bottom: settings, theme, expand (DOM order). */
+.rail-collapsed .rail-footer { flex-direction: column; align-items: center; }
+.rail-collapsed .rail-footer .rail-toggle { margin-left: 0; }
 
 main { padding: 30px 32px 64px; }
 
@@ -124,21 +160,19 @@ main:has(.sessions-split) { padding: 0; }
 .session-search-row { display: flex; align-items: center; gap: 8px; }
 .session-search { flex: 1 1 auto; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
 .session-filters { display: flex; flex-wrap: wrap; gap: 6px; }
-.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--pill-cool-line); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool) 14%, transparent); color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--pill-cool-line); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool) 14%, transparent); color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
 .filter-pill:hover { border-color: var(--accent); }
 .filter-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: var(--hover); font-size: 13px; line-height: 1; }
 .filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
-.filter-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; user-select: none; }
+.filter-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; user-select: none; }
 .filter-toggle:hover { border-color: var(--accent); }
-.session-sort { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 26px 3px 10px; color: var(--text); font: 600 11.5px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
-.session-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; }
+.session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
 .session-load-more:hover { border-color: var(--accent); color: var(--heading); }
 .session-load-more:disabled { opacity: .6; cursor: default; }
 .filter-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
 .filter-toggle-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.session-count { flex: 0 0 auto; color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; white-space: nowrap; }
+.session-count { flex: 0 0 auto; color: var(--muted); font: 600 11px var(--font-ui); white-space: nowrap; }
 .session-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
 .session-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
 .session-item:hover { background: var(--hover); color: var(--text); }
@@ -146,7 +180,7 @@ main:has(.sessions-split) { padding: 0; }
 .session-item-title { color: var(--heading); font-weight: 700; font-size: 13.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .session-item-meta { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; font-size: 11.5px; }
 .session-item-meta .truncate { max-width: 60%; }
-.session-item-stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; color: var(--muted); font: 600 10.5px "Poppins", "Avenir Next", Arial, sans-serif; }
+.session-item-stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; color: var(--muted); font: 600 10.5px var(--font-ui); }
 .session-empty-row { padding: 18px 14px; color: var(--muted); font-size: 13px; }
 
 .session-detail { overflow-y: auto; min-height: 0; }
@@ -160,14 +194,12 @@ main:has(.sessions-split) { padding: 0; }
 .eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
 .table-link { color: var(--link); }
 .table-link:hover { color: var(--link-hover); text-decoration: underline; }
-.session-detail-title { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; line-height: 1.25; }
 .session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
-.session-detail-inner h3 { margin: 0 0 10px; color: var(--heading); font-size: 14px; font-weight: 700; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .section-title-row h3 { margin: 0; }
-.task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px "Poppins", "Avenir Next", Arial, sans-serif; cursor: pointer; white-space: nowrap; }
+.task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .task-action:hover:not(:disabled) { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
 .task-action:disabled { opacity: .65; cursor: wait; }
 .task-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -190,11 +222,9 @@ main:has(.sessions-split) { padding: 0; }
 .debug .kv-row { min-width: 0; }
 .debug .kv-v { min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
 .debug-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
-.debug-head h2 { margin: 0; color: var(--heading); font-size: 22px; font-weight: 700; }
 .debug section { margin: 22px 0 0; }
-.debug h3 { margin: 0 0 10px; color: var(--heading); font-size: 14px; font-weight: 700; }
 .debug-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.debug-table th { text-align: left; color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; text-transform: uppercase; letter-spacing: .04em; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); }
+.debug-table th { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); }
 .debug-table td { padding: 5px 10px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-all; }
 .debug-table code { font-size: 12px; }
 .debug-json { margin: 0; padding: 12px; background: var(--code-bg); color: var(--code-text); border-radius: 8px; font-size: 12px; overflow-x: auto; }
@@ -229,10 +259,9 @@ main:has(.sessions-split) { padding: 0; }
   .task-panel, .task-panel.closing, .task-panel-backdrop, .task-panel-backdrop.closing { animation-duration: 1ms; }
 }
 .task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.task-panel-head h3 { margin: 0; color: var(--heading); font-size: 15px; font-weight: 700; }
+.task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
 .task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
 .task-panel-field { display: grid; gap: 4px; }
-.task-panel-label { color: var(--muted); font: 600 11px "Poppins", "Avenir Next", Arial, sans-serif; text-transform: uppercase; letter-spacing: .04em; }
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
 .task-panel-desc { white-space: pre-wrap; }
 .task-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -252,37 +281,32 @@ main:has(.sessions-split) { padding: 0; }
 .task-action .spin { animation: spin 0.8s linear infinite; transform-origin: center; }
 
 section { margin: 0 0 42px; }
-section h2 { font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: .14em; color: var(--accent); margin: 0 0 14px; font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: 12px; padding: 15px 16px 16px; }
-.card .label { color: var(--muted); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
 .card .value { color: var(--heading); font-size: 25px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .card .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
-.usersel { color: var(--muted); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
-.usersel select { background: var(--surface); color: var(--text); border: 1px solid var(--cornflower-ocean); border-radius: 7px; padding: 5px 9px; font: 13px "Aleo", Georgia, serif; text-transform: none; letter-spacing: normal; }
-.usersel select:focus-visible { outline: 2px solid var(--tiger-orange); outline-offset: 2px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 @media (max-width: 880px) { .grid2 { grid-template-columns: 1fr; } }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
-.panel h3 { margin: 0 0 12px; color: var(--heading); font-size: 15px; font-weight: 700; }
 .chart-box { position: relative; }
 canvas { max-width: 100%; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+/* th identity → .t-overline; this keeps only the sortable-sticky-header layout. */
+th { cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; background: var(--surface); z-index: 1; }
 th:hover { color: var(--accent); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .nowrap { white-space: nowrap; }
 .session-project { width: clamp(160px, 24vw, 260px); max-width: clamp(160px, 24vw, 260px); }
 .truncate { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tr:hover td { background: var(--hover); }
-.pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font: 11px "Poppins", "Avenir Next", Arial, sans-serif; border: 1px solid var(--line); color: var(--muted); margin: 1px 3px 1px 0; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font: 11px var(--font-ui); border: 1px solid var(--line); color: var(--muted); margin: 1px 3px 1px 0; }
 .pill.on { color: var(--pill-cool); border-color: var(--pill-cool-line); }
 .pill.warn { color: var(--tiger-orange); border-color: var(--racing-red); }
 .rec-list { display: flex; flex-direction: column; gap: 10px; }
 .rec { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--sky-surge); border-radius: 10px; padding: 12px 16px; }
 .rec.warning { border-left-color: var(--racing-red); }
-.rec-title { font-family: "Poppins", "Avenir Next", Arial, sans-serif; font-size: 13px; font-weight: 600; color: var(--heading); }
+.rec-title { font-family: var(--font-ui); font-size: 13px; font-weight: 600; color: var(--heading); }
 .rec-detail { font-size: 12.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
 .pill.clean { color: var(--sky-surge); border-color: var(--cornflower-ocean); }
 .pill.interrupted { color: var(--racing-red); border-color: var(--racing-red); }
@@ -302,7 +326,106 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .app-shell { --rail-w: 60px; }
   .rail-wordmark, .rail-label { display: none; }
   .rail-brand, .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
-  .rail-footer { flex-direction: column-reverse; }
+  .rail-footer { flex-direction: column; align-items: center; }
+  .rail-footer .rail-toggle { margin-left: 0; }
   main { padding-left: 18px; padding-right: 18px; }
   .filter-bar { padding-left: 18px; padding-right: 18px; gap: 12px; }
+}
+
+/* ── Settings surface (#154) ───────────────────────────────────────────────────
+   A full take-over: a left category nav + a right pane of sectioned settings. */
+.settings-surface { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-columns: 248px 1fr; background: var(--bg); }
+.settings-nav { display: flex; flex-direction: column; gap: 4px; padding: 18px 14px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
+.settings-back { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 6px 8px; margin-bottom: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: 600 13px var(--font-ui); cursor: pointer; }
+.settings-back:hover { background: var(--hover); color: var(--heading); }
+.settings-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-title { margin: 4px 8px 14px; color: var(--heading); font-family: var(--font-ui); font-size: 22px; font-weight: 700; letter-spacing: -0.04em; }
+.settings-categories { display: flex; flex-direction: column; gap: 2px; }
+.settings-cat-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px var(--font-ui); }
+.settings-cat-link:hover { background: var(--hover); color: var(--heading); }
+.settings-cat-link[aria-current="page"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.settings-cat-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.settings-pane { overflow-y: auto; padding: 40px 48px 80px; }
+/* --setting-control-w: the fixed width of the right-hand control column (inputs, selects, secret
+   widget) so they all line up; widen here to give longer values more room. */
+.settings-content { max-width: 760px; margin: 0 auto; --setting-control-w: 300px; }
+/* The category title and section headings use the shared type scale (.t-title / .t-eyebrow). */
+.settings-empty { color: var(--muted); padding: 24px 0; }
+.settings-section { margin-top: 28px; }
+.settings-rows { display: flex; flex-direction: column; }
+
+.setting-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+/* The last row in a section needs no divider — the section gap separates groups. */
+.settings-rows > .setting-row:last-child { border-bottom: none; }
+.setting-label { display: flex; flex-direction: column; gap: 3px; max-width: 60%; }
+.setting-name { color: var(--heading); font-weight: 600; font-size: 14px; }
+.setting-desc { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.setting-override { color: var(--accent); font-size: 12px; line-height: 1.45; margin-top: 2px; }
+.setting-control { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: var(--setting-control-w); }
+/* The settings control column is a fixed width so inputs and the shared <Select> line up. Text/number
+   inputs match the .select__control height (32px) so they sit identically beside it. */
+.setting-input { box-sizing: border-box; width: var(--setting-control-w); height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.setting-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+/* Numeric values read better flush-right (and the spinner sits at the edge). */
+.setting-input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+.setting-textarea { width: var(--setting-control-w); height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A textarea row stacks: label + description on top, a full-width control below. */
+.setting-row-stacked { flex-direction: column; align-items: stretch; gap: 10px; }
+.setting-row-stacked .setting-label { max-width: 100%; }
+.setting-row-stacked .setting-control { align-items: stretch; min-width: 0; }
+.setting-row-stacked .setting-textarea { width: 100%; min-height: 120px; }
+/* The provider dropdown is the shared <Select>; size its wrapper to the control column. */
+.setting-select { width: var(--setting-control-w); }
+.setting-select .select__control { width: 100%; }
+
+.setting-toggle { position: relative; width: 42px; height: 24px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; background: var(--hover); cursor: pointer; transition: background .15s; }
+.setting-toggle[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.setting-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.setting-toggle-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--porcelain); transition: transform .15s; }
+.setting-toggle[aria-checked="true"] .setting-toggle-knob { transform: translateX(18px); }
+
+/* Inactive controls (e.g. the LLM fields until task extraction is on): greyed and non-interactive. */
+.setting-row-disabled .setting-name, .setting-row-disabled .setting-desc { opacity: .5; }
+.setting-input:disabled, .select__control:disabled, .setting-toggle:disabled { opacity: .45; cursor: not-allowed; }
+
+/* API key (secret) field: a single-line widget — masked value or input, with icon-button actions to
+   the right, sized to the same control column as the other rows. */
+.setting-name-icon { vertical-align: -2px; color: var(--muted); }
+.secret-line { display: flex; align-items: center; gap: 6px; width: var(--setting-control-w); }
+.secret-line .secret-input { flex: 1 1 auto; width: auto; min-width: 0; }
+.secret-mask { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 6px 9px; border-radius: 8px; letter-spacing: .08em; }
+.secret-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.secret-icon-btn:hover:not(:disabled) { color: var(--heading); border-color: var(--accent); }
+.secret-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.secret-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+.secret-icon-btn.danger:hover:not(:disabled) { color: var(--racing-red); border-color: var(--racing-red); }
+.secret-confirm { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--racing-red); }
+
+/* "Test connection" action row, below the LLM settings. */
+.connection-test { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.secret-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font: 600 12.5px var(--font-ui); cursor: pointer; }
+.secret-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--heading); }
+.secret-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.secret-btn:disabled { opacity: .45; cursor: not-allowed; }
+.conn-result { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+.conn-result.ok { color: var(--sky-surge); }
+.conn-result.error { color: var(--racing-red); }
+.secret-set { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.setting-status.error { font-size: 12px; color: var(--racing-red); text-align: right; margin-top: 4px; }
+
+/* The single global save indicator, pinned to the top-right of the surface. */
+.save-indicator { position: absolute; top: 18px; right: 24px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--font-ui); color: var(--muted); }
+.save-indicator.saved { color: var(--sky-surge); }
+.save-indicator.error { color: var(--racing-red); }
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .settings-surface { grid-template-columns: 1fr; }
+  .settings-nav { display: none; }
+  .setting-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .setting-label { max-width: 100%; }
+  .setting-control { align-items: stretch; min-width: 0; }
+  .setting-input, .setting-textarea, .setting-select, .secret-line { width: 100%; }
 }

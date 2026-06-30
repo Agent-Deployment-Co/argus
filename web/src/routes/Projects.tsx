@@ -30,10 +30,10 @@ export function Projects() {
 
   return (
     <section>
-      <h2>Projects</h2>
+      <h2 className="t-eyebrow">Projects</h2>
       <div className="grid2">
         <div className="panel">
-          <h3>Tokens by project</h3>
+          <h3 className="t-subhead">Tokens by project</h3>
           <ChartCanvas
             type="bar"
             height={340}
@@ -46,7 +46,7 @@ export function Projects() {
           />
         </div>
         <div className="panel">
-          <h3>Est. cost by project</h3>
+          <h3 className="t-subhead">Est. cost by project</h3>
           <ChartCanvas
             type="bar"
             height={340}

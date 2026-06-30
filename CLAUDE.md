@@ -80,6 +80,21 @@ may use the internal vocabulary freely.
 (not "CoWork" or "Co-Work"). Use this exact casing in all user-facing strings. The internal
 source identifier / slug stays `cowork` (all lowercase).
 
+## User-facing UI
+
+Rules for anything presented in the web app (and any other UI surface):
+
+1. **Never present an unordered list.** Every list the user sees — `<select>` options, table rows,
+   card grids, legends, any enumeration — must have an ordering that is obvious to the user. A list
+   in arbitrary/source/insertion order is a bug.
+2. **Pick the ordering that fits the context.** If there's a natural temporal order (newest/oldest)
+   or numeric order (by tokens, cost, count, duration), use it — that's usually what the user wants
+   to scan by, and make the sort direction unmistakable. **If there is no meaningful temporal or
+   numeric ordering, sort alphabetically ascending.** (E.g. the LLM provider select has no inherent
+   ranking, so it should be alpha — not registry/declaration order.)
+3. **Sort the data, don't rely on how it arrived.** Order explicitly at the point of display (or in
+   the query) so it can't drift when the underlying source reorders.
+
 ## Writing the docs
 
 When writing or editing anything under `docs/` (the VitePress site), follow the authoring

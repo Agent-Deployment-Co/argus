@@ -48,10 +48,10 @@ export function Tools() {
   return (
     <>
       <section>
-        <h2>Skills</h2>
+        <h2 className="t-eyebrow">Skills</h2>
         <div className="grid2">
           <div className="panel">
-            <h3>Top skills by tokens</h3>
+            <h3 className="t-subhead">Top skills by tokens</h3>
             <ChartCanvas
               type="bar"
               height={260}
@@ -65,7 +65,7 @@ export function Tools() {
             <p className="note">Token attribution is exact — usage and the active skill are recorded on the same message.</p>
           </div>
           <div className="panel">
-            <h3>Skill usage over time</h3>
+            <h3 className="t-subhead">Skill usage over time</h3>
             {skillNames.length > 0 && (
               <ChartCanvas
                 type="bar"
@@ -90,10 +90,10 @@ export function Tools() {
       </section>
 
       <section>
-        <h2>Tools</h2>
+        <h2 className="t-eyebrow">Tools</h2>
         <div className="grid2">
           <div className="panel">
-            <h3>Tool calls by category</h3>
+            <h3 className="t-subhead">Tool calls by category</h3>
             <ChartCanvas
               type="doughnut"
               height={240}
@@ -104,7 +104,7 @@ export function Tools() {
             />
           </div>
           <div className="panel">
-            <h3>Most-used tools (by calls)</h3>
+            <h3 className="t-subhead">Most-used tools (by calls)</h3>
             <ChartCanvas
               type="bar"
               height={240}
@@ -124,10 +124,10 @@ export function Tools() {
       </section>
 
       <section>
-        <h2>MCP servers &amp; tool output weight</h2>
+        <h2 className="t-eyebrow">MCP servers &amp; tool output weight</h2>
         <div className="grid2">
           <div className="panel">
-            <h3>MCP server calls</h3>
+            <h3 className="t-subhead">MCP server calls</h3>
             <ChartCanvas
               type="bar"
               height={240}
@@ -142,7 +142,7 @@ export function Tools() {
             />
           </div>
           <div className="panel">
-            <h3>Heaviest tool results (approx tokens dumped into context)</h3>
+            <h3 className="t-subhead">Heaviest tool results (approx tokens dumped into context)</h3>
             <ChartCanvas
               type="bar"
               height={240}
@@ -159,7 +159,7 @@ export function Tools() {
       </section>
 
       <section>
-        <h2>Plugins</h2>
+        <h2 className="t-eyebrow">Plugins</h2>
         <DataTable columns={pluginColumns} rows={d.byPlugin} initialSort="skillTokens" />
         <p className="note">Rows marked <span className="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
       </section>

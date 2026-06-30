@@ -90,7 +90,7 @@ export function SessionDetail() {
             <span className="muted">·</span>
             <code className="session-id">{s.sessionId}</code>
           </div>
-          <h2 className="session-detail-title">{sessionTitle(s)}</h2>
+          <h2 className="t-title">{sessionTitle(s)}</h2>
           <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
         </div>
         <button
@@ -110,7 +110,7 @@ export function SessionDetail() {
       <StatCards stats={cards} />
 
       <section>
-        <h3>Tasks <span className="muted">({tasks.length})</span></h3>
+        <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
         {tasks.length > 0 ? (
           <ol className="tasks">
             {tasks.map((task) => (
@@ -142,7 +142,7 @@ export function SessionDetail() {
       </section>
 
       <section>
-        <h3>Friction</h3>
+        <h3 className="t-subhead">Friction</h3>
         <div className="kv">
           <Row k="Interruptions" v={numOrDash(h.interruptions)} />
           <Row k="Rejections" v={numOrDash(h.rejections)} />
@@ -154,7 +154,7 @@ export function SessionDetail() {
       </section>
 
       <section>
-        <h3>Models</h3>
+        <h3 className="t-subhead">Models</h3>
         {s.models.length ? (
           <div className="chips">
             {s.models.map((m) => (
@@ -168,13 +168,13 @@ export function SessionDetail() {
       </section>
 
       <section>
-        <h3>Skills</h3>
+        <h3 className="t-subhead">Skills</h3>
         <div className="chips"><Skills skills={s.topSkills} /></div>
       </section>
 
       {tools.length > 0 && (
         <section>
-          <h3>Tools used</h3>
+          <h3 className="t-subhead">Tools used</h3>
           <div className="kv">
             {tools.slice(0, 12).map(([tool, count]) => <Row key={tool} k={tool} v={count} />)}
           </div>
@@ -183,7 +183,7 @@ export function SessionDetail() {
 
       {s.filesTouched.length > 0 && (
         <section>
-          <h3>Files touched <span className="muted">({s.filesTouched.length})</span></h3>
+          <h3 className="t-subhead">Files touched <span className="muted">({s.filesTouched.length})</span></h3>
           <ul className="file-list">
             {s.filesTouched.slice(0, 30).map((f) => <li key={f} title={f}>{f}</li>)}
           </ul>
@@ -192,7 +192,7 @@ export function SessionDetail() {
 
       {s.firstPrompt && (
         <section>
-          <h3>Opening prompt</h3>
+          <h3 className="t-subhead">Opening prompt</h3>
           <blockquote className="first-prompt">{s.firstPrompt}</blockquote>
         </section>
       )}
