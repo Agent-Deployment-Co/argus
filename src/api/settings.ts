@@ -114,14 +114,6 @@ export interface SettingsResponse {
   providerConfigs?: Record<string, Record<string, unknown>>;
 }
 
-/** The category → section → setting layout for the surface. Categories and their order are the
- *  product's grouping of the `argus.json` surface; the settings themselves are the registry
- *  descriptors, so types/defaults/validation come from one place. General is intentionally empty
- *  for now (#154).
- *
- *  Only the settings listed here are editable in the UI. Some settings are deliberately CLI/config-file
- *  only (advanced) and must NOT be added here — notably `retainText` (#120), which stays an
- *  `argus config` / `ARGUS_RETAIN_TEXT` / `--retain-text` setting. */
 /** The API key field for the BYO-key providers. The user enters the key itself (treated as a password
  *  and stored in the OS keychain via the secret endpoints); `llm.apiKeyEnv` — which env var the key is
  *  read from — stays an advanced CLI/config-file setting, not exposed here. The secret name per provider
@@ -155,28 +147,32 @@ type LayoutSection = {
   connectionTest?: ConnectionTestDescriptor;
 };
 
+/** The category → section → setting layout for the surface. Categories and their order are the
+ *  product's grouping of the `argus.json` surface; the settings themselves are the registry descriptors,
+ *  so types/defaults/validation come from one place.
+ *
+ *  Only the settings listed here are editable in the UI. Some are deliberately CLI/config-file only
+ *  (advanced) and must NOT be added — notably `retainText` (#120), which stays an `argus config` /
+ *  `ARGUS_RETAIN_TEXT` / `--retain-text` setting. */
 const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
   {
-    // Appearance (the color theme) is a client-only preference rendered by the surface — it isn't an
-    // `argus.json` setting, so it has no registry descriptor here. The Argus Hub connection lives here
-    // too (it used to be its own tab): the URL is a plain setting; the key is secret-store-backed
+    // General. Appearance (the color theme) is a client-only preference the surface renders itself — not
+    // an `argus.json` setting, so no registry descriptor here. The Argus Hub connection lives here too
+    // (it used to be its own tab): the URL is a plain setting; the key is secret-store-backed
     // (HUB_KEY_FIELD), like the LLM API keys.
     id: "general",
     label: "General",
     sections: [{ label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] }],
   },
   {
-    // Task extraction + the LLM that powers it live together: task extraction is the only consumer of
-    // the LLM settings today, so they're one tab. Two (unlabeled) sections keep the task on/off + prompt
-    // grouped apart from the model config; sub-section labels can be added back if this grows.
+    // Sessions = task extraction + the LLM that powers it (its only consumer today). One group: the
+    // Extract-tasks toggle, the hourly cap, then the LLM provider + its provider-specific fields, the
+    // API key, and the Test-connection action. (Custom prompt / prompt file aren't exposed yet; advanced
+    // / CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers the key itself via API_KEY_FIELD —
+    // `llm.baseUrl`, and `llm.maxTokens`. `claudeCliPath` shows only for claude-cli, per its configFields.)
     id: "sessions",
     label: "Sessions",
     sections: [
-      // One group: the Extract-tasks toggle, the hourly cap, then the LLM provider + its
-      // provider-specific fields, the API key, and the Test-connection action. (Custom prompt / prompt
-      // file aren't exposed yet; advanced / CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers
-      // the key itself via API_KEY_FIELD — `llm.baseUrl`, and `llm.maxTokens`. `claudeCliPath` shows only
-      // for claude-cli, per its configFields.)
       {
         settings: [
           TASK_SETTINGS.enabled,
