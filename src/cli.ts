@@ -965,6 +965,11 @@ const runCmd = defineCommand({
       default: false,
       description: "Skip uploads (index and serve only)",
     },
+    "hub-only-sync": {
+      type: "boolean",
+      default: false,
+      description: "Only upload to Argus Hub when configured; never use Cloudflare Access login",
+    },
     debug: {
       type: "boolean",
       default: false,
@@ -980,6 +985,7 @@ const runCmd = defineCommand({
         syncIntervalMin: Number(args["sync-interval"]) || 5,
         endpoint: args.endpoint,
         noSync: !!args["no-sync"],
+        hubOnlySync: !!args["hub-only-sync"],
         taskExtraction: () => taskExtractionOptions(args),
       },
       log,
