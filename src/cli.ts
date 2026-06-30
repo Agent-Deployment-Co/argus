@@ -59,6 +59,10 @@ function configureLog(args: Record<string, unknown> = {}): void {
   log.setLevel?.(resolveLogLevel(args, loadConfig()));
 }
 
+function printResultLine(message: string): void {
+  process.stderr.write(message + "\n");
+}
+
 /** Parse a tri-state boolean override flag (e.g. `--extract-tasks`, `--retain-text`): unset → undefined
  *  (defer to argus.json/env), else the explicit boolean. Anything other than true/false is a usage
  *  error. One place so the accepted vocabulary and exit code don't drift across flags. */
@@ -329,21 +333,21 @@ async function runPushOnce(opts: PushLoopOptions, log: Log): Promise<void> {
   }
 }
 
-async function runStatus(log: Log): Promise<void> {
-  log(`Store path: ${STORE_FILE}`);
+async function runStatus(): Promise<void> {
+  printResultLine(`Store path: ${STORE_FILE}`);
   try {
-    log(`Store size: ${formatBytes(statSync(STORE_FILE).size)}`);
+    printResultLine(`Store size: ${formatBytes(statSync(STORE_FILE).size)}`);
   } catch {
-    log("Store size: unavailable");
+    printResultLine("Store size: unavailable");
   }
   let scans;
   try {
     scans = await scanStore({ sources: ALL_SOURCES });
   } catch (err) {
-    log(
+    printResultLine(
       `Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`,
     );
-    log(
+    printResultLine(
       "Run `argus index rebuild --force` to rebuild it from your transcripts.",
     );
     process.exit(1);
@@ -395,15 +399,15 @@ async function runStatus(log: Log): Promise<void> {
   }
 
   if (!lines.length) {
-    log(
+    printResultLine(
       "No sessions yet. Run `argus index` once you've used Claude Code, Claude Cowork, Codex, or Gemini.",
     );
     return;
   }
-  for (const line of lines) log(line);
-  if (lines.length > 1) log(`Total: ${total} sessions`);
+  for (const line of lines) printResultLine(line);
+  if (lines.length > 1) printResultLine(`Total: ${total} sessions`);
   if (totalArchived) {
-    log(
+    printResultLine(
       `Kept after leaving disk: ${totalArchived} session${totalArchived === 1 ? "" : "s"} · remove with \`argus index delete --archived\``,
     );
   }
@@ -416,12 +420,13 @@ async function runStatus(log: Log): Promise<void> {
     const outdated = interpretation.outdated
       ? `, ${interpretation.outdated} with new activity`
       : "";
-    log(
+    printResultLine(
       `Extracted tasks from ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
         `(${interpretation.pending} waiting${outdated}).`,
     );
   }
-  if (pending) log("Run `argus index` to pick up new and changed sessions.");
+  if (pending)
+    printResultLine("Run `argus index` to pick up new and changed sessions.");
 }
 
 // ---------------------------------------------------------------------------
@@ -443,18 +448,14 @@ function flattenObject(obj: unknown, prefix = ""): [string, unknown][] {
   return result;
 }
 
-async function runConfigGet(
-  key: string,
-  log: Log,
-  json = false,
-): Promise<void> {
+async function runConfigGet(key: string, json = false): Promise<void> {
   const value = getPath(loadConfig(), key);
   if (json) {
     process.stdout.write(JSON.stringify(value ?? null) + "\n");
     return;
   }
   if (value === undefined) {
-    log("(not set)");
+    printResultLine("(not set)");
   } else {
     process.stdout.write(String(value) + "\n");
   }
@@ -480,7 +481,6 @@ async function runConfigSet(
 
 async function runConfigList(
   opts: { showSecrets?: boolean; asJson?: boolean },
-  log: Log,
 ): Promise<void> {
   const cfg = loadConfig();
   if (opts.asJson) {
@@ -489,7 +489,7 @@ async function runConfigList(
   }
   const pairs = flattenObject(cfg);
   if (pairs.length === 0) {
-    log("(no settings in argus.json)");
+    printResultLine("(no settings in argus.json)");
     return;
   }
   let hasRedacted = false;
@@ -503,7 +503,7 @@ async function runConfigList(
     }
   }
   if (hasRedacted) {
-    log(
+    printResultLine(
       "(use --show-secrets to reveal secret values, or --json for machine-readable output)",
     );
   }
@@ -836,7 +836,7 @@ const status = defineCommand({
     description: "show the local store path + per-source counts",
   },
   args: { ...logArgs },
-  run: handler(() => runStatus(log)),
+  run: handler(() => runStatus()),
 });
 
 const login = defineCommand({
@@ -1003,7 +1003,7 @@ const configGet = defineCommand({
   },
   run: handler((args) => {
     if (args._.length !== 1) failArg("Usage: argus config get <key>");
-    return runConfigGet(args._[0]!, log, args.json);
+    return runConfigGet(args._[0]!, args.json);
   }),
 });
 
@@ -1042,10 +1042,7 @@ const configList = defineCommand({
     },
   },
   run: handler((args) =>
-    runConfigList(
-      { showSecrets: !!args["show-secrets"], asJson: !!args.json },
-      log,
-    ),
+    runConfigList({ showSecrets: !!args["show-secrets"], asJson: !!args.json }),
   ),
 });
 

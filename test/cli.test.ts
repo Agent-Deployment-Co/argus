@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +145,70 @@ describe("index command group", () => {
     const { status, stderr } = runCli(["index", "rebuild"]);
     expect(status).toBe(2);
     expect(stderr).toContain("--force");
+  });
+});
+
+describe("read command output", () => {
+  test("status prints its result even under --quiet", () => {
+    const { status, stderr } = runCli(["status", "--quiet"]);
+    expect(status).toBe(0);
+    expect(stderr).toContain("Store path:");
+    expect(stderr).toContain("Store size:");
+    expect(stderr).toContain("No sessions yet.");
+  });
+
+  test("status prints its result when argus.json sets log.level to warn", () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
+    mkdirSync(join(dir, "config"), { recursive: true });
+    writeFileSync(
+      join(dir, "config", "argus.json"),
+      JSON.stringify({ log: { level: "warn" } }, null, 2) + "\n",
+    );
+
+    const { status, stderr } = runCli(["status"], dir);
+    expect(status).toBe(0);
+    expect(stderr).toContain("Store path:");
+    expect(stderr).toContain("No sessions yet.");
+  });
+
+  test("config get prints an unset result even under --quiet", () => {
+    const { status, stderr, stdout } = runCli([
+      "config",
+      "get",
+      "llm.provider",
+      "--quiet",
+    ]);
+    expect(status).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("(not set)");
+  });
+
+  test("config list prints an empty result even under --quiet", () => {
+    const { status, stderr, stdout } = runCli([
+      "config",
+      "list",
+      "--quiet",
+    ]);
+    expect(status).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("(no settings in argus.json)");
+  });
+
+  test("config list prints the redaction hint even under --quiet", () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
+    mkdirSync(join(dir, "config"), { recursive: true });
+    writeFileSync(
+      join(dir, "config", "argus.json"),
+      JSON.stringify({ hub: { key: "fake-key" } }, null, 2) + "\n",
+    );
+
+    const { status, stderr, stdout } = runCli(
+      ["config", "list", "--quiet"],
+      dir,
+    );
+    expect(status).toBe(0);
+    expect(stdout).toContain("hub.key=<redacted>");
+    expect(stderr).toContain("use --show-secrets");
   });
 });
 
