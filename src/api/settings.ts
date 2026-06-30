@@ -230,9 +230,9 @@ function describe(setting: Setting<unknown>, file: ArgusConfig, opts: { claudeBi
   if (setting.env && present(process.env[setting.env])) {
     descriptor.override = { layer: "env", name: setting.env };
   }
-  // The Claude CLI path field shows the auto-resolved binary as its placeholder, so the user sees what
-  // "leave blank to auto-detect" would actually use.
-  if (setting.path === "llm.claudeCliPath" && opts.claudeBinary) descriptor.placeholder = opts.claudeBinary;
+  // A setting can declare a server-computed placeholder source (ui.placeholderFrom). Today the only one
+  // is the auto-resolved `claude` binary, so the user sees what "leave blank to auto-detect" would use.
+  if (setting.ui?.placeholderFrom === "claudeBinary" && opts.claudeBinary) descriptor.placeholder = opts.claudeBinary;
   return descriptor;
 }
 

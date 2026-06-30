@@ -170,6 +170,10 @@ export interface SettingUi {
   /** For a `number` control: the minimum allowed value. Rendered as the input's `min`, and enforced on
    *  write (a smaller value is rejected). */
   min?: number;
+  /** A server-computed placeholder source: the settings API fills the descriptor's `placeholder` from
+   *  this when building the response (e.g. `"claudeBinary"` → the auto-resolved `claude` path). Keeps
+   *  the API generic instead of special-casing a specific setting path. */
+  placeholderFrom?: "claudeBinary";
 }
 
 /** One setting, binding its three spellings explicitly plus coercion/validation and a default. */
@@ -449,6 +453,7 @@ export const LLM_SETTINGS = {
       control: "text",
       activeWhen: TASK_GATE,
       visibleWhen: visibleForField("claudeCliPath"),
+      placeholderFrom: "claudeBinary",
     },
     parse: parseString,
   } satisfies Setting<OptionalString>,
