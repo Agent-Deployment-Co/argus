@@ -28,7 +28,7 @@ Press `Ctrl-C` to stop. Nothing leaves your machine.
 ## What the dashboard shows
 
 - [Tokens](/glossary#token) and estimated [cost](/glossary#cost) over time
-- A breakdown by [source](/glossary#source): Claude Code, Codex, Gemini, and Claude Cowork
+- A breakdown by [source](/glossary#source): Claude Code, Claude Cowork, Claude Chat, Codex, and Gemini CLI
 - The [skills](/glossary#skill), [tools](/glossary#tool), [MCP servers](/glossary#mcp-server), [plugins](/glossary#plugin), [models](/glossary#model), and [projects](/glossary#project) you use most
 - The tools that send the most content back into your agent's context
 - Per-[session](/glossary#session) time, tokens, cost, and prompts

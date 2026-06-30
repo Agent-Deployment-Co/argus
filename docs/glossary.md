@@ -63,8 +63,10 @@ task the same way each time, like drafting a release note or formatting a report
 
 ## Source
 
-Which agent tool a piece of usage came from. Argus reads from several sources:
-Claude Code, Codex, Gemini, and Claude Cowork.
+Which agent a piece of usage came from. Argus reads from Claude (Claude Code,
+Claude Cowork, and Claude Chat), Codex, and Gemini CLI. Claude Chat usage is
+estimated rather than metered, and it stays on your machine: it isn't uploaded to
+an Argus Hub.
 
 ## Sync
 
