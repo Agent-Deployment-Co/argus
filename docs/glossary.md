@@ -27,6 +27,14 @@ The visual view of your usage that Argus opens in your browser: tokens and cost
 over time, which tools and skills you lean on, and a breakdown by project and
 source.
 
+## Index
+
+The local store Argus builds from your sessions. Indexing goes through each
+session once, pulls out the useful details (usage, cost, tools, skills, and the
+like), and saves them so your dashboard is fast and your sessions are ready to
+explore. The index lives on your own computer. Nothing is uploaded unless you
+choose to sync.
+
 ## MCP server
 
 A connector that gives an agent extra abilities, like access to a database, a
@@ -63,15 +71,15 @@ task the same way each time, like drafting a release note or formatting a report
 
 ## Source
 
-Which agent a piece of usage came from. Argus reads from Claude (Claude Code,
-Claude Cowork, and Claude Chat), Codex, and Gemini CLI. Claude Chat usage is
-estimated rather than metered, and it stays on your machine: it isn't uploaded to
-an Argus Hub.
+Which agent a piece of usage came from. Argus indexes Claude (Claude Code, Claude
+Cowork, and Claude Chat), Codex, and Gemini CLI. Claude Chat usage is estimated
+rather than metered, and it stays on your machine: it isn't uploaded to an Argus
+Hub.
 
 ## Sync
 
 Uploading a snapshot of your usage to an Argus Hub so it can be combined with other
-people's. Nothing is uploaded unless you choose to sync; reading and the local
+people's. Nothing is uploaded unless you choose to sync; indexing and the local
 dashboard stay on your machine.
 
 ## Token
@@ -83,9 +91,3 @@ so a longer conversation or a bigger file means more tokens.
 
 A single action an agent can take, such as reading a file, running a command,
 searching the web, or calling an API. Argus shows which tools your agents use most.
-
-## Transcript
-
-The local file an agent writes as it works, recording the session: what you asked,
-what it did, and how many tokens it used. Argus reads these transcripts from your
-machine to build the dashboard.

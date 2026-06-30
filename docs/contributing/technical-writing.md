@@ -75,7 +75,15 @@ When you do show commands:
 
 Use the product's words, consistently.
 
-- **session, transcript, project, source, store** for the user-facing concepts.
+- **session, project, source, store** for the user-facing concepts. Say
+  **session** for what the reader did with an agent. **transcript** is a storage
+  detail nobody outside the code cares about, so keep it to `docs/internals/`.
+- For what Argus does with that data, say **finds and indexes** ("Argus finds and
+  indexes your sessions"): it discovers your sessions and builds a local index.
+  Don't say *reads* (it sounds like Argus only looks, not that it does anything
+  useful), and don't say *loads* or *imports* (they sound like your data moves
+  somewhere, which undercuts the local-first story). Use **include** only for
+  coverage ("Argus includes every agent by default").
 - **Claude Code**, **Claude Cowork** (lowercase "w"), **Claude Chat**, **Codex**,
   and **Gemini CLI** for the agents.
 - `serve`, `index`, `sync`, `run` for the commands. `sync` is the upload (it was
@@ -102,7 +110,7 @@ and don't talk down by over-explaining. Instead, **link the term to its glossary
 entry the first time it appears on a page**, then use it plainly after that:
 
 ```md
-Argus reads your local [transcripts](/glossary#transcript) and...
+Argus indexes your local [sessions](/glossary#session) and...
 ```
 
 This lets an unfamiliar reader click through to learn and a familiar reader keep

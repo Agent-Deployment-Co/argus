@@ -1,7 +1,7 @@
 # Supported agents
 
-Argus indexes [sessions](/glossary#session) from your AI [agents](/glossary#agent)
-by reading their [transcripts](/glossary#transcript). It supports five
+Argus finds and indexes the [sessions](/glossary#session) from your AI
+[agents](/glossary#agent) on your computer. It supports five
 [sources](/glossary#source) across three agents, and includes all of them by
 default.
 
@@ -13,16 +13,9 @@ default.
 | [Codex](https://openai.com/codex/) | OpenAI's coding and knowledge work agent |
 | [Gemini CLI](https://geminicli.com/) | Google's coding agent that runs in your terminal |
 
-## No configuration required
+## How Argus finds your sessions
 
-Argus automatically indexes sessions from every agent it finds without any additional configuration. When it
-reads your machine, it picks up whatever each agent has left behind and folds it
-all into one [dashboard](/glossary#dashboard).
-
-## Where Argus looks for sessions
-
-Argus reads each agent's sessions from wherever that agent already stores them on
-your computer. You don't point Argus at anything; it checks these locations:
+Argus automatically indexes sessions from every agent it finds on your computer without any additional configuration. By default, Argus uses these locations to find your existing agent sessions:
 
 | Agent | macOS | Windows |
 |---|---|---|
@@ -37,10 +30,10 @@ If you've moved an agent's data with its own setting (for example
 setting. For where Argus keeps its own data, see
 [Configuration](/configuration#filesystem-locations).
 
-## Claude Chat needs the desktop app
+## Claude Chat sessions require the desktop app
 
-Argus reads Claude Chat from the [Claude desktop app](https://claude.com/download),
-which keeps a local copy of your conversations. It can't read chats that only
+Argus finds Claude Chat in the [Claude desktop app](https://claude.com/download),
+which keeps a local copy of your conversations. It can't include chats that only
 happened on claude.ai and were never synced to the desktop app, so two limits apply:
 
 - You need the desktop app installed and signed in, and only conversations that
