@@ -3,8 +3,8 @@
 Argus has one app-owned settings file, **`argus.json`**, under `$ARGUS_CONFIG_DIR`
 (macOS: `~/Library/Application Support/argus/argus.json`). It's the config peer of the data store
 (`argus.db`) — the durable, structured home for user settings. It is **settings only**:
-`token.json` (the login credential) and `pricing.json` (price overrides) stay as their own files,
-with different sensitivity and backup characteristics.
+`pricing.json` (price overrides) stays as its own file, with different sensitivity and backup
+characteristics.
 
 `src/config.ts` owns the file: a typed `ArgusConfig`, a tolerant loader, and the settings resolver.
 
@@ -201,12 +201,12 @@ Argus keeps two kinds of files on disk, and deliberately separates them:
 
 - **data** — the store (`argus.db`) and regenerable derived state. Fully rebuildable by re-indexing,
   large, and churns; not worth backing up.
-- **config** — credentials and hand-authored settings (`token.json`, `pricing.json`, `argus.json`).
-  Tiny, not regenerable, and worth backing up. `token.json` is a secret.
+- **config** — credentials and hand-authored settings (`pricing.json`, `argus.json`).
+  Tiny, not regenerable, and worth backing up.
 
 **`ARGUS_HOME` is the single primary knob.** Set it and the data lands in `$ARGUS_HOME/data` and the
 config in `$ARGUS_HOME/config`, keeping the split underneath. So `rm -rf $ARGUS_HOME/data` clears
-derived state without touching your login or price overrides, and a dotfiles/backup tool can include
+derived state without touching your settings or price overrides, and a dotfiles/backup tool can include
 `config/` while excluding the churning `data/`.
 
 Resolution order for each directory (first present value wins; empty values count as absent):

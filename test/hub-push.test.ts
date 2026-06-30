@@ -145,6 +145,25 @@ describe("readHubUploadPayload", () => {
     expect(Object.keys(payload.rows)).not.toContain("interactionText");
   });
 
+  test("excludes claude-chat sessions from hub payloads regardless of source filter", () => {
+    const path = buildArgusDb({ sessionId: "sess-syncable" });
+    // Add a claude-chat session to the same store.
+    const db = new Database(path);
+    db.query(
+      `INSERT INTO resolved_sessions(session_id, source, project, cwd, first_ts, last_ts, message_count, meta_json)
+       VALUES ('sess-local', 'claude-chat', '/p', '/p', 1000000, null, 1, ?)`,
+    ).run(JSON.stringify({ sessionId: "sess-local", source: "claude-chat" }));
+    db.close();
+
+    // source: "all" must silently drop the claude-chat session.
+    const all = readHubUploadPayload(path);
+    expect(all.rows.sessions.map((s) => s.session_id)).toEqual(["sess-syncable"]);
+
+    // explicit source: "claude-chat" also produces an empty payload (not a leak).
+    const chatOnly = readHubUploadPayload(path, { source: "claude-chat" });
+    expect(chatOnly.rows.sessions).toHaveLength(0);
+  });
+
   test("includes the client_fingerprint log in the payload", () => {
     const path = buildArgusDb({
       fingerprint: [
