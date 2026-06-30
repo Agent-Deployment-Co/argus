@@ -126,6 +126,8 @@ interface AppOptions {
    *  surface. Resolved once at serve startup (off the request path — resolution can spawn a login
    *  shell) and passed in; omit it (tests, other callers) and the placeholder is simply not shown. */
   claudeBinary?: string;
+  /** Server log sink. Used for explicit user actions like Refresh. */
+  log?: Log;
 }
 
 const MIME: Record<string, string> = {
@@ -173,6 +175,10 @@ function placeholderHtml(): string {
 <p>The web app hasn't been built yet. Build it once with <code>bun run build:web</code>, or run the
 dev server with <code>bun run dev:web</code> for live-reloading development.</p>
 <p>The data API is live at <a href="/api/snapshot">/api/snapshot</a>.</p></body>`;
+}
+
+function taskCountLabel(count: number): string {
+  return `${count} task${count === 1 ? "" : "s"}`;
 }
 
 /** The custom header the web app sends on mutating requests. A cross-origin page can't set it
@@ -332,13 +338,19 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     if (!sessionId) return c.json({ error: "Missing session id." }, 400);
     if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);
 
+    opts.log?.(`Refreshing ${sessionId}: re-reading the session and rebuilding tasks...`);
     const result = await opts.reindex(sessionId);
     if (!result.ok) {
+      if (opts.log) logWarn(opts.log, `Refresh failed for ${sessionId}: ${result.message}`);
       return c.json({ error: result.message, diagnostics: result.diagnostics ?? [] }, result.status);
     }
 
+    const diagnostics = result.diagnostics ?? [];
+    const issueCount = diagnostics.filter((diagnostic) => diagnostic.severity !== "info").length;
+    const issueNote = issueCount ? ` with ${issueCount} issue${issueCount === 1 ? "" : "s"}` : "";
+    opts.log?.(`Refreshed ${sessionId}: rebuilt ${taskCountLabel(result.tasks.length)}${issueNote}.`);
     opts.onStoreChanged?.();
-    return c.json({ tasks: result.tasks, diagnostics: result.diagnostics } satisfies ReindexResponse);
+    return c.json({ tasks: result.tasks, diagnostics } satisfies ReindexResponse);
   });
 
   // Per-task metrics for a whole session, computed on demand from the messages attributed to each
@@ -599,6 +611,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
     claudeBinary,
+    log,
   });
 
   let resolveClosed!: () => void;

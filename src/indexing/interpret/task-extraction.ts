@@ -38,6 +38,32 @@ Rules:
 - Keep descriptions concise and specific.
 - messageIndexes must refer to the filtered user message indexes provided below.`;
 
+const LOCAL_PATH_REPLACEMENT = "[local file path]";
+const LOCAL_PATH_START =
+  "(?:/(?:Users|Volumes|Network|private|var|tmp|home|opt|Applications)(?=/)|~(?:[A-Za-z0-9._-]+)?/)";
+const LOCAL_PATH_CHARS = '[^\\s"\'`<>()[\\]{}]+';
+const LOCAL_PATH_EXTENSIONS =
+  "photoslibrary|png|jpe?g|heic|gif|webp|svg|pdf|txt|jsonl?|ya?ml|md|csv|ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|rb|php|sh|zsh|bash|zip|tar|gz|db|sqlite|mov|mp4|mp3|wav";
+const LOCAL_PATH_WITH_EXTENSION_RE = new RegExp(
+  `${LOCAL_PATH_START}[^\\n"'\`<>]*?\\.(?:${LOCAL_PATH_EXTENSIONS})(?=\\b|[\\s"'\`<>()[\\]{}])`,
+  "gi",
+);
+const LOCAL_FILE_URL_RE = /file:\/\/\/[^\s"'`<>()[\]{}]+/g;
+const LOCAL_POSIX_PATH_RE = new RegExp(`${LOCAL_PATH_START}${LOCAL_PATH_CHARS}`, "g");
+const LOCAL_WINDOWS_PATH_RE = /\b(?:[A-Za-z]:\\|\\\\[^\\/\s"'`<>()[\]{}]+\\[^\\/\s"'`<>()[\]{}]+\\)[^\s"'`<>()[\]{}]+/g;
+
+/** Claude Code's prompt mode may treat local-looking paths in stdin as files or media to open.
+ *  Task extraction only needs the user's intent, not the exact local path, so provider prompts
+ *  redact filesystem references before invoking the LLM. The original transcript text remains
+ *  unchanged in the local store. */
+export function sanitizeProviderText(text: string): string {
+  return text
+    .replace(LOCAL_FILE_URL_RE, LOCAL_PATH_REPLACEMENT)
+    .replace(LOCAL_PATH_WITH_EXTENSION_RE, LOCAL_PATH_REPLACEMENT)
+    .replace(LOCAL_POSIX_PATH_RE, LOCAL_PATH_REPLACEMENT)
+    .replace(LOCAL_WINDOWS_PATH_RE, LOCAL_PATH_REPLACEMENT);
+}
+
 export interface ExtractedTaskSpec {
   description: string;
   messageIndexes: number[];
@@ -131,7 +157,7 @@ export function buildTaskExtractionPrompt(
     ...(candidate.timestampMs != null
       ? { timestamp: new Date(candidate.timestampMs).toISOString() }
       : {}),
-    text: candidate.promptText ?? "",
+    text: sanitizeProviderText(candidate.promptText ?? ""),
   }));
   return `${instructions.trim()}\n\nFiltered user messages:\n${JSON.stringify(
     { sessionId, messages },
@@ -350,8 +376,11 @@ export function buildTaskOutcomePrompt(
   interactions: InteractionFact[],
   instructions = DEFAULT_TASK_OUTCOME_PROMPT,
 ): string {
-  const turns = interactionTurns(interactions);
-  return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
+  const turns = interactionTurns(interactions).map((turn) => ({
+    ...turn,
+    text: sanitizeProviderText(turn.text),
+  }));
+  return `${instructions.trim()}\n\nTask: ${sanitizeProviderText(description)}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
 }
 
 function toOutcome(value: unknown): TaskOutcome {
