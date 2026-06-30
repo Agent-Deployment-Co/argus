@@ -23,7 +23,7 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
+import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, resolveTaskExtraction, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
@@ -37,8 +37,9 @@ export interface ServeOptions {
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
-  /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
-  taskExtraction: ResolvedTaskExtraction;
+  /** Provider settings used when the session-detail Refresh action re-indexes a single session.
+   *  Called at refresh time so Settings changes made while serving are honored. */
+  taskExtraction?: TaskExtractionResolver;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
   installSignalHandlers?: boolean;
@@ -100,6 +101,7 @@ export interface SnapshotFilters {
  *  (the `?refresh` seam) rather than joining an in-flight build for the same filters. */
 export type SnapshotSource = (filters: SnapshotFilters, force: boolean) => Promise<Snapshot>;
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
+export type TaskExtractionResolver = () => ResolvedTaskExtraction;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
 /** A filtered/sorted/paginated page of session list rows, backed by the store's session aggregates. */
@@ -528,6 +530,9 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     }
   }
 
+  const resolveRefreshTaskExtraction: TaskExtractionResolver =
+    opts.taskExtraction ?? (() => resolveTaskExtraction({}, opts.configPath ? loadConfig(opts.configPath) : loadConfig(), log));
+
   const reindex: SessionReindexer = async (sessionId) => {
     // Honor the local text-retention opt-out (#120) on the web Refresh path: resolve it from config
     // (env > argus.json > default-on) the same way taskExtraction is resolved, and thread it through.
@@ -537,7 +542,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     // to the config opt-in), keeping the configured provider/model — but only when we're retaining
     // text: with retention off we neither store the conversation nor run the model over it. A provider
     // explicitly set to "off" stays off.
-    const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: retainText };
+    const reindexTaskExtraction: ResolvedTaskExtraction = { ...resolveRefreshTaskExtraction(), enabled: retainText };
     const store = await openStore();
     try {
       return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction, retainText });
