@@ -29,7 +29,7 @@ import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStor
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
-import { logWarn, type Log } from "../logger.ts";
+import { isLevelEnabled, logWarn, type Log } from "../logger.ts";
 
 export interface ServeOptions {
   port: number;
@@ -158,6 +158,35 @@ function findWebRoot(): string | null {
     join(here, "..", "..", "dist", "web"), // from source: src/api/serve.ts → repo-root/dist/web
   ];
   return candidates.find((p) => existsSync(join(p, "index.html"))) ?? null;
+}
+
+/** Find the source checkout root when running `bun run src/cli.ts ...`. Installed/compiled builds
+ *  don't carry the workspace files needed by `build:web`, so they skip this and serve shipped assets. */
+function findSourceRoot(): string | null {
+  if (process.env.ARGUS_WEB_ROOT) return null;
+  const here = dirname(fileURLToPath(import.meta.url));
+  const root = join(here, "..", "..");
+  return existsSync(join(root, "package.json")) &&
+    existsSync(join(root, "web", "vite.config.ts"))
+    ? root
+    : null;
+}
+
+function buildWebAppIfSource(log: Log): void {
+  const root = findSourceRoot();
+  if (!root) return;
+
+  log("Building web app...");
+  const res = spawnSync("bun", ["run", "build:web"], {
+    cwd: root,
+    stdio: isLevelEnabled(log, "info") ? "inherit" : "ignore",
+  });
+  if (res.error) {
+    throw new Error(`Couldn't build the web app: ${res.error.message}`);
+  }
+  if (res.status !== 0) {
+    throw new Error("Couldn't build the web app before starting the server.");
+  }
 }
 
 /** Map a URL path to a file inside the web root, refusing anything that escapes it. */
@@ -480,6 +509,7 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
 }
 
 export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHandle> {
+  buildWebAppIfSource(log);
   const webRoot = findWebRoot();
 
   // Move any legacy plaintext Hub key out of argus.json into the secret store, so the settings surface
