@@ -17,6 +17,24 @@ Keep the core voice, and ease off the long-form signature:
 - Go light on analogies. Use one only when it does real explanatory work.
 - No footnote asides, no self-deprecating bits, no winking. Those belong in posts.
 
+## Not a sales pitch
+
+Argus is an open source tool, not a product we're selling. Write like a maintainer
+showing a peer how it works, not like a B2B marketing site pitching a buyer. The
+reader should feel informed, never courted.
+
+- No hero taglines, no feature-benefit pitches, no calls to action ("get started
+  today," "supercharge your workflow").
+- No social proof or growth-funnel language: "trusted by teams," "join thousands
+  of users," "enterprise-grade."
+- Don't sell the outcome. State what Argus does and what the reader sees, and let
+  them decide if it's useful. A plain capability beats a promised benefit.
+- Confident, not promotional. "Argus reads your transcripts locally" is confident.
+  "Argus gives you powerful, effortless visibility" is a pitch.
+
+This is the same instinct as the buzzword list under "Cut on sight," applied to the
+whole register, not just word choice.
+
 ## Core principles
 
 These always hold.
@@ -99,5 +117,6 @@ constantly, so it's easier to hold the line than to ration them.
 - [ ] Code internals on a user-facing page, describe the observable effect
 - [ ] Real paths, names, or data, swap for fake fixtures
 - [ ] Any em-dash, use a comma, parentheses, colon, or conjunction
+- [ ] Reads like a sales pitch (tagline, CTA, social proof, promised benefit), make it a plain statement
 - [ ] Could this paragraph be a sentence? Could this sentence be cut?
 - [ ] Read it aloud: does it sound like a person, or a brochure?
