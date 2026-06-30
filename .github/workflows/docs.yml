@@ -6,6 +6,10 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
+  # Rebuild the docs when a release is published — both a release published
+  # directly and a draft release promoted to published fire `published`.
+  release:
+    types: [published]
   workflow_dispatch:
 
 # Allow only one concurrent deployment, skipping runs queued between the run

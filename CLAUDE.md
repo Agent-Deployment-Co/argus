@@ -95,6 +95,15 @@ Rules for anything presented in the web app (and any other UI surface):
 3. **Sort the data, don't rely on how it arrived.** Order explicitly at the point of display (or in
    the query) so it can't drift when the underlying source reorders.
 
+## Writing the docs
+
+When writing or editing anything under `docs/` (the VitePress site), follow the authoring
+guides in **`docs/contributing/`**: `voice-and-tone.md` (how the docs should sound) and
+`technical-writing.md` (structure, formatting, terminology). They specialize ADC's house voice
+for Argus's technical docs and extend the "User-facing messages" rules above. Note in
+particular: no em-dashes, and don't surface code internals on user-facing pages. The
+`docs/contributing/` guides are excluded from the published site (`srcExclude`).
+
 ## Architecture
 
 The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/architecture.md`):
