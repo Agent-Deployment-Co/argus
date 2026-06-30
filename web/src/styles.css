@@ -115,8 +115,11 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 
 .rail { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
 .rail-brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 14px; }
-.brand-mark { display: block; width: auto; height: 20px; flex: 0 0 auto; }
-.rail-wordmark { color: var(--heading); font-family: var(--font-ui); font-size: 22px; line-height: 1; font-weight: 700; letter-spacing: -0.05em; }
+/* Expanded rail shows the full wordmark (arch + ARGUS); the bare arch is for the collapsed rail. */
+.brand-mark { display: none; width: auto; height: 26px; flex: 0 0 auto; }
+.brand-wordmark { display: block; width: auto; height: 22px; flex: 0 0 auto; color: var(--soft-apricot); }
+:root[data-theme="light"] .brand-wordmark { color: var(--coffee-bean); }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) .brand-wordmark { color: var(--coffee-bean); } }
 
 .rail-nav { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; }
 .rail-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px var(--font-ui); letter-spacing: .01em; white-space: nowrap; }
@@ -142,7 +145,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .theme-switcher-labeled .theme-choice { gap: 6px; padding: 6px 12px; font-size: 13px; }
 
 /* Collapsed rail: hide text, center icons. */
-.rail-collapsed .rail-wordmark, .rail-collapsed .rail-label { display: none; }
+.rail-collapsed .brand-wordmark, .rail-collapsed .rail-label { display: none; }
+.rail-collapsed .brand-mark { display: block; }
 .rail-collapsed .rail-brand { justify-content: center; padding-left: 0; padding-right: 0; }
 .rail-collapsed .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
 /* Stacked top-to-bottom: settings, theme, expand (DOM order). */
@@ -324,7 +328,8 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 @media (max-width: 640px) {
   /* Force the rail to its icon-only width on narrow screens. */
   .app-shell { --rail-w: 60px; }
-  .rail-wordmark, .rail-label { display: none; }
+  .brand-wordmark, .rail-label { display: none; }
+  .brand-mark { display: block; }
   .rail-brand, .rail-link { justify-content: center; padding-left: 0; padding-right: 0; }
   .rail-footer { flex-direction: column; align-items: center; }
   .rail-footer .rail-toggle { margin-left: 0; }
