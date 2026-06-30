@@ -1,8 +1,8 @@
 [package]
-name = "app"
-version = "0.1.15"
-description = "A Tauri App"
-authors = ["you"]
+name = "argus-desktop"
+version = "0.1.16"
+description = "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard."
+authors = ["hayes.davis@agentdeployment.co", "jerry@agentdeployment.co", "mando@agentdeployment.co"]
 license = ""
 repository = ""
 edition = "2021"
