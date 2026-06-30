@@ -143,14 +143,20 @@ describe("serve API", () => {
       position: { originKey: "fixture", recordIndex: 0, itemIndex: 0 },
     };
     let changed = 0;
+    const logs: string[] = [];
     const app = createApp(async () => fixtureSnapshot(), null, {
       reindex: async (sessionId) => ({ ok: true, tasks: [{ ...task, sourceSessionId: sessionId }], diagnostics: [] }),
       onStoreChanged: () => { changed++; },
+      log: (message) => { logs.push(message); },
     });
 
     const res = await app.request("/api/sessions/codex:codex-sess1/reindex", SAME_ORIGIN);
     expect(res.status).toBe(200);
     expect(changed).toBe(1);
+    expect(logs).toEqual([
+      "Refreshing codex:codex-sess1: re-reading the session and rebuilding tasks...",
+      "Refreshed codex:codex-sess1: rebuilt 1 task.",
+    ]);
     expect(await res.json()).toEqual({
       tasks: [{ ...task, sourceSessionId: "codex:codex-sess1" }],
       diagnostics: [],
@@ -159,14 +165,20 @@ describe("serve API", () => {
 
   test("POST /api/sessions/:id/reindex returns a clear error when the transcript is gone", async () => {
     let changed = 0;
+    const logs: string[] = [];
     const app = createApp(async () => fixtureSnapshot(), null, {
       reindex: async () => ({ ok: false, status: 422, message: "Couldn't re-index missing: it has no local transcript on disk." }),
       onStoreChanged: () => { changed++; },
+      log: (message) => { logs.push(message); },
     });
 
     const res = await app.request("/api/sessions/missing/reindex", SAME_ORIGIN);
     expect(res.status).toBe(422);
     expect(changed).toBe(0);
+    expect(logs).toEqual([
+      "Refreshing missing: re-reading the session and rebuilding tasks...",
+      "Refresh failed for missing: Couldn't re-index missing: it has no local transcript on disk.",
+    ]);
     expect(await res.json()).toEqual({
       error: "Couldn't re-index missing: it has no local transcript on disk.",
       diagnostics: [],
