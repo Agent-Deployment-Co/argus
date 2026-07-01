@@ -10,9 +10,10 @@ import { join } from "node:path";
 import { computeRecommendations } from "../src/api/recommendations.ts";
 import { computeTaskMetrics } from "../src/api/task-metrics.ts";
 import { INTERPRETER_VERSION } from "../src/indexing/interpret/index.ts";
+import { cost } from "../src/pricing.ts";
 import { aggregate } from "../src/reporting/aggregate.ts";
 import { openStore } from "../src/store/store.ts";
-import { totalTokens } from "../src/types.ts";
+import { emptyUsage, totalTokens } from "../src/types.ts";
 import { generateDemoData } from "../scripts/demo/generate.ts";
 
 const ANCHOR = new Date("2026-07-01T12:00:00").getTime();
@@ -86,8 +87,15 @@ test("the demo corpus fills every major breakdown", async () => {
   expect(dash.byMcpServer.length).toBeGreaterThan(0);
   expect(dash.skillInvocations.length).toBeGreaterThan(0);
 
-  // The demo uses only priced models, so cost is fully accounted for (no unpriced-models notice).
-  expect(dash.unpriced).toHaveLength(0);
+  // Every model the demo uses is priced, so cost is fully accounted for and no unpriced-models
+  // notice appears. Check the demo's own models directly: `dash.unpriced` reflects pricing.ts's
+  // process-global accumulator, which other tests pollute in a full run.
+  const demoModels = new Set(
+    [...demo.sessionsByOwner.values()].flat().flatMap((s) => s.messages.map((m) => m.model)),
+  );
+  for (const model of demoModels) {
+    expect(cost({ ...emptyUsage(), input: 1000 }, model)).toBeGreaterThan(0);
+  }
 
   // Manufactured rapid-growth sessions register.
   expect(dash.highTokenGrowthSessions).toBeGreaterThanOrEqual(1);
@@ -99,8 +107,6 @@ test("the corpus triggers the recommendations it's designed for", async () => {
   for (const id of ["unused-plugins", "token-growth", "rejections", "frequent-compactions"]) {
     expect(ids.has(id)).toBe(true);
   }
-  // The demo intentionally has no unpriced models, so that notice must NOT appear.
-  expect(ids.has("unpriced-models")).toBe(false);
 });
 
 test("pre-baked tasks round-trip with their outcomes", async () => {
