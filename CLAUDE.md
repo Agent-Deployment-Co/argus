@@ -217,7 +217,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   `CONFIG_FILE` = `$ARGUS_CONFIG_DIR/argus.json` (the settings store; see `config.ts`).
 
 - **`config.ts`** — The `argus.json` settings store (the config peer of `argus.db`; full design in
-  `docs/configuration.md`). Tolerant loader (missing → defaults; malformed/bad value → warn + default,
+  `docs/internals/configuration.md`). Tolerant loader (missing → defaults; malformed/bad value → warn + default,
   never crash) plus a **settings registry + resolver**: each setting binds its kebab/SCREAMING_SNAKE/
   camelCase names + `parse()` in one descriptor, and `resolveSetting` walks `flag > env > argus.json >
   default` (empty values count as absent). `resolveTaskExtraction` produces the effective

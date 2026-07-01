@@ -27,8 +27,8 @@ Argus automatically indexes sessions from every agent it finds on your computer 
 
 If you've moved an agent's data with its own setting (for example
 `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GEMINI_CLI_HOME`), Argus follows that same
-setting. For where Argus keeps its own data, see
-[Configuration](/configuration#filesystem-locations).
+setting. For where Argus keeps its own data, see the
+[CLI Reference](/cli-reference#where-argus-stores-its-data).
 
 ## Claude Chat sessions require the desktop app
 
