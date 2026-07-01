@@ -79,7 +79,7 @@ export default defineConfig({
     nav: [],
 
     sidebar: [
-      { text: 'Quick Start', link: '/' },
+      { text: 'Quick start', link: '/' },
       { text: 'Supported agents', link: '/supported-agents' },
       { text: 'Installation', link: '/installation' },
       { text: 'Configuration', link: '/configuration' },
