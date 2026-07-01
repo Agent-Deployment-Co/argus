@@ -65,7 +65,7 @@ apply to docs as much as to terminal output.
   Use plain words: file, folder, session, project, source.
 - **Never talk down.** Don't over-explain, and don't pad a term with a definition
   the reader may not need. Explain a term once, then trust the reader. For the
-  language-of-agents terms, link to the [Glossary](/glossary) on first use instead
+  language-of-agents terms, link to the [Terminology](/terminology) on first use instead
   of defining inline (see the technical-writing guide), so the unfamiliar can learn
   and the familiar can move on.
 - **Don't name code internals.** Describe the effect the reader observes, not the

@@ -17,11 +17,11 @@ npx @agentdeploymentco/argus <command>
 | Command | What it does |
 |---|---|
 | `serve` | Start Argus in your browser. |
-| `index` | Find and index your [sessions](/glossary#session) into the local store. |
+| `index` | Find and index your [sessions](/terminology#session) into the local store. |
 | `index rebuild` | Rebuild the store from your sessions, dropping ones no longer on disk. |
 | `index refresh` | Re-index everything, or the session ids you name. |
 | `index delete` | Remove the session ids you name from the store. |
-| `sync` | Upload a usage snapshot to an [Argus Hub](/glossary#argus-hub). |
+| `sync` | Upload a usage snapshot to an [Argus Hub](/terminology#argus-hub). |
 | `run` | Do it all: keep the index current, serve Argus and sync on a schedule. |
 | `status` | Show where the local store lives and per-source counts. |
 | `config` | Read or write settings (`config get`, `config set`). |
@@ -31,7 +31,7 @@ Run `argus <command> --help` for the flags on any command.
 
 ## Where Argus stores its data
 
-Argus keeps its [index](/glossary#index) and settings on your own computer:
+Argus keeps its [index](/terminology#index) and settings on your own computer:
 
 | | macOS | Windows |
 |---|---|---|

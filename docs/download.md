@@ -1,7 +1,7 @@
 # Download
 
 Argus is a native desktop app that lives in your menu bar. It keeps your local
-[session](/glossary#session) data current and opens Argus in your browser, with
+[session](/terminology#session) data current and opens Argus in your browser, with
 no separate setup. The macOS build is available now, and Windows is coming soon.
 
 <DownloadButtons />

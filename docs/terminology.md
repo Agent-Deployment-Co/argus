@@ -1,7 +1,7 @@
-# Glossary
+# Terminology
 
-Plain definitions for the terms you'll meet in these docs and in the Argus
-dashboard. If a word on another page links here, this is where it lands.
+Plain definitions for the terms you'll meet in these docs and in the Argus app.
+If a word on another page links here, this is where it lands.
 
 ## Agent
 

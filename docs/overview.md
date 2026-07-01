@@ -16,13 +16,13 @@ The nav down the left side switches between views, top to bottom:
 
 - **Activity** is the home view: your usage at a glance, with headline totals,
   recommendations and trends over time.
-- **Sessions** is where you read individual [sessions](/glossary#session) in
+- **Sessions** is where you read individual [sessions](/terminology#session) in
   depth. See [Sessions](/sessions).
-- **Projects** groups your usage by [project](/glossary#project).
-- **Tools** shows the [skills](/glossary#skill), [tools](/glossary#tool),
-  [MCP servers](/glossary#mcp-server) and [plugins](/glossary#plugin) your agents
+- **Projects** groups your usage by [project](/terminology#project).
+- **Tools** shows the [skills](/terminology#skill), [tools](/terminology#tool),
+  [MCP servers](/terminology#mcp-server) and [plugins](/terminology#plugin) your agents
   use.
-- **Health** surfaces [friction](/glossary#friction) in your sessions. It's
+- **Health** surfaces [friction](/terminology#friction) in your sessions. It's
   available once you have Claude sessions to measure.
 
 Activity, Projects, Tools and Health are the metric views, explained in
@@ -32,7 +32,7 @@ Activity, Projects, Tools and Health are the metric views, explained in
 ## Filtering what you see
 
 Two controls at the top shape every view: a date range (a From and a To date)
-and a [source](/glossary#source) filter. Set them once and they carry across the
+and a [source](/terminology#source) filter. Set them once and they carry across the
 views, so you can focus on the last week, or on a single agent, without setting
 them again each time. Argus starts on the last 30 days and all sources, and a
 Reset button returns to that.
