@@ -10,7 +10,7 @@ Argus indexes [sessions](/glossary#session) from your AI [agents](/glossary#agen
 
 </div>
 
-<DownloadMac :note="false" center />
+<DownloadButtons center />
 
 ## Argus is local, private and free
 
@@ -30,5 +30,5 @@ Open Argus and it shows your agent usage from every angle:
 
 - **[How It Works](/how-it-works):** how Argus finds and indexes your sessions in the background.
 - **[Overview](/overview):** get around the app.
-- **[Installation](/installation):** download and set up the Mac app.
+- **[Download](/download):** get the desktop app.
 - **[Argus Hub](/argus-hub):** collect usage across a team and see an org-wide view.
