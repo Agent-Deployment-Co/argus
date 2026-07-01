@@ -209,6 +209,54 @@ body {
   letter-spacing: 0;
 }
 
+/*
+ * Primary button, matching the ADC website's .btn-primary: Tiger Orange fill,
+ * Coffee Bean text, Poppins 600, soft drop shadow with a lift on hover. The
+ * single button treatment for the docs — reuse this class, don't restyle.
+ */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  font-family: 'Poppins', var(--vp-font-family-base);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1;
+  color: var(--adc-coffee-bean);
+  background: var(--adc-tiger-orange);
+  box-shadow: 0 2px 10px rgba(28, 17, 5, 0.3);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(28, 17, 5, 0.35);
+}
+
+.btn-primary svg {
+  flex-shrink: 0;
+  fill: currentColor;
+}
+
+.dark .btn-primary {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.dark .btn-primary:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* Defeat the default in-content link color/underline when the button appears in
+   markdown (.vp-doc a outranks a bare .btn-primary). */
+.vp-doc a.btn-primary,
+.vp-doc a.btn-primary:hover {
+  color: var(--adc-coffee-bean);
+  text-decoration: none;
+}
+
 .VPHero .name,
 .VPHero .text {
   max-width: 680px;
@@ -504,4 +552,35 @@ html:not(.dark) .shiki span {
   color: var(--vp-c-danger-1);
   font-family: var(--vp-font-family-mono);
   text-align: left;
+}
+
+/* Plain in-content images get soft corners; the full border and shadow are
+   reserved for the .screenshot wrapper. */
+.vp-doc img {
+  border-radius: 8px;
+}
+
+/* Product screenshots, offset from the page background. Mirrors the hero-image
+   border/radius/shadow above so screenshots read as one treatment site-wide. */
+.screenshot {
+  margin: 28px 0;
+}
+
+.screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(28, 17, 5, 0.16);
+}
+
+.dark .screenshot img {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+}
+
+/* A little more air between a screenshot and the download buttons directly
+   below it (the Quick Start page). */
+.vp-doc .screenshot + .download-btns {
+  margin-top: 44px;
 }

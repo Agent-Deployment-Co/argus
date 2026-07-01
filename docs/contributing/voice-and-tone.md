@@ -17,6 +17,26 @@ Keep the core voice, and ease off the long-form signature:
 - Go light on analogies. Use one only when it does real explanatory work.
 - No footnote asides, no self-deprecating bits, no winking. Those belong in posts.
 
+## Not a sales pitch
+
+Argus is an open source tool, not a product we're selling. Write like a maintainer
+showing a peer how it works, not like a B2B marketing site pitching a buyer. The
+reader should feel informed, never courted.
+
+- No hero taglines, no feature-benefit pitches, no calls to action ("get started
+  today," "supercharge your workflow").
+- No vague or aspirational social proof: "trusted by teams," "join thousands of
+  users," "enterprise-grade." Real, verifiable proof is fine when it exists (a
+  genuine "used by" list, an actual GitHub star count), but none of that exists
+  today, so don't write it yet. Never invent or inflate it.
+- Don't sell the outcome. State what Argus does and what the reader sees, and let
+  them decide if it's useful. A plain capability beats a promised benefit.
+- Confident, not promotional. "Argus reads your transcripts locally" is confident.
+  "Argus gives you powerful, effortless visibility" is a pitch.
+
+This is the same instinct as the buzzword list under "Cut on sight," applied to the
+whole register, not just word choice.
+
 ## Core principles
 
 These always hold.
@@ -38,14 +58,21 @@ These always hold.
 These come from the repo's own rules (`CLAUDE.md`, "User-facing messages") and
 apply to docs as much as to terminal output.
 
-- **Plain language for a moderately technical reader.** The reader understands
-  agents and computers generally, but hasn't read the code. Use words they already
-  know: file, directory, session, transcript, project, source.
+- **Plain language for a go-to-market reader.** Argus is for people using AI agents
+  to do sales, marketing, revops, and AI-ops work, not to write software. They span
+  a wide technical range, from people who never open a terminal to fairly technical
+  non-developers. Assume light familiarity with the language of agents, not fluency.
+  Use plain words: file, folder, session, project, source.
+- **Never talk down.** Don't over-explain, and don't pad a term with a definition
+  the reader may not need. Explain a term once, then trust the reader. For the
+  language-of-agents terms, link to the [Terminology](/terminology) on first use instead
+  of defining inline (see the technical-writing guide), so the unfamiliar can learn
+  and the familiar can move on.
 - **Don't name code internals.** Describe the effect the reader observes, not the
   implementation. "Re-reads your transcripts from disk," not "clears the structural
   index." Internal vocabulary (table names, layer numbers, fragments, fact rows)
-  stays off user-facing pages. The architecture and database-schema pages are the
-  exception: they document internals on purpose.
+  stays off published pages. The `docs/internals/` pages are the exception: they
+  document internals on purpose and are excluded from the published site.
 - **Product names.** Anthropic styles it **Claude Cowork** (lowercase "w"). Use that
   exact casing. The other sources are Claude Code, Codex, and Gemini.
 - **Never use real data.** This is a public repo. Synthesize obviously-fake
@@ -92,5 +119,6 @@ constantly, so it's easier to hold the line than to ration them.
 - [ ] Code internals on a user-facing page, describe the observable effect
 - [ ] Real paths, names, or data, swap for fake fixtures
 - [ ] Any em-dash, use a comma, parentheses, colon, or conjunction
+- [ ] Reads like a sales pitch (tagline, CTA, social proof, promised benefit), make it a plain statement
 - [ ] Could this paragraph be a sentence? Could this sentence be cut?
 - [ ] Read it aloud: does it sound like a person, or a brochure?
