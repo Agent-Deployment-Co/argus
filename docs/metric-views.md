@@ -29,12 +29,24 @@ Below the totals:
   too.
 - **Models** shows your token use by [model](/glossary#model) over time.
 
+<div class="screenshot">
+
+![The Activity view: headline totals, recommendations and daily token and cost trends.](./images/screenshots/activity@1920x1080@2.webp)
+
+</div>
+
 ## Projects
 
 Your usage grouped by [project](/glossary#project), the folder an agent was
 working in. Charts rank your projects by tokens and by cost, and a table lists
 them all with their session, token and cost totals. Click a project to open its
 sessions.
+
+<div class="screenshot">
+
+![The Projects view: your usage ranked by project, as charts and a sortable table.](./images/screenshots/projects@1920x1080@2.webp)
+
+</div>
 
 ## Tools
 
@@ -54,6 +66,12 @@ What your agents actually reach for, in four parts:
   candidates to turn off, since every enabled plugin adds to what an agent loads
   before you even prompt it.
 
+<div class="screenshot">
+
+![The Tools view: top skills and tools, MCP server calls and the plugins list.](./images/screenshots/tools@1920x1080@2.webp)
+
+</div>
+
 ## Health
 
 Signs of [friction](/glossary#friction) in your sessions: how often you
@@ -63,3 +81,9 @@ up top and a table breaks the same signals down by project.
 
 Argus measures friction for Claude sessions only, so this view stays empty until
 you have some. Codex and Gemini sessions don't report these signals.
+
+<div class="screenshot">
+
+![The Health view: friction totals up top and a per-project breakdown.](./images/screenshots/health@1920x1080@2.webp)
+
+</div>
