@@ -1,9 +1,9 @@
 # Supported Agents
 
 Argus finds and indexes the [sessions](/terminology#session) from your AI
-[agents](/terminology#agent) on your computer. It supports five
-[sources](/terminology#source) across three agents, and includes all of them by
-default.
+[agents](/terminology#agent) on your computer. It covers five
+[sources](/terminology#source), from Claude, Codex and Gemini, and includes all
+of them by default.
 
 | Agent | Description |
 |---|---|

@@ -39,9 +39,10 @@ and the agent sent, how long it lasted and how many turns it took.
 
 Below the totals:
 
-- **Tasks** breaks the session into the [tasks](/terminology#task) you worked on and
-  how each one went. Tasks appear once you turn on task interpretation in
-  [Settings](/settings); until then this reads "No tasks yet."
+- **Tasks** breaks the session into the tasks you worked on and how each one went.
+  They appear once you turn on [task interpretation](/tasks) in
+  [Settings](/settings); until then this reads "No tasks yet." See
+  [Tasks](/tasks) for the full picture.
 - **Friction** counts the [friction](/terminology#friction) signals in the session:
   interruptions, tool actions you declined, compactions and turn timings. Claude
   sessions only.
