@@ -115,8 +115,9 @@ Two things decide where your task data goes:
 - **Syncing to a Hub.** If you [sync](/terminology#sync) usage to an
   [Argus Hub](/terminology#argus-hub), your tasks and their judgments (the
   outcome, frustration and signals) are included, so an ops leader can see them
-  across a team. The underlying text of your prompts and responses is never
-  uploaded; it stays on your machine.
+  across a team, along with short snippets like a session's opening prompt and
+  the brief evidence behind each judgment. The full text of your sessions is
+  never uploaded; it stays on your machine.
 - **Interpretation.** To judge a task, Argus sends its prompts and responses to
   the model provider you chose. Every provider does this over the internet,
   including the default Claude CLI, which sends the text to Anthropic. The one
