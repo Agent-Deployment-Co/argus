@@ -15,6 +15,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
+    "screenshot": "bun scripts/screenshot.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "build:compile": "bun run build:web && bun build --compile src/cli.ts --outfile dist/argus",
     "bump-version": "bun run scripts/bump-version.ts",
@@ -51,6 +52,7 @@
     "react": "^19.2.7",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.7",
+    "sharp": "^0.35.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "vitepress": "^2.0.0-alpha.17"

@@ -1,0 +1,46 @@
+# Product screenshots for the Argus docs.
+#
+# Run the whole batch:
+#   bun run screenshot --batch docs/screenshots.yaml
+#
+# The Argus web app must be running. `argus serve` uses http://localhost:4242
+# (the default below). If you're on another port (e.g. `bun run dev` picks a
+# random one), point there:
+#   bun run screenshot --batch docs/screenshots.yaml --base-url http://localhost:5173
+#
+# Files land at docs/images/screenshots/{name}@{width}x{height}@2.webp, one per viewport.
+
+baseUrl: http://localhost:4242
+
+screenshots:
+  - name: activity
+    url: /
+
+  - name: sessions
+    url: /sessions
+
+  - name: projects
+    url: /projects
+
+  - name: tools
+    url: /tools
+
+  - name: health
+    url: /health
+
+  - name: settings
+    url: /settings/general
+
+  # Scripted states. The screenshot skill runs these interactions via
+  # agent-browser and then captures; the --batch runner skips them (it only
+  # navigates to a URL). See .claude/skills/screenshot/SKILL.md.
+  - name: session-detail
+    url: /sessions
+    script: |
+      1. Click the second session in the list on the left
+      2. Wait for the detail pane to finish loading on the right
+
+  - name: settings-sessions
+    url: /settings/general
+    script: |
+      1. Click "Sessions" in the settings category nav

@@ -137,8 +137,14 @@ doesn't cover yet, add it to the glossary in the same change.
 
 ## Images and screenshots
 
-- A screenshot that belongs to one page: put it in `docs/images/` and reference it
-  relatively (`![...](./images/x.png)`), so Vite hashes and optimizes it.
-- Brand assets, and anything referenced from `config.ts`: put them in
+- **Product screenshots** of the Argus web app go in `docs/images/screenshots/`,
+  referenced relatively (`![...](./images/screenshots/x.webp)`). Generate them with
+  the screenshot tool (`bun run screenshot`, or the `screenshot` skill), which
+  writes two WebP files per page at 2x display resolution, named
+  `{name}@{width}x{height}@2.webp`. The batch of docs screenshots is defined in
+  `docs/screenshots.yaml`.
+- **Other page images** (diagrams, icons, one-offs) go in `docs/images/`,
+  referenced relatively (`![...](./images/x.png)`), so Vite hashes and optimizes them.
+- **Brand assets**, and anything referenced from `config.ts`: put them in
   `docs/public/` and reference them root-absolute (`/x.svg`).
 - Screenshots must use synthesized, fake data, never a real session.
