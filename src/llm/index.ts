@@ -76,6 +76,7 @@ export async function complete(
     apiKey: config.apiKey,
     command: config.command,
     claudeCliPath: config.claudeCliPath,
+    log: config.log,
     fetch: deps.fetch ?? fetch,
     signal: request.signal,
   });

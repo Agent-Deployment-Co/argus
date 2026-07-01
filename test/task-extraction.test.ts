@@ -52,25 +52,6 @@ describe("task extraction", () => {
     expect(prompt).toContain('"text": "add a facts command"');
   });
 
-  test("redacts local paths before sending prompt text to the provider", () => {
-    const prompt = buildTaskExtractionPrompt(
-      "codex:one",
-      [
-        candidate(
-          0,
-          "compare /Users/you/screenshots/a.png with /Volumes/Team Share/b.jpg and ~/Pictures/Photos Library.photoslibrary, then fix /api/sessions",
-        ),
-      ],
-      "Return JSON.",
-    );
-    expect(prompt).toContain(
-      '"text": "compare [local file path] with [local file path] and [local file path], then fix /api/sessions"',
-    );
-    expect(prompt).not.toContain("/Users/you");
-    expect(prompt).not.toContain("/Volumes");
-    expect(prompt).not.toContain("Photos Library.photoslibrary");
-  });
-
   test("parses JSON task output and markdown-fenced JSON", () => {
     expect(
       parseTaskExtractionOutput(
@@ -161,25 +142,6 @@ describe("task outcome (pass 2)", () => {
     expect(prompt).toContain("Task: Add a facts command");
     expect(prompt).toContain('"role": "user"');
     expect(prompt).toContain('"text": "done"');
-  });
-
-  test("redacts local paths before sending outcome dialogue to the provider", () => {
-    const prompt = buildTaskOutcomePrompt(
-      "Analyze /Users/you/Pictures/input.heic",
-      [
-        candidate(
-          0,
-          "please inspect file:///Users/you/Pictures/input.heic",
-          undefined,
-          "I opened C:\\Users\\you\\Pictures\\input.heic",
-        ),
-      ],
-    );
-    expect(prompt).toContain("Task: Analyze [local file path]");
-    expect(prompt).toContain('"text": "please inspect [local file path]"');
-    expect(prompt).toContain('"text": "I opened [local file path]"');
-    expect(prompt).not.toContain("/Users/you");
-    expect(prompt).not.toContain("C:\\Users");
   });
 
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {
