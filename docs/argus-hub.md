@@ -18,4 +18,4 @@ Run `argus sync` to upload manually.
 
 ## More information
 
-See the [Argus Hub repository](https://github.com/Agent-Deployment-Co/argus-dash) for installation instructions and release downloads.
+See the [Argus Hub repository](https://github.com/Agent-Deployment-Co/argus-hub) for installation instructions and release downloads.
