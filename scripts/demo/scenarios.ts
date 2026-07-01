@@ -224,7 +224,7 @@ export const PROJECTS: ProjectScenario[] = [
         files: [doc("marketing/q3-launch/campaign-brief.md"), doc("marketing/q3-launch/messaging.md")],
         tools: ["Read", "Write", NOTION, "WebSearch", GDRIVE],
         skills: ["content-studio:blog-draft"],
-        turns: 11,
+        turns: 12,
         friction: "growth",
         tasks: [
           {
@@ -640,7 +640,7 @@ export const PROJECTS: ProjectScenario[] = [
         title: "Tune the outreach agent's tone so it stops sounding pushy",
         files: [doc("agent-ops/outreach-agent/prompt.md")],
         tools: ["Read", "Edit", "Bash"],
-        turns: 10,
+        turns: 12,
         friction: "growth",
         instances: 3,
         tasks: [
