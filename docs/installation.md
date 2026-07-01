@@ -19,6 +19,8 @@ Intel Macs.
 Once it's running, look for the Argus icon in your menu bar. Open it to start
 the dashboard and explore your usage.
 
+![The Argus menu bar icon and its menu: Open Argus, Start, Stop, Check for updates and more.](./images/screenshots/mac-menu.png)
+
 ::: tip If macOS blocks the app on first launch
 If you see a warning that the app can't be opened, right-click (or
 Control-click) **Argus** in Applications and choose **Open**, then confirm.
