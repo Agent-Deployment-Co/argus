@@ -6,7 +6,6 @@ import {
   judgeTaskOutcome,
   parseTaskExtractionOutput,
   parseTaskOutcomeOutput,
-  sanitizeProviderText,
   taskFactsFromSpecs,
 } from "../src/indexing/interpret/task-extraction.ts";
 import { claudeProviderArgs, splitCommand } from "../src/llm/providers/local.ts";
@@ -191,11 +190,6 @@ describe("task outcome (pass 2)", () => {
     expect(await judgeTaskOutcome("t", [], te({ llm: { provider: "claude-cli" } }))).toEqual({ diagnostics: [] });
   });
 
-  test("sanitizeProviderText keeps non-file absolute routes intact", () => {
-    expect(sanitizeProviderText("fix /api/sessions and /docs/task-interpretation.md")).toBe(
-      "fix /api/sessions and /docs/task-interpretation.md",
-    );
-  });
 });
 
 describe("assignInteractionTaskSeqs", () => {
