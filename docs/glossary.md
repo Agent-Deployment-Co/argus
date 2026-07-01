@@ -27,6 +27,13 @@ The visual view of your usage that Argus opens in your browser: tokens and cost
 over time, which tools and skills you lean on, and a breakdown by project and
 source.
 
+## Friction
+
+Signs that a session didn't go smoothly: interruptions, tool actions you
+declined, context that had to be compacted and slow turns. Argus surfaces these
+on the Health view so you can see where your agents get stuck. Friction is
+measured for Claude sessions only.
+
 ## Index
 
 The local store Argus builds from your sessions. Indexing goes through each
@@ -81,6 +88,12 @@ Hub.
 Uploading a snapshot of your usage to an Argus Hub so it can be combined with other
 people's. Nothing is uploaded unless you choose to sync; indexing and the local
 dashboard stay on your machine.
+
+## Task
+
+A single thing you set out to do in a session, like researching an account or
+drafting a post. When you turn on task interpretation, Argus groups a session's
+back-and-forth into tasks and judges how each one went.
 
 ## Token
 
