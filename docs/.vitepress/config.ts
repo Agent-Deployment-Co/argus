@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Argus',
   description:
-    'Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI sessions and shows your agent usage in a local web app.',
+    "Argus is free, open source software that analyzes AI agent usage to help non-coders be more productive with AI. It supports Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI.",
   cleanUrls: true,
   lastUpdated: true,
   // Contributor/agent material kept in the repo but excluded from the published
@@ -56,7 +56,7 @@ export default defineConfig({
       {
         property: 'og:description',
         content:
-          'Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI sessions and shows your agent usage in a local web app.'
+          "Argus is free, open source software that analyzes AI agent usage to help non-coders be more productive with AI. It supports Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI."
       }
     ]
   ],
