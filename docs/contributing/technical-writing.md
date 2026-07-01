@@ -107,18 +107,18 @@ it does.
 ### Link terms on first use
 
 The reader has light familiarity with the language of agents, not fluency. The
-[Glossary](/glossary) defines the terms they meet (session, transcript, source,
+[Terminology](/terminology) defines the terms they meet (session, transcript, source,
 skill, tool, MCP server, token, and so on). Don't stop to define a term inline,
-and don't talk down by over-explaining. Instead, **link the term to its glossary
+and don't talk down by over-explaining. Instead, **link the term to its Terminology
 entry the first time it appears on a page**, then use it plainly after that:
 
 ```md
-Argus indexes your local [sessions](/glossary#session) and...
+Argus indexes your local [sessions](/terminology#session) and...
 ```
 
 This lets an unfamiliar reader click through to learn and a familiar reader keep
-moving without a definition in their way. When you introduce a term the glossary
-doesn't cover yet, add it to the glossary in the same change.
+moving without a definition in their way. When you introduce a term the Terminology
+doesn't cover yet, add it to the Terminology in the same change.
 
 ## Formatting
 

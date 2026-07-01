@@ -93,6 +93,7 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/overview' },
           { text: 'Sessions', link: '/sessions' },
+          { text: 'Tasks', link: '/tasks' },
           { text: 'Metric Views', link: '/metric-views' },
           { text: 'Settings', link: '/settings' }
         ]
@@ -105,7 +106,7 @@ export default defineConfig({
         text: 'Reference',
         items: [
           { text: 'CLI Reference', link: '/cli-reference' },
-          { text: 'Glossary', link: '/glossary' },
+          { text: 'Terminology', link: '/terminology' },
           { text: 'About', link: '/about' }
         ]
       }

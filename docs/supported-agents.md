@@ -1,8 +1,8 @@
 # Supported Agents
 
-Argus finds and indexes the [sessions](/glossary#session) from your AI
-[agents](/glossary#agent) on your computer. It supports five
-[sources](/glossary#source) across three agents, and includes all of them by
+Argus finds and indexes the [sessions](/terminology#session) from your AI
+[agents](/terminology#agent) on your computer. It supports five
+[sources](/terminology#source) across three agents, and includes all of them by
 default.
 
 | Agent | Description |
@@ -39,4 +39,4 @@ happened on claude.ai and were never synced to the desktop app, so two limits ap
 - You need the desktop app installed and signed in, and only conversations that
   have synced to it are included.
 - Claude Chat usage is estimated, not exact, because Claude Chat doesn't report
-  [token](/glossary#token) counts the way the command-line agents do.
+  [token](/terminology#token) counts the way the command-line agents do.

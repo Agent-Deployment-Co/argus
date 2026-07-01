@@ -1,7 +1,7 @@
 # Sessions
 
 The Sessions view is where you see how you actually work with your agents, one
-[session](/glossary#session) at a time, rather than as totals. Open any session
+[session](/terminology#session) at a time, rather than as totals. Open any session
 to read what happened in it.
 
 ## Browsing sessions
@@ -11,12 +11,12 @@ title (taken from your opening prompt), when it ran, its project and its token
 and cost totals. Three controls narrow the list:
 
 - **Filter sessions** searches titles, projects and sources as you type.
-- **Sort** orders the list by most recent, most [tokens](/glossary#token) or
-  highest [cost](/glossary#cost).
+- **Sort** orders the list by most recent, most [tokens](/terminology#token) or
+  highest [cost](/terminology#cost).
 - **Argus sessions** toggles whether Argus's own background sessions show up.
   They're hidden by default.
 
-If you arrived by clicking a project or [source](/glossary#source) on another
+If you arrived by clicking a project or [source](/terminology#source) on another
 view, the list is already narrowed to it, shown as a pill you can remove.
 
 <div class="screenshot">
@@ -39,14 +39,14 @@ and the agent sent, how long it lasted and how many turns it took.
 
 Below the totals:
 
-- **Tasks** breaks the session into the [tasks](/glossary#task) you worked on and
+- **Tasks** breaks the session into the [tasks](/terminology#task) you worked on and
   how each one went. Tasks appear once you turn on task interpretation in
   [Settings](/settings); until then this reads "No tasks yet."
-- **Friction** counts the [friction](/glossary#friction) signals in the session:
+- **Friction** counts the [friction](/terminology#friction) signals in the session:
   interruptions, tool actions you declined, compactions and turn timings. Claude
   sessions only.
-- **Models**, **Skills** and **Tools used** list the [models](/glossary#model),
-  [skills](/glossary#skill) and [tools](/glossary#tool) the session drew on.
+- **Models**, **Skills** and **Tools used** list the [models](/terminology#model),
+  [skills](/terminology#skill) and [tools](/terminology#tool) the session drew on.
 - **Files touched** lists the files the agent read or changed.
 - **Opening prompt** shows the first thing you asked, in full.
 
