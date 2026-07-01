@@ -79,12 +79,34 @@ export default defineConfig({
     nav: [],
 
     sidebar: [
-      { text: 'Quick Start', link: '/' },
-      { text: 'Supported Agents', link: '/supported-agents' },
-      { text: 'Installation', link: '/installation' },
-      { text: 'Configuration', link: '/configuration' },
-      { text: 'Argus Hub', link: '/argus-hub' },
-      { text: 'Glossary', link: '/glossary' }
+      {
+        text: 'Get Started',
+        items: [
+          { text: 'Quick Start', link: '/' },
+          { text: 'Installation', link: '/installation' },
+          { text: 'Supported Agents', link: '/supported-agents' }
+        ]
+      },
+      {
+        text: 'Using Argus',
+        items: [
+          { text: 'Overview', link: '/overview' },
+          { text: 'Sessions', link: '/sessions' },
+          { text: 'Metric Views', link: '/metric-views' },
+          { text: 'Settings', link: '/settings' }
+        ]
+      },
+      {
+        text: 'Teams',
+        items: [{ text: 'Argus Hub', link: '/argus-hub' }]
+      },
+      {
+        text: 'Reference',
+        items: [
+          { text: 'Configuration', link: '/configuration' },
+          { text: 'Glossary', link: '/glossary' }
+        ]
+      }
     ],
 
     lastUpdated: {
