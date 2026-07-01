@@ -6,7 +6,7 @@ Argus indexes [sessions](/terminology#session) from your AI [agents](/terminolog
 
 <div class="screenshot">
 
-![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](./images/screenshots/argus-activity.png)
+![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](./images/screenshots/activity@1920x1080@2.webp)
 
 </div>
 
