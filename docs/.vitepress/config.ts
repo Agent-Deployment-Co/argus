@@ -83,8 +83,8 @@ export default defineConfig({
         text: 'Get Started',
         items: [
           { text: 'Quick Start', link: '/' },
-          { text: 'How It Works', link: '/how-it-works' },
           { text: 'Download', link: '/download' },
+          { text: 'How It Works', link: '/how-it-works' },
           { text: 'Supported Agents', link: '/supported-agents' }
         ]
       },
@@ -105,7 +105,8 @@ export default defineConfig({
         text: 'Reference',
         items: [
           { text: 'CLI Reference', link: '/cli-reference' },
-          { text: 'Glossary', link: '/glossary' }
+          { text: 'Glossary', link: '/glossary' },
+          { text: 'About', link: '/about' }
         ]
       }
     ],
