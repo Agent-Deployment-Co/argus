@@ -50,7 +50,8 @@ Argus reads a session in two passes:
 
 This runs quietly as Argus indexes, and only on sessions that have changed.
 Judging an outcome means re-reading your prompts and responses, so Argus keeps
-that text on your own machine. It stays local and is never uploaded.
+that text in its local store. That stored text is never uploaded, though
+interpreting a task does send it to the model you pick, covered below.
 
 ## Turning it on
 
@@ -75,19 +76,20 @@ choose which one in the same Sessions settings. This is the only part of Argus
 that sends your sessions to a model, so the choice, including whether anything
 leaves your machine, is yours.
 
-| Provider | Needs an API key | Where it runs |
+| Provider | Needs an API key | Sends task text to |
 |---|---|---|
-| **Claude CLI** (default) | No | Your machine, through the `claude` app you already use |
+| **Claude CLI** (default) | No | Anthropic, through your Claude sign-in |
 | **Claude API** | Yes | Anthropic |
 | **OpenAI** | Yes | OpenAI |
 | **Gemini** | Yes | Google |
-| **OpenRouter** | Yes | OpenRouter, which forwards to many models |
-| **Command** | No | Your machine, through a command you provide |
+| **OpenRouter** | Yes | OpenRouter, which forwards to the model |
+| **Command** | No | Wherever your command sends it (a local model keeps it on your machine) |
 
 **Claude CLI** is the default and needs no setup if you already use Claude Code.
-It runs the `claude` program on your machine with a small, fast model, signed in
-with your existing Claude login, so it needs no API key. If Argus can't find the
-`claude` program, set its location in **Claude CLI path**.
+It runs the `claude` program signed in with your existing Claude login, so there
+is no separate API key to manage. Like any use of Claude, it sends the task's
+text to Anthropic's models to do the reading. If Argus can't find the `claude`
+program, set its location in **Claude CLI path**.
 
 **The hosted providers** (Claude API, OpenAI, Gemini and OpenRouter) call a model
 over the internet. Each needs an API key, which Argus keeps in your operating
@@ -97,19 +99,26 @@ key works. With a hosted provider, the prompts and responses for each task are
 sent to that provider to be judged. OpenRouter is a single key that forwards to
 models from many providers.
 
-**Command** runs a model or script you point it at on your own machine, such as a
-local model, passing the text in and reading the result back. Like Claude CLI, it
-keeps everything on your computer.
+**Command** runs a model or script you point it at, passing the task's text in
+and reading the result back. Point it at a model that runs on your own machine
+and nothing leaves your computer. This is the one way to keep interpretation
+fully on your machine.
 
 Whichever you choose, interpretation uses tokens with that provider. The default
-is cheap and local; a hosted provider bills your own account for what it reads
-and writes.
+uses your existing Claude sign-in; a provider with its own API key bills that
+account for what it reads and writes.
 
 ## What stays private
 
-Tasks and their judgments live only on your computer. They're never uploaded,
-even when you [sync](/terminology#sync) usage to an
-[Argus Hub](/terminology#argus-hub). With a local provider, Claude CLI or
-Command, interpreting your sessions sends nothing off your machine. With a hosted
-provider, only the prompts and responses for the tasks being judged go to that
-provider, and nothing else.
+Two things decide where your task data goes:
+
+- **Syncing to a Hub.** If you [sync](/terminology#sync) usage to an
+  [Argus Hub](/terminology#argus-hub), your tasks and their judgments (the
+  outcome, frustration and signals) are included, so an ops leader can see them
+  across a team. The underlying text of your prompts and responses is never
+  uploaded; it stays on your machine.
+- **Interpretation.** To judge a task, Argus sends its prompts and responses to
+  the model provider you chose. Every provider does this over the internet,
+  including the default Claude CLI, which sends the text to Anthropic. The one
+  exception is a Command provider pointed at a model that runs on your own
+  machine.
