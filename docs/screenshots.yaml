@@ -28,19 +28,23 @@ screenshots:
   - name: health
     url: /health
 
-  - name: settings
+  - name: settings-general
     url: /settings/general
 
   # Scripted states. The screenshot skill runs these interactions via
   # agent-browser and then captures; the --batch runner skips them (it only
   # navigates to a URL). See .claude/skills/screenshot/SKILL.md.
-  - name: session-detail
-    url: /sessions
-    script: |
-      1. Click the second session in the list on the left
-      2. Wait for the detail pane to finish loading on the right
-
   - name: settings-sessions
-    url: /settings/general
+    url: /settings/sessions
     script: |
-      1. Click "Sessions" in the settings category nav
+      1. Click extract tasks
+      2. Change Claude CLI path to "claude" and remove focus
+
+  - name: session-detail
+    url: /sessions/cowork%3Aa100d797-ae57-470e-94c7-cf7d36b36482
+ 
+  - name: session-detail--open-failure
+    url: /sessions/cowork%3Aa100d797-ae57-470e-94c7-cf7d36b36482
+    script: |
+      1. Click on the failed task
+      2. Wait for the task detail pane to load

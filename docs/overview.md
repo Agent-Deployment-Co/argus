@@ -4,6 +4,12 @@ Argus opens in your browser and brings all your AI agent work into one place.
 This page covers how to get around: the views in the left nav, and the filter
 that shapes what each one shows.
 
+<div class="screenshot">
+
+![The Argus app: the left nav, the date and source filter, and the Activity view.](./images/screenshots/activity@1920x1280@2.webp)
+
+</div>
+
 ## The left nav
 
 The nav down the left side switches between views, top to bottom:

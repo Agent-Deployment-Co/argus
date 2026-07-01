@@ -19,11 +19,23 @@ and cost totals. Three controls narrow the list:
 If you arrived by clicking a project or [source](/glossary#source) on another
 view, the list is already narrowed to it, shown as a pill you can remove.
 
+<div class="screenshot">
+
+![The Sessions view: the session list on the left with its filter, sort and source controls.](./images/screenshots/sessions@1920x1080@2.webp)
+
+</div>
+
 ## Inside a session
 
 Open a session and the right pane shows what Argus indexed about it, starting
 with when it ran and its totals: tokens, estimated cost, how many messages you
 and the agent sent, how long it lasted and how many turns it took.
+
+<div class="screenshot">
+
+![A session's detail pane: totals, tasks, friction, models, skills and tools used.](./images/screenshots/session-detail@1920x1080@2.webp)
+
+</div>
 
 Below the totals:
 
@@ -37,6 +49,15 @@ Below the totals:
   [skills](/glossary#skill) and [tools](/glossary#tool) the session drew on.
 - **Files touched** lists the files the agent read or changed.
 - **Opening prompt** shows the first thing you asked, in full.
+
+Click a task to open its detail drawer, with the outcome, any frustration
+signals and the tools it used:
+
+<div class="screenshot">
+
+![A task's detail drawer showing a failed task: its outcome, frustration, signals and tools.](./images/screenshots/session-detail--open-failure@1920x1080@2.webp)
+
+</div>
 
 ## Keeping a session current
 

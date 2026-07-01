@@ -13,6 +13,12 @@ opens Settings, grouped into a few categories.
   sends it anywhere except the provider you chose. A **Test connection** button
   confirms the key works.
 
+<div class="screenshot">
+
+![General settings: appearance, updates and Argus Hub.](./images/screenshots/settings-general@1920x1080@2.webp)
+
+</div>
+
 ## Sessions
 
 - **Task interpretation** is an optional pass that groups each
@@ -23,6 +29,12 @@ opens Settings, grouped into a few categories.
 - **Text retention** controls whether Argus keeps the text of your prompts and
   responses on your computer. Either way the text stays local and is never
   uploaded.
+
+<div class="screenshot">
+
+![Sessions settings: task interpretation and the model provider it uses.](./images/screenshots/settings-sessions@1920x1080@2.webp)
+
+</div>
 
 ## Debug
 
