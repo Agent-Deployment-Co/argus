@@ -107,6 +107,7 @@ export default defineConfig({
         items: [
           { text: 'CLI Reference', link: '/cli-reference' },
           { text: 'Terminology', link: '/terminology' },
+          { text: 'Privacy and Security', link: '/privacy' },
           { text: 'About', link: '/about' }
         ]
       }
