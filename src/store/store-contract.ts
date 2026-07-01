@@ -179,7 +179,7 @@ export interface UsageFact {
   position: SourcePosition;
 }
 
-/** Who authored an interaction's opening prompt (see docs/session-model.md). Only `human`-initiated
+/** Who authored an interaction's opening prompt (see docs/internals/session-model.md). Only `human`-initiated
  *  prompts carry intent — task interpretation filters on this. */
 export type InteractionInitiator = "human" | "agent" | "harness";
 
@@ -222,7 +222,7 @@ export interface PromptFact {
 }
 
 /**
- * One interaction: prompt → agent loop → response (see docs/session-model.md). The atomic unit of a
+ * One interaction: prompt → agent loop → response (see docs/internals/session-model.md). The atomic unit of a
  * session. **Reconcile-derived**, not a per-file fact: reconcile groups the deduped timeline into
  * these. The stored `interaction_json` is always text-free (the slot positions pin where the text
  * lives); prompt/response text is persisted separately, opt-in and local-only, in

@@ -1,0 +1,50 @@
+# Product screenshots for the Argus docs.
+#
+# Run the whole batch:
+#   bun run screenshot --batch docs/screenshots.yaml
+#
+# The Argus web app must be running. `argus serve` uses http://localhost:4242
+# (the default below). If you're on another port (e.g. `bun run dev` picks a
+# random one), point there:
+#   bun run screenshot --batch docs/screenshots.yaml --base-url http://localhost:5173
+#
+# Files land at docs/images/screenshots/{name}@{width}x{height}@2.webp, one per viewport.
+
+baseUrl: http://localhost:4242
+
+screenshots:
+  - name: activity
+    url: /
+
+  - name: sessions
+    url: /sessions
+
+  - name: projects
+    url: /projects
+
+  - name: tools
+    url: /tools
+
+  - name: health
+    url: /health
+
+  - name: settings-general
+    url: /settings/general
+
+  # Scripted states. The screenshot skill runs these interactions via
+  # agent-browser and then captures; the --batch runner skips them (it only
+  # navigates to a URL). See .claude/skills/screenshot/SKILL.md.
+  - name: settings-sessions
+    url: /settings/sessions
+    script: |
+      1. Click extract tasks
+      2. Change Claude CLI path to "claude" and remove focus
+
+  - name: session-detail
+    url: /sessions/cowork%3Aa100d797-ae57-470e-94c7-cf7d36b36482
+ 
+  - name: session-detail--open-failure
+    url: /sessions/cowork%3Aa100d797-ae57-470e-94c7-cf7d36b36482
+    script: |
+      1. Click on the failed task
+      2. Wait for the task detail pane to load

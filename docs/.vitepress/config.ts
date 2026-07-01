@@ -4,12 +4,13 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Argus',
   description:
-    'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.',
+    "Argus is free, open source software that analyzes AI agent usage to help non-coders be more productive with AI. It supports Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI.",
   cleanUrls: true,
   lastUpdated: true,
-  // Authoring guides for contributors/agents, not product docs — kept in the
-  // repo but excluded from the published site. See docs/contributing/.
-  srcExclude: ['contributing/**'],
+  // Contributor/agent material kept in the repo but excluded from the published
+  // site: authoring guides (docs/contributing/) and the internal/architecture
+  // reference (docs/internals/).
+  srcExclude: ['contributing/**', 'internals/**'],
   markdown: {
     // VitePress has no built-in Mermaid support. Turn ```mermaid fences into a
     // placeholder div carrying the (base64-encoded) source; the theme renders
@@ -55,7 +56,7 @@ export default defineConfig({
       {
         property: 'og:description',
         content:
-          'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.'
+          "Argus is free, open source software that analyzes AI agent usage to help non-coders be more productive with AI. It supports Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI."
       }
     ]
   ],
@@ -78,16 +79,38 @@ export default defineConfig({
     nav: [],
 
     sidebar: [
-      { text: 'Introduction', link: '/' },
-      { text: 'Installation', link: '/installation' },
-      { text: 'Architecture', link: '/architecture' },
-      { text: 'Session model', link: '/session-model' },
-      { text: 'Task interpretation', link: '/task-interpretation' },
-      { text: 'Web app', link: '/web-app' },
-      { text: 'Configuration', link: '/configuration' },
-      { text: 'Database schema', link: '/database-schema' },
-      { text: 'LLM providers', link: '/llm-providers' },
-      { text: 'Argus Hub', link: '/argus-hub' }
+      {
+        text: 'Get Started',
+        items: [
+          { text: 'Quick Start', link: '/' },
+          { text: 'Download', link: '/download' },
+          { text: 'How It Works', link: '/how-it-works' },
+          { text: 'Supported Agents', link: '/supported-agents' }
+        ]
+      },
+      {
+        text: 'Using Argus',
+        items: [
+          { text: 'Overview', link: '/overview' },
+          { text: 'Sessions', link: '/sessions' },
+          { text: 'Tasks', link: '/tasks' },
+          { text: 'Metric Views', link: '/metric-views' },
+          { text: 'Settings', link: '/settings' }
+        ]
+      },
+      {
+        text: 'Teams',
+        items: [{ text: 'Argus Hub', link: '/argus-hub' }]
+      },
+      {
+        text: 'Reference',
+        items: [
+          { text: 'CLI Reference', link: '/cli-reference' },
+          { text: 'Terminology', link: '/terminology' },
+          { text: 'Privacy and Security', link: '/privacy' },
+          { text: 'About', link: '/about' }
+        ]
+      }
     ],
 
     lastUpdated: {

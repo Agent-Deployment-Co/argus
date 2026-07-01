@@ -104,7 +104,8 @@ each interaction — not full transcripts, tool output, or attached files.
 
 ### Task interpretation
 
-The first consumer is task interpretation (see [task-interpretation.md](./task-interpretation.md)):
+The first consumer is task interpretation, the optional model-driven pass that segments and judges
+your sessions:
 
 | Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
 |---|---|---|---|
@@ -132,8 +133,7 @@ Example `argus.json`:
 ## The `llm` block (shared LLM access)
 
 LLM access is a top-level `llm` block, shared by any model-driven feature (today: task
-interpretation). It resolves through the same flag > env > file > default chain. Full design in
-[llm-providers.md](./llm-providers.md).
+interpretation). It resolves through the same flag > env > file > default chain.
 
 | Setting | `argus.json` | env | CLI flag |
 |---|---|---|---|

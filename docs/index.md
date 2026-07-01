@@ -1,45 +1,34 @@
-# Introduction
+# Quick Start
 
-**Argus audits how you use Claude Code, Codex, and Gemini CLI.** It reads your local
-session transcripts and makes them legible — usage, cost, tools, skills, and session
-health — in one place. Everything is local-first: parsing happens on your machine, and
-nothing is uploaded unless you explicitly run `sync`.
+Argus analyzes your AI agent usage to help you be more productive with AI. It's built for non-coders using agents to do business tasks like account research, drafting content, editing spreadsheets and building workflows.
 
-Argus can:
+Argus indexes [sessions](/terminology#session) from your AI [agents](/terminology#agent) like Claude and Codex, bringing all your AI agent work into one app running locally on your computer. It's free and open source.
 
-- **Serve an interactive dashboard** at a local web address (`serve`) — the preferred way to
-  explore your usage.
-- **Upload usage snapshots** to the [Argus dashboard](https://argus.agentdeployment.co), where
-  you can keep and analyze your data over time (`sync`).
-- **Run all of it as one always-on process** (`run`) — keep the local data current, serve the
-  web app, and upload on a schedule, so the dashboard is live whenever you want it.
+<div class="screenshot">
 
-## Quick start
+![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](./images/screenshots/activity@1920x1080@2.webp)
 
-Argus's published CLI requires Node.js 20.17 or newer. Run it directly with `npx` — open the
-interactive dashboard in your browser:
+</div>
 
-```bash
-npx @agentdeploymentco/argus serve --open
-```
+<DownloadButtons center label="Download:" />
 
-This starts a local web server (default `http://localhost:4242`) and opens it. Press `Ctrl-C`
-to stop. Nothing leaves your machine — it reads your local transcripts and serves them locally.
+## Local, private and free
 
-## What the web app shows
+Argus stores all its data on your own computer and never uploads it unless you choose to [sync](/terminology#sync) usage data to an [Argus Hub](/terminology#argus-hub) run by your company. Argus is a [free open source project](https://github.com/Agent-Deployment-Co/argus) from [The Agent Deployment Company](https://www.agentdeployment.co).
 
-- Tokens and estimated cost over time
-- Claude, Codex, and Gemini source breakdowns
-- Skill, tool, MCP server, plugin, model, and project attribution
-- Tools that return the most content to your context
-- Per-session duration, tokens, cost, prompts, and summaries
+## What you'll see
+
+Open Argus and it shows your agent usage from every angle:
+
+- [Tokens](/terminology#token) and estimated [cost](/terminology#cost) over time
+- A breakdown by [source](/terminology#source): Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI
+- The [skills](/terminology#skill), [tools](/terminology#tool), [MCP servers](/terminology#mcp-server), [plugins](/terminology#plugin), [models](/terminology#model) and [projects](/terminology#project) you use most
+- The tools that send the most content back into your agent's context
+- Per-session time, tokens, cost and prompts
 
 ## Where to go next
 
-- **[Architecture](/architecture)** — the one-way pipeline, from transcripts to dashboard.
-- **[Session model](/session-model)** — how raw transcripts become normalized sessions.
-- **[Task interpretation](/task-interpretation)** — the optional, model-driven task pass.
-- **[Web app](/web-app)** — the interactive local dashboard in depth.
-- **[Configuration](/configuration)** — settings, flags, and environment variables.
-- **[Database schema](/database-schema)** — the local store's tables and relationships.
-- **[LLM providers](/llm-providers)** — the shared LLM access layer.
+- **[How It Works](/how-it-works):** how Argus finds and indexes your sessions in the background.
+- **[Overview](/overview):** get around the app.
+- **[Download](/download):** get the desktop app.
+- **[Argus Hub](/argus-hub):** collect usage across a team and see an org-wide view.
