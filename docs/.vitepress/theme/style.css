@@ -505,3 +505,22 @@ html:not(.dark) .shiki span {
   font-family: var(--vp-font-family-mono);
   text-align: left;
 }
+
+/* Product screenshots, offset from the page background. Mirrors the hero-image
+   border/radius/shadow above so screenshots read as one treatment site-wide. */
+.screenshot {
+  margin: 28px 0;
+}
+
+.screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(28, 17, 5, 0.16);
+}
+
+.dark .screenshot img {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+}
