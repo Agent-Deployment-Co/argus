@@ -112,6 +112,28 @@ test("pre-baked tasks round-trip with their outcomes", async () => {
   for (const outcome of ["success", "failure", "unclear"]) expect(allOutcomes.has(outcome as never)).toBe(true);
 });
 
+test("sessions have realistic ids and non-empty message counts", () => {
+  const demo = generateDemoData({ asOfMs: ANCHOR, seed: 42 });
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  for (const [source, sessions] of demo.sessionsByOwner) {
+    for (const s of sessions) {
+      const id = s.meta.sessionId;
+      // Claude Code ids are a bare uuid (legacy); every other source is `<source>:<uuid>`.
+      if (source === "claude") expect(id).toMatch(UUID);
+      else {
+        expect(id.startsWith(`${source}:`)).toBe(true);
+        expect(id.slice(source.length + 1)).toMatch(UUID);
+      }
+      expect(s.meta.userMessages ?? 0).toBeGreaterThan(0);
+      expect(s.meta.agentMessages ?? 0).toBeGreaterThan(0);
+    }
+  }
+  // Ids are stable across identical runs.
+  const ids = (d: ReturnType<typeof generateDemoData>) =>
+    [...d.sessionsByOwner.values()].flat().map((s) => s.meta.sessionId).sort();
+  expect(ids(demo)).toEqual(ids(generateDemoData({ asOfMs: ANCHOR, seed: 42 })));
+});
+
 test("task counts are 1-3 per session and scale with session size", () => {
   const demo = generateDemoData({ asOfMs: ANCHOR, seed: 42 });
   const tokensByCount: Record<number, number[]> = { 1: [], 2: [], 3: [] };

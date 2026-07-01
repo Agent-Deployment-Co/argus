@@ -55,6 +55,43 @@ export interface GenerateOptions {
   seed: number;
 }
 
+/** Deterministic UUID (v4-shaped) from a stable key (cyrb128 hash), so a session always gets the
+ *  same id across runs without Math.random. */
+function deterministicUuid(key: string): string {
+  let h1 = 1779033703;
+  let h2 = 3144134277;
+  let h3 = 1013904242;
+  let h4 = 2773480762;
+  for (let i = 0; i < key.length; i++) {
+    const k = key.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+  const hex =
+    (h1 >>> 0).toString(16).padStart(8, "0") +
+    (h2 >>> 0).toString(16).padStart(8, "0") +
+    (h3 >>> 0).toString(16).padStart(8, "0") +
+    (h4 >>> 0).toString(16).padStart(8, "0");
+  const c = hex.split("");
+  c[12] = "4"; // version nibble
+  c[16] = ((parseInt(c[16]!, 16) & 0x3) | 0x8).toString(16); // variant nibble
+  const u = c.join("");
+  return `${u.slice(0, 8)}-${u.slice(8, 12)}-${u.slice(12, 16)}-${u.slice(16, 20)}-${u.slice(20, 32)}`;
+}
+
+/** A canonical session id: real ids are a UUID prefixed by the source, except Claude Code, which is
+ *  a bare UUID for legacy reasons. Stable for a given logical session across runs. */
+function sessionIdFor(source: AgentSource, key: string): string {
+  const uuid = deterministicUuid(key);
+  return source === "claude" ? uuid : `${source}:${uuid}`;
+}
+
 /** mulberry32: a tiny, fast, seedable PRNG so runs are reproducible without Math.random. */
 function makeRng(seed: number): () => number {
   let a = seed >>> 0;
@@ -176,7 +213,7 @@ function planSessions(rng: () => number): ExpandedSession[] {
         const dayOffset = Math.min(WINDOW_DAYS - 1, Math.floor(rng() * WINDOW_DAYS));
         planned.push({
           source: project.source,
-          sessionId: `${project.source}:${project.project}-${ti}-${inst}`,
+          sessionId: sessionIdFor(project.source, `${project.source}|${project.project}|${ti}|${inst}`),
           project: project.project,
           cwd: `/Users/rachel/${project.project}`,
           template,
@@ -372,6 +409,13 @@ export function generateDemoData(opts: GenerateOptions): DemoData {
       ? frictionFor(plan.template.friction ?? "none", messages.length, lastTs, rng)
       : undefined;
 
+    // Agent messages are the assistant turns. User messages are the user-role records: the human
+    // turn each assistant reply answers, plus the tool results returned into the conversation (those
+    // are user-role records too), so tool-heavy sessions show more user messages than agent ones.
+    const toolCalls = messages.reduce((n, m) => n + m.toolUses.length, 0);
+    const agentMessages = messages.length;
+    const userMessages = messages.length + toolCalls;
+
     const materialize: MaterializeSession = {
       meta: {
         source: plan.source,
@@ -381,6 +425,8 @@ export function generateDemoData(opts: GenerateOptions): DemoData {
         filePath: `${plan.cwd}/session-${plan.sessionId}.jsonl`,
         firstPrompt: plan.template.title,
         rawTurns: messages.length,
+        userMessages,
+        agentMessages,
         ...(friction ? { friction } : {}),
       },
       messages,
