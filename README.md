@@ -1,19 +1,19 @@
 # Argus by ADC
 
-Argus audits how you use Claude Code, Codex, and Gemini CLI. It reads local session
-transcripts and can:
+Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and
+Gemini CLI sessions and shows your agent usage. It can:
 
-- **Serve an interactive dashboard** at a local web address (`serve`) — the preferred way to
+- **Serve an interactive web app** at a local web address (`serve`) — the preferred way to
   explore your usage.
-- Upload usage snapshots to the [Argus dashboard](https://argus.agentdeployment.co), where
+- Upload usage snapshots to an [Argus Hub](https://argus.agentdeployment.co), where
   you can keep and analyze your data over time (`sync`).
 - **Run all of it as one always-on process** (`run`) — keep the local data current, serve the
-  web app, and upload on a schedule, so the dashboard is live whenever you want it.
+  web app, and upload on a schedule, so it's live whenever you want it.
 
 The web app includes:
 
 - Tokens and estimated cost over time
-- Claude, Codex, and Gemini source breakdowns
+- Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI source breakdowns
 - Skill, tool, MCP server, plugin, model, and project attribution
 - Tools that return the most content to your context
 - Per-session duration, tokens, cost, prompts, and summaries
@@ -25,14 +25,14 @@ Run `argus` directly with `npx`.
 Argus's published CLI requires Node.js 20.17 or newer. The repository uses Bun for
 development and tests, but the installed npm executable runs under Node.
 
-Open the interactive dashboard in your browser (recommended):
+Open the interactive web app in your browser (recommended):
 
 ```bash
 npx @agentdeploymentco/argus serve --open
 ```
 
 This starts a local web server (default `http://localhost:4242`) and opens it. Press `Ctrl-C`
-to stop. Nothing leaves your machine — it reads your local transcripts and serves them locally.
+to stop. Nothing leaves your machine — it finds and indexes your local sessions and serves them locally.
 
 ## Web app
 
@@ -47,7 +47,7 @@ npx @agentdeploymentco/argus serve --port 8080      # choose a port (or set ARGU
 | Flag | Description |
 |------|-------------|
 | `-p, --port <N>` | Local port to listen on (env `ARGUS_PORT`, default: `4242`) |
-| `--open` | Open the dashboard in your browser once it's ready (macOS) |
+| `--open` | Open the web app in your browser once it's ready (macOS) |
 
 The web app shows the whole local session store and refreshes it in the background; it does not
 re-parse every transcript on each page load. Session titles use an instant heuristic summary built
@@ -78,21 +78,23 @@ npx @agentdeploymentco/argus status                  # show the store location a
 `index`, `index rebuild`, and `index refresh` accept `--source <claude|codex|gemini|cowork|all>`
 to scope which transcript sources are read.
 
-## Task interpretation (opt-in)
+## Task interpretation
 
 Argus can interpret each session into the **tasks** you asked for and how they turned out — a
 description, the span of the session it covers, and a judged outcome (success / failure / unclear)
-with a frustration signal. This runs an AI model on each session, so it's **off by default**.
+with a frustration signal. This runs an AI model on each session and is **on by default**, using
+your local `claude` CLI unless you configure another provider.
 
-Turn it on in `argus.json` (under `$ARGUS_CONFIG_DIR`, macOS:
+To turn it off, set `enabled` to false in `argus.json` (under `$ARGUS_CONFIG_DIR`, macOS:
 `~/Library/Application Support/argus/argus.json`):
 
 ```json
-{ "taskExtraction": { "enabled": true, "provider": "claude" } }
+{ "taskExtraction": { "enabled": false } }
 ```
 
-With it enabled, `index` extracts tasks for sessions as it reads them. To try it on specific sessions
-without enabling it globally, force it per run:
+The model provider is the shared `llm.provider` setting (default `claude-cli`). With interpretation
+enabled, `index` extracts tasks for sessions as it indexes them. To try it on specific sessions
+without changing your config, force it per run:
 
 ```bash
 npx @agentdeploymentco/argus index refresh <session-id> --extract-tasks true
@@ -107,8 +109,8 @@ only the task description and outcome are. See
 
 ## Keep and analyze data over time
 
-The local web app shows the transcripts currently available on your machine. The
-[Argus dashboard](https://argus.agentdeployment.co) stores pushed snapshots so you can
+The local web app shows the sessions currently available on your machine. An
+[Argus Hub](https://argus.agentdeployment.co) stores pushed snapshots so you can
 analyze usage over time, compare users, filter the organization view, and review trends.
 
 Configure Argus Hub, then upload your current usage with `sync`:
