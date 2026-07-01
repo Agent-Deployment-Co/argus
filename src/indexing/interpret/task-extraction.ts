@@ -13,7 +13,6 @@ import { complete } from "../../llm/index.ts";
 import type { LlmResult } from "../../llm/types.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
 import { logAt } from "../../logger.ts";
-import { sanitizeProviderText } from "./sanitize-paths.ts";
 
 /** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
  *  interactions, in order — the projection of prompts+responses the session model describes (#122),
@@ -39,7 +38,6 @@ Return JSON only. Use this exact shape:
 Rules:
 - A task is concrete work the user wanted the agent to do.
 - Exclude setup/context instructions, AGENTS.md instructions, aborted or cancelled turns, status messages, and messages that do not ask the agent to accomplish work.
-- Do not open, read or access any files or directories or URLs.
 - Combine multiple messages into one task when they are clearly part of the same user goal.
 - Keep descriptions concise and specific.
 - messageIndexes must refer to the filtered user message indexes provided below.`;
@@ -54,7 +52,7 @@ export function logTaskExtractionDebug(
   message: string,
 ): void {
   if (!options?.log) return;
-  logAt(options.log, "info", `[task extraction] ${message}`);
+  logAt(options.log, "debug", `[task extraction] ${message}`);
 }
 
 function logTaskExtractionBlock(
@@ -66,7 +64,7 @@ function logTaskExtractionBlock(
   logTaskExtractionDebug(options, `${label} begin`);
   const content = body.length ? body : "(empty)";
   for (const line of content.split(/\r?\n/)) {
-    logAt(options.log, "info", `[task extraction] ${line}`);
+    logAt(options.log, "debug", `[task extraction] ${line}`);
   }
   logTaskExtractionDebug(options, `${label} end`);
 }
@@ -113,6 +111,17 @@ function llmConfigSummary(options: ResolvedTaskExtraction | undefined): string {
   return `llm config: ${parts.join(" ")}`;
 }
 
+function llmWithProviderLog(
+  options: ResolvedTaskExtraction,
+): ResolvedTaskExtraction["llm"] {
+  if (!options.log) return options.llm;
+  return {
+    ...options.llm,
+    log: (message) =>
+      logAt(options.log!, "warn", `[task extraction] ${message}`),
+  };
+}
+
 function resolveInstructions(
   options: ResolvedTaskExtraction | undefined,
   diagnostics: ParserDiagnostic[],
@@ -153,7 +162,7 @@ export function buildTaskExtractionPrompt(
     ...(candidate.timestampMs != null
       ? { timestamp: new Date(candidate.timestampMs).toISOString() }
       : {}),
-    text: sanitizeProviderText(candidate.promptText ?? ""),
+    text: candidate.promptText ?? "",
   }));
   return `${instructions.trim()}\n\nFiltered user messages:\n${JSON.stringify(
     { sessionId, messages },
@@ -215,7 +224,7 @@ async function runExtraction(
 ): Promise<LlmResult> {
   if (taskExtractionProvider(options) === "off")
     return { ok: true, text: '{"tasks":[]}' };
-  return complete({ prompt }, options!.llm);
+  return complete({ prompt }, llmWithProviderLog(options!));
 }
 
 function uniqueValidIndexes(indexes: number[], count: number): number[] {
@@ -369,7 +378,6 @@ Return JSON only. Use this exact shape:
 {"outcome":"success","frustration":"none","signals":["short tag"],"reason":"one sentence"}
 
 Rules:
-- Do not open, read or access any files or directories or URLs.
 - outcome is one of: "success" (the user got what they asked for), "failure" (they clearly did not), "unclear"
   (you can't tell).
 - Judge from the WHOLE exchange, not just the final message.
@@ -390,11 +398,8 @@ export function buildTaskOutcomePrompt(
   interactions: InteractionFact[],
   instructions = DEFAULT_TASK_OUTCOME_PROMPT,
 ): string {
-  const turns = interactionTurns(interactions).map((turn) => ({
-    ...turn,
-    text: sanitizeProviderText(turn.text),
-  }));
-  return `${instructions.trim()}\n\nTask: ${sanitizeProviderText(description)}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
+  const turns = interactionTurns(interactions);
+  return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
 }
 
 function toOutcome(value: unknown): TaskOutcome {
@@ -448,7 +453,7 @@ export async function judgeTaskOutcome(
   );
   logTaskExtractionBlock(options, "outcome prompt", prompt);
   logTaskExtractionDebug(options, llmConfigSummary(options));
-  const result = await complete({ prompt }, options!.llm);
+  const result = await complete({ prompt }, llmWithProviderLog(options!));
   if (!result.ok) {
     diagnostics.push(
       diagnostic(
