@@ -47,6 +47,7 @@ see agent use across the team. Two things to know:
 
 - **The Hub is hosted by your own organization**, not by The Agent Deployment
   Company. Your data goes to your company's server, not to us.
-- **Only your metrics and task data are sent** (usage totals, breakdowns,
-  outcomes and the like). The underlying text of your prompts and responses is
-  never uploaded.
+- **What's sent stays minimal.** A sync carries your metrics and task data
+  (usage totals, breakdowns, outcomes and the like), plus a few short text
+  snippets: a session's opening prompt and the brief evidence behind a task's
+  judgment. The full text of your sessions is never uploaded.

@@ -4,8 +4,10 @@ Argus Hub is a self-hosted server that collects usage data from many people's Ar
 presents an org-wide [dashboard](/terminology#dashboard).
 
 Each person points their Argus at an Argus Hub. The Hub receives usage metrics and
-task data from each one, never the text of your prompts and responses, merges it into
-one central database tagged by user and serves an org-wide view.
+task data from each one, along with short snippets like a session's opening prompt
+and the brief evidence behind a task's judgment. It never receives the full text of
+your sessions. It merges everything into one central database tagged by user and
+serves an org-wide view.
 
 ## Sending data to Argus Hub
 
