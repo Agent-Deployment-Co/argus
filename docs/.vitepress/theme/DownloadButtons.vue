@@ -1,12 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 
-// `center` centers the row; `label` shows a bold caption above the buttons.
-// Quick Start uses both; the Download page uses neither (its context is obvious).
-withDefaults(defineProps<{ center?: boolean; label?: string }>(), {
-  center: false,
-  label: ''
-})
+// `center` centers the button row (Quick Start uses it; the Download page doesn't).
+withDefaults(defineProps<{ center?: boolean }>(), { center: false })
 
 const repo = 'Agent-Deployment-Co/argus'
 // No-JS fallback: the latest release page always shows the newest build.
@@ -49,9 +45,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="download" :class="{ 'download--center': center }">
-    <p v-if="label" class="download__label">{{ label }}</p>
-    <div class="download__btns">
+  <div class="download-btns" :class="{ 'download-btns--center': center }">
     <a class="btn-primary" :href="macHref">
       <svg viewBox="0 0 384 512" width="18" height="18" aria-hidden="true">
         <path
@@ -61,7 +55,7 @@ onMounted(async () => {
       </svg>
       macOS
     </a>
-    <span class="download__soon" aria-disabled="true">
+    <span class="download-btns__soon" aria-disabled="true">
       <svg viewBox="0 0 448 512" width="16" height="16" aria-hidden="true">
         <path
           fill="currentColor"
@@ -70,38 +64,23 @@ onMounted(async () => {
       </svg>
       Windows (coming soon)
     </span>
-    </div>
   </div>
 </template>
 
 <style scoped>
-.download {
-  margin: 24px 0;
-}
-
-.download--center {
-  text-align: center;
-}
-
-.download__label {
-  margin: 0 0 10px;
-  font-family: 'Poppins', var(--vp-font-family-base);
-  font-weight: 700;
-  font-size: 1rem;
-}
-
-.download__btns {
+.download-btns {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
+  margin: 24px 0;
 }
 
-.download--center .download__btns {
+.download-btns--center {
   justify-content: center;
 }
 
-.download__soon {
+.download-btns__soon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -118,7 +97,7 @@ onMounted(async () => {
   cursor: default;
 }
 
-.download__soon svg {
+.download-btns__soon svg {
   flex-shrink: 0;
   fill: currentColor;
 }

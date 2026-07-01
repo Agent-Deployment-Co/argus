@@ -578,3 +578,9 @@ html:not(.dark) .shiki span {
 .dark .screenshot img {
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
 }
+
+/* A little more air between a screenshot and the download buttons directly
+   below it (the Quick Start page). */
+.vp-doc .screenshot + .download-btns {
+  margin-top: 44px;
+}
