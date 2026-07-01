@@ -143,12 +143,18 @@ async function main() {
   }
 
   const outDir = values["out-dir"] ?? DEFAULT_OUT_DIR;
-  const quality = values.quality ? Number(values.quality) : DEFAULT_QUALITY;
-  const waitMs = values.wait ? Number(values.wait) : 0;
+  // Validate numeric flags so a non-number (or out-of-range value) can't reach
+  // sharp as NaN and crash every capture; fall back to the defaults instead.
+  const q = Number(values.quality);
+  const quality = Number.isInteger(q) && q >= 1 && q <= 100 ? q : DEFAULT_QUALITY;
+  const w = Number(values.wait);
+  const waitMs = Number.isFinite(w) && w >= 0 ? w : 0;
   const envBase = values["base-url"] ?? process.env.ARGUS_URL;
 
   if (values.batch) {
-    const data = Bun.YAML.parse(await Bun.file(values.batch).text()) as BatchFile;
+    // A null/empty (or comment-only) YAML file parses to null; fall back to {}
+    // so the "No screenshots defined" guard below fires cleanly.
+    const data = (Bun.YAML.parse(await Bun.file(values.batch).text()) ?? {}) as BatchFile;
     const baseUrl = envBase ?? data.baseUrl ?? DEFAULT_BASE_URL;
     const shots = data.screenshots ?? [];
     if (shots.length === 0) {
