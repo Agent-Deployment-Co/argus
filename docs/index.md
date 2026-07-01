@@ -1,4 +1,4 @@
-# Introduction
+# Quick Start
 
 Argus analyzes your AI agent usage to help you be more productive with AI. It's built for non-coders using agents to do business tasks like account research, drafting content, editing spreadsheets, and building workflows.
 
@@ -10,7 +10,7 @@ Argus indexes [sessions](/glossary#session) from your AI [agents](/glossary#agen
 
 </div>
 
-## Argus is always local, private, secure, and free
+## Argus is local, private and free
 
 Argus stores all its data on your own computer and never uploads it unless you choose to [sync](/glossary#sync) usage data to an [Argus Hub](/glossary#argus-hub) run by your company. Argus is a [free open source project](https://github.com/Agent-Deployment-Co/argus) from [The Agent Deployment Company](https://www.agentdeployment.co).
 
