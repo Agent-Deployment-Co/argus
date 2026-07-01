@@ -6,40 +6,29 @@ Argus indexes [sessions](/glossary#session) from your AI [agents](/glossary#agen
 
 <div class="screenshot">
 
-![The Argus Activity dashboard: sessions, tokens and estimated cost up top, recommendations and daily token and cost trends.](./images/argus-activity.png)
+![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](./images/screenshots/argus-activity.png)
 
 </div>
+
+<DownloadMac :note="false" center />
 
 ## Argus is local, private and free
 
 Argus stores all its data on your own computer and never uploads it unless you choose to [sync](/glossary#sync) usage data to an [Argus Hub](/glossary#argus-hub) run by your company. Argus is a [free open source project](https://github.com/Agent-Deployment-Co/argus) from [The Agent Deployment Company](https://www.agentdeployment.co).
 
-## Get started
+## What you'll see
 
-Install the desktop app and you're set: it keeps your usage up to date and opens
-your [dashboard](/glossary#dashboard) in your browser, with no extra setup. See
-[Installation](/installation) to download it for Mac.
-
-Prefer the command line? Argus also runs as a command-line tool through `npx`
-(needs Node.js 20.17 or newer):
-
-```bash
-npx @agentdeploymentco/argus serve --open
-```
-
-This starts a local dashboard (default `http://localhost:4242`) and opens it.
-Press `Ctrl-C` to stop. Nothing leaves your machine.
-
-## What the dashboard shows
+Open Argus and it shows your agent usage from every angle:
 
 - [Tokens](/glossary#token) and estimated [cost](/glossary#cost) over time
 - A breakdown by [source](/glossary#source): Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI
 - The [skills](/glossary#skill), [tools](/glossary#tool), [MCP servers](/glossary#mcp-server), [plugins](/glossary#plugin), [models](/glossary#model) and [projects](/glossary#project) you use most
 - The tools that send the most content back into your agent's context
-- Per-[session](/glossary#session) time, tokens, cost and prompts
+- Per-session time, tokens, cost and prompts
 
 ## Where to go next
 
-- **[Installation](/installation):** install the Mac app, or run the command-line tool through `npx`.
-- **[CLI Reference](/cli-reference):** run Argus from the command line.
-- **[Argus Hub](/argus-hub):** collect usage across a team and view an org-wide dashboard.
+- **[How It Works](/how-it-works):** how Argus finds and indexes your sessions in the background.
+- **[Overview](/overview):** get around the app.
+- **[Installation](/installation):** download and set up the Mac app.
+- **[Argus Hub](/argus-hub):** collect usage across a team and see an org-wide view.
