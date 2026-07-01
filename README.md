@@ -1,7 +1,7 @@
 # Argus by ADC
 
-Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and
-Gemini CLI sessions and shows your agent usage. It can:
+Argus analyzes how you use your AI agents (Claude Code, Claude Cowork, Claude Chat, Codex and
+Gemini CLI) so you can get more out of them. It can:
 
 - **Serve an interactive web app** at a local web address (`serve`) — the preferred way to
   explore your usage.
