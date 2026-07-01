@@ -2,11 +2,12 @@
 // agent sessions she runs. This is the reviewable *data* half of the demo generator; `generate.ts`
 // expands it deterministically into store records. Everything here is obviously-fake, single-company
 // synthetic content (see docs/contributing/voice-and-tone.md): Rachel does sales/marketing/revops/
-// AI-ops work, never software of her own, and researches invented companies from the same fictional
-// world (Wallace Corp, Rosen Associates, Sebastian Design, Off-World Colonies).
+// AI-ops work, never software of her own, and researches plausible, invented companies (Wallace
+// Corp, Rosen Associates, Sebastian Design, Meridian Software).
 //
-// No real paths, names, emails, or transcript text. MCP/product names (hubspot, notion, ...) are
-// public and fine to use; the content around them is invented.
+// Keep everything grounded and realistic: no overt sci-fi (the Tyrell/Rachel nod is subtle on
+// purpose), no real paths, names, emails, or transcript text. MCP/product names (hubspot, notion,
+// ...) are public and fine to use; the content around them is invented. Full rules: scripts/demo/README.md.
 
 import type { AgentSource } from "../../src/types.ts";
 import type { TaskFrustration, TaskOutcome } from "../../src/store/store-contract.ts";
@@ -309,12 +310,12 @@ export const PROJECTS: ProjectScenario[] = [
     persona: "marketing",
     sessions: [
       {
-        title: "How does Off-World Colonies position against us?",
+        title: "How does Meridian Software position against us?",
         turns: 5,
         instances: 5,
         tasks: [
           {
-            description: "Compare Off-World Colonies' positioning and pricing to Tyrell's",
+            description: "Compare Meridian Software's positioning and pricing to Tyrell's",
             outcome: "success",
             frustration: "none",
             outcomeReason: "Rachel got a clear side-by-side she could paste into a doc.",
