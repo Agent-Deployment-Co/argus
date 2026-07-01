@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Argus',
   description:
-    'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.',
+    'Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI sessions and shows your agent usage in a local web app.',
   cleanUrls: true,
   lastUpdated: true,
   // Contributor/agent material kept in the repo but excluded from the published
@@ -56,7 +56,7 @@ export default defineConfig({
       {
         property: 'og:description',
         content:
-          'Local-first usage analytics for Claude Code, Codex, Gemini, and Claude Cowork.'
+          'Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI sessions and shows your agent usage in a local web app.'
       }
     ]
   ],

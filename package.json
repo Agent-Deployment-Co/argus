@@ -1,7 +1,7 @@
 {
   "name": "@agentdeploymentco/argus-workspace",
   "version": "0.1.16",
-  "description": "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard.",
+  "description": "Analyze your AI agent usage. Argus finds and indexes your local Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI sessions and shows them in a local web app. Free and open source.",
   "type": "module",
   "private": true,
   "bin": {
