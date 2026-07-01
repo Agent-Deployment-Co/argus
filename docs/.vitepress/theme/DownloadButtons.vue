@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 
-// `center` centers the button row (Quick Start uses it; the Download page doesn't).
-withDefaults(defineProps<{ center?: boolean }>(), { center: false })
+// `center` centers the row; `label` shows a caption inline to the left of the
+// buttons. Quick Start uses both; the Download page uses neither.
+withDefaults(defineProps<{ center?: boolean; label?: string }>(), {
+  center: false,
+  label: ''
+})
 
 const repo = 'Agent-Deployment-Co/argus'
 // No-JS fallback: the latest release page always shows the newest build.
@@ -46,6 +50,7 @@ onMounted(async () => {
 
 <template>
   <div class="download-btns" :class="{ 'download-btns--center': center }">
+    <span v-if="label" class="download-btns__label">{{ label }}</span>
     <a class="btn-primary" :href="macHref">
       <svg viewBox="0 0 384 512" width="18" height="18" aria-hidden="true">
         <path
@@ -78,6 +83,13 @@ onMounted(async () => {
 
 .download-btns--center {
   justify-content: center;
+}
+
+.download-btns__label {
+  font-family: 'Poppins', var(--vp-font-family-base);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--vp-c-text-1);
 }
 
 .download-btns__soon {
