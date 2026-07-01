@@ -114,10 +114,11 @@ async function main(): Promise<void> {
   }
 
   // Side-files the dashboard reads from disk (not from the store): the plugin inventory, and an
-  // Argus config that keeps task extraction off (tasks are pre-seeded, so nothing should re-run).
+  // Argus config. Task extraction is on by default, so the demo leaves it on to match what a real
+  // user sees; tasks are pre-seeded and serving never re-indexes, so nothing actually re-runs.
   writeJson(join(claudeDir, "settings.json"), demo.settingsJson);
   writeJson(join(claudeDir, "plugins", "installed_plugins.json"), demo.installedPluginsJson);
-  writeJson(join(configDir, "argus.json"), { taskExtraction: { enabled: false } });
+  writeJson(join(configDir, "argus.json"), { taskExtraction: { enabled: true } });
 
   const bySource = Object.entries(demo.stats.bySource)
     .sort((a, b) => a[0].localeCompare(b[0]))
