@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "bun run src/cli.ts",
+    "demo": "bun run scripts/demo.ts --serve",
     "dev": "bash scripts/dev.sh",
     "dev:web": "vite --config web/vite.config.ts",
     "test": "bun test",
