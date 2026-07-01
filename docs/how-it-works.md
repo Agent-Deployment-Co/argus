@@ -32,4 +32,4 @@ it.
 The macOS app runs from your menu bar. Look for the Argus icon at the top of your
 screen: open it to launch the app in your browser, and leave it running so Argus
 keeps finding and indexing new sessions in the background. See
-[Installation](/installation) to set it up.
+[Download](/download) to set it up.

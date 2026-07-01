@@ -84,7 +84,7 @@ export default defineConfig({
         items: [
           { text: 'Quick Start', link: '/' },
           { text: 'How It Works', link: '/how-it-works' },
-          { text: 'Installation', link: '/installation' },
+          { text: 'Download', link: '/download' },
           { text: 'Supported Agents', link: '/supported-agents' }
         ]
       },

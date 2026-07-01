@@ -2,7 +2,7 @@ import DefaultTheme from 'vitepress/theme'
 import { useData, useRoute } from 'vitepress'
 import { h, nextTick, watch } from 'vue'
 import GithubStars from './GithubStars.vue'
-import DownloadMac from './DownloadMac.vue'
+import DownloadButtons from './DownloadButtons.vue'
 import './style.css'
 
 // Lazily loaded once: mermaid is large, so only pull it in when a page that
@@ -104,7 +104,7 @@ export default {
   },
   enhanceApp({ app }) {
     // Usable directly in markdown (e.g. the installation page).
-    app.component('DownloadMac', DownloadMac)
+    app.component('DownloadButtons', DownloadButtons)
   },
   setup() {
     const route = useRoute()
