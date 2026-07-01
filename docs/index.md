@@ -1,4 +1,4 @@
-# Quick start
+# Quick Start
 
 Argus analyzes your AI agent usage to help you be more productive with AI. It's built for non-coders using agents to do business tasks like account research, drafting content, editing spreadsheets and building workflows.
 

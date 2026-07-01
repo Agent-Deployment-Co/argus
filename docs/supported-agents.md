@@ -1,4 +1,4 @@
-# Supported agents
+# Supported Agents
 
 Argus finds and indexes the [sessions](/glossary#session) from your AI
 [agents](/glossary#agent) on your computer. It supports five
