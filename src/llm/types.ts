@@ -24,6 +24,9 @@ export type LlmProvider =
  *  shows for a selected provider (e.g. an API provider needs a key env var; the local CLI doesn't). */
 export type LlmConfigField = "model" | "baseUrl" | "apiKeyEnv" | "maxTokens" | "command" | "claudeCliPath";
 
+/** Optional transient diagnostic sink for provider-level warnings. */
+export type ProviderLog = (message: string) => void;
+
 /** A consumer-agnostic completion request. `system` carries instructions, `prompt` carries the data;
  *  the single-blob callers map everything to `prompt` with no `system`. */
 export interface LlmRequest {
@@ -66,6 +69,8 @@ export interface ResolvedLlmConfig {
   apiKey?: string;
   /** Name of the env var the key is expected under — used only to phrase the "no key" diagnostic. */
   apiKeyEnv?: string;
+  /** Transient provider diagnostics; never persisted to config. */
+  log?: ProviderLog;
 }
 
 /** The fully-resolved per-call context the client hands to a provider's `complete`. The client has
@@ -82,6 +87,7 @@ export interface ProviderCall {
   command?: string;
   /** Explicit path to the `claude` CLI; the claude-cli provider auto-resolves when unset. */
   claudeCliPath?: string;
+  log?: ProviderLog;
   fetch: typeof fetch;
   signal?: AbortSignal;
 }
@@ -120,5 +126,6 @@ export interface LocalProviderContext {
   command?: string;
   /** Explicit path to the `claude` CLI; auto-resolved when unset. */
   claudeCliPath?: string;
+  log?: ProviderLog;
   signal?: AbortSignal;
 }

@@ -3,10 +3,21 @@
 // was generalized (#132) — these are the no-API-key providers, and `claude` stays the default so
 // "no LLM configured" behaves exactly as before.
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, constants } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
-import type { LlmResult, LocalProviderContext, ProviderCall, ProviderDescriptor } from "../types.ts";
+import type {
+  LlmResult,
+  LocalProviderContext,
+  ProviderCall,
+  ProviderDescriptor,
+} from "../types.ts";
+import {
+  type ClaudeSandboxCommand,
+  type ClaudeSandboxRuntimeOptions,
+  claudeSandboxCommand,
+  disableClaudeSandbox,
+  isExecutable,
+} from "./claude-sandbox.ts";
 
 /** Cap on a provider's stdout so a runaway process can't exhaust memory. */
 export const MAX_LLM_BUFFER_BYTES = 32 * 1024 * 1024;
@@ -16,21 +27,15 @@ export const DEFAULT_CLAUDE_PROVIDER_MODEL = "haiku";
 
 const CLAUDE_BIN = "claude";
 
-function isExecutable(path: string): boolean {
-  try {
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Search `$PATH` in-process for an executable `claude` (the fast path for a terminal-launched CLI;
  *  honors PATHEXT on Windows). */
 function findOnPath(): string | undefined {
   const path = process.env.PATH;
   if (!path) return undefined;
-  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  const exts =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")
+      : [""];
   for (const dir of path.split(delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
@@ -101,13 +106,22 @@ let cachedAuto: string | null | undefined;
  *   5. bare `"claude"` (lets spawn surface a clear ENOENT we turn into actionable guidance).
  * The explicit override is honored verbatim and never cached; the auto-resolution (2–4) is cached.
  */
-export function resolveClaudeBinary(explicit?: string, probes?: ClaudeBinaryProbes): string {
+export function resolveClaudeBinary(
+  explicit?: string,
+  probes?: ClaudeBinaryProbes,
+): string {
   if (explicit?.trim()) return explicit.trim();
   if (probes) {
-    return probes.onPath?.() ?? probes.loginShell?.() ?? probes.knownLocations?.() ?? CLAUDE_BIN;
+    return (
+      probes.onPath?.() ??
+      probes.loginShell?.() ??
+      probes.knownLocations?.() ??
+      CLAUDE_BIN
+    );
   }
   if (cachedAuto === undefined) {
-    cachedAuto = findOnPath() ?? findViaLoginShell() ?? findInKnownLocations() ?? null;
+    cachedAuto =
+      findOnPath() ?? findViaLoginShell() ?? findInKnownLocations() ?? null;
   }
   return cachedAuto ?? CLAUDE_BIN;
 }
@@ -125,7 +139,39 @@ export function resetClaudeBinaryCache(): void {
  * fails "Not logged in"; the tolerant output parsers already handle the normal fenced/wrapped output.)
  */
 export function claudeProviderArgs(model?: string): string[] {
-  return ["-p", "--no-session-persistence", "--model", model || DEFAULT_CLAUDE_PROVIDER_MODEL, "-"];
+  return [
+    "-p",
+    "--no-session-persistence",
+    "--model",
+    model || DEFAULT_CLAUDE_PROVIDER_MODEL,
+    "-",
+  ];
+}
+
+type SpawnWithStdin = (
+  file: string,
+  args: string[],
+  input: string,
+  signal?: AbortSignal,
+  cwd?: string,
+) => Promise<LlmResult>;
+
+export interface ClaudeProviderRuntimeOptions extends ClaudeSandboxRuntimeOptions {
+  cwd?: string;
+  spawnWithStdin?: SpawnWithStdin;
+}
+
+function displayCommand(
+  command: ClaudeSandboxCommand,
+  bin: string,
+  args: string[],
+): string {
+  if (!command.sandboxed) return `${command.file} ${command.args.join(" ")}`;
+  return `${command.file} -p <generated claude-cli sandbox profile> ${bin} ${args.join(" ")}`;
+}
+
+function logSandboxWarning(ctx: LocalProviderContext, message: string): void {
+  ctx.log?.(message);
 }
 
 /** Split a command string into argv, honoring single/double quotes and backslash escapes. */
@@ -175,9 +221,14 @@ function spawnWithStdin(
   args: string[],
   input: string,
   signal?: AbortSignal,
+  cwd?: string,
 ): Promise<LlmResult> {
   return new Promise((resolve) => {
-    const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"], signal });
+    const child = spawn(file, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      signal,
+      ...(cwd ? { cwd } : {}),
+    });
     let stdout = "";
     let stderr = "";
     let bytesOut = 0;
@@ -200,13 +251,23 @@ function spawnWithStdin(
     child.stdin.on("error", () => {});
     child.stdin.end(input, "utf8");
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       const error = truncated
         ? "provider output exceeded buffer limit"
-        : code !== 0
-          ? stderr.trim() || `exited with status ${code}`
-          : undefined;
-      resolve({ ok: !error && !!stdout.trim(), text: stdout, error, status: code });
+        : code === null
+          ? stderr.trim() ||
+            (signal
+              ? `terminated by signal ${signal}`
+              : "terminated without an exit status")
+          : code !== 0
+            ? stderr.trim() || `exited with status ${code}`
+            : undefined;
+      resolve({
+        ok: !error && !!stdout.trim(),
+        text: stdout,
+        error,
+        status: code,
+      });
     });
 
     child.on("error", (err) => {
@@ -221,9 +282,28 @@ function blob(ctx: LocalProviderContext): string {
   return ctx.system ? `${ctx.system}\n\n${ctx.prompt}` : ctx.prompt;
 }
 
-export async function runClaudeProvider(ctx: LocalProviderContext): Promise<LlmResult> {
+export async function runClaudeProvider(
+  ctx: LocalProviderContext,
+  runtime: ClaudeProviderRuntimeOptions = {},
+): Promise<LlmResult> {
   const bin = resolveClaudeBinary(ctx.claudeCliPath);
-  const result = await spawnWithStdin(bin, claudeProviderArgs(ctx.model), blob(ctx), ctx.signal);
+  const args = claudeProviderArgs(ctx.model);
+  const input = blob(ctx);
+  const command = claudeSandboxCommand(bin, args, runtime);
+  if (command.warning) logSandboxWarning(ctx, command.warning);
+  const cwd = runtime.cwd ?? runtime.tmpDir ?? tmpdir();
+
+  const run = runtime.spawnWithStdin ?? spawnWithStdin;
+  let result = await run(command.file, command.args, input, ctx.signal, cwd);
+  if (command.sandboxed && !ctx.signal?.aborted && !result.ok) {
+    const reason = result.error ?? "no output";
+    disableClaudeSandbox(reason);
+    logSandboxWarning(
+      ctx,
+      `claude-cli sandbox failed (${reason}); retrying without sandbox and skipping sandbox for later claude-cli calls in this process`,
+    );
+    result = await run(bin, args, input, ctx.signal, cwd);
+  }
   // Turn a "not found" into actionable guidance instead of a bare ENOENT (the failure behind #159).
   if (!result.ok && result.error && /ENOENT|not found/i.test(result.error)) {
     return {
@@ -234,16 +314,24 @@ export async function runClaudeProvider(ctx: LocalProviderContext): Promise<LlmR
   return result;
 }
 
-export async function runCommandProvider(ctx: LocalProviderContext): Promise<LlmResult> {
+export async function runCommandProvider(
+  ctx: LocalProviderContext,
+): Promise<LlmResult> {
   const command = ctx.command;
-  if (!command?.trim()) return { ok: false, text: "", error: "no command configured" };
+  if (!command?.trim())
+    return { ok: false, text: "", error: "no command configured" };
   let argv: string[];
   try {
     argv = splitCommand(command);
   } catch (error) {
-    return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      text: "",
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
-  if (!argv.length) return { ok: false, text: "", error: "no command configured" };
+  if (!argv.length)
+    return { ok: false, text: "", error: "no command configured" };
   return spawnWithStdin(argv[0]!, argv.slice(1), blob(ctx), ctx.signal);
 }
 
@@ -257,6 +345,7 @@ export const claudeCliProvider: ProviderDescriptor = {
       prompt: call.prompt,
       model: call.model,
       claudeCliPath: call.claudeCliPath,
+      log: call.log,
       signal: call.signal,
     }),
 };
@@ -265,5 +354,10 @@ export const commandProvider: ProviderDescriptor = {
   name: "command",
   configFields: ["command"],
   complete: (call: ProviderCall) =>
-    runCommandProvider({ system: call.system, prompt: call.prompt, command: call.command, signal: call.signal }),
+    runCommandProvider({
+      system: call.system,
+      prompt: call.prompt,
+      command: call.command,
+      signal: call.signal,
+    }),
 };

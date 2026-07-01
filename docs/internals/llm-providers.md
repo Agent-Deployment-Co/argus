@@ -24,8 +24,10 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
 - **`http.ts`** — shared transport for the HTTP providers: retry on `429`/`5xx` honoring `retry-after`
   (reuses `src/backoff.ts`), a 32 MB response-size cap, and uniform error→`LlmResult` mapping.
 - **`providers/`**
-  - `local.ts` — `claude-cli` (`claude -p --no-session-persistence --model haiku -`) and `command` (an
-    arbitrary local command: prompt on stdin, completion on stdout). No API key.
+  - `local.ts`: `claude-cli` (`claude -p --no-session-persistence --model haiku -`) and `command` (an
+    arbitrary local command: prompt on stdin, completion on stdout). No API key. On macOS,
+    `claude-cli` attempts a `sandbox-exec` filesystem sandbox with Claude runtime and keychain access
+    before falling back to the direct call.
   - `anthropic.ts` — the `claude-api` provider: `POST /v1/messages`, `x-api-key` + `anthropic-version`;
     default `claude-haiku-4-5`.
   - `openai-compatible.ts` — the shared OpenAI Chat Completions transport: base URL + which token
@@ -42,7 +44,7 @@ it builds the prompt and parses the JSON; the layer just runs the completion.
 | Provider | Transport | Key | Notes |
 |---|---|---|---|
 | `off` | — | — | Default. `ok: false` "no provider"; consumers treat it as "no LLM". |
-| `claude-cli` | local `claude -p` | none | Uses your Claude login; the historical task-extraction default. |
+| `claude-cli` | local `claude -p` | none | Uses your Claude login. On macOS, attempts a filesystem sandbox and logs any unsandboxed fallback. |
 | `command` | local subprocess | none | Prompt on stdin, JSON on stdout. |
 | `claude-api` | HTTP | `ANTHROPIC_API_KEY` | Anthropic's API. Default model `claude-haiku-4-5`. |
 | `openai` | HTTP | `OPENAI_API_KEY` | Native OpenAI (`max_completion_tokens`); `baseUrl` for OpenAI-compatible proxies using the modern field. |
@@ -79,7 +81,9 @@ the future `hub` provider, where Argus would post the request to an org proxy th
 ## Privacy
 
 The default is `off`: no session text leaves the machine. `claude-cli`/`command` send the dialogue to
-a local process. The `claude-api`/`openai`/`gemini`/`openrouter` providers send the reconstructed session
+a local process. On macOS, `claude-cli` first tries to run with a filesystem sandbox that blocks
+unneeded file access while allowing Claude's login and runtime files. The
+`claude-api`/`openai`/`gemini`/`openrouter` providers send the reconstructed session
 prompt/response text to that **third-party cloud API** — a meaningful change from Argus's
 otherwise-local processing. The reconstructed dialogue is an in-memory intermediate (never written to
 disk), but it does leave the machine when an API provider is selected. This is surfaced in
