@@ -10,7 +10,7 @@ Argus indexes [sessions](/glossary#session) from your AI [agents](/glossary#agen
 
 </div>
 
-<DownloadButtons center />
+<DownloadButtons center label="Download" />
 
 ## Argus is local, private and free
 
