@@ -32,9 +32,12 @@ from the published site; everything published stays at the user's altitude.
   subject. No preamble, no "in this guide we will."
 - **One page, one job.** If a page is doing two jobs, split it and add both to the
   sidebar.
-- **Short sections with task-shaped headings.** Sentence case ("Quick start," "What
-  the web app shows"), not Title Case. A heading names what the reader wants to do
-  or know.
+- **Short sections with task-shaped headings.** A heading names what the reader
+  wants to do or know.
+- **Heading case: Title Case for the page, sentence case for sections.** A page's
+  H1 and its sidebar/nav label use Title Case ("Quick Start", "Supported Agents").
+  Every heading inside the page (H2 and below) uses sentence case ("Get started",
+  "What the dashboard shows").
 - **Front-load the answer.** Put the command or the conclusion first and the
   caveats after.
 
@@ -124,9 +127,13 @@ doesn't cover yet, add it to the glossary in the same change.
 - **Admonitions** for asides the reader can skip: `::: tip`, `::: warning`,
   `::: danger`. Use them sparingly.
 - **Bold** for a single key term, never a whole sentence. **Inline code** for
-  commands, flags, file names, environment variables, and settings.
+  commands, flags, file names, environment variables and settings.
 - **Link** to a related page instead of repeating its content. Send the reader to
   the source of truth.
+- **No Oxford comma.** Skip the comma before the final "and" or "or" in a simple
+  list ("skills, tools and MCP servers"). Add it back only when a list is complex
+  enough that leaving it out is ambiguous, for example when the items themselves
+  contain "and" or commas.
 
 ## Images and screenshots
 

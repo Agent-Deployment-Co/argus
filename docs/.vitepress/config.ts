@@ -79,8 +79,8 @@ export default defineConfig({
     nav: [],
 
     sidebar: [
-      { text: 'Quick start', link: '/' },
-      { text: 'Supported agents', link: '/supported-agents' },
+      { text: 'Quick Start', link: '/' },
+      { text: 'Supported Agents', link: '/supported-agents' },
       { text: 'Installation', link: '/installation' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Argus Hub', link: '/argus-hub' },
