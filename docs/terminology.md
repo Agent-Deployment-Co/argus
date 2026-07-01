@@ -23,9 +23,9 @@ bill.
 
 ## Dashboard
 
-The visual view of your usage that Argus opens in your browser: tokens and cost
-over time, which tools and skills you lean on, and a breakdown by project and
-source.
+The org-wide view an [Argus Hub](#argus-hub) presents, pulling together usage from
+everyone whose Argus syncs to it. It's how an ops leader sees agent use across a
+team, rather than one person's own usage in the Argus app.
 
 ## Friction
 
@@ -38,7 +38,7 @@ measured for Claude sessions only.
 
 The local store Argus builds from your sessions. Indexing goes through each
 session once, pulls out the useful details (usage, cost, tools, skills and the
-like) and saves them so your dashboard is fast and your sessions are ready to
+like) and saves them so the app is fast and your sessions are ready to
 explore. The index lives on your own computer. Nothing is uploaded unless you
 choose to sync.
 
@@ -87,7 +87,7 @@ Hub.
 
 Uploading a snapshot of your usage to an Argus Hub so it can be combined with other
 people's. Nothing is uploaded unless you choose to sync; indexing and the local
-dashboard stay on your machine.
+app stay on your machine.
 
 ## Task
 

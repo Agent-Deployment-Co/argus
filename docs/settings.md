@@ -22,10 +22,11 @@ opens Settings, grouped into a few categories.
 
 ## Sessions
 
-- **Extract tasks** turns on task interpretation, the pass that groups each
-  [session](/terminology#session) into the [tasks](/terminology#task) you worked on and
-  judges how each one went. It's on by default. This is the one thing Argus does
-  with an outside model, so turning it on reveals the model settings below.
+- **Extract tasks** turns on [task interpretation](/tasks), the pass that groups
+  each [session](/terminology#session) into the tasks you worked on and judges how
+  each one went. It's on by default. This is the one thing Argus does with an
+  outside model, so turning it on reveals the model settings below. See
+  [Tasks](/tasks) for what it captures and how to choose a provider.
 - **Max sessions per hour** caps how many sessions Argus interprets
   automatically each hour. Refreshing a session by hand isn't limited.
 - **Model provider**, **Model** and **Claude CLI path** choose which model

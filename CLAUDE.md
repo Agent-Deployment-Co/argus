@@ -29,7 +29,7 @@ presents them two ways: an interactive local web app (`serve` — the preferred 
 store current (`index --watch`), serves the web app, and uploads on a schedule (`sync --watch`) in
 one supervised foreground process. Nothing is uploaded during `serve`/`index`; all parsing is local.
 
-The Worker + D1 dashboard backend lives in a **separate private repo**, `agentdeploymentco/argus-dash`.
+The Worker + D1 dashboard backend lives in a **separate public repo**, `agentdeploymentco/argus-dash`.
 This repo is the public CLI only.
 
 ## Commands
