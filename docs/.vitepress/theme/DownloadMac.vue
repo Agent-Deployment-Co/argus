@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 
+// `note` shows the build/version caption (default on); `center` centers the
+// button. Quick Start passes :note="false" center; Installation uses defaults.
+withDefaults(defineProps<{ note?: boolean; center?: boolean }>(), {
+  note: true,
+  center: false
+})
+
 const repo = 'Agent-Deployment-Co/argus'
 // No-JS fallback: the latest release page always shows the newest build.
 const releasesUrl = `https://github.com/${repo}/releases/latest`
@@ -51,8 +58,8 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="download-mac">
-    <a class="download-mac__btn" :href="href">
+  <div class="download-mac" :class="{ 'download-mac--center': center }">
+    <a class="btn-primary" :href="href">
       <svg viewBox="0 0 384 512" width="18" height="18" aria-hidden="true">
         <path
           fill="currentColor"
@@ -61,8 +68,8 @@ onMounted(async () => {
       </svg>
       Download for macOS
     </a>
-    <span class="download-mac__note">
-      Universal build — Apple Silicon &amp; Intel<span v-if="version"> · {{ version }}</span>
+    <span v-if="note" class="download-mac__note">
+      Universal build for Apple Silicon &amp; Intel<span v-if="version"> · {{ version }}</span>
     </span>
   </div>
 </template>
@@ -76,29 +83,8 @@ onMounted(async () => {
   margin: 24px 0;
 }
 
-.download-mac__btn {
-  display: inline-flex;
+.download-mac--center {
   align-items: center;
-  gap: 10px;
-  padding: 12px 22px;
-  border-radius: 10px;
-  font-family: 'Poppins', var(--vp-font-family-base);
-  font-weight: 600;
-  font-size: 15px;
-  line-height: 1;
-  color: var(--vp-button-brand-text);
-  background-color: var(--vp-button-brand-bg);
-  transition: background-color 0.25s;
-}
-
-.download-mac__btn:hover {
-  color: var(--vp-button-brand-hover-text);
-  background-color: var(--vp-button-brand-hover-bg);
-}
-
-.download-mac__btn svg {
-  flex-shrink: 0;
-  fill: currentColor;
 }
 
 .download-mac__note {
