@@ -1,7 +1,8 @@
 # About
 
 Argus is a free and open source tool from the team at
-[The Agent Deployment Company](https://www.agentdeployment.co). It's
+[The Agent Deployment Company](https://www.agentdeployment.co). The source lives
+on [GitHub](https://github.com/Agent-Deployment-Co/argus), and it's
 [MIT licensed](https://github.com/Agent-Deployment-Co/argus/blob/main/LICENSE),
 so you're free to use, read and modify it.
 
