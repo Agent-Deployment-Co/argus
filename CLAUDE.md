@@ -29,7 +29,7 @@ presents them two ways: an interactive local web app (`serve` — the preferred 
 store current (`index --watch`), serves the web app, and uploads on a schedule (`sync --watch`) in
 one supervised foreground process. Nothing is uploaded during `serve`/`index`; all parsing is local.
 
-The Worker + D1 dashboard backend lives in a **separate public repo**, `agentdeploymentco/argus-dash`.
+The Worker + D1 dashboard backend lives in a **separate public repo**, `agentdeploymentco/argus-hub`.
 This repo is the public CLI only.
 
 ## Commands
@@ -273,7 +273,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 
 Stable types come from the external package `@agentdeploymentco/argus-schema` (pinned to a git tag in
 `package.json`). `types.ts` re-exports them and extends `Dashboard`/`SessionRow` with CLI-only fields
-(e.g. `bySource`, `source`). The schema package is the single source of truth shared with `argus-dash`.
+(e.g. `bySource`, `source`). The schema package is the single source of truth shared with `argus-hub`.
 
 `test/contract.test.ts` builds a dashboard from fixtures and validates it against the schema's
 `PushPayloadSchema`, so any drift between the CLI's output and the wire contract **fails CI**. When
