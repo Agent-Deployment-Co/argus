@@ -155,6 +155,19 @@ test("task counts are 1-3 per session and scale with session size", () => {
   expect(avg(tokensByCount[3]!)).toBeGreaterThan(avg(tokensByCount[2]!));
 });
 
+test("interaction compaction counts reconcile with session-level friction", () => {
+  const demo = generateDemoData({ asOfMs: ANCHOR, seed: 42 });
+  for (const [, sessions] of demo.sessionsByOwner) {
+    for (const s of sessions) {
+      // A session's compaction count must equal the sum over its interactions; anything else is a
+      // state real data can't reach (session says compacted, but no interaction did).
+      const sessionCompactions = s.meta.friction?.compactions ?? 0;
+      const interactionCompactions = (s.interactions ?? []).reduce((n, i) => n + i.compactionCount, 0);
+      expect(interactionCompactions).toBe(sessionCompactions);
+    }
+  }
+});
+
 test("every task carries its token and tool activity (tied to interactions)", async () => {
   const { taskMetrics } = await seedAndAggregate();
   // The regression this guards: tasks with no interaction spine show 0 tokens / no tools.

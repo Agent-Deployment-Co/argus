@@ -51,9 +51,19 @@ function parseArgs(argv: string[]): Args {
   let asOfMs: number;
   let asOfLabel: string;
   if (out.asOf) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(out.asOf);
+    if (!m) throw new Error(`--as-of must be YYYY-MM-DD, got: ${out.asOf}`);
     // Anchor to the end of the given local day so the whole day is in range.
     const parsed = new Date(`${out.asOf}T23:59:59`);
-    if (Number.isNaN(parsed.getTime())) throw new Error(`--as-of must be YYYY-MM-DD, got: ${out.asOf}`);
+    // JS rolls invalid dates over (Feb 30 -> Mar 2), so confirm the parsed date round-trips the input.
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getFullYear() !== Number(m[1]) ||
+      parsed.getMonth() + 1 !== Number(m[2]) ||
+      parsed.getDate() !== Number(m[3])
+    ) {
+      throw new Error(`--as-of is not a real calendar date: ${out.asOf}`);
+    }
     asOfMs = parsed.getTime();
     asOfLabel = out.asOf;
   } else {
@@ -87,8 +97,10 @@ async function main(): Promise<void> {
   rmSync(`${storePath}-shm`, { force: true });
   mkdirSync(dataDir, { recursive: true });
 
-  // Seed the store: sessions/messages per source, then pre-baked tasks per session. A fixed `now`
-  // keeps the interpretation timestamps deterministic too.
+  // Seed the store: sessions/messages per source, then pre-baked tasks per session. The corpus is
+  // deterministic on its own (dates and day-buckets come from --as-of, all other variation from
+  // --seed); pinning the store clock just keeps any timestamps it stamps on the anchor date. (The
+  // store's own bookkeeping columns, e.g. content_indexed_at_ms, aren't surfaced in the app.)
   const store = await openStore({ path: storePath, now: () => args.asOfMs });
   try {
     for (const [owner, sessions] of demo.sessionsByOwner) {

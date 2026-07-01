@@ -3,6 +3,7 @@
 // the real store/pricing/tool-category types and helpers so any contract drift fails typecheck.
 
 import { categorizeTool, parseMcpTool } from "../../src/tool-categories.ts";
+import { localDate } from "../../src/indexing/reconcile.ts";
 import type { InteractionFact, MaterializeSession, TaskFact } from "../../src/store/store-contract.ts";
 import {
   emptyUsage,
@@ -102,15 +103,6 @@ function makeRng(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** Local YYYY-MM-DD for an epoch ms (matches how the app buckets days). */
-function localDate(ms: number): string {
-  const d = new Date(ms);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 /** Base per-message token magnitudes by source. Claude Chat has no cache (estimated usage). */
@@ -312,8 +304,9 @@ function buildInteractionsAndTasks(
   messages: MessageRecord[],
 ): { interactions: InteractionFact[]; tasks: TaskFact[] } {
   // Take 1-3 tasks from the pool, scaled by session size, never more than the messages can slice.
+  // An empty pool yields parts = 0 (no interactions/tasks) rather than crashing.
   const pool = plan.template.tasks;
-  const parts = Math.max(1, Math.min(pool.length, targetTaskCount(messages.length), messages.length));
+  const parts = Math.min(pool.length, targetTaskCount(messages.length), messages.length);
   const templates = pool.slice(0, parts);
   const sizes = evenSlices(messages.length, parts);
   const pos = (record: number, item: number) => ({
@@ -321,6 +314,14 @@ function buildInteractionsAndTasks(
     recordIndex: record,
     itemIndex: item,
   });
+
+  // Sessions whose friction carries a compaction (heavy/growth on a friction-bearing source) get
+  // exactly one, attributed to a single interaction, so the interaction spine sums to the session's
+  // compaction count (frictionFor sets compactions: 1). Anything else stays at 0. Attributing it to
+  // every interaction would overcount vs the session-level total.
+  const hasCompaction =
+    FRICTION_SOURCES.has(plan.source) &&
+    (plan.template.friction === "heavy" || plan.template.friction === "growth");
 
   const interactions: InteractionFact[] = [];
   const tasks: TaskFact[] = [];
@@ -338,7 +339,7 @@ function buildInteractionsAndTasks(
       seq: k,
       initiator: "human",
       disposition: interrupted ? "interrupted" : "completed",
-      compactionCount: plan.template.friction === "growth" ? 1 : 0,
+      compactionCount: hasCompaction && k === parts - 1 ? 1 : 0,
       timestampMs: startTs,
       promptPosition: pos(start, 0),
       ...(interrupted ? {} : { responsePosition: pos(mi - 1, 1) }),
