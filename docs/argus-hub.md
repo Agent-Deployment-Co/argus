@@ -4,7 +4,7 @@ Argus Hub is a self-hosted server that collects usage data from many people's Ar
 presents an org-wide [dashboard](/glossary#dashboard).
 
 Each person points their Argus at an Argus Hub. The Hub receives [session](/glossary#session)
-data from each one, merges it into one central database tagged by user, and serves an
+data from each one, merges it into one central database tagged by user and serves an
 org-wide view.
 
 ## Sending data to Argus Hub

@@ -1,7 +1,7 @@
 # Installation
 
 Argus ships as a native macOS app that lives in your menu bar. It bundles the
-command-line tool, keeps your local [session](/glossary#session) data current, and
+command-line tool, keeps your local [session](/glossary#session) data current and
 opens the [dashboard](/glossary#dashboard) in your browser, with no separate setup
 required.
 
