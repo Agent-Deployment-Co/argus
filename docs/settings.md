@@ -7,11 +7,12 @@ opens Settings, grouped into a few categories.
 
 - **Appearance** sets the color theme: follow your system, or force light or
   dark.
-- **Model provider** picks the model Argus uses for [task
-  interpretation](#sessions) and stores the API key for it. Argus keeps your key
-  in your operating system's secure store, never in its settings file, and never
-  sends it anywhere except the provider you chose. A **Test connection** button
-  confirms the key works.
+- **Updates** controls whether the desktop app installs new versions
+  automatically. With it off, Argus tells you when an update is ready and you
+  install it from the menu bar.
+- **Argus Hub** holds the address of your team's [Argus Hub](/glossary#argus-hub)
+  and the key used to [sync](/glossary#sync) to it. Leave these blank if you
+  aren't using a Hub.
 
 <div class="screenshot">
 
@@ -21,14 +22,16 @@ opens Settings, grouped into a few categories.
 
 ## Sessions
 
-- **Task interpretation** is an optional pass that groups each
+- **Extract tasks** turns on task interpretation, the pass that groups each
   [session](/glossary#session) into the [tasks](/glossary#task) you worked on and
-  judges how each one went. It's off by default, and turning it on reveals the
-  model settings it uses. This is the one thing Argus does with an outside model,
-  which is why it's opt-in and needs a provider set under General.
-- **Text retention** controls whether Argus keeps the text of your prompts and
-  responses on your computer. Either way the text stays local and is never
-  uploaded.
+  judges how each one went. It's on by default. This is the one thing Argus does
+  with an outside model, so turning it on reveals the model settings below.
+- **Max sessions per hour** caps how many sessions Argus interprets
+  automatically each hour. Refreshing a session by hand isn't limited.
+- **Model provider**, **Model** and **Claude CLI path** choose which model
+  backend does the interpretation. Argus stores any API key in your operating
+  system's secure store, never in its settings file, and a **Test connection**
+  button confirms it works.
 
 <div class="screenshot">
 
@@ -44,5 +47,7 @@ showing up and you want to see what Argus sees.
 
 ## From the command line
 
-Every setting has a command-line equivalent, and there are commands the app
-doesn't surface. See the [CLI Reference](/cli-reference).
+The app surfaces the everyday settings. A few advanced ones are set from the
+command line instead, including text retention, which controls whether Argus
+keeps the text of your prompts and responses on your machine (it stays local
+either way). See the [CLI Reference](/cli-reference).
