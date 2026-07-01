@@ -5,9 +5,9 @@ dashboard. If a word on another page links here, this is where it lands.
 
 ## Agent
 
-An AI assistant you direct to get work done, like Claude Code, Codex, or Claude
+An AI assistant you direct to get work done, like Claude Code, Codex or Claude
 Cowork. You give it a goal in plain language and it carries out the steps, using
-tools to read files, run commands, or call other systems.
+tools to read files, run commands or call other systems.
 
 ## Argus Hub
 
@@ -30,26 +30,26 @@ source.
 ## Index
 
 The local store Argus builds from your sessions. Indexing goes through each
-session once, pulls out the useful details (usage, cost, tools, skills, and the
-like), and saves them so your dashboard is fast and your sessions are ready to
+session once, pulls out the useful details (usage, cost, tools, skills and the
+like) and saves them so your dashboard is fast and your sessions are ready to
 explore. The index lives on your own computer. Nothing is uploaded unless you
 choose to sync.
 
 ## MCP server
 
 A connector that gives an agent extra abilities, like access to a database, a
-ticketing system, or a web service. MCP (Model Context Protocol) is the shared
+ticketing system or a web service. MCP (Model Context Protocol) is the shared
 standard agents use to talk to these connectors.
 
 ## Model
 
-The specific AI behind an agent, such as Claude Opus, Claude Sonnet, or a GPT
-model. Different models have different speed, capability, and price, so your usage
+The specific AI behind an agent, such as Claude Opus, Claude Sonnet or a GPT
+model. Different models have different speed, capability and price, so your usage
 and cost depend on which ones you use.
 
 ## Plugin
 
-A bundle that adds skills, tools, or connectors to an agent in one package. Argus
+A bundle that adds skills, tools or connectors to an agent in one package. Argus
 can show which plugins you have enabled and which ones you aren't actually using.
 
 ## Project
@@ -90,4 +90,4 @@ so a longer conversation or a bigger file means more tokens.
 ## Tool
 
 A single action an agent can take, such as reading a file, running a command,
-searching the web, or calling an API. Argus shows which tools your agents use most.
+searching the web or calling an API. Argus shows which tools your agents use most.

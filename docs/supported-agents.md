@@ -7,7 +7,7 @@ default.
 
 | Agent | Description |
 |---|---|
-| [Claude Code](https://claude.com/product/claude-code) | Claude's coding agent for the terminal, IDE, and desktop app |
+| [Claude Code](https://claude.com/product/claude-code) | Claude's coding agent for the terminal, IDE and desktop app |
 | [Claude Cowork](https://claude.com/product/cowork) | Claude's agent for knowledge work in the Claude desktop app |
 | [Claude Chat](https://claude.ai) | Chat conversations on claude.ai (via desktop, see below) |
 | [Codex](https://openai.com/codex/) | OpenAI's coding and knowledge work agent |
@@ -26,7 +26,7 @@ Argus automatically indexes sessions from every agent it finds on your computer 
 | Gemini CLI | `~/.gemini` | `%USERPROFILE%\.gemini` |
 
 If you've moved an agent's data with its own setting (for example
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GEMINI_CLI_HOME`), Argus follows that same
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GEMINI_CLI_HOME`), Argus follows that same
 setting. For where Argus keeps its own data, see
 [Configuration](/configuration#filesystem-locations).
 
