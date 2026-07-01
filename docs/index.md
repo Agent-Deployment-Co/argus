@@ -41,5 +41,5 @@ Press `Ctrl-C` to stop. Nothing leaves your machine.
 ## Where to go next
 
 - **[Installation](/installation):** install the Mac app, or run the command-line tool through `npx`.
-- **[Configuration](/configuration):** settings, flags and environment variables.
+- **[CLI Reference](/cli-reference):** run Argus from the command line.
 - **[Argus Hub](/argus-hub):** collect usage across a team and view an org-wide dashboard.

@@ -102,7 +102,7 @@ npx @agentdeploymentco/argus index refresh <session-id> --extract-tasks true
 config for that run. The `claude` provider uses `claude -p` with a fast, cheap model by default and
 leaves no extra session behind. The reconstructed dialogue used to judge outcomes is never stored —
 only the task description and outcome are. See
-[docs/configuration.md](docs/configuration.md) and
+[docs/internals/configuration.md](docs/internals/configuration.md) and
 [docs/internals/task-interpretation.md](docs/internals/task-interpretation.md).
 
 ## Keep and analyze data over time

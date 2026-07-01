@@ -9,5 +9,4 @@ Configure Argus from inside the app. Open Settings from the left nav.
 - Text retention, which controls whether Argus keeps the text of your prompts and
   responses on your machine.
 
-For the full list of settings, including the ones you set on the command line, see
-[Configuration](/configuration).
+You can also run Argus from the command line; see the [CLI Reference](/cli-reference).

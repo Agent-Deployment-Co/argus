@@ -46,7 +46,7 @@ from the published site; everything published stays at the user's altitude.
 Drop a `.md` in `docs/`, then register it in the `sidebar` array in
 `docs/.vitepress/config.ts`. A page that isn't in the sidebar still builds, but
 nothing links to it. Reference other pages with a root-absolute link
-(`/configuration`), matching the existing pages.
+(`/installation`), matching the existing pages.
 
 A contributor-only page (architecture or store internals, not for end users) goes
 in `docs/internals/` instead. That directory is excluded from the published site,
