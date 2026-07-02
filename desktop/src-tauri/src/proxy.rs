@@ -3,9 +3,10 @@
 // restart. It splices bytes bidirectionally rather than parsing HTTP, so it transparently carries
 // whatever the Hono server does (chunked responses, keep-alive, any future SSE/WebSocket upgrade).
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use tauri::AppHandle;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -47,45 +48,99 @@ const RECONNECTING_BODY: &str = r##"<!doctype html>
 /// full page load every second even while the sidecar is still down, which is both wasteful and
 /// visibly flashes the page. Polling a cheap endpoint and only reloading once it actually answers
 /// keeps the tab quiet (aside from the spinner) until there's really something to show.
-fn reconnecting_response() -> Vec<u8> {
-    format!(
-        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        RECONNECTING_BODY.len(),
-        RECONNECTING_BODY
-    )
-    .into_bytes()
+///
+/// Computed once and cached: the bytes are a constant, so there's no reason to reformat/reallocate
+/// them on every failed connection.
+static RECONNECTING_RESPONSE: OnceLock<Vec<u8>> = OnceLock::new();
+
+fn reconnecting_response() -> &'static [u8] {
+    RECONNECTING_RESPONSE.get_or_init(|| {
+        format!(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            RECONNECTING_BODY.len(),
+            RECONNECTING_BODY
+        )
+        .into_bytes()
+    })
 }
 
-/// Bind the fixed front-door port and forward every connection to whatever port `backend_port`
-/// currently holds. Runs for the life of the app, independent of the sidecar's own start/stop/crash
-/// cycle, so a restarting sidecar never orphans an already-open browser tab.
-pub fn start_proxy(front_port: u16, backend_port: Arc<AtomicU16>) {
+/// Bind the front-door port and forward every connection to whatever port `backend_port` currently
+/// holds. Runs for the life of the app, independent of the sidecar's own start/stop/crash cycle, so
+/// a restarting sidecar never orphans an already-open browser tab.
+///
+/// Tries `preferred_port` first. If something else already holds it, retries once against an
+/// OS-assigned free port and updates `front_port` to match — `open_dashboard`/`about_info` read
+/// `front_port` live, so they pick up the corrected value — and notifies the user with the actual
+/// URL, since a silent fallback would otherwise leave "Open Argus" (and any already-open tab)
+/// pointed at a port nothing is listening on.
+pub fn start_proxy(preferred_port: u16, backend_port: Arc<AtomicU16>, front_port: Arc<AtomicU16>, app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let listener = match TcpListener::bind(("127.0.0.1", front_port)).await {
-            Ok(listener) => listener,
+        let listener = match bind_front_door(preferred_port).await {
+            Ok(BoundPort::Preferred(listener)) => listener,
+            Ok(BoundPort::Fallback(listener, actual_port)) => {
+                front_port.store(actual_port, Ordering::SeqCst);
+                let url = format!("http://localhost:{actual_port}");
+                log::warn!("front-door proxy bound to fallback port {actual_port} ({url})");
+                crate::notify(
+                    &app,
+                    "Argus switched ports",
+                    &format!("Port {preferred_port} was unavailable. Argus is now at {url}."),
+                );
+                listener
+            }
             Err(err) => {
-                log::error!("binding the front-door proxy port {front_port}: {err}");
+                log::error!("binding the front-door proxy: {err}");
+                crate::notify(
+                    &app,
+                    "Argus couldn't start",
+                    "The browser connection failed to start. Check Console for details.",
+                );
                 return;
             }
         };
-        loop {
-            let (inbound, _) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(err) => {
-                    log::warn!("accepting a proxy connection: {err}");
-                    continue;
-                }
-            };
-            let backend_port = backend_port.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) =
-                    proxy_connection(inbound, backend_port.load(Ordering::SeqCst)).await
-                {
-                    log::debug!("proxying a connection: {err}");
-                }
-            });
-        }
+        run_accept_loop(listener, backend_port).await;
     });
+}
+
+/// Outcome of [`bind_front_door`]: which port it actually landed on.
+enum BoundPort {
+    Preferred(TcpListener),
+    Fallback(TcpListener, u16),
+}
+
+/// Try to bind `preferred_port` first (so the front-door proxy lands on the CLI's familiar default
+/// port whenever nothing else is using it); retry once against an OS-assigned free port otherwise.
+/// Pure port-picking logic, kept separate from `start_proxy`'s `AppHandle`/notify concerns so it's
+/// testable on its own.
+async fn bind_front_door(preferred_port: u16) -> io::Result<BoundPort> {
+    if let Ok(listener) = TcpListener::bind(("127.0.0.1", preferred_port)).await {
+        return Ok(BoundPort::Preferred(listener));
+    }
+    log::warn!(
+        "binding the front-door proxy's preferred port {preferred_port} failed; retrying with an OS-assigned port"
+    );
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let actual_port = listener.local_addr()?.port();
+    Ok(BoundPort::Fallback(listener, actual_port))
+}
+
+/// Accept connections forever, forwarding each to whatever port `backend_port` currently holds.
+async fn run_accept_loop(listener: TcpListener, backend_port: Arc<AtomicU16>) {
+    loop {
+        let (inbound, _) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(err) => {
+                log::warn!("accepting a proxy connection: {err}");
+                continue;
+            }
+        };
+        let backend_port = backend_port.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) = proxy_connection(inbound, backend_port.load(Ordering::SeqCst)).await {
+                log::debug!("proxying a connection: {err}");
+            }
+        });
+    }
 }
 
 /// Forward one inbound connection to the current backend port. If the backend refuses the
@@ -103,23 +158,36 @@ async fn proxy_connection(mut inbound: TcpStream, backend_port: u16) -> io::Resu
     Ok(())
 }
 
+/// Total time budget for draining the client's request before giving up and closing anyway — a
+/// slow or stalled client shouldn't be able to hang the holding-page response indefinitely.
+const DRAIN_DEADLINE: Duration = Duration::from_millis(200);
+
 /// Write the holding page and close cleanly. Drains whatever the client already sent first —
 /// closing a socket with unread bytes still in the kernel receive buffer sends an RST instead of a
 /// clean FIN on most platforms, which would surface to the client as a connection reset rather than
-/// the response we just wrote.
+/// the response we just wrote. Loops until the client stops sending (read returns `0`) or the
+/// overall deadline elapses, rather than a single bounded read, so a multi-packet request (e.g. a
+/// POST body) is still fully drained.
 async fn serve_holding_page(inbound: &mut TcpStream) {
     let mut discard = [0u8; 1024];
-    let _ = tokio::time::timeout(Duration::from_millis(200), inbound.read(&mut discard)).await;
-    let _ = inbound.write_all(&reconnecting_response()).await;
+    let _ = tokio::time::timeout(DRAIN_DEADLINE, async {
+        loop {
+            match inbound.read(&mut discard).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => continue,
+            }
+        }
+    })
+    .await;
+    let _ = inbound.write_all(reconnecting_response()).await;
     let _ = inbound.shutdown().await;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::start_proxy;
+    use super::{bind_front_door, run_accept_loop, BoundPort};
     use std::sync::atomic::{AtomicU16, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -156,8 +224,8 @@ mod tests {
         let backend_port = Arc::new(AtomicU16::new(backend_a));
 
         let front_port = free_port().await;
-        start_proxy(front_port, backend_port.clone());
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let listener = TcpListener::bind(("127.0.0.1", front_port)).await.unwrap();
+        tokio::spawn(run_accept_loop(listener, backend_port.clone()));
 
         let mut client = TcpStream::connect(("127.0.0.1", front_port)).await.unwrap();
         client.write_all(b"hello-a").await.unwrap();
@@ -179,8 +247,8 @@ mod tests {
     async fn proxy_serves_a_holding_page_when_the_backend_is_down() {
         let backend_port = Arc::new(AtomicU16::new(free_port().await)); // nothing listens here
         let front_port = free_port().await;
-        start_proxy(front_port, backend_port);
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let listener = TcpListener::bind(("127.0.0.1", front_port)).await.unwrap();
+        tokio::spawn(run_accept_loop(listener, backend_port));
 
         let mut client = TcpStream::connect(("127.0.0.1", front_port)).await.unwrap();
         client.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
@@ -189,5 +257,31 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(response.contains("Reconnecting"));
         assert!(response.contains("/healthz"));
+    }
+
+    #[tokio::test]
+    async fn bind_front_door_uses_the_preferred_port_when_free() {
+        let preferred = free_port().await;
+        match bind_front_door(preferred).await.unwrap() {
+            BoundPort::Preferred(listener) => {
+                assert_eq!(listener.local_addr().unwrap().port(), preferred);
+            }
+            BoundPort::Fallback(..) => panic!("expected the preferred port to bind"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bind_front_door_falls_back_when_the_preferred_port_is_taken() {
+        // Hold the preferred port open so the real bind attempt fails.
+        let held = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let preferred = held.local_addr().unwrap().port();
+
+        match bind_front_door(preferred).await.unwrap() {
+            BoundPort::Fallback(listener, actual_port) => {
+                assert_ne!(actual_port, preferred);
+                assert_eq!(listener.local_addr().unwrap().port(), actual_port);
+            }
+            BoundPort::Preferred(_) => panic!("expected a fallback port since the preferred one is held"),
+        }
     }
 }
