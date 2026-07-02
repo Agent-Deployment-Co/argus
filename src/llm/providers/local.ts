@@ -16,6 +16,7 @@ import {
   type ClaudeSandboxRuntimeOptions,
   claudeSandboxCommand,
   disableClaudeSandbox,
+  isClaudeSandboxFailure,
   isExecutable,
 } from "./claude-sandbox.ts";
 
@@ -295,7 +296,12 @@ export async function runClaudeProvider(
 
   const run = runtime.spawnWithStdin ?? spawnWithStdin;
   let result = await run(command.file, command.args, input, ctx.signal, cwd);
-  if (command.sandboxed && !ctx.signal?.aborted && !result.ok) {
+  if (
+    command.sandboxed &&
+    !ctx.signal?.aborted &&
+    !result.ok &&
+    isClaudeSandboxFailure(result)
+  ) {
     const reason = result.error ?? "no output";
     disableClaudeSandbox(reason);
     logSandboxWarning(
