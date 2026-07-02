@@ -9,15 +9,52 @@ use std::time::Duration;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-// 503 (not 200): a request for /healthz that lands here because the backend is unreachable must
-// read as unhealthy, so the holding page's own poll below (and anything else probing /healthz)
-// can tell "still down" apart from "back up" by status code alone.
-//
-// The page polls /healthz itself rather than reloading on a timer: reloading blind re-issues the
-// full page load every second even while the sidecar is still down, which is both wasteful and
-// visibly flashes the page. Polling a cheap endpoint and only reloading once it actually answers
-// keeps the tab quiet until there's really something to show.
-const RECONNECTING_RESPONSE: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><html><head><meta charset=\"utf-8\"><title>Argus</title></head><body style=\"font-family:sans-serif;color:#888;text-align:center;margin-top:20vh\"><p>Reconnecting to Argus\xe2\x80\xa6</p><script>(function poll(){setTimeout(function(){fetch('/healthz',{cache:'no-store'}).then(function(r){if(r.ok){location.reload();}else{poll();}}).catch(function(){poll();});},1000);})();</script></body></html>";
+// The holding page shown in place of a proxied response while the backend is unreachable. A
+// spinning SVG marks it as actively retrying rather than a dead/frozen page.
+const RECONNECTING_BODY: &str = r##"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Argus</title>
+<style>
+@keyframes argus-spin { to { transform: rotate(360deg); } }
+.argus-spinner { animation: argus-spin 1s linear infinite; margin: 0 auto 16px; display: block; }
+</style>
+</head>
+<body style="font-family:sans-serif;color:#888;text-align:center;margin-top:20vh">
+<svg class="argus-spinner" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="12" cy="12" r="10" stroke="#ccc" stroke-width="3" opacity="0.3"></circle>
+<path d="M12 2a10 10 0 0 1 10 10" stroke="#888" stroke-width="3" stroke-linecap="round"></path>
+</svg>
+<p>Reconnecting to Argus&hellip;</p>
+<script>
+(function poll() {
+  setTimeout(function () {
+    fetch("/healthz", { cache: "no-store" })
+      .then(function (r) { if (r.ok) { location.reload(); } else { poll(); } })
+      .catch(function () { poll(); });
+  }, 1000);
+})();
+</script>
+</body>
+</html>"##;
+
+/// 503 (not 200): a request for /healthz that lands here because the backend is unreachable must
+/// read as unhealthy, so the holding page's own poll above (and anything else probing /healthz)
+/// can tell "still down" apart from "back up" by status code alone.
+///
+/// The page polls /healthz itself rather than reloading on a timer: reloading blind re-issues the
+/// full page load every second even while the sidecar is still down, which is both wasteful and
+/// visibly flashes the page. Polling a cheap endpoint and only reloading once it actually answers
+/// keeps the tab quiet (aside from the spinner) until there's really something to show.
+fn reconnecting_response() -> Vec<u8> {
+    format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        RECONNECTING_BODY.len(),
+        RECONNECTING_BODY
+    )
+    .into_bytes()
+}
 
 /// Bind the fixed front-door port and forward every connection to whatever port `backend_port`
 /// currently holds. Runs for the life of the app, independent of the sidecar's own start/stop/crash
@@ -73,7 +110,7 @@ async fn proxy_connection(mut inbound: TcpStream, backend_port: u16) -> io::Resu
 async fn serve_holding_page(inbound: &mut TcpStream) {
     let mut discard = [0u8; 1024];
     let _ = tokio::time::timeout(Duration::from_millis(200), inbound.read(&mut discard)).await;
-    let _ = inbound.write_all(RECONNECTING_RESPONSE).await;
+    let _ = inbound.write_all(&reconnecting_response()).await;
     let _ = inbound.shutdown().await;
 }
 
