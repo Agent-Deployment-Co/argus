@@ -158,7 +158,7 @@ function SessionList() {
         </div>
       </div>
       <ul className="session-items">
-        {query.isError && <li className="session-empty-row">Couldn't load sessions: {(query.error as Error).message}</li>}
+        {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
         {rows.map((s) => (
           <li key={`${s.source}:${s.sessionId}`}>
             <Link
@@ -224,6 +224,7 @@ export function SessionsEmpty() {
     return <Navigate to="/sessions/$sessionId" params={{ sessionId: first.sessionId }} search={search} replace />;
   }
   if (query.isPending) return <div className="session-empty">Loading sessions…</div>;
+  if (query.isError) return <div className="session-empty">{(query.error as Error).message}</div>;
   const filtered = Boolean(filters.project || filters.q || filters.source || filters.since || filters.until);
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
 }
