@@ -26,7 +26,7 @@ import {
   SELECTABLE_PROVIDERS,
 } from "./llm/index.ts";
 import type { LlmProvider, ResolvedLlmConfig } from "./llm/types.ts";
-import { logger, logWarn, normalizeLogLevel, type ArgusLogLevel, type Log } from "./logger.ts";
+import { ARGUS_LOG_LEVELS, logger, logWarn, normalizeLogLevel, type ArgusLogLevel, type Log } from "./logger.ts";
 
 /** The default LLM provider, preserved from before the generalization: with no provider configured,
  *  model-driven features use the local `claude` CLI. The single source of truth for this default —
@@ -241,13 +241,17 @@ function parseString(raw: unknown): string {
   return String(raw);
 }
 
-function parseLogLevel(raw: unknown): ArgusLogLevel {
+// Rejects (returns undefined) a present-but-invalid value, like parseProvider — so the settings API
+// write path turns a bad value into a 400, and the resolver falls through to the default. `loadConfig`
+// / `resolveLogLevel` stay tolerant: an invalid file/env value warns here, then resolves to the
+// default rather than crashing.
+function parseLogLevel(raw: unknown): ArgusLogLevel | undefined {
   const level = normalizeLogLevel(raw);
   if (level) return level;
   defaultConfigWarn(
     `Ignoring invalid log level ${JSON.stringify(String(raw))} (expected error, warn, info, debug, or trace).`,
   );
-  return "info";
+  return undefined;
 }
 
 const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
@@ -309,14 +313,33 @@ const RETENTION_SETTINGS = {
   } satisfies Setting<boolean>,
 };
 
-const LOG_SETTINGS = {
+const DEFAULT_LOG_LEVEL: ArgusLogLevel = "info";
+
+/** The log-level select. Presented in the levels' natural order — least to most verbose
+ *  (error → trace), which is `ARGUS_LOG_LEVELS` — not alphabetical, because verbosity is a meaningful
+ *  ranking (see the UI ordering rules in CLAUDE.md). Pinned first is the unset choice, labeled with the
+ *  default it resolves to. */
+const LOG_LEVEL_OPTIONS: SelectItem[] = [
+  { value: "", label: `Default (${DEFAULT_LOG_LEVEL})` },
+  "separator",
+  ...ARGUS_LOG_LEVELS.map((level) => ({ value: level, label: level })),
+];
+
+export const LOG_SETTINGS = {
   level: {
     path: "log.level",
     env: "ARGUS_LOG_LEVEL",
     flag: "log-level",
-    default: "info" as ArgusLogLevel,
+    default: DEFAULT_LOG_LEVEL,
+    ui: {
+      label: "Log level",
+      description:
+        "How much detail Argus prints to the terminal. The more verbose levels (debug, trace) help when diagnosing a problem.",
+      control: "select",
+      options: LOG_LEVEL_OPTIONS,
+    },
     parse: parseLogLevel,
-  } satisfies Setting<ArgusLogLevel>,
+  } satisfies Setting<ArgusLogLevel | undefined>,
 };
 
 function parseNumber(raw: unknown): number | undefined {
@@ -788,10 +811,11 @@ export function resolveLogLevel(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
 ): ArgusLogLevel {
-  if (flags["log-level"] != null && flags["log-level"] !== "") return parseLogLevel(flags["log-level"]);
+  if (flags["log-level"] != null && flags["log-level"] !== "")
+    return parseLogLevel(flags["log-level"]) ?? DEFAULT_LOG_LEVEL;
   if (flags.quiet === true) return "warn";
   if (flags.verbose === true || flags.debug === true) return "debug";
-  return resolveSetting(LOG_SETTINGS.level, {}, file);
+  return resolveSetting(LOG_SETTINGS.level, {}, file) ?? DEFAULT_LOG_LEVEL;
 }
 
 /** Automatic desktop update behavior. Defaults on. */

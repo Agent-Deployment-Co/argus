@@ -29,7 +29,7 @@ import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStor
 import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
-import { isLevelEnabled, logWarn, type Log } from "../logger.ts";
+import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "../logger.ts";
 
 export interface ServeOptions {
   port: number;
@@ -429,6 +429,14 @@ export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, o
     }
     const result = applySetting(path, value, opts.configPath);
     if (!result.ok) return c.json({ error: result.error }, result.status);
+    // Apply a log-level change to this serve process's logger right away, so terminal verbosity
+    // changes without a restart (matters most for the tauri sidecar, which is long-lived). The
+    // effective value already accounts for ARGUS_LOG_LEVEL winning over the file we just wrote, so
+    // setting it here won't override an active env var.
+    if (path === "log.level") {
+      const level = normalizeLogLevel(result.setting.effectiveValue);
+      if (level) logger.setLevel?.(level);
+    }
     return c.json({ setting: result.setting });
   });
 
