@@ -40,7 +40,7 @@ export interface ReindexResponse {
   diagnostics?: { message: string }[];
 }
 
-async function fetchSnapshot(filters: SnapshotFilters): Promise<Snapshot> {
+export async function fetchSnapshot(filters: SnapshotFilters): Promise<Snapshot> {
   const res = await fetchOrOffline(snapshotUrl(filters));
   return jsonOrThrow<Snapshot>(res, "Failed to load data");
 }

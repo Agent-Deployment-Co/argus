@@ -31,7 +31,7 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
   return `/api/sessions?${params}`;
 }
 
-async function fetchSessions(filters: SessionListFilters, offset: number): Promise<SessionListResponse> {
+export async function fetchSessions(filters: SessionListFilters, offset: number): Promise<SessionListResponse> {
   const res = await fetchOrOffline(sessionsUrl(filters, offset));
   return jsonOrThrow<SessionListResponse>(res, "Failed to load sessions");
 }
@@ -51,7 +51,7 @@ export function useSessionsQuery(filters: SessionListFilters) {
   });
 }
 
-async function fetchSessionDetail(sessionId: string): Promise<SessionRow> {
+export async function fetchSessionDetail(sessionId: string): Promise<SessionRow> {
   const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}`);
   const body = await jsonOrThrow<{ session: SessionRow }>(res, "Failed to load session");
   return body.session;
