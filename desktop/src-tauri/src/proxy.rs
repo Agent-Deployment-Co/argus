@@ -1,0 +1,193 @@
+// A dumb TCP reverse proxy binding a fixed "front door" port that the browser/tabs connect to, so
+// that port never has to change even though the sidecar's actual port is re-picked on every
+// restart. It splices bytes bidirectionally rather than parsing HTTP, so it transparently carries
+// whatever the Hono server does (chunked responses, keep-alive, any future SSE/WebSocket upgrade).
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+// The holding page shown in place of a proxied response while the backend is unreachable. A
+// spinning SVG marks it as actively retrying rather than a dead/frozen page.
+const RECONNECTING_BODY: &str = r##"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Argus</title>
+<style>
+@keyframes argus-spin { to { transform: rotate(360deg); } }
+.argus-spinner { animation: argus-spin 1s linear infinite; margin: 0 auto 16px; display: block; }
+</style>
+</head>
+<body style="font-family:sans-serif;color:#888;text-align:center;margin-top:20vh">
+<svg class="argus-spinner" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="12" cy="12" r="10" stroke="#ccc" stroke-width="3" opacity="0.3"></circle>
+<path d="M12 2a10 10 0 0 1 10 10" stroke="#888" stroke-width="3" stroke-linecap="round"></path>
+</svg>
+<p>Reconnecting to Argus&hellip;</p>
+<script>
+(function poll() {
+  setTimeout(function () {
+    fetch("/healthz", { cache: "no-store" })
+      .then(function (r) { if (r.ok) { location.reload(); } else { poll(); } })
+      .catch(function () { poll(); });
+  }, 1000);
+})();
+</script>
+</body>
+</html>"##;
+
+/// 503 (not 200): a request for /healthz that lands here because the backend is unreachable must
+/// read as unhealthy, so the holding page's own poll above (and anything else probing /healthz)
+/// can tell "still down" apart from "back up" by status code alone.
+///
+/// The page polls /healthz itself rather than reloading on a timer: reloading blind re-issues the
+/// full page load every second even while the sidecar is still down, which is both wasteful and
+/// visibly flashes the page. Polling a cheap endpoint and only reloading once it actually answers
+/// keeps the tab quiet (aside from the spinner) until there's really something to show.
+fn reconnecting_response() -> Vec<u8> {
+    format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        RECONNECTING_BODY.len(),
+        RECONNECTING_BODY
+    )
+    .into_bytes()
+}
+
+/// Bind the fixed front-door port and forward every connection to whatever port `backend_port`
+/// currently holds. Runs for the life of the app, independent of the sidecar's own start/stop/crash
+/// cycle, so a restarting sidecar never orphans an already-open browser tab.
+pub fn start_proxy(front_port: u16, backend_port: Arc<AtomicU16>) {
+    tauri::async_runtime::spawn(async move {
+        let listener = match TcpListener::bind(("127.0.0.1", front_port)).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                log::error!("binding the front-door proxy port {front_port}: {err}");
+                return;
+            }
+        };
+        loop {
+            let (inbound, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(err) => {
+                    log::warn!("accepting a proxy connection: {err}");
+                    continue;
+                }
+            };
+            let backend_port = backend_port.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) =
+                    proxy_connection(inbound, backend_port.load(Ordering::SeqCst)).await
+                {
+                    log::debug!("proxying a connection: {err}");
+                }
+            });
+        }
+    });
+}
+
+/// Forward one inbound connection to the current backend port. If the backend refuses the
+/// connection (sidecar down or mid-restart), hand back a self-reloading holding page instead of a
+/// bare connection reset, so an open tab recovers on its own once the sidecar is back up.
+async fn proxy_connection(mut inbound: TcpStream, backend_port: u16) -> io::Result<()> {
+    let mut outbound = match TcpStream::connect(("127.0.0.1", backend_port)).await {
+        Ok(outbound) => outbound,
+        Err(err) => {
+            serve_holding_page(&mut inbound).await;
+            return Err(err);
+        }
+    };
+    io::copy_bidirectional(&mut inbound, &mut outbound).await?;
+    Ok(())
+}
+
+/// Write the holding page and close cleanly. Drains whatever the client already sent first —
+/// closing a socket with unread bytes still in the kernel receive buffer sends an RST instead of a
+/// clean FIN on most platforms, which would surface to the client as a connection reset rather than
+/// the response we just wrote.
+async fn serve_holding_page(inbound: &mut TcpStream) {
+    let mut discard = [0u8; 1024];
+    let _ = tokio::time::timeout(Duration::from_millis(200), inbound.read(&mut discard)).await;
+    let _ = inbound.write_all(&reconnecting_response()).await;
+    let _ = inbound.shutdown().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::start_proxy;
+    use std::sync::atomic::{AtomicU16, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// A tiny echo server so we can tell which backend actually served a connection.
+    async fn echo_server() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => return,
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    if let Ok(n) = socket.read(&mut buf).await {
+                        let _ = socket.write_all(&buf[..n]).await;
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    async fn free_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    #[tokio::test]
+    async fn proxy_forwards_to_the_current_backend_port() {
+        let backend_a = echo_server().await;
+        let backend_b = echo_server().await;
+        let backend_port = Arc::new(AtomicU16::new(backend_a));
+
+        let front_port = free_port().await;
+        start_proxy(front_port, backend_port.clone());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = TcpStream::connect(("127.0.0.1", front_port)).await.unwrap();
+        client.write_all(b"hello-a").await.unwrap();
+        let mut buf = [0u8; 16];
+        let n = client.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"hello-a");
+        drop(client);
+
+        // Flip the backend, as a sidecar restart on a new port would: a *new* connection should
+        // land on the new backend, without needing to touch the front port at all.
+        backend_port.store(backend_b, Ordering::SeqCst);
+        let mut client = TcpStream::connect(("127.0.0.1", front_port)).await.unwrap();
+        client.write_all(b"hello-b").await.unwrap();
+        let n = client.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"hello-b");
+    }
+
+    #[tokio::test]
+    async fn proxy_serves_a_holding_page_when_the_backend_is_down() {
+        let backend_port = Arc::new(AtomicU16::new(free_port().await)); // nothing listens here
+        let front_port = free_port().await;
+        start_proxy(front_port, backend_port);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = TcpStream::connect(("127.0.0.1", front_port)).await.unwrap();
+        client.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(response.contains("Reconnecting"));
+        assert!(response.contains("/healthz"));
+    }
+}
