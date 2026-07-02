@@ -33,7 +33,8 @@ pub fn start_proxy(front_port: u16, backend_port: Arc<AtomicU16>) {
             };
             let backend_port = backend_port.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(err) = proxy_connection(inbound, backend_port.load(Ordering::SeqCst)).await
+                if let Err(err) =
+                    proxy_connection(inbound, backend_port.load(Ordering::SeqCst)).await
                 {
                     log::debug!("proxying a connection: {err}");
                 }
