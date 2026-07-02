@@ -25,19 +25,19 @@ describe("fetchOrOffline", () => {
   it("throws the offline message on a network error", async () => {
     global.fetch = (async () => {
       throw new TypeError("fetch failed");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(fetchOrOffline("/api/sessions")).rejects.toThrow(OFFLINE_MESSAGE);
   });
 
   it.each([502, 503, 504])("throws the offline message on a %d gateway status", async (status) => {
-    global.fetch = (async () => htmlResponse(status)) as typeof fetch;
+    global.fetch = (async () => htmlResponse(status)) as unknown as typeof fetch;
 
     await expect(fetchOrOffline("/api/sessions")).rejects.toThrow(OFFLINE_MESSAGE);
   });
 
   it("returns the response as-is for other statuses", async () => {
-    global.fetch = (async () => jsonResponse(200, { ok: true })) as typeof fetch;
+    global.fetch = (async () => jsonResponse(200, { ok: true })) as unknown as typeof fetch;
 
     const res = await fetchOrOffline("/api/sessions");
     expect(res.status).toBe(200);
