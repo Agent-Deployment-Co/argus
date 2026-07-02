@@ -5,13 +5,18 @@
 // whose items map onto the CLI's command surface. Logs are written to rotating files. "Open Argus"
 // opens the user's default browser at the served URL; the only embedded webview is the bundled About
 // screen.
+//
+// The browser never talks to the sidecar's port directly. A fixed "front-door" port (`proxy.rs`,
+// preferring the CLI's own default `4242`) is proxied to whatever port the sidecar currently holds,
+// which is re-picked on every start. That keeps any already-open dashboard tab working across a
+// sidecar restart even though the backend port underneath it changes.
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Mutex,
+    sync::atomic::{AtomicBool, AtomicU16, Ordering},
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -31,11 +36,13 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 mod proxy;
 
-/// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
-/// the tray menu items we update as that state changes, and a flag marking a stop as intentional
-/// (so a crash can be told apart from a user-requested Stop / Quit).
+/// Shared state: the fixed local port the browser/tabs always talk to (`front_port`, proxied by
+/// `proxy::start_proxy`), the sidecar's actual (re-picked on every restart) port, the handle to the
+/// running child (if any), the tray menu items we update as that state changes, and a flag marking
+/// a stop as intentional (so a crash can be told apart from a user-requested Stop / Quit).
 struct AppState {
-    port: u16,
+    front_port: u16,
+    backend_port: Arc<AtomicU16>,
     child: Mutex<Option<CommandChild>>,
     stopping: AtomicBool,
     status_item: MenuItem<Wry>,
@@ -56,6 +63,9 @@ const CHECKING_FOR_UPDATES_LABEL: &str = "Checking for updates...";
 const INSTALLING_UPDATE_LABEL: &str = "Installing Update...";
 const DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES: u64 = 60;
 const DESKTOP_LOG_MAX_BYTES: u64 = 5_000_000;
+/// The CLI's own default port (`src/cli.ts`'s `DEFAULT_PORT`). Tried first for the front-door proxy
+/// so `http://localhost:4242` keeps working whether Argus is run standalone or via the desktop app.
+const PREFERRED_FRONT_PORT: u16 = 4242;
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -71,7 +81,15 @@ fn pick_free_port() -> u16 {
         .ok()
         .and_then(|listener| listener.local_addr().ok())
         .map(|addr| addr.port())
-        .unwrap_or(4242)
+        .unwrap_or(PREFERRED_FRONT_PORT)
+}
+
+/// Try to bind `preferred` first (so the front-door proxy lands on the CLI's familiar default port
+/// whenever nothing else is using it); fall back to an OS-assigned free port otherwise.
+fn pick_preferred_or_free_port(preferred: u16) -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", preferred))
+        .map(|_| preferred)
+        .unwrap_or_else(|_| pick_free_port())
 }
 
 /// The bundled web assets live under `<resources>/web`. Returns it as a string for the sidecar's
@@ -219,7 +237,13 @@ fn refresh_status(app: &AppHandle) {
 /// output to the log. When it exits (crash or stop), clear the handle and refresh the menu so the
 /// tray never claims to be running a process that has gone away.
 fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
-    let port = app.state::<AppState>().port;
+    // Re-pick a free backend port on every spawn (not just once per app launch): the front-door
+    // proxy (`proxy::start_proxy`) insulates the browser from this, so there's no reason to keep
+    // relying on the previous port still being free.
+    let port = pick_free_port();
+    app.state::<AppState>()
+        .backend_port
+        .store(port, Ordering::SeqCst);
     // Enable uploads only when a Hub URL + key are configured (mirrors the CLI's resolveHubConfig).
     // Without them there's nothing to upload to, so run index + serve only. Re-checked on every
     // start, so toggling the Hub settings then using Stop/Start picks up the change.
@@ -328,7 +352,7 @@ fn stop(app: &AppHandle) {
 
 /// Open the served dashboard in the user's default browser.
 fn open_dashboard(app: &AppHandle) {
-    let port = app.state::<AppState>().port;
+    let port = app.state::<AppState>().front_port;
     let url = format!("http://localhost:{port}");
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
         log::error!("opening the dashboard: {err}");
@@ -614,7 +638,7 @@ fn about_info(app: &AppHandle) -> serde_json::Value {
         "latestVersion": latest_version,
         "lastUpdateCheckMs": last_update_check_ms,
         "buildNumber": env!("ARGUS_BUILD_ID"),
-        "dashboardUrl": format!("http://localhost:{}", state.port),
+        "dashboardUrl": format!("http://localhost:{}", state.front_port),
         "clientId": local_client_id(),
         "syncUserId": sync_user_id(),
     })
@@ -950,8 +974,13 @@ pub fn run() {
                 ],
             )?;
 
+            let front_port = pick_preferred_or_free_port(PREFERRED_FRONT_PORT);
+            let backend_port = Arc::new(AtomicU16::new(0));
+            proxy::start_proxy(front_port, backend_port.clone());
+
             app.manage(AppState {
-                port: pick_free_port(),
+                front_port,
+                backend_port,
                 child: Mutex::new(None),
                 stopping: AtomicBool::new(false),
                 status_item: status,
