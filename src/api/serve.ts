@@ -327,6 +327,10 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
 export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
 
+  // Cheap liveness check: no store/snapshot access, just confirms the server is answering. The
+  // desktop app's front-door proxy polls this to know when a restarting sidecar is back up.
+  app.get("/healthz", (c) => c.json({ ok: true }));
+
   app.get("/api/snapshot", async (c) => {
     const filters = parseSnapshotFilters(c);
     if (typeof filters === "string") return c.json({ error: filters }, 400);
