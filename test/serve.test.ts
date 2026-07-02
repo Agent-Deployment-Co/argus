@@ -33,6 +33,16 @@ function fixtureSnapshot(): Snapshot {
 }
 
 describe("serve API", () => {
+  test("GET /healthz answers without touching the snapshot source", async () => {
+    const app = createApp(async () => {
+      throw new Error("should not be called");
+    }, null);
+
+    const res = await app.request("/healthz");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
   test("GET /api/snapshot returns a payload whose dashboard satisfies the wire contract", async () => {
     const snap = fixtureSnapshot();
     const app = createApp(async () => snap, null);
