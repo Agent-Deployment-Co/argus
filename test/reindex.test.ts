@@ -32,7 +32,7 @@ function fakeProviderCommand(root: string): string {
     script,
     `let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{
       if(s.includes("Filtered user messages:")){process.stdout.write(JSON.stringify({tasks:[{description:"say hello",messageIndexes:[0]}]}));}
-      else{process.stdout.write(JSON.stringify({outcome:"success",frustration:"low",signals:["greeted"],reason:"the agent replied"}));}
+      else{process.stdout.write(JSON.stringify({outcome:"success",frustration:"moderate",signals:["greeted"],reason:"the agent replied"}));}
     });`,
     "utf8",
   );
@@ -71,7 +71,7 @@ describe("reindexSession", () => {
       expect(result.tasks[0]).toMatchObject({
         description: "say hello",
         outcome: "success",
-        frustration: "low",
+        frustration: "moderate",
         signals: ["greeted"],
       });
       // Persisted: reading the session's tasks back returns the same outcome.

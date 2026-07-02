@@ -277,7 +277,7 @@ main:has(.sessions-split) { padding: 0; }
 .pill.task-failure { color: var(--racing-red); border-color: var(--racing-red); }
 .pill.task-unclear { color: var(--muted); border-color: var(--line); }
 .pill.frust-none { color: var(--muted); border-color: var(--line); }
-.pill.frust-low { color: var(--tiger-orange); border-color: var(--tiger-orange); }
+.pill.frust-moderate { color: var(--tiger-orange); border-color: var(--tiger-orange); }
 .pill.frust-high { color: var(--racing-red); border-color: var(--racing-red); }
 .task-error { margin-bottom: 8px; color: var(--racing-red); font-size: 12.5px; line-height: 1.4; }
 .session-detail-head .task-action { flex-shrink: 0; }

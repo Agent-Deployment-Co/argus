@@ -108,7 +108,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Summarize the last three Gong calls with Wallace Corp",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one re-ask for a shorter version"],
             outcomeReason: "Delivered after a follow-up asking to trim it to five bullets.",
             evidence: "Condensed three call transcripts into a five-bullet recap.",
@@ -140,7 +140,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Adapt the sequence for the VP of Operations persona",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one re-ask to shorten it"],
             outcomeReason: "Second variant matched the shorter format Rachel wanted.",
             evidence: "Produced a VP-of-Ops variant of the four-touch sequence.",
@@ -157,7 +157,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Pull the open support tickets that could threaten the renewal",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["declined a Salesforce write"],
             outcomeReason: "Got the ticket list after declining an auto-update to the record.",
             evidence: "Listed four open support tickets tied to the account.",
@@ -201,7 +201,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Make the proposal opening feel written for Rosen Associates specifically",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one re-ask for a warmer tone"],
             outcomeReason: "Second pass landed the tone Rachel wanted.",
             evidence: "Reworked the intro twice; kept the version naming their expansion goal.",
@@ -230,7 +230,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Turn the positioning doc into a full campaign brief",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["long session", "context compacted once"],
             outcomeReason: "Brief finished, though the session grew large before wrapping.",
             evidence: "Expanded messaging.md into a brief with audience, channels, and timeline.",
@@ -294,7 +294,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Draft two LinkedIn thought-leadership variants",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one re-ask for a less salesy tone"],
             outcomeReason: "Second pass toned down the pitch.",
             evidence: "Wrote two LinkedIn variants; kept the softer one.",
@@ -330,7 +330,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Draft objection-handling points for Sebastian Design's launch",
             outcome: "unclear",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["needed a source it couldn't verify"],
             outcomeReason: "Useful points, but Rachel wasn't sure the feature claim was current.",
             evidence: "Offered three talking points and flagged one unverified claim.",
@@ -378,7 +378,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Write the story arc connecting this quarter's GTM metrics",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one interruption to reorder sections"],
             outcomeReason: "Narrative approved after a reorder of the middle sections.",
             evidence: "Drafted a three-act narrative tied to the metrics.csv figures.",
@@ -433,7 +433,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Identify duplicate accounts and propose merges",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["declined two auto-merges to review them first"],
             outcomeReason: "Rachel accepted the merge list after reviewing the risky ones by hand.",
             evidence: "Flagged 14 duplicates; Rachel declined two auto-merges for manual review.",
@@ -441,7 +441,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Draft the merge plan and flag the risky pairs for review",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["interrupted once"],
             outcomeReason: "Plan produced; Rachel paused on the risky merges.",
             evidence: "Wrote a merge plan marking five high-risk pairs.",
@@ -476,7 +476,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Pull the duplicate-contact candidates from both systems",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["declined a risky auto-merge"],
             outcomeReason: "Got the candidate list after reviewing the risky matches.",
             evidence: "Listed 30 candidate duplicate contacts across both systems.",
@@ -518,7 +518,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Turn the pipeline export into a weighted Q3 forecast",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one re-run after fixing a stage weight"],
             outcomeReason: "Forecast produced after correcting a stage-probability weight.",
             evidence: "Computed a weighted forecast and wrote assumptions.md alongside it.",
@@ -622,7 +622,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Connect the outreach agent to HubSpot and confirm it can read contacts",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one permission declined", "one interruption"],
             outcomeReason: "Connection worked after Rachel approved the contact-read scope.",
             evidence: "Configured the server; a test contact lookup returned results.",
@@ -654,7 +654,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Compare the before and after tone on five sample leads",
             outcome: "unclear",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["hard to judge the improvement"],
             outcomeReason: "The change looked real but was hard to quantify.",
             evidence: "Ran five before/after comparisons; results were mixed.",
@@ -679,7 +679,7 @@ export const PROJECTS: ProjectScenario[] = [
           {
             description: "Add guardrails against fabricated account facts",
             outcome: "success",
-            frustration: "low",
+            frustration: "moderate",
             signals: ["one interruption"],
             outcomeReason: "Added constraints that cut down the invented details.",
             evidence: "Edited prompt.md to forbid unverified claims.",
