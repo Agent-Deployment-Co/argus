@@ -311,7 +311,7 @@ export interface ToolResultFact {
 /** Did the user get what they wanted (judged from the whole task dialogue, not just the ending). */
 export type TaskOutcome = "success" | "failure" | "unclear";
 /** How frustrated the user seemed across the task (re-asks, escalating tone, refusals). */
-export type TaskFrustration = "none" | "low" | "high";
+export type TaskFrustration = "none" | "moderate" | "high";
 
 export interface TaskFact {
   id: string;

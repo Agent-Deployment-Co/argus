@@ -92,9 +92,16 @@ indexing would otherwise pick up as a bogus session), and haiku keeps the per-se
 configured `model` overrides the default. (`--bare` is intentionally not used — in `-p` mode it fails
 "Not logged in".)
 
+On macOS, the provider first tries to run that command through `sandbox-exec`. The sandbox denies
+filesystem access by default, then allows Claude's executable files, macOS keychain access needed for
+the Claude login, Claude's own runtime state, system runtime files, network access, and temp files. If
+`sandbox-exec` is unavailable or the sandbox blocks a required Claude operation, Argus logs the
+fallback and retries the existing unsandboxed call. Non-macOS runs use the existing unsandboxed call
+because `sandbox-exec` is macOS-only.
+
 The **command provider** runs an arbitrary command that reads the prompt on stdin and writes the task
 JSON to stdout. The **claude-api/openai/gemini/openrouter providers** call a third-party API directly with a
-BYO key (`argus secret set …`); note this transmits the reconstructed dialogue off-machine — see the
+BYO key (`argus secret set …`); note this transmits the reconstructed dialogue off-machine. See the
 privacy note in [llm-providers.md](./llm-providers.md).
 
 ## When it runs

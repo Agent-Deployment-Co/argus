@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   complete,
   getProvider,
@@ -7,7 +7,17 @@ import {
   PROVIDER_API_KEY_ENVS,
   type LlmProvider,
 } from "../src/llm/index.ts";
-import { resolveClaudeBinary, runCommandProvider } from "../src/llm/providers/local.ts";
+import {
+  resolveClaudeBinary,
+  runClaudeProvider,
+  runCommandProvider,
+} from "../src/llm/providers/local.ts";
+import {
+  buildClaudeSandboxProfile,
+  claudeSandboxCommand,
+  isClaudeSandboxFailure,
+  resetClaudeSandboxState,
+} from "../src/llm/providers/claude-sandbox.ts";
 import type { ResolvedLlmConfig } from "../src/llm/types.ts";
 
 /** A recording fake fetch that returns scripted responses in order. */
@@ -32,6 +42,16 @@ function json(body: unknown, init?: ResponseInit): Response {
     headers: { "content-type": "application/json" },
     ...init,
   });
+}
+
+async function silenceStderr<T>(fn: () => Promise<T>): Promise<T> {
+  const originalWrite = process.stderr.write;
+  process.stderr.write = ((..._args: unknown[]) => true) as typeof process.stderr.write;
+  try {
+    return await fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
 }
 
 const cfg = (over: Partial<ResolvedLlmConfig> & { provider: LlmProvider }): ResolvedLlmConfig => ({
@@ -63,6 +83,175 @@ describe("resolveClaudeBinary", () => {
 
   test("falls back to bare \"claude\" when nothing resolves (spawn then surfaces a clear ENOENT)", () => {
     expect(resolveClaudeBinary(undefined, { onPath: () => undefined })).toBe("claude");
+  });
+});
+
+describe("claude-cli sandbox", () => {
+  beforeEach(() => {
+    resetClaudeSandboxState();
+  });
+
+  const env = { TMPDIR: "/var/folders/zz/argus/T" } as NodeJS.ProcessEnv;
+  const sandboxDeps = {
+    platform: "darwin",
+    sandboxExecPath: "/usr/bin/sandbox-exec",
+    homeDir: "/Users/you",
+    claudeDir: "/Users/you/.claude",
+    tmpDir: "/var/folders/zz/argus/T",
+    env,
+    isExecutable: (path: string) => path === "/usr/bin/sandbox-exec",
+    realpath: (path: string) =>
+      path === "/usr/local/bin/claude" ? "/Users/you/.claude/local/claude" : path,
+  };
+
+  test("builds a deny-by-default profile with Claude, keychain, and temp access", () => {
+    const profile = buildClaudeSandboxProfile({
+      claudeBin: "/usr/local/bin/claude",
+      realClaudeBin: "/Users/you/.claude/local/claude",
+      homeDir: "/Users/you",
+      claudeDir: "/Users/you/.claude",
+      tmpDir: "/var/folders/zz/argus/T",
+      env,
+    });
+
+    expect(profile).toContain("(deny default)");
+    expect(profile).toContain('(allow file-ioctl\n  (literal "/dev/dtracehelper"))');
+    expect(profile).toContain('(literal "/")');
+    expect(profile).toContain('(literal "/dev/dtracehelper")');
+    expect(profile).toContain('(literal "/Users/you/.claude.json")');
+    expect(profile).toContain('(literal "/Users/you/.claude/settings.json")');
+    expect(profile).toContain('(literal "/Users/you/Library/Keychains/login.keychain-db")');
+    expect(profile).toContain('(literal "/Library/Keychains/System.keychain")');
+    expect(profile).toContain('(literal "/Library/Preferences/com.apple.networkd.plist")');
+    expect(profile).toContain('(allow file-read-metadata');
+    expect(profile).toContain('(literal "/Users")');
+    expect(profile).toContain('(literal "/Users/you")');
+    expect(profile).toContain('(subpath "/var/folders/zz/argus/T")');
+    expect(profile).toContain('(subpath "/private/var/folders")');
+    expect(profile).toContain('(subpath "/Users/you/.claude/local")');
+    expect(profile).toContain('(subpath "/Users/you/.claude/plugins")');
+    expect(profile).toContain('(subpath "/Users/you/.claude/session-env")');
+    expect(profile).toContain('(allow file-write* file-write-create');
+    expect(profile).not.toContain("/Users/you/.claude/projects");
+    expect(profile).not.toContain("/Users/you/.codex");
+    expect(profile).not.toContain("/Users/you/code");
+  });
+
+  test("wraps claude with sandbox-exec on macOS when sandboxing is available", () => {
+    const command = claudeSandboxCommand("/usr/local/bin/claude", ["-p", "-"], sandboxDeps);
+
+    expect(command.sandboxed).toBe(true);
+    expect(command.file).toBe("/usr/bin/sandbox-exec");
+    expect(command.args[0]).toBe("-p");
+    expect(command.args[1]).toContain("/Users/you/.claude/local/claude");
+    expect(command.args.slice(2)).toEqual(["/usr/local/bin/claude", "-p", "-"]);
+  });
+
+  test("missing sandbox-exec logs and runs direct claude", async () => {
+    const calls: Array<{ file: string; args: string[]; input: string; cwd: string | undefined }> = [];
+    const logs: string[] = [];
+    const result = await silenceStderr(() =>
+      runClaudeProvider(
+        { prompt: "hello", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
+        {
+          ...sandboxDeps,
+          isExecutable: () => false,
+          spawnWithStdin: async (file, args, input, _signal, cwd) => {
+            calls.push({ file, args, input, cwd });
+            return { ok: true, text: "ok" };
+          },
+        },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.file).toBe("/usr/local/bin/claude");
+    expect(calls[0]!.args).toEqual(["-p", "--no-session-persistence", "--model", "haiku", "-"]);
+    expect(calls[0]!.cwd).toBe("/var/folders/zz/argus/T");
+    expect(logs.join("\n")).toContain("sandbox unavailable");
+  });
+
+  test("sandbox failures log and retry direct claude", async () => {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const logs: string[] = [];
+    const runtime = {
+      ...sandboxDeps,
+      spawnWithStdin: async (file: string, args: string[]) => {
+        calls.push({ file, args });
+        if (file === "/usr/bin/sandbox-exec") {
+          return { ok: false, text: "", error: "exited with status null", status: null };
+        }
+        return { ok: true, text: "ok" };
+      },
+    };
+    const result = await silenceStderr(() =>
+      runClaudeProvider(
+        { prompt: "hello", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
+        runtime,
+      ),
+    );
+    const second = await silenceStderr(() =>
+      runClaudeProvider(
+        { prompt: "hello again", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
+        runtime,
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(calls.map((call) => call.file)).toEqual([
+      "/usr/bin/sandbox-exec",
+      "/usr/local/bin/claude",
+      "/usr/local/bin/claude",
+    ]);
+    expect(logs.join("\n")).toContain("retrying without sandbox");
+    expect(logs.join("\n").match(/retrying without sandbox/g)).toHaveLength(1);
+  });
+
+  test("an app-level Claude failure surfaces without an unsandboxed retry", async () => {
+    const calls: string[] = [];
+    const logs: string[] = [];
+    const runtime = {
+      ...sandboxDeps,
+      // A genuine app-level failure (not a sandbox denial): a non-zero exit with a real message.
+      spawnWithStdin: async (file: string) => {
+        calls.push(file);
+        return file === "/usr/bin/sandbox-exec"
+          ? { ok: false, text: "", error: "Not logged in", status: 1 }
+          : { ok: true, text: "ok" };
+      },
+    };
+    const result = await silenceStderr(() =>
+      runClaudeProvider(
+        { prompt: "hello", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
+        runtime,
+      ),
+    );
+
+    // The failure is not a sandbox failure, so we don't retry unsandboxed or disable the sandbox.
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Not logged in");
+    expect(calls).toEqual(["/usr/bin/sandbox-exec"]);
+    expect(logs.join("\n")).not.toContain("retrying without sandbox");
+
+    // The latch is untouched: a later call still attempts the sandbox.
+    const second = await silenceStderr(() =>
+      runClaudeProvider(
+        { prompt: "again", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
+        runtime,
+      ),
+    );
+    expect(calls).toEqual(["/usr/bin/sandbox-exec", "/usr/bin/sandbox-exec"]);
+    expect(second.ok).toBe(false);
+  });
+
+  test("isClaudeSandboxFailure distinguishes sandbox denials from app failures", () => {
+    // An app-level failure with a real message is not a sandbox failure.
+    expect(isClaudeSandboxFailure({ ok: false, text: "", error: "Not logged in", status: 1 })).toBe(false);
+    // An opaque failure (killed with no output, or a bare non-zero exit with no stderr) is treated as one.
+    expect(isClaudeSandboxFailure({ ok: false, text: "", error: "exited with status null", status: null })).toBe(true);
+    expect(isClaudeSandboxFailure({ ok: false, text: "", error: "exited with status 1", status: 1 })).toBe(true);
   });
 });
 
