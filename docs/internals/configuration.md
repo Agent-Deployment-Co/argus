@@ -47,6 +47,11 @@ Levels are `error`, `warn`, `info`, `debug`, and `trace`. The default is `info`.
 accept `--quiet` as a shortcut for warnings and errors only, and `--verbose` as a shortcut for debug
 logs. The task-extraction `--debug` flag now writes debug logs through the same stderr logger.
 
+The level is also editable from the web Settings surface (General → Logging). Saving it writes
+`log.level` to `argus.json` and applies to the running `serve` logger immediately, without a restart.
+`ARGUS_LOG_LEVEL` still wins over the file, so when it's set the surface shows the usual env-override
+note and the running level stays at the env value.
+
 ```json
 {
   "log": { "level": "debug" }

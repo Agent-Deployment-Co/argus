@@ -13,6 +13,11 @@ opens Settings, grouped into a few categories.
 - **Argus Hub** holds the address of your team's [Argus Hub](/terminology#argus-hub)
   and the key used to [sync](/terminology#sync) to it. Leave these blank if you
   aren't using a Hub.
+- **Logging** sets how much detail Argus prints to the terminal, from `error`
+  (least) through `warn`, `info`, `debug`, and `trace` (most). The default is
+  `info`. A change takes effect right away, without a restart. Setting the
+  `ARGUS_LOG_LEVEL` environment variable overrides this, and the app shows a note
+  when it does.
 
 <div class="screenshot">
 
