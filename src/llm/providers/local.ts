@@ -12,7 +12,6 @@ import type {
   ProviderDescriptor,
 } from "../types.ts";
 import {
-  type ClaudeSandboxCommand,
   type ClaudeSandboxRuntimeOptions,
   claudeSandboxCommand,
   disableClaudeSandbox,
@@ -160,15 +159,6 @@ type SpawnWithStdin = (
 export interface ClaudeProviderRuntimeOptions extends ClaudeSandboxRuntimeOptions {
   cwd?: string;
   spawnWithStdin?: SpawnWithStdin;
-}
-
-function displayCommand(
-  command: ClaudeSandboxCommand,
-  bin: string,
-  args: string[],
-): string {
-  if (!command.sandboxed) return `${command.file} ${command.args.join(" ")}`;
-  return `${command.file} -p <generated claude-cli sandbox profile> ${bin} ${args.join(" ")}`;
 }
 
 function logSandboxWarning(ctx: LocalProviderContext, message: string): void {
