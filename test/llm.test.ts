@@ -294,6 +294,34 @@ describe("local provider stdin (#154 review)", () => {
     const result = await runCommandProvider({ prompt: huge, command: "false" });
     expect(result.ok).toBe(false);
   });
+
+  test("surfaces a failing command's stdout when it exits non-zero with empty stderr", async () => {
+    // The `claude -p` failure behind the "exited with status 1" report: the CLI writes its diagnostic
+    // (e.g. "Not logged in · Please run /login") to stdout, not stderr, then exits 1. The error must be
+    // that message, not a bare "exited with status 1".
+    const result = await runCommandProvider({
+      prompt: "ping",
+      command: `sh -c 'echo "Not logged in · Please run /login"; exit 1'`,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Not logged in · Please run /login");
+    expect(result.status).toBe(1);
+  });
+
+  test("falls back to the bare status only when both streams are empty", async () => {
+    const result = await runCommandProvider({ prompt: "ping", command: "false" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("exited with status 1");
+  });
+
+  test("prefers stderr over stdout for the failure reason", async () => {
+    const result = await runCommandProvider({
+      prompt: "ping",
+      command: `sh -c 'echo stdout-msg; echo stderr-msg 1>&2; exit 2'`,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("stderr-msg");
+  });
 });
 
 describe("provider registry (single source of truth)", () => {

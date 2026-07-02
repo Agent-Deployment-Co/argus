@@ -243,15 +243,20 @@ function spawnWithStdin(
     child.stdin.end(input, "utf8");
 
     child.on("close", (code, signal) => {
+      // Prefer stderr, then stdout, for the failure reason: `claude -p` (and some other CLIs) print
+      // their diagnostic to *stdout*, not stderr — an unauthenticated CLI writes "Not logged in ·
+      // Please run /login" to stdout and exits 1 with an empty stderr. Falling back to stdout surfaces
+      // the CLI's own message instead of a bare, unhelpful "exited with status 1".
+      const failureText = stderr.trim() || stdout.trim();
       const error = truncated
         ? "provider output exceeded buffer limit"
         : code === null
-          ? stderr.trim() ||
+          ? failureText ||
             (signal
               ? `terminated by signal ${signal}`
               : "terminated without an exit status")
           : code !== 0
-            ? stderr.trim() || `exited with status ${code}`
+            ? failureText || `exited with status ${code}`
             : undefined;
       resolve({
         ok: !error && !!stdout.trim(),

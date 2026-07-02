@@ -24,8 +24,11 @@ import {
   type SettingUi,
 } from "../config.ts";
 import { complete, getProvider, providersForConfigField } from "../llm/index.ts";
+import type { ResolvedLlmConfig } from "../llm/types.ts";
+import { claudeProviderArgs } from "../llm/providers/local.ts";
 import { resolveApiKey, type SecretStore } from "../secrets.ts";
 import { CONFIG_FILE } from "../paths.ts";
+import { logAt, logDebug, type Log } from "../logger.ts";
 
 /** Where an effective value is coming from when it isn't the `argus.json` layer the UI edits — so the
  *  surface can warn that a file edit won't take effect (an env var/flag is winning). */
@@ -348,20 +351,70 @@ export interface ConnectionTestResult {
   error?: string;
 }
 
+function sanitizedUrlForLog(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "<configured>";
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "<configured>";
+  }
+}
+
+/** A one-line, secret-free description of what the connection test will run, for the debug log.
+ *  User-controlled command contents, URL credentials, query strings, fragments, and local paths are
+ *  intentionally redacted. */
+function describeLlmInvocation(llm: ResolvedLlmConfig): string {
+  switch (llm.provider) {
+    case "claude-cli":
+      return [
+        "provider=claude-cli",
+        `binary=${llm.claudeCliPath?.trim() ? "<configured>" : "<auto>"}`,
+        `args=${claudeProviderArgs(llm.model).join(" ")}`,
+      ].join(" ");
+    case "command":
+      return llm.command?.trim()
+        ? "provider=command command=<configured>"
+        : "provider=command command=<unset>";
+    default: {
+      const parts = [`provider=${llm.provider}`];
+      if (llm.model) parts.push(`model=${llm.model}`);
+      if (llm.baseUrl) parts.push(`baseUrl=${sanitizedUrlForLog(llm.baseUrl)}`);
+      return parts.join(" ");
+    }
+  }
+}
+
 /**
  * Run a tiny live completion through the currently-configured provider so the user can confirm their
  * setup (provider + key + model) actually works. Resolves the LLM config from `argus.json` plus the
  * API key from the secret store, sends a one-word prompt, and reports whether a completion came back.
  * Never throws — the LLM client turns missing keys / auth / network errors into `ok:false`.
+ *
+ * Logs (when a sink is given): INFO when the test starts and again with the outcome on success, a
+ * DEBUG line with the full invocation (secret-free), and WARN with the diagnostic on failure.
  */
 export async function testLlmConnection(opts: {
   configPath?: string;
   secrets: SecretStore;
   fetch?: typeof fetch;
+  log?: Log;
 }): Promise<ConnectionTestResult> {
   const file = loadConfig(opts.configPath ?? CONFIG_FILE);
   const { llm } = resolveTaskExtraction({}, file);
   const apiKey = await resolveApiKey(llm.apiKeyEnv, opts.secrets);
+
+  const log = opts.log;
+  const label = `${llm.provider}${llm.model ? ` (model ${llm.model})` : ""}`;
+  if (log) {
+    logAt(log, "info", `Testing the ${label} connection...`);
+    logDebug(log, `Connection test invocation: ${describeLlmInvocation(llm)}`);
+  }
+
   const result = await complete(
     {
       system: "You are a connectivity check. Reply with the single word: OK.",
@@ -371,6 +424,12 @@ export async function testLlmConnection(opts: {
     { ...llm, apiKey },
     { fetch: opts.fetch },
   );
+
+  if (log) {
+    if (result.ok) logAt(log, "info", `Connection test succeeded for ${label}.`);
+    else logAt(log, "warn", `Connection test failed for ${label}: ${result.error ?? "no completion returned"}`);
+  }
+
   return {
     ok: result.ok,
     provider: llm.provider,
