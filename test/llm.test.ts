@@ -209,28 +209,47 @@ describe("claude-cli sandbox", () => {
     expect(logs.join("\n").match(/retrying without sandbox/g)).toHaveLength(1);
   });
 
-  test("any sandboxed Claude failure retries without sandbox", async () => {
+  test("an app-level Claude failure surfaces without an unsandboxed retry", async () => {
     const calls: string[] = [];
     const logs: string[] = [];
+    const runtime = {
+      ...sandboxDeps,
+      // A genuine app-level failure (not a sandbox denial): a non-zero exit with a real message.
+      spawnWithStdin: async (file: string) => {
+        calls.push(file);
+        return file === "/usr/bin/sandbox-exec"
+          ? { ok: false, text: "", error: "Not logged in", status: 1 }
+          : { ok: true, text: "ok" };
+      },
+    };
     const result = await silenceStderr(() =>
       runClaudeProvider(
         { prompt: "hello", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
-        {
-          ...sandboxDeps,
-          spawnWithStdin: async (file) => {
-            calls.push(file);
-            return file === "/usr/bin/sandbox-exec"
-              ? { ok: false, text: "", error: "Not logged in", status: 1 }
-              : { ok: true, text: "ok" };
-          },
-        },
+        runtime,
       ),
     );
 
-    expect(result.ok).toBe(true);
-    expect(calls).toEqual(["/usr/bin/sandbox-exec", "/usr/local/bin/claude"]);
-    expect(logs.join("\n")).toContain("retrying without sandbox");
-    expect(isClaudeSandboxFailure(result)).toBe(false);
+    // The failure is not a sandbox failure, so we don't retry unsandboxed or disable the sandbox.
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Not logged in");
+    expect(calls).toEqual(["/usr/bin/sandbox-exec"]);
+    expect(logs.join("\n")).not.toContain("retrying without sandbox");
+
+    // The latch is untouched: a later call still attempts the sandbox.
+    const second = await silenceStderr(() =>
+      runClaudeProvider(
+        { prompt: "again", claudeCliPath: "/usr/local/bin/claude", log: (message) => logs.push(message) },
+        runtime,
+      ),
+    );
+    expect(calls).toEqual(["/usr/bin/sandbox-exec", "/usr/bin/sandbox-exec"]);
+    expect(second.ok).toBe(false);
+  });
+
+  test("isClaudeSandboxFailure distinguishes sandbox denials from app failures", () => {
+    // An app-level failure with a real message is not a sandbox failure.
+    expect(isClaudeSandboxFailure({ ok: false, text: "", error: "Not logged in", status: 1 })).toBe(false);
+    // An opaque failure (killed with no output, or a bare non-zero exit with no stderr) is treated as one.
     expect(isClaudeSandboxFailure({ ok: false, text: "", error: "exited with status null", status: null })).toBe(true);
     expect(isClaudeSandboxFailure({ ok: false, text: "", error: "exited with status 1", status: 1 })).toBe(true);
   });
