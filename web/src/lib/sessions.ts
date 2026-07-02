@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { fetchOrOffline, jsonOrThrow } from "./http";
 import { KNOWN_SOURCES, type SnapshotFilters } from "./snapshot";
 import type { SessionListResponse, SessionRow, SessionSort } from "../types";
 
@@ -30,25 +31,9 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
   return `/api/sessions?${params}`;
 }
 
-/** Shown whenever the local server can't be reached at all, or answers with something that isn't
- *  the JSON we expect (e.g. a proxy's HTML error page) — both usually mean Argus isn't running. */
-const OFFLINE_MESSAGE = "Couldn't reach Argus. Make sure Argus is running.";
-
 async function fetchSessions(filters: SessionListFilters, offset: number): Promise<SessionListResponse> {
-  let res: Response;
-  try {
-    res = await fetch(sessionsUrl(filters, offset));
-  } catch {
-    throw new Error(OFFLINE_MESSAGE);
-  }
-  // A 502/503/504 here means a dev proxy or reverse proxy is up but Argus itself isn't answering.
-  if (res.status === 502 || res.status === 503 || res.status === 504) throw new Error(OFFLINE_MESSAGE);
-  if (!res.ok) throw new Error(`Failed to load sessions (${res.status})`);
-  try {
-    return await res.json();
-  } catch {
-    throw new Error(OFFLINE_MESSAGE);
-  }
+  const res = await fetchOrOffline(sessionsUrl(filters, offset));
+  return jsonOrThrow<SessionListResponse>(res, "Failed to load sessions");
 }
 
 /** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery so "Load more"
@@ -67,20 +52,9 @@ export function useSessionsQuery(filters: SessionListFilters) {
 }
 
 async function fetchSessionDetail(sessionId: string): Promise<SessionRow> {
-  let res: Response;
-  try {
-    res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
-  } catch {
-    throw new Error(OFFLINE_MESSAGE);
-  }
-  if (!res.ok) {
-    throw new Error(res.status === 404 ? "Session not found." : `Failed to load session (${res.status})`);
-  }
-  try {
-    return (await res.json()).session as SessionRow;
-  } catch {
-    throw new Error(OFFLINE_MESSAGE);
-  }
+  const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}`);
+  const body = await jsonOrThrow<{ session: SessionRow }>(res, "Failed to load session");
+  return body.session;
 }
 
 /** One session's full detail, fetched on demand (not from the bulk snapshot). */
