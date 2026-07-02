@@ -12,13 +12,13 @@ describe("fetchSnapshot", () => {
   it("surfaces the offline message on a network error", async () => {
     global.fetch = (async () => {
       throw new TypeError("fetch failed");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(fetchSnapshot({})).rejects.toThrow(OFFLINE_MESSAGE);
   });
 
   it("surfaces the offline message on a 502/503/504 from the proxy's holding page", async () => {
-    global.fetch = (async () => new Response("<html></html>", { status: 502 })) as typeof fetch;
+    global.fetch = (async () => new Response("<html></html>", { status: 502 })) as unknown as typeof fetch;
 
     await expect(fetchSnapshot({})).rejects.toThrow(OFFLINE_MESSAGE);
   });
