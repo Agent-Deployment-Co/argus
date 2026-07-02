@@ -9,7 +9,15 @@ use std::time::Duration;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-const RECONNECTING_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><html><head><meta charset=\"utf-8\"><title>Argus</title></head><body style=\"font-family:sans-serif;color:#888;text-align:center;margin-top:20vh\"><p>Reconnecting to Argus\xe2\x80\xa6</p><script>setTimeout(() => location.reload(), 1000)</script></body></html>";
+// 503 (not 200): a request for /healthz that lands here because the backend is unreachable must
+// read as unhealthy, so the holding page's own poll below (and anything else probing /healthz)
+// can tell "still down" apart from "back up" by status code alone.
+//
+// The page polls /healthz itself rather than reloading on a timer: reloading blind re-issues the
+// full page load every second even while the sidecar is still down, which is both wasteful and
+// visibly flashes the page. Polling a cheap endpoint and only reloading once it actually answers
+// keeps the tab quiet until there's really something to show.
+const RECONNECTING_RESPONSE: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><html><head><meta charset=\"utf-8\"><title>Argus</title></head><body style=\"font-family:sans-serif;color:#888;text-align:center;margin-top:20vh\"><p>Reconnecting to Argus\xe2\x80\xa6</p><script>(function poll(){setTimeout(function(){fetch('/healthz',{cache:'no-store'}).then(function(r){if(r.ok){location.reload();}else{poll();}}).catch(function(){poll();});},1000);})();</script></body></html>";
 
 /// Bind the fixed front-door port and forward every connection to whatever port `backend_port`
 /// currently holds. Runs for the life of the app, independent of the sidecar's own start/stop/crash
@@ -141,7 +149,8 @@ mod tests {
         client.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
         let mut response = String::new();
         client.read_to_string(&mut response).await.unwrap();
-        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(response.contains("Reconnecting"));
+        assert!(response.contains("/healthz"));
     }
 }
