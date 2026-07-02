@@ -36,12 +36,14 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 mod proxy;
 
-/// Shared state: the fixed local port the browser/tabs always talk to (`front_port`, proxied by
-/// `proxy::start_proxy`), the sidecar's actual (re-picked on every restart) port, the handle to the
-/// running child (if any), the tray menu items we update as that state changes, and a flag marking
-/// a stop as intentional (so a crash can be told apart from a user-requested Stop / Quit).
+/// Shared state: the local port the browser/tabs talk to (`front_port`, proxied by
+/// `proxy::start_proxy`) — normally fixed at `PREFERRED_FRONT_PORT` for the app's lifetime, but
+/// corrected once if that port turns out to be unavailable when the proxy actually binds — the
+/// sidecar's actual (re-picked on every restart) port, the handle to the running child (if any),
+/// the tray menu items we update as that state changes, and a flag marking a stop as intentional
+/// (so a crash can be told apart from a user-requested Stop / Quit).
 struct AppState {
-    front_port: u16,
+    front_port: Arc<AtomicU16>,
     backend_port: Arc<AtomicU16>,
     child: Mutex<Option<CommandChild>>,
     stopping: AtomicBool,
@@ -68,28 +70,20 @@ const DESKTOP_LOG_MAX_BYTES: u64 = 5_000_000;
 const PREFERRED_FRONT_PORT: u16 = 4242;
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
-fn notify(app: &AppHandle, title: &str, body: &str) {
+pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
     if let Err(err) = app.notification().builder().title(title).body(body).show() {
         log::warn!("could not show notification: {err}");
     }
 }
 
 /// Ask the OS for an unused localhost port by binding to :0 and reading back the assignment.
-/// Falls back to the CLI's default if that somehow fails.
-fn pick_free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .ok()
-        .and_then(|listener| listener.local_addr().ok())
+fn pick_free_port() -> Result<u16, String> {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("binding a free port: {e}"))?;
+    listener
+        .local_addr()
         .map(|addr| addr.port())
-        .unwrap_or(PREFERRED_FRONT_PORT)
-}
-
-/// Try to bind `preferred` first (so the front-door proxy lands on the CLI's familiar default port
-/// whenever nothing else is using it); fall back to an OS-assigned free port otherwise.
-fn pick_preferred_or_free_port(preferred: u16) -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", preferred))
-        .map(|_| preferred)
-        .unwrap_or_else(|_| pick_free_port())
+        .map_err(|e| format!("reading the bound port: {e}"))
 }
 
 /// The bundled web assets live under `<resources>/web`. Returns it as a string for the sidecar's
@@ -239,8 +233,9 @@ fn refresh_status(app: &AppHandle) {
 fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     // Re-pick a free backend port on every spawn (not just once per app launch): the front-door
     // proxy (`proxy::start_proxy`) insulates the browser from this, so there's no reason to keep
-    // relying on the previous port still being free.
-    let port = pick_free_port();
+    // relying on the previous port still being free. Propagate failure rather than falling back to
+    // a fixed port here — a fallback could collide with the front-door proxy's own port.
+    let port = pick_free_port()?;
     app.state::<AppState>()
         .backend_port
         .store(port, Ordering::SeqCst);
@@ -352,7 +347,7 @@ fn stop(app: &AppHandle) {
 
 /// Open the served dashboard in the user's default browser.
 fn open_dashboard(app: &AppHandle) {
-    let port = app.state::<AppState>().front_port;
+    let port = app.state::<AppState>().front_port.load(Ordering::SeqCst);
     let url = format!("http://localhost:{port}");
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
         log::error!("opening the dashboard: {err}");
@@ -638,7 +633,7 @@ fn about_info(app: &AppHandle) -> serde_json::Value {
         "latestVersion": latest_version,
         "lastUpdateCheckMs": last_update_check_ms,
         "buildNumber": env!("ARGUS_BUILD_ID"),
-        "dashboardUrl": format!("http://localhost:{}", state.front_port),
+        "dashboardUrl": format!("http://localhost:{}", state.front_port.load(Ordering::SeqCst)),
         "clientId": local_client_id(),
         "syncUserId": sync_user_id(),
     })
@@ -974,9 +969,16 @@ pub fn run() {
                 ],
             )?;
 
-            let front_port = pick_preferred_or_free_port(PREFERRED_FRONT_PORT);
+            // `front_port` starts optimistic at the preferred port; `proxy::start_proxy` corrects it
+            // (and notifies the user) if that port turns out to be unavailable when it actually binds.
+            let front_port = Arc::new(AtomicU16::new(PREFERRED_FRONT_PORT));
             let backend_port = Arc::new(AtomicU16::new(0));
-            proxy::start_proxy(front_port, backend_port.clone());
+            proxy::start_proxy(
+                PREFERRED_FRONT_PORT,
+                backend_port.clone(),
+                front_port.clone(),
+                app.handle().clone(),
+            );
 
             app.manage(AppState {
                 front_port,
