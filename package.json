@@ -24,6 +24,7 @@
     "desktop:stage": "bash scripts/stage-desktop-sidecar.sh --build",
     "desktop:dev": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri dev",
     "desktop:build": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles app",
+    "desktop:build:local": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles app -c src-tauri/tauri.conf.json.local",
     "desktop:dmg": "bun run desktop:stage && cd desktop && ../node_modules/.bin/tauri build --bundles dmg",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
