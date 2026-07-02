@@ -41,6 +41,8 @@ async function fetchSessions(filters: SessionListFilters, offset: number): Promi
   } catch {
     throw new Error(OFFLINE_MESSAGE);
   }
+  // A 502/503/504 here means a dev proxy or reverse proxy is up but Argus itself isn't answering.
+  if (res.status === 502 || res.status === 503 || res.status === 504) throw new Error(OFFLINE_MESSAGE);
   if (!res.ok) throw new Error(`Failed to load sessions (${res.status})`);
   try {
     return await res.json();
