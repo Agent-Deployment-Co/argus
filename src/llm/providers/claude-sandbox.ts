@@ -111,6 +111,13 @@ const CLAUDE_WRITABLE_SUPPORT_DIRS = [
   "telemetry",
 ];
 
+/** `claude -p` probes for a git repo (e.g. to attach branch/status context) even for a one-shot,
+ *  non-interactive call. On a Mac without Xcode Command Line Tools installed, `/usr/bin/git` is
+ *  Apple's stub that pops the "install command line tools" dialog the instant it's exec'd — jarring
+ *  for a background task-extraction call the user never asked to run interactively. Deny exec'ing it
+ *  specifically: the CLI already tolerates "not a git repo", so this just skips the git context. */
+const SANDBOX_DENY_PROCESS_EXEC_LITERALS = ["/usr/bin/git"];
+
 function uniqueSorted(paths: Array<string | undefined>): string[] {
   return [...new Set(paths.filter((path): path is string => !!path?.trim()))].sort();
 }
@@ -146,9 +153,13 @@ function parentDirectories(path: string | undefined): string[] {
   return parents;
 }
 
-function sandboxClause(operation: string, filters: string[]): string | undefined {
+function sandboxClause(
+  operation: string,
+  filters: string[],
+  verb: "allow" | "deny" = "allow",
+): string | undefined {
   if (!filters.length) return undefined;
-  return `(allow ${operation}\n  ${filters.join("\n  ")})`;
+  return `(${verb} ${operation}\n  ${filters.join("\n  ")})`;
 }
 
 function claudeConfigDir(env: NodeJS.ProcessEnv, home: string): string {
@@ -227,6 +238,9 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
     "(allow network*)",
     "(allow sysctl-read)",
     "(allow mach-lookup)",
+    // More specific than the blanket `(allow process*)` above; Seatbelt gives the later, more
+    // specific rule precedence, so this still blocks the stub even though process* is allowed.
+    sandboxClause("process-exec", SANDBOX_DENY_PROCESS_EXEC_LITERALS.map(sandboxLiteral), "deny"),
     sandboxClause("file-ioctl", [sandboxLiteral("/dev/dtracehelper")]),
     sandboxClause("file-read-metadata", readMetadataLiterals.map(sandboxLiteral)),
     sandboxClause("file-read*", [
