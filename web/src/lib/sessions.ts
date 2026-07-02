@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { fetchOrOffline, jsonOrThrow } from "./http";
 import { KNOWN_SOURCES, type SnapshotFilters } from "./snapshot";
 import type { SessionListResponse, SessionRow, SessionSort } from "../types";
 
@@ -30,10 +31,9 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
   return `/api/sessions?${params}`;
 }
 
-async function fetchSessions(filters: SessionListFilters, offset: number): Promise<SessionListResponse> {
-  const res = await fetch(sessionsUrl(filters, offset));
-  if (!res.ok) throw new Error(`Failed to load sessions (${res.status})`);
-  return res.json();
+export async function fetchSessions(filters: SessionListFilters, offset: number): Promise<SessionListResponse> {
+  const res = await fetchOrOffline(sessionsUrl(filters, offset));
+  return jsonOrThrow<SessionListResponse>(res, "Failed to load sessions");
 }
 
 /** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery so "Load more"
@@ -51,12 +51,10 @@ export function useSessionsQuery(filters: SessionListFilters) {
   });
 }
 
-async function fetchSessionDetail(sessionId: string): Promise<SessionRow> {
-  const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
-  if (!res.ok) {
-    throw new Error(res.status === 404 ? "Session not found." : `Failed to load session (${res.status})`);
-  }
-  return (await res.json()).session as SessionRow;
+export async function fetchSessionDetail(sessionId: string): Promise<SessionRow> {
+  const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}`);
+  const body = await jsonOrThrow<{ session: SessionRow }>(res, "Failed to load session");
+  return body.session;
 }
 
 /** One session's full detail, fetched on demand (not from the bulk snapshot). */
