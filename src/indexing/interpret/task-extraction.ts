@@ -407,7 +407,7 @@ function toOutcome(value: unknown): TaskOutcome {
 }
 
 function toFrustration(value: unknown): TaskFrustration {
-  return value === "low" || value === "high" ? value : "none";
+  return value === "moderate" || value === "high" ? value : "none";
 }
 
 export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
