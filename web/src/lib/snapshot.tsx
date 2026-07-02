@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createContext, useContext, type ReactNode } from "react";
 import type { Dashboard, DebugInfo, SessionRow, Snapshot, TaskMetrics } from "../types";
-import { APP_HEADER, jsonOrThrow } from "./http";
+import { APP_HEADER, fetchOrOffline, jsonOrThrow } from "./http";
 
 /** Global dashboard filters, threaded into /api/snapshot's query string (the server pushes them down
  *  to the store read). Only date-range + source are server-side; `project` stays a client-side refine
@@ -41,16 +41,15 @@ export interface ReindexResponse {
 }
 
 async function fetchSnapshot(filters: SnapshotFilters): Promise<Snapshot> {
-  const res = await fetch(snapshotUrl(filters));
-  if (!res.ok) throw new Error(`Failed to load data (${res.status})`);
-  return res.json();
+  const res = await fetchOrOffline(snapshotUrl(filters));
+  return jsonOrThrow<Snapshot>(res, "Failed to load data");
 }
 
 /** Re-index a single session: re-read its transcript from disk and refresh it in the local store
  *  (sessions/messages/tools/tasks), with task processing on. Throws with a clear message when the
  *  transcript is gone (the session can't be reindexed). */
 export async function reindexSession(sessionId: string): Promise<ReindexResponse> {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/reindex`, {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/reindex`, {
     method: "POST",
     headers: { ...APP_HEADER },
   });
@@ -63,15 +62,14 @@ export async function reindexSession(sessionId: string): Promise<ReindexResponse
 export async function fetchSessionTaskMetrics(
   sessionId: string,
 ): Promise<Record<string, TaskMetrics>> {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/task-metrics`);
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/task-metrics`);
   return (await jsonOrThrow<{ metrics: Record<string, TaskMetrics> }>(res, "Failed to load task metrics")).metrics;
 }
 
 /** Fetch the /debug payload (settings, env, paths, store/index status). Hidden diagnostics page. */
 export async function fetchDebugInfo(): Promise<DebugInfo> {
-  const res = await fetch("/api/debug");
-  if (!res.ok) throw new Error(`Failed to load debug info (${res.status})`);
-  return res.json();
+  const res = await fetchOrOffline("/api/debug");
+  return jsonOrThrow<DebugInfo>(res, "Failed to load debug info");
 }
 
 /** Shared query for a session's per-task metrics. The list and the drawer both call this with the
