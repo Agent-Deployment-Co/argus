@@ -12,16 +12,20 @@ import {
 import { complete } from "../../llm/index.ts";
 import type { LlmResult } from "../../llm/types.ts";
 import type { ResolvedTaskExtraction } from "../../config.ts";
-import { logDebug } from "../../logger.ts";
+import { logAt } from "../../logger.ts";
 
 /** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
  *  interactions, in order — the projection of prompts+responses the session model describes (#122),
  *  not a role-tag reconstruction. Built straight from the interactions; never persisted. */
-function interactionTurns(interactions: InteractionFact[]): Array<{ role: "user" | "assistant"; text: string }> {
+function interactionTurns(
+  interactions: InteractionFact[],
+): Array<{ role: "user" | "assistant"; text: string }> {
   const turns: Array<{ role: "user" | "assistant"; text: string }> = [];
   for (const interaction of [...interactions].sort((a, b) => a.seq - b.seq)) {
-    if (interaction.promptText) turns.push({ role: "user", text: interaction.promptText });
-    if (interaction.responseText) turns.push({ role: "assistant", text: interaction.responseText });
+    if (interaction.promptText)
+      turns.push({ role: "user", text: interaction.promptText });
+    if (interaction.responseText)
+      turns.push({ role: "assistant", text: interaction.responseText });
   }
   return turns;
 }
@@ -38,32 +42,6 @@ Rules:
 - Keep descriptions concise and specific.
 - messageIndexes must refer to the filtered user message indexes provided below.`;
 
-const LOCAL_PATH_REPLACEMENT = "[local file path]";
-const LOCAL_PATH_START =
-  "(?:/(?:Users|Volumes|Network|private|var|tmp|home|opt|Applications)(?=/)|~(?:[A-Za-z0-9._-]+)?/)";
-const LOCAL_PATH_CHARS = '[^\\s"\'`<>()[\\]{}]+';
-const LOCAL_PATH_EXTENSIONS =
-  "photoslibrary|png|jpe?g|heic|gif|webp|svg|pdf|txt|jsonl?|ya?ml|md|csv|ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|rb|php|sh|zsh|bash|zip|tar|gz|db|sqlite|mov|mp4|mp3|wav";
-const LOCAL_PATH_WITH_EXTENSION_RE = new RegExp(
-  `${LOCAL_PATH_START}[^\\n"'\`<>]*?\\.(?:${LOCAL_PATH_EXTENSIONS})(?=\\b|[\\s"'\`<>()[\\]{}])`,
-  "gi",
-);
-const LOCAL_FILE_URL_RE = /file:\/\/\/[^\s"'`<>()[\]{}]+/g;
-const LOCAL_POSIX_PATH_RE = new RegExp(`${LOCAL_PATH_START}${LOCAL_PATH_CHARS}`, "g");
-const LOCAL_WINDOWS_PATH_RE = /\b(?:[A-Za-z]:\\|\\\\[^\\/\s"'`<>()[\]{}]+\\[^\\/\s"'`<>()[\]{}]+\\)[^\s"'`<>()[\]{}]+/g;
-
-/** Claude Code's prompt mode may treat local-looking paths in stdin as files or media to open.
- *  Task extraction only needs the user's intent, not the exact local path, so provider prompts
- *  redact filesystem references before invoking the LLM. The original transcript text remains
- *  unchanged in the local store. */
-export function sanitizeProviderText(text: string): string {
-  return text
-    .replace(LOCAL_FILE_URL_RE, LOCAL_PATH_REPLACEMENT)
-    .replace(LOCAL_PATH_WITH_EXTENSION_RE, LOCAL_PATH_REPLACEMENT)
-    .replace(LOCAL_POSIX_PATH_RE, LOCAL_PATH_REPLACEMENT)
-    .replace(LOCAL_WINDOWS_PATH_RE, LOCAL_PATH_REPLACEMENT);
-}
-
 export interface ExtractedTaskSpec {
   description: string;
   messageIndexes: number[];
@@ -73,7 +51,8 @@ export function logTaskExtractionDebug(
   options: ResolvedTaskExtraction | undefined,
   message: string,
 ): void {
-  logDebug(options?.log, `[task extraction] ${message}`);
+  if (!options?.log) return;
+  logAt(options.log, "debug", `[task extraction] ${message}`);
 }
 
 function logTaskExtractionBlock(
@@ -85,7 +64,7 @@ function logTaskExtractionBlock(
   logTaskExtractionDebug(options, `${label} begin`);
   const content = body.length ? body : "(empty)";
   for (const line of content.split(/\r?\n/)) {
-    logDebug(options.log, `[task extraction] ${line}`);
+    logAt(options.log, "debug", `[task extraction] ${line}`);
   }
   logTaskExtractionDebug(options, `${label} end`);
 }
@@ -96,11 +75,19 @@ function diagnostic(
   severity: ParserDiagnostic["severity"] = "warning",
   position?: SourcePosition,
 ): ParserDiagnostic {
-  return { code, severity, phase: "reconcile", message, ...(position ? { position } : {}) };
+  return {
+    code,
+    severity,
+    phase: "reconcile",
+    message,
+    ...(position ? { position } : {}),
+  };
 }
 
 /** The configured provider for this run (`off` when no extraction options are present). */
-export function taskExtractionProvider(options: ResolvedTaskExtraction | undefined): string {
+export function taskExtractionProvider(
+  options: ResolvedTaskExtraction | undefined,
+): string {
   return options?.llm.provider ?? "off";
 }
 
@@ -109,12 +96,30 @@ export function taskExtractionProvider(options: ResolvedTaskExtraction | undefin
 function llmConfigSummary(options: ResolvedTaskExtraction | undefined): string {
   const llm = options?.llm;
   if (!llm) return "llm config: provider=off";
-  const parts = [`provider=${llm.provider}`, `model=${llm.model ?? "(default)"}`];
+  const parts = [
+    `provider=${llm.provider}`,
+    `model=${llm.model ?? "(default)"}`,
+  ];
   if (llm.baseUrl) parts.push(`baseUrl=${llm.baseUrl}`);
   if (llm.maxTokens != null) parts.push(`maxTokens=${llm.maxTokens}`);
   if (llm.command) parts.push(`command=${llm.command}`);
-  if (llm.apiKeyEnv) parts.push(`apiKeyEnv=${llm.apiKeyEnv}`, `key=${llm.apiKey ? "set" : "unset"}`);
+  if (llm.apiKeyEnv)
+    parts.push(
+      `apiKeyEnv=${llm.apiKeyEnv}`,
+      `key=${llm.apiKey ? "set" : "unset"}`,
+    );
   return `llm config: ${parts.join(" ")}`;
+}
+
+function llmWithProviderLog(
+  options: ResolvedTaskExtraction,
+): ResolvedTaskExtraction["llm"] {
+  if (!options.log) return options.llm;
+  return {
+    ...options.llm,
+    log: (message) =>
+      logAt(options.log!, "warn", `[task extraction] ${message}`),
+  };
 }
 
 function resolveInstructions(
@@ -157,7 +162,7 @@ export function buildTaskExtractionPrompt(
     ...(candidate.timestampMs != null
       ? { timestamp: new Date(candidate.timestampMs).toISOString() }
       : {}),
-    text: sanitizeProviderText(candidate.promptText ?? ""),
+    text: candidate.promptText ?? "",
   }));
   return `${instructions.trim()}\n\nFiltered user messages:\n${JSON.stringify(
     { sessionId, messages },
@@ -195,7 +200,8 @@ export function parseTaskExtractionOutput(raw: string): ExtractedTaskSpec[] {
   for (const item of payload) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const values = item as Record<string, unknown>;
-    const description = typeof values.description === "string" ? values.description.trim() : "";
+    const description =
+      typeof values.description === "string" ? values.description.trim() : "";
     if (!description) continue;
     const rawIndexes = Array.isArray(values.messageIndexes)
       ? values.messageIndexes
@@ -216,8 +222,9 @@ async function runExtraction(
   prompt: string,
   options: ResolvedTaskExtraction | undefined,
 ): Promise<LlmResult> {
-  if (taskExtractionProvider(options) === "off") return { ok: true, text: '{"tasks":[]}' };
-  return complete({ prompt }, options!.llm);
+  if (taskExtractionProvider(options) === "off")
+    return { ok: true, text: '{"tasks":[]}' };
+  return complete({ prompt }, llmWithProviderLog(options!));
 }
 
 function uniqueValidIndexes(indexes: number[], count: number): number[] {
@@ -234,7 +241,10 @@ export function taskFactsFromSpecs(
   if (!candidates.length) return [];
   return specs
     .map((spec, taskIndex): TaskFact | null => {
-      const indexes = uniqueValidIndexes(spec.messageIndexes, candidates.length);
+      const indexes = uniqueValidIndexes(
+        spec.messageIndexes,
+        candidates.length,
+      );
       // A task anchors to the interaction openings it references (#122). A spec the model couldn't
       // anchor to any valid candidate index is dropped — it would otherwise default onto candidate 0
       // and either own no interaction or tie onto the real first task's.
@@ -276,17 +286,26 @@ export async function extractTasksForSession(
     `starting extraction for ${sessionId}: provider=${provider}, task-start interactions=${candidates.length}`,
   );
   if (provider === "off") {
-    logTaskExtractionDebug(options, `skipping ${sessionId}: task extraction is off`);
+    logTaskExtractionDebug(
+      options,
+      `skipping ${sessionId}: task extraction is off`,
+    );
     return { tasks: [], diagnostics };
   }
   if (candidates.length === 0) {
-    logTaskExtractionDebug(options, `skipping ${sessionId}: no task-start interactions`);
+    logTaskExtractionDebug(
+      options,
+      `skipping ${sessionId}: no task-start interactions`,
+    );
     return { tasks: [], diagnostics };
   }
 
   const instructions = resolveInstructions(options, diagnostics);
   if (!instructions) {
-    logTaskExtractionDebug(options, `skipping ${sessionId}: no task extraction prompt available`);
+    logTaskExtractionDebug(
+      options,
+      `skipping ${sessionId}: no task extraction prompt available`,
+    );
     return { tasks: [], diagnostics };
   }
 
@@ -297,7 +316,10 @@ export async function extractTasksForSession(
       : "default prompt";
   logTaskExtractionDebug(options, `using ${promptSource}`);
   const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions);
-  logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
+  logTaskExtractionDebug(
+    options,
+    `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`,
+  );
   logTaskExtractionBlock(options, "prompt", prompt);
   logTaskExtractionDebug(options, llmConfigSummary(options));
   const result = await runExtraction(prompt, options);
@@ -376,11 +398,8 @@ export function buildTaskOutcomePrompt(
   interactions: InteractionFact[],
   instructions = DEFAULT_TASK_OUTCOME_PROMPT,
 ): string {
-  const turns = interactionTurns(interactions).map((turn) => ({
-    ...turn,
-    text: sanitizeProviderText(turn.text),
-  }));
-  return `${instructions.trim()}\n\nTask: ${sanitizeProviderText(description)}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
+  const turns = interactionTurns(interactions);
+  return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
 }
 
 function toOutcome(value: unknown): TaskOutcome {
@@ -402,7 +421,9 @@ export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
     frustration: toFrustration(values.frustration),
   };
   const signals = Array.isArray(values.signals)
-    ? values.signals.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    ? values.signals.filter(
+        (s): s is string => typeof s === "string" && s.trim().length > 0,
+      )
     : [];
   if (signals.length) judgment.signals = signals;
   const reason = typeof values.reason === "string" ? values.reason.trim() : "";
@@ -416,13 +437,23 @@ export async function judgeTaskOutcome(
   description: string,
   interactions: InteractionFact[],
   options: ResolvedTaskExtraction | undefined,
-): Promise<{ judgment?: TaskOutcomeJudgment; diagnostics: ParserDiagnostic[] }> {
+): Promise<{
+  judgment?: TaskOutcomeJudgment;
+  diagnostics: ParserDiagnostic[];
+}> {
   const diagnostics: ParserDiagnostic[] = [];
   const hasText = interactions.some((i) => i.promptText || i.responseText);
-  if (taskExtractionProvider(options) === "off" || !hasText) return { diagnostics };
+  if (taskExtractionProvider(options) === "off" || !hasText)
+    return { diagnostics };
 
   const prompt = buildTaskOutcomePrompt(description, interactions);
-  const result = await complete({ prompt }, options!.llm);
+  logTaskExtractionDebug(
+    options,
+    `outcome prompt bytes=${Buffer.byteLength(prompt, "utf8")}`,
+  );
+  logTaskExtractionBlock(options, "outcome prompt", prompt);
+  logTaskExtractionDebug(options, llmConfigSummary(options));
+  const result = await complete({ prompt }, llmWithProviderLog(options!));
   if (!result.ok) {
     diagnostics.push(
       diagnostic(
@@ -446,15 +477,22 @@ export async function judgeTaskOutcome(
 }
 
 /** Run async work over items with a small concurrency cap, preserving input order in the result. */
-async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await fn(items[index]!);
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (next < items.length) {
+        const index = next++;
+        results[index] = await fn(items[index]!);
+      }
+    },
+  );
   await Promise.all(workers);
   return results;
 }
@@ -496,7 +534,8 @@ export async function extractTasksWithOutcome(
     const taskIndex = taskSeqByInteraction.get(interaction.seq);
     if (taskIndex == null) continue;
     const list = interactionsByTask.get(taskIndex) ?? [];
-    if (!interactionsByTask.has(taskIndex)) interactionsByTask.set(taskIndex, list);
+    if (!interactionsByTask.has(taskIndex))
+      interactionsByTask.set(taskIndex, list);
     list.push(interaction);
   }
   logTaskExtractionDebug(
@@ -508,11 +547,8 @@ export async function extractTasksWithOutcome(
     4,
     async ([taskIndex, owned]) => {
       const task = tasks[taskIndex]!;
-      const { judgment, diagnostics: outcomeDiagnostics } = await judgeTaskOutcome(
-        task.description,
-        owned,
-        options,
-      );
+      const { judgment, diagnostics: outcomeDiagnostics } =
+        await judgeTaskOutcome(task.description, owned, options);
       diagnostics.push(...outcomeDiagnostics);
       if (judgment) {
         task.outcome = judgment.outcome;

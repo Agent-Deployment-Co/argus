@@ -6,7 +6,6 @@ import {
   judgeTaskOutcome,
   parseTaskExtractionOutput,
   parseTaskOutcomeOutput,
-  sanitizeProviderText,
   taskFactsFromSpecs,
 } from "../src/indexing/interpret/task-extraction.ts";
 import { claudeProviderArgs, splitCommand } from "../src/llm/providers/local.ts";
@@ -51,25 +50,6 @@ describe("task extraction", () => {
     expect(prompt).toContain('"sessionId": "codex:one"');
     expect(prompt).toContain('"index": 0');
     expect(prompt).toContain('"text": "add a facts command"');
-  });
-
-  test("redacts local paths before sending prompt text to the provider", () => {
-    const prompt = buildTaskExtractionPrompt(
-      "codex:one",
-      [
-        candidate(
-          0,
-          "compare /Users/you/screenshots/a.png with /Volumes/Team Share/b.jpg and ~/Pictures/Photos Library.photoslibrary, then fix /api/sessions",
-        ),
-      ],
-      "Return JSON.",
-    );
-    expect(prompt).toContain(
-      '"text": "compare [local file path] with [local file path] and [local file path], then fix /api/sessions"',
-    );
-    expect(prompt).not.toContain("/Users/you");
-    expect(prompt).not.toContain("/Volumes");
-    expect(prompt).not.toContain("Photos Library.photoslibrary");
   });
 
   test("parses JSON task output and markdown-fenced JSON", () => {
@@ -164,25 +144,6 @@ describe("task outcome (pass 2)", () => {
     expect(prompt).toContain('"text": "done"');
   });
 
-  test("redacts local paths before sending outcome dialogue to the provider", () => {
-    const prompt = buildTaskOutcomePrompt(
-      "Analyze /Users/you/Pictures/input.heic",
-      [
-        candidate(
-          0,
-          "please inspect file:///Users/you/Pictures/input.heic",
-          undefined,
-          "I opened C:\\Users\\you\\Pictures\\input.heic",
-        ),
-      ],
-    );
-    expect(prompt).toContain("Task: Analyze [local file path]");
-    expect(prompt).toContain('"text": "please inspect [local file path]"');
-    expect(prompt).toContain('"text": "I opened [local file path]"');
-    expect(prompt).not.toContain("/Users/you");
-    expect(prompt).not.toContain("C:\\Users");
-  });
-
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {
     // Provider off short-circuits even with text; no-text interactions short-circuit even with a provider.
     expect(await judgeTaskOutcome("t", [candidate(0, "x")], te({ llm: { provider: "off" } }))).toEqual({
@@ -191,11 +152,6 @@ describe("task outcome (pass 2)", () => {
     expect(await judgeTaskOutcome("t", [], te({ llm: { provider: "claude-cli" } }))).toEqual({ diagnostics: [] });
   });
 
-  test("sanitizeProviderText keeps non-file absolute routes intact", () => {
-    expect(sanitizeProviderText("fix /api/sessions and /docs/task-interpretation.md")).toBe(
-      "fix /api/sessions and /docs/task-interpretation.md",
-    );
-  });
 });
 
 describe("assignInteractionTaskSeqs", () => {
