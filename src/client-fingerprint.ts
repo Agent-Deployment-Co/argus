@@ -1,21 +1,49 @@
 // Client-fingerprint collection (#141 follow-up). Probes a handful of environment signals (starting
-// with `git config user.name`) and records each as a key/value/timestamp tuple on the local store.
+// with the user's git identity) and records each as a key/value/timestamp tuple on the local store.
 // The store writer suppresses repeat-of-same-value, so a steady environment doesn't churn the log —
 // only changes accumulate. Later used to register a client with the dashboard backend.
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ReadModelStore } from "./store/store-contract.ts";
 
-/** Read `git config user.name`. Returns undefined if git isn't on PATH, the call fails, or the
- *  config key is unset/empty — never throws, so a missing git install just yields no observation. */
-export function readGitUserName(): string | undefined {
+/** Parse the `user.name` value out of a git config file's contents (INI-like: `[section]` headers,
+ *  `key = value` lines, `;`/`#` comments). Only looks at top-level `[user]` sections — subsections
+ *  like `[user "foo"]` aren't git identity and are skipped. Returns undefined if no such key is
+ *  found or its value is blank. Not a full git-config parser (no `include`/`includeIf`, no
+ *  quoting/escape handling) — sufficient for the common case of a flat `[user]` block. */
+export function parseGitConfigUserName(contents: string): string | undefined {
+  let inUserSection = false;
+  for (const rawLine of contents.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+    const sectionMatch = line.match(/^\[([^\]"]+)(\s+"[^"]*")?\]$/);
+    if (sectionMatch) {
+      inUserSection = sectionMatch[1]?.trim().toLowerCase() === "user" && !sectionMatch[2];
+      continue;
+    }
+    if (!inUserSection) continue;
+    const keyMatch = line.match(/^name\s*=\s*(.*)$/i);
+    if (keyMatch) {
+      const value = (keyMatch[1] ?? "").trim();
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+/** Read the user's git identity from their global gitconfig — `$GIT_CONFIG_GLOBAL` if set, else
+ *  `$HOME/.gitconfig` (git's own default resolution for the global config file) — without shelling
+ *  out to the `git` binary. Deliberately avoids invoking `git` (or any other PATH binary) here: on
+ *  macOS, running `git` when Xcode Command Line Tools aren't installed pops up a system dialog
+ *  prompting the user to install them, which this unattended background probe must not trigger.
+ *  Returns undefined if the file is missing, unreadable, or has no `user.name`. */
+export function readGitUserName(
+  path: string = process.env.GIT_CONFIG_GLOBAL || join(homedir(), ".gitconfig"),
+): string | undefined {
   try {
-    const result = spawnSync("git", ["config", "user.name"], { encoding: "utf8" });
-    if (result.status !== 0) return undefined;
-    const value = result.stdout.trim();
-    return value || undefined;
+    const contents = readFileSync(path, "utf8");
+    return parseGitConfigUserName(contents);
   } catch {
     return undefined;
   }

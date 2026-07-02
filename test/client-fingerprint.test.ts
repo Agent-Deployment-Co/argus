@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectClientFingerprint,
+  parseGitConfigUserName,
   readClaudeOauthEmail,
   readCodexOauthEmail,
+  readGitUserName,
   type FingerprintProbe,
 } from "../src/client-fingerprint.ts";
 import type { ClientFingerprintEntry } from "../src/store/store-contract.ts";
@@ -45,6 +47,50 @@ describe("readClaudeOauthEmail", () => {
     expect(
       readClaudeOauthEmail(fakeClaudeJson({ oauthAccount: { emailAddress: "  " } })),
     ).toBeUndefined();
+  });
+});
+
+function fakeGitConfig(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "argus-fp-gitconfig-"));
+  tempDirs.push(dir);
+  const path = join(dir, ".gitconfig");
+  writeFileSync(path, contents);
+  return path;
+}
+
+describe("parseGitConfigUserName", () => {
+  test("extracts user.name from a [user] section", () => {
+    expect(parseGitConfigUserName("[user]\n\tname = Ada Lovelace\n\temail = ada@example.com\n")).toBe(
+      "Ada Lovelace",
+    );
+  });
+
+  test("ignores other sections and subsections named user", () => {
+    expect(parseGitConfigUserName('[user "work"]\n\tname = Not This\n[core]\n\tname = Nope\n')).toBeUndefined();
+  });
+
+  test("skips comments and blank lines", () => {
+    expect(
+      parseGitConfigUserName("; comment\n[user]\n# another comment\n\nname = Grace Hopper\n"),
+    ).toBe("Grace Hopper");
+  });
+
+  test("returns undefined for missing or blank name", () => {
+    expect(parseGitConfigUserName("[user]\nemail = only@example.com\n")).toBeUndefined();
+    expect(parseGitConfigUserName("[user]\nname =   \n")).toBeUndefined();
+    expect(parseGitConfigUserName("")).toBeUndefined();
+  });
+});
+
+describe("readGitUserName", () => {
+  test("reads user.name from the given gitconfig path", () => {
+    const path = fakeGitConfig("[user]\n\tname = Ada Lovelace\n");
+    expect(readGitUserName(path)).toBe("Ada Lovelace");
+  });
+
+  test("returns undefined when the file is missing or has no user.name", () => {
+    expect(readGitUserName(join(tmpdir(), "argus-no-such-gitconfig-xyz"))).toBeUndefined();
+    expect(readGitUserName(fakeGitConfig("[core]\n\tautocrlf = false\n"))).toBeUndefined();
   });
 });
 
