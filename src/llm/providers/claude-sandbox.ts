@@ -306,8 +306,8 @@ export function claudeSandboxCommand(
 
 export function isClaudeSandboxFailure(result: LlmResult): boolean {
   const message = `${result.error ?? ""}\n${result.text ?? ""}`;
-  if (result.status == null && !result.text.trim()) return true;
-  if (/^exited with status \d+$/.test(result.error ?? "") && !result.text.trim())
+  if (result.status == null && !result.text?.trim()) return true;
+  if (/^exited with status \d+$/.test(result.error ?? "") && !result.text?.trim())
     return true;
   return /sandbox-exec|sandbox|profile|deny\(|operation not permitted|not permitted/i.test(message);
 }
