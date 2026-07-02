@@ -29,6 +29,8 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+mod proxy;
+
 /// Shared state: the local port the sidecar serves on, the handle to the running child (if any),
 /// the tray menu items we update as that state changes, and a flag marking a stop as intentional
 /// (so a crash can be told apart from a user-requested Stop / Quit).
