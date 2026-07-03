@@ -135,6 +135,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; text-decoration: none; }
 .rail-icon-btn:hover { color: var(--heading); border-color: var(--muted); }
 .rail-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rail-icon-btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 
 .theme-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; }
 .theme-choice { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; padding: 7px; background: transparent; color: var(--muted); cursor: pointer; }
@@ -263,6 +264,7 @@ main:has(.sessions-split) { padding: 0; }
 }
 .task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
+.task-panel-nav { display: flex; align-items: center; gap: 6px; }
 .task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
 .task-panel-field { display: grid; gap: 4px; }
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
