@@ -253,7 +253,7 @@ main:has(.sessions-split) { padding: 0; }
 
 /* Task detail panel: a flex sibling of .session-detail-inner within .session-detail, so it takes
    its own column instead of floating over the content (which shrinks via flex to make room). */
-.task-panel { flex: 0 0 auto; width: min(400px, 38vw); min-width: 280px; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); animation: panel-slide-in .24s cubic-bezier(.4,0,.2,1) both; }
+.task-panel { flex: 0 0 auto; width: min(400px, 38vw); min-width: 280px; display: flex; flex-direction: column; background: color-mix(in srgb, var(--surface) 50%, var(--bg)); border-left: 1px solid var(--line); animation: panel-slide-in .24s cubic-bezier(.4,0,.2,1) both; }
 .task-panel.closing { animation: panel-slide-out .2s cubic-bezier(.4,0,1,1) both; }
 @keyframes panel-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes panel-slide-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
