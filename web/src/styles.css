@@ -264,7 +264,8 @@ main:has(.sessions-split) { padding: 0; }
 }
 .task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
-.task-panel-nav { display: flex; align-items: center; gap: 6px; }
+.task-panel-nav { display: flex; align-items: center; gap: 14px; }
+.task-panel-nav-group { display: flex; align-items: center; gap: 6px; }
 .task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
 .task-panel-field { display: grid; gap: 4px; }
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
