@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { dtAmPm, fmt, usd } from "../lib/format";
 import { useSessionTaskMetrics } from "../lib/snapshot";
@@ -98,8 +98,23 @@ export function TaskDetails({ sessionId, task }: { sessionId: string; task: Task
 }
 
 /** Inline side panel with the full detail for a single task. It lays out next to the session
- *  content (see .session-detail in styles.css), which shrinks to make room — not an overlay. */
-export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; task: Task; onClose: () => void }) {
+ *  content (see .session-detail in styles.css), which shrinks to make room — not an overlay.
+ *  onPrev/onNext are omitted (rather than passed as no-ops) when there's no adjacent task, which
+ *  disables the corresponding nav button. The parent keeps its own task-list selection in sync
+ *  since navigating here just calls back into the same setSelectedTaskId it uses for clicks. */
+export function TaskPanel({
+  sessionId,
+  task,
+  onClose,
+  onPrev,
+  onNext,
+}: {
+  sessionId: string;
+  task: Task;
+  onClose: () => void;
+  onPrev?: () => void;
+  onNext?: () => void;
+}) {
   // Stay mounted while the slide-out plays; the parent unmounts us once it finishes.
   const [closing, setClosing] = useState(false);
   const requestClose = () => setClosing(true);
@@ -123,9 +138,17 @@ export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; tas
     >
       <header className="task-panel-head">
         <h3 className="t-subhead">Task details</h3>
-        <button type="button" className="rail-icon-btn task-panel-close" onClick={requestClose} aria-label="Close">
-          <X size={16} strokeWidth={1.75} />
-        </button>
+        <div className="task-panel-nav">
+          <button type="button" className="rail-icon-btn" onClick={onPrev} disabled={!onPrev} aria-label="Previous task">
+            <ChevronLeft size={16} strokeWidth={1.75} />
+          </button>
+          <button type="button" className="rail-icon-btn" onClick={onNext} disabled={!onNext} aria-label="Next task">
+            <ChevronRight size={16} strokeWidth={1.75} />
+          </button>
+          <button type="button" className="rail-icon-btn task-panel-close" onClick={requestClose} aria-label="Close">
+            <X size={16} strokeWidth={1.75} />
+          </button>
+        </div>
       </header>
 
       <TaskDetails sessionId={sessionId} task={task} />
