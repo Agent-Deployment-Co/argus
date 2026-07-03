@@ -27,7 +27,7 @@ function FrustrationBadge({ frustration }: { frustration?: string }) {
 }
 
 /** The full detail body for one task (description, outcome, signals, reason, on-demand metrics).
- *  Shared by the right-side drawer (TaskPanel) and the inline expanding card (see SessionDetail). */
+ *  Shared by the inline side panel (TaskPanel) and the inline expanding card (see SessionDetail). */
 export function TaskDetails({ sessionId, task }: { sessionId: string; task: Task }) {
   // Metrics are fetched on demand for the whole session (not part of the snapshot) and shared with the
   // task list via React Query's cache; we pick this task's entry.
@@ -97,7 +97,8 @@ export function TaskDetails({ sessionId, task }: { sessionId: string; task: Task
   );
 }
 
-/** Right-side drawer with the full detail for a single task. Rough first pass for #90. */
+/** Inline side panel with the full detail for a single task. It lays out next to the session
+ *  content (see .session-detail in styles.css), which shrinks to make room — not an overlay. */
 export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; task: Task; onClose: () => void }) {
   // Stay mounted while the slide-out plays; the parent unmounts us once it finishes.
   const [closing, setClosing] = useState(false);
@@ -112,27 +113,22 @@ export function TaskPanel({ sessionId, task, onClose }: { sessionId: string; tas
   }, []);
 
   return (
-    <>
-      <div className={`task-panel-backdrop${closing ? " closing" : ""}`} onClick={requestClose} aria-hidden />
-      <aside
-        className={`task-panel${closing ? " closing" : ""}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Task details"
-        onAnimationEnd={(e) => {
-          // Only react to the panel's own slide animation, and only when sliding out.
-          if (e.target === e.currentTarget && closing) onClose();
-        }}
-      >
-        <header className="task-panel-head">
-          <h3 className="t-subhead">Task details</h3>
-          <button type="button" className="rail-icon-btn task-panel-close" onClick={requestClose} aria-label="Close">
-            <X size={16} strokeWidth={1.75} />
-          </button>
-        </header>
+    <aside
+      className={`task-panel${closing ? " closing" : ""}`}
+      aria-label="Task details"
+      onAnimationEnd={(e) => {
+        // Only react to the panel's own slide animation, and only when sliding out.
+        if (e.target === e.currentTarget && closing) onClose();
+      }}
+    >
+      <header className="task-panel-head">
+        <h3 className="t-subhead">Task details</h3>
+        <button type="button" className="rail-icon-btn task-panel-close" onClick={requestClose} aria-label="Close">
+          <X size={16} strokeWidth={1.75} />
+        </button>
+      </header>
 
-        <TaskDetails sessionId={sessionId} task={task} />
-      </aside>
-    </>
+      <TaskDetails sessionId={sessionId} task={task} />
+    </aside>
   );
 }
