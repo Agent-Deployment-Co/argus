@@ -22,7 +22,8 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
 // How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
-// right-side panel. Flip this to compare; the drawer (TaskPanel) is kept, just suppressed in "card".
+// side panel next to the content. Flip this to compare; the drawer (TaskPanel) is kept, just
+// suppressed in "card".
 const TASK_VIEW: "card" | "drawer" = "drawer";
 
 export function SessionDetail() {
