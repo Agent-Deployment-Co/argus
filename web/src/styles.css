@@ -262,6 +262,18 @@ main:has(.sessions-split) { padding: 0; }
 @media (prefers-reduced-motion: reduce) {
   .task-panel, .task-panel.closing { animation-duration: 1ms; }
 }
+/* Below this width the session list's own min-width floor leaves too little room for the panel to
+   sit beside the content without squeezing it to a sliver, so stack the panel under it instead. */
+@media (max-width: 900px) {
+  .session-detail { flex-direction: column; }
+  .task-panel { width: 100%; min-width: 0; max-height: 55vh; border-left: none; border-top: 1px solid var(--line); animation: panel-slide-up .24s cubic-bezier(.4,0,.2,1) both; }
+  .task-panel.closing { animation: panel-slide-down .2s cubic-bezier(.4,0,1,1) both; }
+}
+@keyframes panel-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes panel-slide-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .task-panel, .task-panel.closing { animation-duration: 1ms; }
+}
 .task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
 .task-panel-nav { display: flex; align-items: center; gap: 14px; }
