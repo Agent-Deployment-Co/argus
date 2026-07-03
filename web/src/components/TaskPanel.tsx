@@ -119,6 +119,13 @@ export function TaskPanel({
   const [closing, setClosing] = useState(false);
   const requestClose = () => setClosing(true);
 
+  // If a close was mid-animation and the user picks a different task (a list row, or a prev/next
+  // chevron) instead of letting it finish, cancel the close — otherwise the stale `closing` flag
+  // fires onAnimationEnd and yanks the panel shut right after the user asked to see the new task.
+  useEffect(() => {
+    setClosing(false);
+  }, [task.id]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") requestClose();
