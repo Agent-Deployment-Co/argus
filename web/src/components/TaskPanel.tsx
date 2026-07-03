@@ -139,12 +139,14 @@ export function TaskPanel({
       <header className="task-panel-head">
         <h3 className="t-subhead">Task details</h3>
         <div className="task-panel-nav">
-          <button type="button" className="rail-icon-btn" onClick={onPrev} disabled={!onPrev} aria-label="Previous task">
-            <ChevronLeft size={16} strokeWidth={1.75} />
-          </button>
-          <button type="button" className="rail-icon-btn" onClick={onNext} disabled={!onNext} aria-label="Next task">
-            <ChevronRight size={16} strokeWidth={1.75} />
-          </button>
+          <div className="task-panel-nav-group">
+            <button type="button" className="rail-icon-btn" onClick={onPrev} disabled={!onPrev} aria-label="Previous task">
+              <ChevronLeft size={16} strokeWidth={1.75} />
+            </button>
+            <button type="button" className="rail-icon-btn" onClick={onNext} disabled={!onNext} aria-label="Next task">
+              <ChevronRight size={16} strokeWidth={1.75} />
+            </button>
+          </div>
           <button type="button" className="rail-icon-btn task-panel-close" onClick={requestClose} aria-label="Close">
             <X size={16} strokeWidth={1.75} />
           </button>
