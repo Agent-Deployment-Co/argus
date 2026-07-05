@@ -3,6 +3,7 @@ import { useIsFetching } from "@tanstack/react-query";
 import { Activity, Folder, HeartPulse, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
+import { VIEW_QUERY_KEY } from "../lib/views";
 import { SettingsSurface } from "../routes/Settings";
 
 // The Argus arch mark — the ADC chevron un-bent into a rounded archway (a proto-"A"), four bands
@@ -66,8 +67,10 @@ export function Layout() {
   const lastApp = useRef<{ pathname: string; search: Record<string, unknown> }>({ pathname: "/", search: {} });
   if (!isSettings) lastApp.current = { pathname: location.pathname, search: location.search as Record<string, unknown> };
   // Each dashboard view fetches its own data now, so there's no single snapshot query to gate on;
-  // any in-flight view query drives the FilterBar's refreshing indicator.
-  const fetching = useIsFetching() > 0;
+  // any in-flight dashboard-view query drives the FilterBar's refreshing indicator. Scoped to the
+  // view query prefix so unrelated fetches (session detail, list pagination, task-metrics, /debug)
+  // don't spin it as if the date/source filter were reloading.
+  const fetching = useIsFetching({ queryKey: [VIEW_QUERY_KEY] }) > 0;
 
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleRail = useCallback(() => {

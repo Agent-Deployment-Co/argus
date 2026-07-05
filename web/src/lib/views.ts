@@ -45,12 +45,18 @@ function viewUrl(path: string, filters: SnapshotFilters): string {
   return qs ? `${path}?${qs}` : path;
 }
 
-/** Build a React Query hook for one view endpoint. The key is the path + the sent filter values, so
- *  distinct endpoints and filter sets cache independently and rapid reloads reuse the last result. */
+/** Shared leading key element for every dashboard-view query, so the FilterBar's refreshing
+ *  indicator can watch just these (via `useIsFetching({ queryKey: [VIEW_QUERY_KEY] })`) and not spin
+ *  for unrelated fetches like session detail, list pagination, task-metrics, or /api/debug. */
+export const VIEW_QUERY_KEY = "dashboard-view";
+
+/** Build a React Query hook for one view endpoint. The key is the shared prefix + path + the sent
+ *  filter values, so distinct endpoints and filter sets cache independently and rapid reloads reuse
+ *  the last result. */
 function makeViewHook<T>(path: string) {
   return (filters: SnapshotFilters, enabled = true) =>
     useQuery({
-      queryKey: [path, filters.since ?? null, filters.until ?? null, sanitizedSource(filters.source)] as const,
+      queryKey: [VIEW_QUERY_KEY, path, filters.since ?? null, filters.until ?? null, sanitizedSource(filters.source)] as const,
       queryFn: () => fetchOrOffline(viewUrl(path, filters)).then((res) => jsonOrThrow<T>(res, "Failed to load data")),
       staleTime: 30_000,
       placeholderData: keepPreviousData,

@@ -72,19 +72,25 @@ describe("usage builders", () => {
 });
 
 describe("tools builders", () => {
-  test("buildSkills folds skills (with (none)) and builds the per-day series", () => {
+  test("buildSkills folds skills (with (none)) and spans every usage day, gaps included", () => {
     const rows = [
       { skill: "jj:jj", model: "haiku", usage: u(10), messages: 1 },
       { skill: "", model: "haiku", usage: u(5), messages: 1 },
     ];
+    // Skill activity only on the 1st and 8th, but usage (from the full date set) also on the idle 4th.
     const { bySkill, bySkillDaily } = buildSkills(
       rows,
-      [{ date: "2026-06-01", skill: "jj:jj", total: 10 }],
+      [{ date: "2026-06-01", skill: "jj:jj", total: 10 }, { date: "2026-06-08", skill: "jj:jj", total: 4 }],
+      ["2026-06-01", "2026-06-04", "2026-06-08"],
       new Map<string, PluginInfo>(),
     );
     expect(bySkill.some((s) => s.name === "jj:jj")).toBe(true);
     expect(bySkill.some((s) => s.name === "(none)")).toBe(true);
+    // The x-axis spans all three usage days in order; the idle day is present with an empty bucket
+    // (so a week-long gap doesn't collapse into two adjacent bars).
+    expect(bySkillDaily.map((d) => d.date)).toEqual(["2026-06-01", "2026-06-04", "2026-06-08"]);
     expect(bySkillDaily[0]!.bySkill["jj:jj"]).toBe(10);
+    expect(bySkillDaily[1]!.bySkill).toEqual({});
   });
 
   const toolStats = [

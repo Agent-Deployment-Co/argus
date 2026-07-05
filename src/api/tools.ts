@@ -11,8 +11,8 @@ import {
   UNATTRIBUTED_SKILL,
 } from "../tool-categories.ts";
 import type { UsageGroupRow } from "../store/store-contract.ts";
-import { type Dashboard, type NamedUsage, type PluginInfo, type ToolCategoryStat, type ToolStat, totalTokens } from "../types.ts";
-import { foldUsageByKey } from "./usage.ts";
+import type { Dashboard, NamedUsage, PluginInfo, ToolCategoryStat, ToolStat } from "../types.ts";
+import { foldNamedUsage } from "./usage.ts";
 
 type BySkillModel = { skill: string } & UsageGroupRow;
 type ToolStatRow = { tool: string; category: ToolCategory; calls: number; sessions: number };
@@ -45,29 +45,24 @@ export interface HeaviestResultsResponse {
 /** Fold per-(skill, model) usage into per-skill rows (empty skill → "(none)"), tagging each with its
  *  owning plugin. Exposed so the plugins builder can reuse the same bySkill fold. */
 export function foldBySkill(rows: BySkillModel[], plugins: Map<string, PluginInfo>): NamedUsage[] {
-  return [...foldUsageByKey(rows, (r) => r.skill || UNATTRIBUTED_SKILL).entries()]
-    .map(([name, v]) => ({
-      name,
-      messages: v.messages,
-      total: totalTokens(v.u),
-      cost: v.cost,
-      meta: { plugin: skillPlugin(name, plugins) },
-    }))
-    .sort((a, b) => b.total - a.total);
+  return foldNamedUsage(rows, (r) => r.skill || UNATTRIBUTED_SKILL, (name) => ({ plugin: skillPlugin(name, plugins) }));
 }
 
-/** GET /api/skills — per-skill tokens/cost + the per-day stacked series (attributed skills only). */
+/** GET /api/skills — per-skill tokens/cost + the per-day stacked series (attributed skills only).
+ *  `dates` is the full set of usage days in scope (from the store), so the series spans every day —
+ *  emitting an empty `{}` for days with usage but no attributed skill — and its x-axis stays aligned
+ *  with Activity's byModelDaily chart. (Deriving dates from `skillTokensByDate` alone, which is
+ *  attributed-only, would silently drop idle days and collapse week-long gaps into adjacent bars.) */
 export function buildSkills(
   rows: BySkillModel[],
   skillTokensByDate: Array<{ date: string; skill: string; total: number }>,
+  dates: string[],
   plugins: Map<string, PluginInfo>,
 ): SkillsResponse {
   const bySkill = foldBySkill(rows, plugins);
 
   const skillDayMap = new Map<string, Map<string, number>>();
-  const dates = new Set<string>();
   for (const r of skillTokensByDate) {
-    dates.add(r.date);
     let row = skillDayMap.get(r.date);
     if (!row) {
       row = new Map();

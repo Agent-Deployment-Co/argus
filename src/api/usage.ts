@@ -56,6 +56,24 @@ export function foldUsageByKey<R extends { model: string; usage: Usage; messages
   return map;
 }
 
+/** Fold (dimension, model) rows into sorted `NamedUsage[]` (per-model pricing, total-tokens desc),
+ *  optionally attaching per-row `meta`. The one place the `NamedUsage` shape + sort lives — used by
+ *  the by-source / by-project builders and by `foldBySkill` in tools.ts. */
+export function foldNamedUsage<R extends { model: string; usage: Usage; messages: number }>(
+  rows: R[],
+  keyOf: (row: R) => string,
+  metaFor?: (name: string) => NamedUsage["meta"],
+): NamedUsage[] {
+  return [...foldUsageByKey(rows, keyOf).entries()]
+    .map(([name, v]) => {
+      const row: NamedUsage = { name, messages: v.messages, total: totalTokens(v.u), cost: v.cost };
+      const meta = metaFor?.(name);
+      if (meta) row.meta = meta;
+      return row;
+    })
+    .sort((a, b) => b.total - a.total);
+}
+
 /** GET /api/usage/daily — per-day token/cost buckets + grand totals + the unpriced-model list. Session
  *  count comes in separately (each session has one source, so it's the sum of the per-source counts). */
 export function buildUsageDaily(rows: ByDateModel[], totalSessions: number): UsageDailyResponse {
@@ -132,16 +150,7 @@ export function buildUsageBySource(
   sessionsBySource: Array<{ source: string; sessions: number }>,
 ): UsageBySourceResponse {
   const sessions = new Map(sessionsBySource.map((r) => [r.source, r.sessions]));
-  const bySource: NamedUsage[] = [...foldUsageByKey(rows, (r) => r.source).entries()]
-    .map(([name, v]) => ({
-      name,
-      messages: v.messages,
-      total: totalTokens(v.u),
-      cost: v.cost,
-      meta: { sessions: sessions.get(name) ?? 0 },
-    }))
-    .sort((a, b) => b.total - a.total);
-  return { bySource };
+  return { bySource: foldNamedUsage(rows, (r) => r.source, (name) => ({ sessions: sessions.get(name) ?? 0 })) };
 }
 
 /** GET /api/usage/by-project — tokens/cost per project with its distinct-session count. (Per-project
@@ -151,14 +160,5 @@ export function buildUsageByProject(
   sessionsByProject: Array<{ project: string; sessions: number }>,
 ): UsageByProjectResponse {
   const sessions = new Map(sessionsByProject.map((r) => [r.project, r.sessions]));
-  const byProject: NamedUsage[] = [...foldUsageByKey(rows, (r) => r.project).entries()]
-    .map(([name, v]) => ({
-      name,
-      messages: v.messages,
-      total: totalTokens(v.u),
-      cost: v.cost,
-      meta: { sessions: sessions.get(name) ?? 0 },
-    }))
-    .sort((a, b) => b.total - a.total);
-  return { byProject };
+  return { byProject: foldNamedUsage(rows, (r) => r.project, (name) => ({ sessions: sessions.get(name) ?? 0 })) };
 }
