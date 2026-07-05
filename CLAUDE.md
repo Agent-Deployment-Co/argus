@@ -117,10 +117,12 @@ layer], **`secrets.ts`** [BYO API-key storage]) and the CLI/runtime layer (`cli.
 
 The data flow:
 
-`indexing/` (Discover → Parse → Reconcile → Interpret → Materialize) → `store/` → `reporting/aggregate.ts` → (`api/serve.ts` web app | `push.ts` snapshot)
+`indexing/` (Discover → Parse → Reconcile → Interpret → Materialize) → `store/` → (`api/serve.ts` per-view endpoints for the web app | `push.ts` raw-row upload for `sync`)
 
-`reporting/dashboard-builder.ts` wraps read + `aggregate` as `buildDashboard()`, the single entry
-point the `sync` command and the web server both call.
+Neither read path assembles a monolithic `Dashboard`: `serve` answers one small endpoint per view,
+each reading only what it needs straight off `argus.db` (#217), and `sync` uploads raw `resolved_*`
+rows that the Hub aggregates server-side. `reporting/dashboard-builder.ts` is now just the shared
+source-selection helpers (`ALL_SOURCES`/`sourcesFor`/`BuildDashboardOptions`).
 
 The HTTP API layer lives under **`src/api/`**: `serve.ts` (the Hono server + routes) plus the
 serve-only modules that build its responses — `session-list.ts`, `recommendations.ts`,
@@ -139,12 +141,13 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   - Tool *results* (output dumped back into context) are attributed to the producing tool via the
     `tool_use_id`/`call_id` → tool-name maps, for the "heaviest tool results" view.
 
-- **`reporting/aggregate.ts`** — Pure transform from `ParseResult` → `Dashboard`. Builds all the breakdowns
-  (daily, by model/source/skill/project, MCP servers, plugins, sessions). **Cost is computed by
-  re-walking individual messages** (not by summing usage then pricing once) so sessions that mix
-  models are priced correctly. Also derives per-session health (#38): friction counts, median/max
-  turn duration, stop-reason mix, token-growth trend, and an ended-clean/interrupted/unknown
-  outcome proxy — plus `frictionTotals` and per-project friction rollups (CLI-only fields).
+- **`reporting/aggregate.ts`** — Per-session row assembly + plugin folding (the monolithic dashboard
+  `aggregate()` was removed in #217). `buildSessionRow` turns one session's messages + metadata into a
+  `SessionRow` — including per-session health (#38): friction counts, median/max turn duration,
+  stop-reason mix, token-growth trend — and is shared by the on-demand `/api/session/:id` detail and
+  the paginated `/api/sessions` list. `foldPlugins` folds per-skill + per-MCP-server usage into
+  per-plugin rows (used by the `/api/plugins` builder). Cost is priced per message here (via `cost()`);
+  the per-view builders price per `(dimension, model)` row from the store's SQL sums.
 
 - **`indexing/friction.ts`** — Session-level friction signals (#37): detection of interruptions,
   permission rejections, compactions, and turn durations from raw Claude JSONL records, plus
@@ -188,12 +191,18 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 
 - **`api/serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer`
   to listen via `@hono/node-server`) serving the React+Vite SPA in `web/` from `dist/web` (SPA fallback
-  to `index.html`) and exposing the JSON API:
-  - `GET /api/snapshot` — the aggregate dashboard (`{ dashboard, recommendations, generatedAtMs }`),
-    narrowed by `since`/`until`/`project`/`source` query params (mapped into `buildDashboard`'s
-    filters; unknown source → 400). Built fresh per request — no server cache; concurrent identical
-    builds share one in-flight promise and the client's React Query `staleTime` absorbs reloads.
-    `includeSessions:false`, so the heavy per-session array is **not** in this payload.
+  to `index.html`) and exposing the JSON API. There is **no monolithic `/api/snapshot`** (#217): each
+  dashboard view has its own small endpoint, built on demand with no server-side cache (the client's
+  React Query `staleTime` absorbs reloads). All the view endpoints share the same
+  `since`/`until`/`project`/`source` filter contract (unknown source → 400):
+  - **Views** — `GET /api/usage/daily` (totals + per-day buckets + unpriced models), `/api/usage/by-model`,
+    `/api/usage/by-source`, `/api/usage/by-project`, `/api/skills`, `/api/tools/by-tool`,
+    `/api/tools/by-category`, `/api/tools/by-mcp-server`, `/api/tools/heaviest-results`, `/api/plugins`,
+    `/api/health`, `/api/recommendations`. Each is a promoted store method (`readUsageByDateModel`,
+    `readToolStats`, `readHealthRollups`, … in `store/store.ts`) plus a small pure builder in
+    `api/{usage,tools,plugins,health}.ts` that folds + prices it. `computeRecommendations`
+    (`api/recommendations.ts`) takes only its four real inputs (byPlugin/highTokenGrowthSessions/
+    frictionTotals/unpriced).
   - `GET /api/sessions` — paginated/filtered/sorted session list (`api/session-list.ts` over
     `store.readSessionAggregates`, a SQL `GROUP BY` — no per-message JS walk).
   - `GET /api/session/:id` — one session's full `SessionRow`, built on demand from its messages.
@@ -275,9 +284,11 @@ Stable types come from the external package `@agentdeploymentco/argus-schema` (p
 `package.json`). `types.ts` re-exports them and extends `Dashboard`/`SessionRow` with CLI-only fields
 (e.g. `bySource`, `source`). The schema package is the single source of truth shared with `argus-hub`.
 
-`test/contract.test.ts` builds a dashboard from fixtures and validates it against the schema's
-`PushPayloadSchema`, so any drift between the CLI's output and the wire contract **fails CI**. When
-changing the `Dashboard` shape, update the schema package and bump its pinned version here in lockstep.
+`sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads raw `resolved_*` rows and the
+Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check (`test/contract.test.ts`)
+was removed in #217. The `@agentdeploymentco/argus-schema` `Dashboard` type still backs the web app's
+per-view response types (imported type-only by `web/src/types.ts`); the wire contract itself is being
+reworked separately.
 
 Not everything is on the wire: `TaskFact` and the task-interpretation fields (chapter span, outcome,
 frustration) live in `store/store-contract.ts` and are **local-only** — they are not pushed by `sync`,

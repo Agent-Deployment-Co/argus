@@ -3,7 +3,16 @@ import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { DataTable, type Column } from "../components/DataTable";
 import { Dash, Skills } from "../components/pills";
 import { CATEGORY_PALETTE, fmt, SERIES, SKILL_PALETTE, usd } from "../lib/format";
-import { useSnapshot } from "../lib/snapshot";
+import {
+  useDashboardFilters,
+  useHeaviestResultsQuery,
+  useMcpServersQuery,
+  usePluginsQuery,
+  useSkillsQuery,
+  useToolsByCategoryQuery,
+  useToolsByToolQuery,
+  viewGate,
+} from "../lib/views";
 import type { PluginRow, ToolStat } from "../types";
 
 const fmtTick = (v: number | string) => fmt(Number(v));
@@ -37,13 +46,26 @@ const pluginColumns: Column<PluginRow>[] = [
 ];
 
 export function Tools() {
-  const { dashboard: d } = useSnapshot();
-  const sk = d.bySkill.filter((s) => s.name !== "(none)").slice(0, 12);
+  const filters = useDashboardFilters();
+  const skillsQ = useSkillsQuery(filters);
+  const toolsQ = useToolsByToolQuery(filters);
+  const categoryQ = useToolsByCategoryQuery(filters);
+  const mcpQ = useMcpServersQuery(filters);
+  const heaviestQ = useHeaviestResultsQuery(filters);
+  const pluginsQ = usePluginsQuery(filters);
+  const gate = viewGate([skillsQ, toolsQ, categoryQ, mcpQ, heaviestQ, pluginsQ]);
+  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
+
+  const { bySkill, bySkillDaily } = skillsQ.data!;
+  const sk = bySkill.filter((s) => s.name !== "(none)").slice(0, 12);
   const skillNames = sk.map((s) => s.name);
-  const tc = d.byToolCategory;
-  const tr = d.byTool.slice(0, 15);
-  const mcp = d.byMcpServer.slice(0, 12);
-  const ht = d.heaviestToolResults.slice(0, 12);
+  const tc = categoryQ.data!.byToolCategory;
+  const byTool = toolsQ.data!.byTool;
+  const tr = byTool.slice(0, 15);
+  const mcp = mcpQ.data!.byMcpServer.slice(0, 12);
+  const ht = heaviestQ.data!.heaviestToolResults.slice(0, 12);
+  const byPlugin = pluginsQ.data!.byPlugin;
 
   return (
     <>
@@ -71,10 +93,10 @@ export function Tools() {
                 type="bar"
                 height={260}
                 data={{
-                  labels: d.bySkillDaily.map((x) => x.date),
+                  labels: bySkillDaily.map((x) => x.date),
                   datasets: skillNames.map((name, i) => ({
                     label: name,
-                    data: d.bySkillDaily.map((x) => x.bySkill[name] ?? 0),
+                    data: bySkillDaily.map((x) => x.bySkill[name] ?? 0),
                     backgroundColor: SKILL_PALETTE[i % SKILL_PALETTE.length],
                     stack: "s",
                   })),
@@ -118,7 +140,7 @@ export function Tools() {
           </div>
         </div>
         <div style={{ marginTop: 24 }}>
-          <DataTable columns={toolColumns} rows={d.byTool} initialSort="calls" />
+          <DataTable columns={toolColumns} rows={byTool} initialSort="calls" />
         </div>
         <p className="note">MCP tool names are displayed as <code>server · tool</code>.</p>
       </section>
@@ -160,7 +182,7 @@ export function Tools() {
 
       <section>
         <h2 className="t-eyebrow">Plugins</h2>
-        <DataTable columns={pluginColumns} rows={d.byPlugin} initialSort="skillTokens" />
+        <DataTable columns={pluginColumns} rows={byPlugin} initialSort="skillTokens" />
         <p className="note">Rows marked <span className="pill warn">enabled · unused</span> are candidates to disable — every enabled plugin's skills/MCP tools add context overhead before you prompt.</p>
       </section>
     </>

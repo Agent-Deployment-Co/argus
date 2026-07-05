@@ -5,25 +5,44 @@ import { Recommendations } from "../components/Recommendations";
 import { StatCards, type Stat } from "../components/StatCards";
 import { namedUsageColumns } from "../components/tables";
 import { fmt, modelFamilyColor, SERIES, SKILL_PALETTE, usd } from "../lib/format";
-import { useSnapshot } from "../lib/snapshot";
+import {
+  useDashboardFilters,
+  useRecommendationsQuery,
+  useUsageByModelQuery,
+  useUsageBySourceQuery,
+  useUsageDailyQuery,
+  viewGate,
+} from "../lib/views";
 
 const fmtTick = (v: number | string) => fmt(Number(v));
 const dollarTick = (v: number | string) => "$" + v;
 const rotated = { maxRotation: 90, minRotation: 45 };
 
 export function Activity() {
-  const { dashboard: d, recommendations } = useSnapshot();
-  const u = d.totals.usage;
-  const days = d.daily.map((x) => x.date);
+  const filters = useDashboardFilters();
+  const dailyQ = useUsageDailyQuery(filters);
+  const modelQ = useUsageByModelQuery(filters);
+  const sourceQ = useUsageBySourceQuery(filters);
+  const recsQ = useRecommendationsQuery(filters);
+  const gate = viewGate([dailyQ, modelQ, sourceQ, recsQ]);
+  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
+
+  const { totals, daily, unpriced } = dailyQ.data!;
+  const { byModel, byModelDaily } = modelQ.data!;
+  const { bySource } = sourceQ.data!;
+  const recommendations = recsQ.data!.recommendations;
+  const u = totals.usage;
+  const days = daily.map((x) => x.date);
 
   const cards: Stat[] = [
-    { label: "Sessions", value: String(d.totals.sessions) },
-    { label: "Model responses", value: fmt(d.totals.messages) },
-    { label: "Total tokens", value: fmt(d.totals.total) },
-    { label: "Est. cost", value: usd(d.totals.cost) },
+    { label: "Sessions", value: String(totals.sessions) },
+    { label: "Model responses", value: fmt(totals.messages) },
+    { label: "Total tokens", value: fmt(totals.total) },
+    { label: "Est. cost", value: usd(totals.cost) },
     {
       label: "Cache read",
-      value: <>{Math.round((100 * u.cacheRead) / Math.max(1, d.totals.total))}% <small>{fmt(u.cacheRead)}</small></>,
+      value: <>{Math.round((100 * u.cacheRead) / Math.max(1, totals.total))}% <small>{fmt(u.cacheRead)}</small></>,
     },
     { label: "Output tokens", value: fmt(u.output) },
   ];
@@ -32,8 +51,8 @@ export function Activity() {
     <>
       <section>
         <StatCards stats={cards} />
-        {d.unpriced.length > 0 && (
-          <p className="note">Unpriced models (cost excluded): {d.unpriced.join(", ")}.</p>
+        {unpriced.length > 0 && (
+          <p className="note">Unpriced models (cost excluded): {unpriced.join(", ")}.</p>
         )}
       </section>
 
@@ -50,10 +69,10 @@ export function Activity() {
               data={{
                 labels: days,
                 datasets: [
-                  { label: "cache read", data: d.daily.map((x) => x.cacheRead), backgroundColor: SERIES.cacheRead, stack: "t" },
-                  { label: "cache write", data: d.daily.map((x) => x.cacheWrite), backgroundColor: SERIES.cacheWrite, stack: "t" },
-                  { label: "input", data: d.daily.map((x) => x.input), backgroundColor: SERIES.input, stack: "t" },
-                  { label: "output", data: d.daily.map((x) => x.output), backgroundColor: SERIES.output, stack: "t" },
+                  { label: "cache read", data: daily.map((x) => x.cacheRead), backgroundColor: SERIES.cacheRead, stack: "t" },
+                  { label: "cache write", data: daily.map((x) => x.cacheWrite), backgroundColor: SERIES.cacheWrite, stack: "t" },
+                  { label: "input", data: daily.map((x) => x.input), backgroundColor: SERIES.input, stack: "t" },
+                  { label: "output", data: daily.map((x) => x.output), backgroundColor: SERIES.output, stack: "t" },
                 ],
               }}
               options={{
@@ -70,7 +89,7 @@ export function Activity() {
               data={{
                 labels: days,
                 datasets: [{
-                  label: "USD", data: d.daily.map((x) => x.cost),
+                  label: "USD", data: daily.map((x) => x.cost),
                   borderColor: SERIES.accent, backgroundColor: "rgba(239,137,32,.16)",
                   fill: true, tension: 0.25, pointRadius: 2,
                 }],
@@ -93,15 +112,15 @@ export function Activity() {
               type="doughnut"
               height={220}
               data={{
-                labels: d.bySource.map((s) => s.name),
+                labels: bySource.map((s) => s.name),
                 // One color per source by position so the palette scales to however many sources exist
                 // (a fixed 4-color array left the 5th+ slice uncolored once claude-chat was added).
-                datasets: [{ data: d.bySource.map((s) => s.total), backgroundColor: d.bySource.map((_, i) => SKILL_PALETTE[i % SKILL_PALETTE.length]) }],
+                datasets: [{ data: bySource.map((s) => s.total), backgroundColor: bySource.map((_, i) => SKILL_PALETTE[i % SKILL_PALETTE.length]) }],
               }}
               options={{
                 plugins: {
                   legend: { position: "right" },
-                  tooltip: { callbacks: { label: (c) => `${c.label}: ${fmt(Number(c.parsed))} tok · ${usd(d.bySource[c.dataIndex]!.cost)}` } },
+                  tooltip: { callbacks: { label: (c) => `${c.label}: ${fmt(Number(c.parsed))} tok · ${usd(bySource[c.dataIndex]!.cost)}` } },
                 },
               } satisfies ChartOptions<"doughnut">}
             />
@@ -111,7 +130,7 @@ export function Activity() {
             <ChartCanvas
               type="bar"
               height={220}
-              data={{ labels: d.bySource.map((s) => s.name), datasets: [{ label: "USD", data: d.bySource.map((s) => s.cost), backgroundColor: SERIES.accent }] }}
+              data={{ labels: bySource.map((s) => s.name), datasets: [{ label: "USD", data: bySource.map((s) => s.cost), backgroundColor: SERIES.accent }] }}
               options={{
                 indexAxis: "y",
                 plugins: { legend: { display: false } },
@@ -121,38 +140,9 @@ export function Activity() {
           </div>
         </div>
         <div style={{ marginTop: 24 }}>
-          <DataTable columns={namedUsageColumns("Source")} rows={d.bySource} initialSort="total" />
+          <DataTable columns={namedUsageColumns("Source")} rows={bySource} initialSort="total" />
         </div>
       </section>
-
-      {d.byUser && d.byUser.length > 0 && (
-        <section>
-          <h2 className="t-eyebrow">By user</h2>
-          <div className="grid2">
-            <div className="panel">
-              <h3 className="t-subhead">Tokens by user</h3>
-              <ChartCanvas
-                type="bar"
-                height={240}
-                data={{ labels: d.byUser.map((x) => x.name), datasets: [{ label: "tokens", data: d.byUser.map((x) => x.total), backgroundColor: SERIES.input }] }}
-                options={{ indexAxis: "y", plugins: { legend: { display: false } }, scales: { x: { ticks: { callback: fmtTick } } } } satisfies ChartOptions<"bar">}
-              />
-            </div>
-            <div className="panel">
-              <h3 className="t-subhead">Est. cost by user</h3>
-              <ChartCanvas
-                type="bar"
-                height={240}
-                data={{ labels: d.byUser.map((x) => x.name), datasets: [{ label: "USD", data: d.byUser.map((x) => x.cost), backgroundColor: SERIES.accent }] }}
-                options={{ indexAxis: "y", plugins: { legend: { display: false } }, scales: { x: { ticks: { callback: dollarTick } } } } satisfies ChartOptions<"bar">}
-              />
-            </div>
-          </div>
-          <div style={{ marginTop: 24 }}>
-            <DataTable columns={namedUsageColumns("User")} rows={d.byUser} initialSort="total" />
-          </div>
-        </section>
-      )}
 
       <section>
         <h2 className="t-eyebrow">Models</h2>
@@ -162,10 +152,10 @@ export function Activity() {
             type="bar"
             height={260}
             data={{
-              labels: d.byModelDaily.map((x) => x.date),
-              datasets: d.byModel.map((m) => ({
+              labels: byModelDaily.map((x) => x.date),
+              datasets: byModel.map((m) => ({
                 label: m.name,
-                data: d.byModelDaily.map((x) => x.byModel[m.name] ?? 0),
+                data: byModelDaily.map((x) => x.byModel[m.name] ?? 0),
                 backgroundColor: modelFamilyColor(m.name),
                 stack: "m",
               })),

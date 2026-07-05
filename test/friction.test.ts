@@ -10,12 +10,14 @@ import {
 } from "../src/indexing/parse/producers/claude/parser.ts";
 import { parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
 import { parseFixtures } from "./helpers/parse-fixtures.ts";
-import { aggregate } from "../src/reporting/aggregate.ts";
+import { buildSessionRow } from "../src/reporting/aggregate.ts";
+import { openStore } from "../src/store/store.ts";
 import {
   emptySessionFriction,
   type MessageRecord,
   type ParseResult,
   type SessionFriction,
+  type SessionRow,
 } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -279,13 +281,38 @@ function syntheticParse(messages: MessageRecord[], friction?: SessionFriction): 
   };
 }
 
-function aggregated(parsed: ParseResult) {
-  return aggregate(parsed, new Map(), new Map());
+/** Build each session's row the way /api/session(s) does now — buildSessionRow per session, instead
+ *  of the deleted monolithic aggregate(). */
+function sessionRowsFor(parsed: ParseResult): SessionRow[] {
+  const bySession = new Map<string, MessageRecord[]>();
+  for (const m of parsed.messages) {
+    (bySession.get(m.sessionId) ?? bySession.set(m.sessionId, []).get(m.sessionId)!).push(m);
+  }
+  return [...bySession].map(([id, msgs]) =>
+    buildSessionRow(id, msgs, parsed.sessions.get(id), "", parsed.tasksBySession?.get(id) ?? []),
+  );
+}
+
+/** The friction rollup now lives in SQL (readHealthRollups). Seed a throwaway store from an in-memory
+ *  ParseResult and read it back, so the rollup is exercised end to end like the /api/health endpoint. */
+async function healthRollupsFor(parsed: ParseResult) {
+  const store = await openStore({ path: join(tempRoot(), "argus.db") });
+  try {
+    const bySession = new Map<string, MessageRecord[]>();
+    for (const m of parsed.messages) {
+      (bySession.get(m.sessionId) ?? bySession.set(m.sessionId, []).get(m.sessionId)!).push(m);
+    }
+    const sessions = [...bySession].map(([id, messages]) => ({ meta: parsed.sessions.get(id)!, messages }));
+    await store.materializeSessions("claude", sessions);
+    return await store.readHealthRollups();
+  } finally {
+    await store.close();
+  }
 }
 
 describe("session health (#38)", () => {
-  const dash = aggregated(frictionParsed);
-  const row = dash.sessions.find((s) => s.sessionId === "frict1")!;
+  const rows = sessionRowsFor(frictionParsed);
+  const row = rows.find((s) => s.sessionId === "frict1")!;
 
   test("folds friction onto SessionRow.health", () => {
     expect(row.health).toMatchObject({
@@ -300,16 +327,17 @@ describe("session health (#38)", () => {
     });
   });
 
-  test("rolls friction up to totals and per-project meta", () => {
-    expect(dash.frictionTotals).toEqual({
+  test("rolls friction up to totals and per-project meta", async () => {
+    const health = await healthRollupsFor(frictionParsed);
+    expect(health.frictionTotals).toEqual({
       observableSessions: 1,
       interruptions: 3,
       rejections: 1,
       compactions: 1,
       turns: 3,
     });
-    const project = dash.byProject.find((p) => p.name === "fixture/frict")!;
-    expect(project.meta?.friction).toEqual({
+    const project = health.projectFriction.find((p) => p.project === "fixture/frict")!;
+    expect(project.friction).toEqual({
       observableSessions: 1,
       interruptions: 3,
       rejections: 1,
@@ -319,11 +347,11 @@ describe("session health (#38)", () => {
   });
 
   test("friction is null (not zero) for a source that doesn't observe it", () => {
-    const codex = aggregated({
+    const codex = sessionRowsFor({
       messages: [syntheticMessage({ ts: 1, source: "codex", sessionId: "cx", project: "p" })],
       sessions: new Map(),
       toolResults: new Map(),
-    }).sessions[0]!.health;
+    })[0]!.health;
     expect(codex.interruptions).toBeNull();
     expect(codex.stopReasons).toBeNull();
   });
@@ -336,11 +364,11 @@ describe("session health (#38)", () => {
         usage: { input: 0, output: 0, cacheRead: i * 1000, cacheWrite5m: 0, cacheWrite1h: 0 },
       }),
     );
-    const health = aggregated(syntheticParse(msgs, emptySessionFriction())).sessions[0]!.health;
+    const health = sessionRowsFor(syntheticParse(msgs, emptySessionFriction()))[0]!.health;
     expect(health.tokenGrowth).toBe(37);
 
-    const short = aggregated(syntheticParse(msgs.slice(0, 9), emptySessionFriction()));
-    expect(short.sessions[0]!.health.tokenGrowth).toBeNull();
+    const short = sessionRowsFor(syntheticParse(msgs.slice(0, 9), emptySessionFriction()));
+    expect(short[0]!.health.tokenGrowth).toBeNull();
   });
 
   test("non-Claude sessions report null friction fields but still get tokenGrowth", () => {
@@ -352,8 +380,7 @@ describe("session health (#38)", () => {
         usage: { input: 100 * (i + 1), output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
       }),
     );
-    const health = aggregated({ messages: msgs, sessions: new Map(), toolResults: new Map() })
-      .sessions[0]!.health;
+    const health = sessionRowsFor({ messages: msgs, sessions: new Map(), toolResults: new Map() })[0]!.health;
     expect(health.interruptions).toBeNull();
     expect(health.tokenGrowth).toBe(10); // 1000/100
   });

@@ -3,98 +3,127 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
-import { PushPayloadSchema, SCHEMA_VERSION } from "@agentdeploymentco/argus-schema";
-import { aggregate } from "../src/reporting/aggregate.ts";
-import { parseFixtures } from "./helpers/parse-fixtures.ts";
-import { computeRecommendations } from "../src/api/recommendations.ts";
-import { createApp, type Snapshot } from "../src/api/serve.ts";
+import { createApp, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
 import type { TaskFact } from "../src/store/store-contract.ts";
-import type { PluginInfo } from "../src/types.ts";
-
-const FIX = join(import.meta.dir, "fixtures");
+import type { SessionRow } from "../src/types.ts";
 
 /** Same-origin marker the web app sends on mutating requests (see rejectCrossSite in serve.ts). */
 const SAME_ORIGIN = { headers: { "X-Argus-App": "1" }, method: "POST" } as const;
 
-// Parse fixtures once via the real pipeline (temp store); each fixtureSnapshot() re-aggregates the
-// cached ParseResult so the helper stays synchronous and call sites are unchanged.
-const FIXTURE_PARSED = await parseFixtures({
-  projectsDir: join(FIX, "projects"),
-  historyFile: join(FIX, "history.jsonl"),
-  codexSessionsDir: join(FIX, "codex-sessions"),
-  geminiDir: join(FIX, "gemini"),
-  sources: ["claude", "codex", "gemini"],
-});
+/** A full set of per-view readers for routing tests: every reader returns a marker payload; an
+ *  optional `capture` records the filters each was called with. The concrete payload doesn't matter
+ *  here — the folding/pricing logic lives in the builders' own unit tests (dashboard-views.test.ts). */
+function makeViews(capture?: (filters: SnapshotFilters) => void): ViewReaders {
+  const reader = (async (filters: SnapshotFilters) => {
+    capture?.(filters);
+    return { ok: true };
+  }) as unknown as ViewReader<never>;
+  return {
+    usageDaily: reader,
+    usageByModel: reader,
+    usageBySource: reader,
+    usageByProject: reader,
+    skills: reader,
+    toolsByTool: reader,
+    toolsByCategory: reader,
+    toolsByMcpServer: reader,
+    toolsHeaviestResults: reader,
+    plugins: reader,
+    health: reader,
+    recommendations: reader,
+  };
+}
 
-function fixtureSnapshot(): Snapshot {
-  const dashboard = aggregate(FIXTURE_PARSED, new Map<string, PluginInfo>(), new Map());
-  dashboard.generatedAtMs = 1_780_000_000_000;
-  return { dashboard, recommendations: computeRecommendations(dashboard), generatedAtMs: dashboard.generatedAtMs };
+const VIEW_PATHS = [
+  "/api/usage/daily",
+  "/api/usage/by-model",
+  "/api/usage/by-source",
+  "/api/usage/by-project",
+  "/api/skills",
+  "/api/tools/by-tool",
+  "/api/tools/by-category",
+  "/api/tools/by-mcp-server",
+  "/api/tools/heaviest-results",
+  "/api/plugins",
+  "/api/health",
+  "/api/recommendations",
+] as const;
+
+/** A minimal SessionRow for the /api/session/:id detail test (built inline; serve no longer carries a
+ *  per-session array anywhere for tests to borrow one from). */
+function fixtureSession(sessionId: string): SessionRow {
+  return {
+    source: "codex",
+    sessionId,
+    project: "web",
+    start: 1,
+    end: 2,
+    durationMs: 1,
+    messages: 1,
+    userMessages: null,
+    agentMessages: null,
+    rawTurns: null,
+    models: ["gpt-5"],
+    topSkills: [],
+    toolCounts: {},
+    filesTouched: [],
+    total: 10,
+    cost: 0,
+    firstPrompt: "hi",
+    summary: "",
+    health: {
+      interruptions: null,
+      rejections: null,
+      compactions: null,
+      turns: null,
+      medianTurnMs: null,
+      maxTurnMs: null,
+      stopReasons: null,
+      tokenGrowth: null,
+    },
+    tasks: [],
+  };
 }
 
 describe("serve API", () => {
-  test("GET /healthz answers without touching the snapshot source", async () => {
-    const app = createApp(async () => {
-      throw new Error("should not be called");
-    }, null);
-
+  test("GET /healthz answers without touching the store", async () => {
+    const app = createApp(null);
     const res = await app.request("/healthz");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
   });
 
-  test("GET /api/snapshot returns a payload whose dashboard satisfies the wire contract", async () => {
-    const snap = fixtureSnapshot();
-    const app = createApp(async () => snap, null);
+  test("view endpoints return the reader payload and pass filters through", async () => {
+    let seen: SnapshotFilters | undefined;
+    const app = createApp(null, { views: makeViews((f) => { seen = f; }) });
 
-    const res = await app.request("/api/snapshot");
+    const res = await app.request("/api/usage/daily?since=2026-01-01&until=2026-02-01&project=web&source=codex");
     expect(res.status).toBe(200);
-
-    const body = (await res.json()) as Snapshot;
-    expect(body.dashboard.bySource.map((s) => s.name).sort()).toEqual(["claude", "codex", "gemini"]);
-    expect(Array.isArray(body.recommendations)).toBe(true);
-
-    const payload = { schemaVersion: SCHEMA_VERSION, user: "tester@fixture.test", generatedAtMs: body.generatedAtMs, dashboard: body.dashboard };
-    const result = PushPayloadSchema.safeParse(payload);
-    if (!result.success) console.error(result.error.issues);
-    expect(result.success).toBe(true);
-  });
-
-  test("?refresh forces a fresh build", async () => {
-    let calls = 0;
-    const snap = fixtureSnapshot();
-    const app = createApp(async (_filters, force) => { if (force) calls++; return snap; }, null);
-
-    await app.request("/api/snapshot");
-    await app.request("/api/snapshot?refresh=1");
-    expect(calls).toBe(1);
-  });
-
-  test("GET /api/snapshot passes since/until/project/source filters through", async () => {
-    let seen: unknown;
-    const snap = fixtureSnapshot();
-    const app = createApp(async (filters) => { seen = filters; return snap; }, null);
-
-    await app.request("/api/snapshot?since=2026-01-01&until=2026-02-01&project=web&source=codex");
+    expect(await res.json()).toEqual({ ok: true });
     expect(seen).toEqual({ since: "2026-01-01", until: "2026-02-01", project: "web", source: "codex" });
   });
 
-  test("GET /api/snapshot omits absent filters and rejects an unknown source", async () => {
-    let seen: unknown;
-    const snap = fixtureSnapshot();
-    const app = createApp(async (filters) => { seen = filters; return snap; }, null);
+  test("view endpoints omit absent filters and reject an unknown source", async () => {
+    let seen: SnapshotFilters | undefined;
+    const app = createApp(null, { views: makeViews((f) => { seen = f; }) });
 
-    await app.request("/api/snapshot");
+    await app.request("/api/health");
     expect(seen).toEqual({});
 
-    const res = await app.request("/api/snapshot?source=bogus");
-    expect(res.status).toBe(400);
+    expect((await app.request("/api/health?source=bogus")).status).toBe(400);
+  });
+
+  test("every view endpoint is 503 when the views aren't wired", async () => {
+    const app = createApp(null);
+    for (const path of VIEW_PATHS) {
+      expect((await app.request(path)).status).toBe(503);
+    }
   });
 
   test("GET /api/sessions parses pagination/sort/filters and returns the reader's page", async () => {
     let seen: unknown;
     const page = { rows: [], total: 0, offset: 5, limit: 25 };
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       sessionList: async (query) => { seen = query; return page; },
     });
 
@@ -109,7 +138,7 @@ describe("serve API", () => {
 
   test("GET /api/sessions clamps limit and rejects an unknown sort", async () => {
     let seen: { limit?: number } = {};
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       sessionList: async (query) => { seen = query; return { rows: [], total: 0, offset: 0, limit: query.limit }; },
     });
     await app.request("/api/sessions?limit=9999");
@@ -120,14 +149,13 @@ describe("serve API", () => {
   });
 
   test("GET /api/sessions is 503 when the reader is not wired", async () => {
-    const app = createApp(async () => fixtureSnapshot(), null);
+    const app = createApp(null);
     expect((await app.request("/api/sessions")).status).toBe(503);
   });
 
   test("GET /api/session/:id returns detail, 404 for unknown, 503 when unwired", async () => {
-    const snap = fixtureSnapshot();
-    const known = snap.dashboard.sessions[0]!;
-    const app = createApp(async () => snap, null, {
+    const known = fixtureSession("codex:codex-sess1");
+    const app = createApp(null, {
       sessionDetail: async (id) => (id === known.sessionId ? known : null),
     });
 
@@ -137,7 +165,7 @@ describe("serve API", () => {
 
     expect((await app.request("/api/session/nope")).status).toBe(404);
 
-    const unwired = createApp(async () => snap, null);
+    const unwired = createApp(null);
     expect((await unwired.request("/api/session/x")).status).toBe(503);
   });
 
@@ -154,7 +182,7 @@ describe("serve API", () => {
     };
     let changed = 0;
     const logs: string[] = [];
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       reindex: async (sessionId) => ({ ok: true, tasks: [{ ...task, sourceSessionId: sessionId }], diagnostics: [] }),
       onStoreChanged: () => { changed++; },
       log: (message) => { logs.push(message); },
@@ -176,7 +204,7 @@ describe("serve API", () => {
   test("POST /api/sessions/:id/reindex returns a clear error when the transcript is gone", async () => {
     let changed = 0;
     const logs: string[] = [];
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       reindex: async () => ({ ok: false, status: 422, message: "Couldn't re-index missing: it has no local transcript on disk." }),
       onStoreChanged: () => { changed++; },
       log: (message) => { logs.push(message); },
@@ -196,7 +224,7 @@ describe("serve API", () => {
   });
 
   test("POST /api/sessions/:id/reindex surfaces a 404 for an unknown session", async () => {
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       reindex: async () => ({ ok: false, status: 404, message: "No session found for missing." }),
     });
 
@@ -206,14 +234,14 @@ describe("serve API", () => {
   });
 
   test("POST /api/sessions/:id/reindex is 503 when reindexing isn't wired up", async () => {
-    const app = createApp(async () => fixtureSnapshot(), null);
+    const app = createApp(null);
     const res = await app.request("/api/sessions/whatever/reindex", SAME_ORIGIN);
     expect(res.status).toBe(503);
   });
 
   test("POST /api/sessions/:id/reindex rejects cross-site requests (CSRF guard)", async () => {
     let changed = 0;
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       reindex: async () => ({ ok: true, tasks: [], diagnostics: [] }) as never,
       onStoreChanged: () => { changed++; },
     });
@@ -243,7 +271,7 @@ describe("serve API", () => {
       models: ["claude-sonnet-4-5"],
     };
     let gotSession = "";
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       sessionTaskMetrics: async (sessionId) => {
         gotSession = sessionId;
         return { "fact:task:abc": metrics };
@@ -257,17 +285,17 @@ describe("serve API", () => {
   });
 
   test("GET /api/sessions/:id/task-metrics is 503 when metrics aren't wired up", async () => {
-    const app = createApp(async () => fixtureSnapshot(), null);
+    const app = createApp(null);
     const res = await app.request("/api/sessions/s/task-metrics");
     expect(res.status).toBe(503);
   });
 
   test("GET /api/debug returns the injected debug payload (503 when unwired)", async () => {
-    const unwired = createApp(async () => fixtureSnapshot(), null);
+    const unwired = createApp(null);
     expect((await unwired.request("/api/debug")).status).toBe(503);
 
     const payload = { generatedAtMs: 1, version: { argus: "9.9.9", storeSchema: 8 } };
-    const app = createApp(async () => fixtureSnapshot(), null, {
+    const app = createApp(null, {
       debugInfo: async () => payload as never,
     });
     const res = await app.request("/api/debug");
@@ -276,7 +304,7 @@ describe("serve API", () => {
   });
 
   test("unknown paths fall back to the SPA (placeholder when unbuilt)", async () => {
-    const app = createApp(async () => fixtureSnapshot(), null);
+    const app = createApp(null);
     const res = await app.request("/projects");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
@@ -288,7 +316,7 @@ describe("secret settings endpoints (#132)", () => {
   function appWithSecrets() {
     const dir = mkdtempSync(join(tmpdir(), "argus-serve-secrets-"));
     const store = new FileSecretStore(join(dir, "secrets.json"));
-    return createApp(async () => fixtureSnapshot(), null, { secrets: store });
+    return createApp(null, { secrets: store });
   }
   // A same-origin POST carrying a JSON body (the app header + loopback Host).
   const post = (value: unknown) => ({
@@ -455,7 +483,7 @@ describe("settings endpoints (#154)", () => {
     const dir = mkdtempSync(join(tmpdir(), "argus-serve-settings-"));
     const configPath = join(dir, "argus.json");
     writeFileSync(configPath, contents, "utf8");
-    return { app: createApp(async () => fixtureSnapshot(), null, { configPath }), configPath };
+    return { app: createApp(null, { configPath }), configPath };
   }
   const put = (value: unknown) => ({
     method: "PUT",

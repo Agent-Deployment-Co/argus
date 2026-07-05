@@ -168,12 +168,14 @@ archived ones are absent), while an **`index()` fails loud** — the error propa
 silently writing to a temp store it then discards (which would report success having persisted
 nothing, and would mask a corrupt store the user should `reindex --force`).
 
-- `sync` — build the syncable snapshot from the current local store → upload it.
-- `serve` — a pure `read()` → `aggregate.ts` path, exposed as a JSON API and an interactive web app
-  (see [web-app.md](./web-app.md)). The built dashboard is cached briefly between requests.
+- `sync` — read the current local store and upload its raw `resolved_*` rows; the Hub aggregates
+  them server-side (no `Dashboard` is assembled locally).
+- `serve` — exposes the store as a JSON API and an interactive web app (see [web-app.md](./web-app.md)).
+  Each dashboard view is its own small endpoint, reading only what it needs from the store on demand;
+  there is no server-side cache and no monolithic dashboard build.
 - `status` — a read-only scan (`scanStore`) that reports per-source counts, freshness, and the totals.
 
-Because the read model is self-sufficient, the dashboard can be produced even after the original
+Because the read model is self-sufficient, every view can be produced even after the original
 transcripts are gone.
 
 ---
