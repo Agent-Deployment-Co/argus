@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { dtAmPm } from "../lib/format";
-import { fetchDebugInfo } from "../lib/snapshot";
+import { fetchDebugInfo } from "../lib/debug";
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
   return (

@@ -6,7 +6,7 @@ import { Dash, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
-import { reindexSession, useSessionTaskMetrics } from "../lib/snapshot";
+import { reindexSession, useSessionTaskMetrics } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 

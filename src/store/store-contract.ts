@@ -521,35 +521,11 @@ export interface UsageGroupRow {
 }
 
 /**
- * Pre-grouped dashboard inputs read from the materialized model via SQL `GROUP BY` (#121), so the
- * snapshot builds without loading every per-turn usage row into JS. A pure assembler turns these into
- * the `Dashboard` (applying per-model pricing). Local-only (not on the sync wire). Each grouping that
- * needs cost is crossed with model. Tool breakdowns come from resolved_invocations; friction/outcome
- * from session metadata + light scans (no full message materialization).
+ * Session-level health rollups (#217): cross-session + per-project friction and the high-token-growth
+ * count, from session metadata + light SQL scans (no full message materialization). Backs
+ * GET /api/health and the recommendations endpoint. Local-only (not on the sync wire).
  */
-export interface DashboardAggregates {
-  usageByDateModel: Array<{ date: string } & UsageGroupRow>;
-  usageBySourceModel: Array<{ source: string } & UsageGroupRow>;
-  usageByProjectModel: Array<{ project: string } & UsageGroupRow>;
-  /** skill === "" means unattributed ("(none)"). */
-  usageBySkillModel: Array<{ skill: string } & UsageGroupRow>;
-  /** Per (date, skill) total tokens, attributed skills only — backs the skill-over-time chart. */
-  skillTokensByDate: Array<{ date: string; skill: string; total: number }>;
-  /** Distinct session counts per source/project. The grand total isn't carried — each session has one
-   *  source, so the assembler sums sessionsBySource (avoids a redundant COUNT(DISTINCT) scan). */
-  sessionsBySource: Array<{ source: string; sessions: number }>;
-  sessionsByProject: Array<{ project: string; sessions: number }>;
-  /** Per-tool result-size stats, scoped by source ONLY (not date/project) — mirrors the legacy
-   *  `ParseResult.toolResults` map. The assembler joins this for every `approxResultTokens` and derives
-   *  `heaviestToolResults` from it; call counts/sessions come from the fully-filtered lists below. */
-  toolResultStats: Array<{ tool: string; count: number; approxTokens: number }>;
-  /** Call counts/sessions per tool, fully filtered (source/date/project). category is constant per tool. */
-  byTool: Array<{ tool: string; category: ToolCategory; calls: number; sessions: number }>;
-  byToolCategory: Array<{ category: ToolCategory; calls: number; tools: number; sessions: number }>;
-  mcpServers: Array<{ server: string; calls: number }>;
-  /** Per MCP server, the raw tool names called + counts (assembler parses `mcp__server__tool`). */
-  mcpServerTools: Array<{ server: string; tool: string; count: number }>;
-  skillInvocations: Array<{ skill: string; count: number; sampleArgs: string }>;
+export interface HealthRollups {
   frictionTotals: FrictionTotals;
   projectFriction: Array<{ project: string; friction: FrictionTotals }>;
   highTokenGrowthSessions: number;
@@ -702,10 +678,31 @@ export interface ReadModelStore {
    *  readResolved (sources/since/until/project). The date filter selects which sessions appear (those
    *  with a message in range); each row's token sums are whole-session, not windowed. */
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]>;
-  /** Pre-grouped dashboard inputs for the serve snapshot (#121): numeric/tool/friction breakdowns via
-   *  SQL `GROUP BY`, so the snapshot builds without materializing every usage row. Filters match
-   *  readResolved (sources/since/until/project), windowed by message date like the JS aggregate. */
-  readDashboardAggregates(query?: ResolvedQuery): Promise<DashboardAggregates>;
+  // ---- Per-view dashboard reads (#217) ----
+  // Each serve endpoint reads only the breakdown it needs — no monolithic Dashboard build. All match
+  // readResolved's filters (sources/since/until/project), windowed by message date. Usage breakdowns
+  // return per-model token sums (cost is priced per model in JS by the serve-side builders).
+  readUsageByDateModel(query?: ResolvedQuery): Promise<Array<{ date: string } & UsageGroupRow>>;
+  readUsageBySourceModel(query?: ResolvedQuery): Promise<Array<{ source: string } & UsageGroupRow>>;
+  readUsageByProjectModel(query?: ResolvedQuery): Promise<Array<{ project: string } & UsageGroupRow>>;
+  /** skill === "" means unattributed ("(none)"). */
+  readUsageBySkillModel(query?: ResolvedQuery): Promise<Array<{ skill: string } & UsageGroupRow>>;
+  /** Per (date, skill) total tokens, attributed skills only — backs the skill-over-time chart. */
+  readSkillTokensByDate(query?: ResolvedQuery): Promise<Array<{ date: string; skill: string; total: number }>>;
+  /** Distinct session counts per source/project (each session has exactly one source). */
+  readSessionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; sessions: number }>>;
+  readSessionsByProject(query?: ResolvedQuery): Promise<Array<{ project: string; sessions: number }>>;
+  /** Per-tool result-size stats, scoped by source ONLY (not date/project) — mirrors the legacy
+   *  `ParseResult.toolResults` map. Joined for `approxResultTokens` and `heaviestToolResults`. */
+  readToolResultStats(query?: ResolvedQuery): Promise<Array<{ tool: string; count: number; approxTokens: number }>>;
+  /** Call counts/sessions per tool, fully filtered (source/date/project). category is constant per tool. */
+  readToolStats(query?: ResolvedQuery): Promise<Array<{ tool: string; category: ToolCategory; calls: number; sessions: number }>>;
+  readToolCategoryStats(query?: ResolvedQuery): Promise<Array<{ category: ToolCategory; calls: number; tools: number; sessions: number }>>;
+  readMcpServers(query?: ResolvedQuery): Promise<Array<{ server: string; calls: number }>>;
+  /** Per MCP server, the raw tool names called + counts (the builder parses `mcp__server__tool`). */
+  readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>>;
+  /** Cross-session + per-project friction and the high-token-growth count. */
+  readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

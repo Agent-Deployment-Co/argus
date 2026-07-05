@@ -4,7 +4,7 @@ import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { DataTable, type Column } from "../components/DataTable";
 import { metaSessions, namedUsageColumns } from "../components/tables";
 import { fmt, SERIES, usd } from "../lib/format";
-import { useSnapshot } from "../lib/snapshot";
+import { useDashboardFilters, useUsageByProjectQuery, viewGate } from "../lib/views";
 import type { NamedUsage } from "../types";
 
 const fmtTick = (v: number | string) => fmt(Number(v));
@@ -25,8 +25,14 @@ const projectColumns: Column<NamedUsage>[] = namedUsageColumns("Project").map((c
 );
 
 export function Projects() {
-  const { dashboard: d } = useSnapshot();
-  const pj = d.byProject.slice(0, 15);
+  const filters = useDashboardFilters();
+  const q = useUsageByProjectQuery(filters);
+  const gate = viewGate([q]);
+  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
+
+  const byProject = q.data!.byProject;
+  const pj = byProject.slice(0, 15);
 
   return (
     <section>
@@ -60,7 +66,7 @@ export function Projects() {
         </div>
       </div>
       <div style={{ marginTop: 24 }}>
-        <DataTable columns={projectColumns} rows={d.byProject} initialSort="total" />
+        <DataTable columns={projectColumns} rows={byProject} initialSort="total" />
       </div>
     </section>
   );
