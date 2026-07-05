@@ -15,9 +15,6 @@ export interface BuildDashboardOptions {
   /** Read the store without reconciling first (no writes). Set by the serve/upload legs of
    *  `argus run`, where the index leg is the sole writer; left false for one-shot commands. */
   readOnly?: boolean;
-  /** Retained for CLI wiring compatibility; the serve path no longer builds a per-session array
-   *  (the web app reads sessions from the paginated /api/sessions). */
-  includeSessions?: boolean;
   /** Drop local-only sources (claude.ai chat is personal usage with estimated, not metered, tokens —
    *  it stays in the local web app only). Set by the sync upload path; left false for serve/index. */
   forWire?: boolean;

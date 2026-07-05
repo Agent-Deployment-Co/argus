@@ -45,7 +45,7 @@ import {
   type SessionListResponse,
   type SessionSort,
 } from "./session-list.ts";
-import type { SessionRow } from "../types.ts";
+import type { PluginRow, SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
@@ -608,18 +608,31 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     until: filters.until ?? opts.build.until,
     projectSubstring: filters.project ?? opts.build.project,
   });
-  // Open the store, run a read against the request's query, and always close it. Reads are read-only
-  // (serve's index leg is the sole writer). One store open per view request, matching /api/sessions.
+  // One read connection reused across every view + session request. Opening a store runs an integrity
+  // scan (PRAGMA quick_check) + WAL setup, so re-opening per request — 4-6× per page load as the views
+  // fan out — is wasteful. serve only reads (its `index` leg is the sole writer); WAL lets a single
+  // long-lived reader see committed writes, so it stays current. Opened lazily (memoized on the
+  // promise, so concurrent first-callers share one open) and closed on shutdown. The reindex path
+  // keeps its own writable connection.
+  let readStorePromise: Promise<Store> | undefined;
+  const readStore = (): Promise<Store> => (readStorePromise ??= openStore());
+
   const withStore = async <T>(
     filters: SnapshotFilters,
     fn: (store: Store, query: ResolvedQuery) => Promise<T>,
-  ): Promise<T> => {
-    const store = await openStore();
-    try {
-      return await fn(store, queryFor(filters));
-    } finally {
-      await store.close();
-    }
+  ): Promise<T> => fn(await readStore(), queryFor(filters));
+
+  // Assemble the per-plugin rows for a query — shared by the /api/plugins view and the unused-plugins
+  // recommendation so the two can't drift for the same filters. Folding bySkill here also prices every
+  // model seen (unattributed usage included), which populates the unpriced-model list the recommendation
+  // rule reads.
+  const byPluginFor = async (store: Store, query: ResolvedQuery): Promise<PluginRow[]> => {
+    const plugins = loadPlugins();
+    const [skillRows, mcpServers] = await Promise.all([
+      store.readUsageBySkillModel(query),
+      store.readMcpServers(query),
+    ]);
+    return buildPlugins(foldBySkill(skillRows, plugins), mcpServers, plugins).byPlugin;
   };
 
   const views: ViewReaders = {
@@ -651,11 +664,12 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       }),
     skills: (filters) =>
       withStore(filters, async (store, query) => {
-        const [rows, byDate] = await Promise.all([
+        const [rows, byDate, dates] = await Promise.all([
           store.readUsageBySkillModel(query),
           store.readSkillTokensByDate(query),
+          store.readActiveDates(query),
         ]);
-        return buildSkills(rows, byDate, loadPlugins());
+        return buildSkills(rows, byDate, dates, loadPlugins());
       }),
     toolsByTool: (filters) =>
       withStore(filters, async (store, query) => {
@@ -682,33 +696,17 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       }),
     toolsHeaviestResults: (filters) =>
       withStore(filters, async (store, query) => buildHeaviestResults(await store.readToolResultStats(query))),
-    plugins: (filters) =>
-      withStore(filters, async (store, query) => {
-        const plugins = loadPlugins();
-        const [skillRows, mcpServers] = await Promise.all([
-          store.readUsageBySkillModel(query),
-          store.readMcpServers(query),
-        ]);
-        return buildPlugins(foldBySkill(skillRows, plugins), mcpServers, plugins);
-      }),
+    plugins: (filters) => withStore(filters, async (store, query) => ({ byPlugin: await byPluginFor(store, query) })),
     health: (filters) => withStore(filters, async (store, query) => buildHealth(await store.readHealthRollups(query))),
     recommendations: (filters) =>
       withStore(filters, async (store, query) => {
-        const plugins = loadPlugins();
-        const [skillRows, mcpServers, health] = await Promise.all([
-          store.readUsageBySkillModel(query),
-          store.readMcpServers(query),
-          store.readHealthRollups(query),
-        ]);
-        // Folding bySkill prices every model seen (unattributed usage included), populating the
-        // unpriced-model list the last rule reads.
-        const bySkill = foldBySkill(skillRows, plugins);
-        const { byPlugin } = buildPlugins(bySkill, mcpServers, plugins);
+        const [byPlugin, health] = await Promise.all([byPluginFor(store, query), store.readHealthRollups(query)]);
         return {
           recommendations: computeRecommendations({
             byPlugin,
             highTokenGrowthSessions: health.highTokenGrowthSessions,
             frictionTotals: health.frictionTotals,
+            // byPluginFor priced every model above, so the unpriced list is complete here.
             unpriced: unpricedModels(),
           }),
         };
@@ -734,48 +732,36 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   };
 
   const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
-    const store = await openStore();
-    try {
-      const byTask = await store.readSessionTaskMessages(sessionId);
-      const out: Record<string, TaskMetrics> = {};
-      for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
-      return out;
-    } finally {
-      await store.close();
-    }
+    const store = await readStore();
+    const byTask = await store.readSessionTaskMessages(sessionId);
+    const out: Record<string, TaskMetrics> = {};
+    for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+    return out;
   };
 
   const sessionList: SessionListReader = async (query) => {
-    const store = await openStore();
-    try {
-      const aggregates = await store.readSessionAggregates({
-        sources: sourcesFor(query.source ?? opts.build.source),
-        since: query.since ?? opts.build.since,
-        until: query.until ?? opts.build.until,
-      });
-      return buildSessionList(aggregates, {
-        sort: query.sort,
-        limit: query.limit,
-        offset: query.offset,
-        project: query.project,
-        q: query.q,
-        includeGenerated: query.includeGenerated,
-      });
-    } finally {
-      await store.close();
-    }
+    const store = await readStore();
+    const aggregates = await store.readSessionAggregates({
+      sources: sourcesFor(query.source ?? opts.build.source),
+      since: query.since ?? opts.build.since,
+      until: query.until ?? opts.build.until,
+    });
+    return buildSessionList(aggregates, {
+      sort: query.sort,
+      limit: query.limit,
+      offset: query.offset,
+      project: query.project,
+      q: query.q,
+      includeGenerated: query.includeGenerated,
+    });
   };
 
   const sessionDetail: SessionDetailReader = async (sessionId) => {
-    const store = await openStore();
-    try {
-      const messages = await store.readSessionMessages(sessionId);
-      if (!messages.length) return null;
-      const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
-      return buildSessionDetail(sessionId, messages, meta, tasks);
-    } finally {
-      await store.close();
-    }
+    const store = await readStore();
+    const messages = await store.readSessionMessages(sessionId);
+    if (!messages.length) return null;
+    const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
+    return buildSessionDetail(sessionId, messages, meta, tasks);
   };
 
   const app = createApp(webRoot, {
@@ -842,7 +828,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   const close = (): Promise<void> => {
     if (!closing) {
       closing = true;
-      server.close(() => resolveClosed());
+      server.close(() => {
+        // Close the shared read connection (if it was ever opened) before signalling done.
+        const closeStore = readStorePromise ? readStorePromise.then((s) => s.close()).catch(() => {}) : Promise.resolve();
+        void closeStore.finally(() => resolveClosed());
+      });
     }
     return closed;
   };

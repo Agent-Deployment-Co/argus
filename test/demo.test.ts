@@ -45,7 +45,7 @@ async function seedAndAggregate() {
     const plugins = demo.pluginsMap;
     const [
       byDateModel, sessionsBySource, bySourceModel, byProjectModel, sessionsByProject,
-      bySkillModel, skillTokensByDate, toolStats, toolResults, mcpServers, mcpServerTools, health,
+      bySkillModel, skillTokensByDate, activeDates, toolStats, toolResults, mcpServers, mcpServerTools, health,
     ] = await Promise.all([
       store.readUsageByDateModel(),
       store.readSessionsBySource(),
@@ -54,6 +54,7 @@ async function seedAndAggregate() {
       store.readSessionsByProject(),
       store.readUsageBySkillModel(),
       store.readSkillTokensByDate(),
+      store.readActiveDates(),
       store.readToolStats(),
       store.readToolResultStats(),
       store.readMcpServers(),
@@ -65,7 +66,7 @@ async function seedAndAggregate() {
       byModel: buildUsageByModel(byDateModel),
       bySource: buildUsageBySource(bySourceModel, sessionsBySource),
       byProject: buildUsageByProject(byProjectModel, sessionsByProject),
-      skills: buildSkills(bySkillModel, skillTokensByDate, plugins),
+      skills: buildSkills(bySkillModel, skillTokensByDate, activeDates, plugins),
       byTool: buildByTool(toolStats, toolResults),
       byMcpServer: buildByMcpServer(mcpServers, mcpServerTools, toolResults),
       health,

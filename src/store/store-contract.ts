@@ -689,6 +689,9 @@ export interface ReadModelStore {
   readUsageBySkillModel(query?: ResolvedQuery): Promise<Array<{ skill: string } & UsageGroupRow>>;
   /** Per (date, skill) total tokens, attributed skills only — backs the skill-over-time chart. */
   readSkillTokensByDate(query?: ResolvedQuery): Promise<Array<{ date: string; skill: string; total: number }>>;
+  /** Distinct usage days in scope (ascending) — the full x-axis for the skill-over-time series, so
+   *  it spans idle days rather than only the attributed ones from readSkillTokensByDate. */
+  readActiveDates(query?: ResolvedQuery): Promise<string[]>;
   /** Distinct session counts per source/project (each session has exactly one source). */
   readSessionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; sessions: number }>>;
   readSessionsByProject(query?: ResolvedQuery): Promise<Array<{ project: string; sessions: number }>>;

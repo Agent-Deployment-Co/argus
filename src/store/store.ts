@@ -2183,6 +2183,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  readActiveDates(query?: ResolvedQuery): Promise<string[]> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return (
+        await all<{ date: string }>(
+          this.db,
+          `SELECT DISTINCT date FROM resolved_usage ${usage.messageWhere} ORDER BY date`,
+          usage.messageParams,
+        )
+      ).map((r) => r.date);
+    });
+  }
+
   readSessionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; sessions: number }>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);

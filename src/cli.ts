@@ -253,8 +253,8 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
       // silently destroyed extracted tasks (and firstPrompt) for any session whose transcript changed
       // since the last index. The store is maintained by `index` / `argus run`. See #98.
       // The web app reads sessions from the paginated /api/sessions resource; the per-view dashboard
-      // endpoints never build a per-session array (includeSessions is a no-op for serve now).
-      build: { source: "all", readOnly: true, includeSessions: false },
+      // endpoints never build a per-session array.
+      build: { source: "all", readOnly: true },
       // Per-session reindex (POST /api/sessions/:id/reindex) honors the argus.json task-extraction
       // setting (flag > env > argus.json > default), resolved here from config rather than a CLI flag.
       taskExtraction: taskExtractionOptions({}),
