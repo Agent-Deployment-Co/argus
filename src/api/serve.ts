@@ -610,8 +610,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   });
   // One read connection reused across every view + session request. Opening a store runs an integrity
   // scan (PRAGMA quick_check) + WAL setup, so re-opening per request — 4-6× per page load as the views
-  // fan out — is wasteful. serve only reads (its `index` leg is the sole writer); WAL lets a single
-  // long-lived reader see committed writes, so it stays current. Opened lazily (memoized on the
+  // fan out — is wasteful. serve only reads; the store is WAL (one writer + many concurrent readers),
+  // and every read here is autocommit (the `all()` helper is a bare SELECT, no BEGIN), so each query
+  // starts a fresh snapshot that sees the `index` leg's latest committed writes and holds no lock
+  // between requests. That's what makes a long-lived reader safe under `argus run`: it never goes
+  // stale, and it can't pin the WAL and starve wal_autocheckpoint. Opened lazily (memoized on the
   // promise, so concurrent first-callers share one open) and closed on shutdown. The reindex path
   // keeps its own writable connection.
   let readStorePromise: Promise<Store> | undefined;
