@@ -17,6 +17,7 @@ desktop/src-tauri/binaries/
 desktop/src-tauri/gen/
 desktop/src-tauri/web/
 *.bun-build
+.obsidian
 
 # Tauri build artifacts and staged sidecar/web (regenerated from dist/ by the build)
 desktop/src-tauri/target/
