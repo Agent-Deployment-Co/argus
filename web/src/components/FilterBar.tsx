@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { FilterX, Loader2 } from "lucide-react";
-import { KNOWN_SOURCES } from "../lib/snapshot";
+import { KNOWN_SOURCES } from "../lib/filters";
 import { daysAgo, type RootSearch } from "../router";
 import { Select } from "./Select";
 

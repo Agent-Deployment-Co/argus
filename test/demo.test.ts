@@ -9,9 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeRecommendations } from "../src/api/recommendations.ts";
 import { computeTaskMetrics } from "../src/api/task-metrics.ts";
+import { buildPlugins } from "../src/api/plugins.ts";
+import { buildByMcpServer, buildByTool, buildSkills, foldBySkill } from "../src/api/tools.ts";
+import { buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageDaily } from "../src/api/usage.ts";
 import { INTERPRETER_VERSION } from "../src/indexing/interpret/index.ts";
-import { cost } from "../src/pricing.ts";
-import { aggregate } from "../src/reporting/aggregate.ts";
+import { cost, unpricedModels } from "../src/pricing.ts";
 import { openStore } from "../src/store/store.ts";
 import { emptyUsage, totalTokens } from "../src/types.ts";
 import { generateDemoData } from "../scripts/demo/generate.ts";
@@ -38,9 +40,44 @@ async function seedAndAggregate() {
 
   const store = await openStore({ path });
   try {
-    const parsed = await store.readResolved();
-    const dash = aggregate(parsed, demo.pluginsMap, new Map());
-    const recs = computeRecommendations(dash);
+    // Build each view the way the serve endpoints do — per-view store reads + the pure builders,
+    // rather than the deleted monolithic aggregate().
+    const plugins = demo.pluginsMap;
+    const [
+      byDateModel, sessionsBySource, bySourceModel, byProjectModel, sessionsByProject,
+      bySkillModel, skillTokensByDate, activeDates, toolStats, toolResults, mcpServers, mcpServerTools, health,
+    ] = await Promise.all([
+      store.readUsageByDateModel(),
+      store.readSessionsBySource(),
+      store.readUsageBySourceModel(),
+      store.readUsageByProjectModel(),
+      store.readSessionsByProject(),
+      store.readUsageBySkillModel(),
+      store.readSkillTokensByDate(),
+      store.readActiveDates(),
+      store.readToolStats(),
+      store.readToolResultStats(),
+      store.readMcpServers(),
+      store.readMcpServerTools(),
+      store.readHealthRollups(),
+    ]);
+    const views = {
+      daily: buildUsageDaily(byDateModel, sessionsBySource.reduce((n, r) => n + r.sessions, 0)),
+      byModel: buildUsageByModel(byDateModel),
+      bySource: buildUsageBySource(bySourceModel, sessionsBySource),
+      byProject: buildUsageByProject(byProjectModel, sessionsByProject),
+      skills: buildSkills(bySkillModel, skillTokensByDate, activeDates, plugins),
+      byTool: buildByTool(toolStats, toolResults),
+      byMcpServer: buildByMcpServer(mcpServers, mcpServerTools, toolResults),
+      health,
+    };
+    const { byPlugin } = buildPlugins(foldBySkill(bySkillModel, plugins), mcpServers, plugins);
+    const recs = computeRecommendations({
+      byPlugin,
+      highTokenGrowthSessions: health.highTokenGrowthSessions,
+      frictionTotals: health.frictionTotals,
+      unpriced: unpricedModels(),
+    });
     const firstSessionId = [...demo.tasksBySession.keys()][0]!;
     const roundTrippedTasks = await store.readSessionTasks(firstSessionId);
 
@@ -61,34 +98,35 @@ async function seedAndAggregate() {
       }
     }
     const taskMetrics = { taskTokens, taskToolCalls, tasksWithMessages, totalTasks };
-    return { demo, dash, recs, roundTrippedTasks, firstSessionId, taskMetrics };
+    return { demo, views, recs, roundTrippedTasks, firstSessionId, taskMetrics };
   } finally {
     await store.close();
   }
 }
 
 test("the demo corpus fills every major breakdown", async () => {
-  const { demo, dash } = await seedAndAggregate();
+  const { demo, views } = await seedAndAggregate();
 
-  expect(dash.totals.sessions).toBe(demo.stats.sessions);
-  expect(dash.totals.messages).toBe(demo.stats.messages);
-  expect(dash.totals.cost).toBeGreaterThan(0);
+  expect(views.daily.totals.sessions).toBe(demo.stats.sessions);
+  expect(views.daily.totals.messages).toBe(demo.stats.messages);
+  expect(views.daily.totals.cost).toBeGreaterThan(0);
 
   // Trends have several distinct days across the window.
-  expect(dash.daily.length).toBeGreaterThan(5);
+  expect(views.daily.daily.length).toBeGreaterThan(5);
 
   // All four sources are represented (no Gemini in the demo).
-  const sources = new Set(dash.bySource.map((r) => r.name));
+  const sources = new Set(views.bySource.bySource.map((r) => r.name));
   for (const s of ["claude", "cowork", "claude-chat", "codex"]) expect(sources.has(s)).toBe(true);
 
-  expect(dash.byModel.length).toBeGreaterThanOrEqual(4);
-  expect(dash.byProject.length).toBeGreaterThanOrEqual(8);
-  expect(dash.byTool.length).toBeGreaterThan(0);
-  expect(dash.byMcpServer.length).toBeGreaterThan(0);
-  expect(dash.skillInvocations.length).toBeGreaterThan(0);
+  expect(views.byModel.byModel.length).toBeGreaterThanOrEqual(4);
+  expect(views.byProject.byProject.length).toBeGreaterThanOrEqual(8);
+  expect(views.byTool.byTool.length).toBeGreaterThan(0);
+  expect(views.byMcpServer.byMcpServer.length).toBeGreaterThan(0);
+  // At least one attributed skill (bySkill also carries the "(none)" bucket).
+  expect(views.skills.bySkill.some((s) => s.name !== "(none)")).toBe(true);
 
   // Every model the demo uses is priced, so cost is fully accounted for and no unpriced-models
-  // notice appears. Check the demo's own models directly: `dash.unpriced` reflects pricing.ts's
+  // notice appears. Check the demo's own models directly: `unpricedModels()` is pricing.ts's
   // process-global accumulator, which other tests pollute in a full run.
   const demoModels = new Set(
     [...demo.sessionsByOwner.values()].flat().flatMap((s) => s.messages.map((m) => m.model)),
@@ -98,7 +136,7 @@ test("the demo corpus fills every major breakdown", async () => {
   }
 
   // Manufactured rapid-growth sessions register.
-  expect(dash.highTokenGrowthSessions).toBeGreaterThanOrEqual(1);
+  expect(views.health.highTokenGrowthSessions).toBeGreaterThanOrEqual(1);
 });
 
 test("the corpus triggers the recommendations it's designed for", async () => {

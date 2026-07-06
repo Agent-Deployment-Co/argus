@@ -1,8 +1,9 @@
-import { Link, Outlet, useRouterState, useSearch } from "@tanstack/react-router";
+import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { useIsFetching } from "@tanstack/react-query";
 import { Activity, Folder, HeartPulse, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
-import { SnapshotProvider, useSnapshotQuery } from "../lib/snapshot";
+import { VIEW_QUERY_KEY } from "../lib/views";
 import { SettingsSurface } from "../routes/Settings";
 
 // The Argus arch mark — the ADC chevron un-bent into a rounded archway (a proto-"A"), four bands
@@ -43,12 +44,14 @@ function readCollapsed(): boolean {
   try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; }
 }
 
-const NAV: { to: string; label: string; icon: LucideIcon; healthOnly?: boolean }[] = [
+// The Health tab is always shown; the Health route itself renders an empty state when no sessions
+// carry friction data (native Claude transcripts), so it needs no cross-cutting pre-fetch here.
+const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/", label: "Activity", icon: Activity },
   { to: "/sessions", label: "Sessions", icon: MessagesSquare },
   { to: "/projects", label: "Projects", icon: Folder },
   { to: "/tools", label: "Tools", icon: Wrench },
-  { to: "/health", label: "Health", icon: HeartPulse, healthOnly: true },
+  { to: "/health", label: "Health", icon: HeartPulse },
 ];
 
 export function Layout() {
@@ -63,10 +66,11 @@ export function Layout() {
   const location = useRouterState({ select: (s) => s.location });
   const lastApp = useRef<{ pathname: string; search: Record<string, unknown> }>({ pathname: "/", search: {} });
   if (!isSettings) lastApp.current = { pathname: location.pathname, search: location.search as Record<string, unknown> };
-  const filters = useSearch({ strict: false, select: (s) => ({ since: s.since, until: s.until, source: s.source }) });
-  const query = useSnapshotQuery(filters, !isSettings);
-  const snap = query.data;
-  const hasHealth = (snap?.dashboard.frictionTotals.observableSessions ?? 0) > 0;
+  // Each dashboard view fetches its own data now, so there's no single snapshot query to gate on;
+  // any in-flight dashboard-view query drives the FilterBar's refreshing indicator. Scoped to the
+  // view query prefix so unrelated fetches (session detail, list pagination, task-metrics, /debug)
+  // don't spin it as if the date/source filter were reloading.
+  const fetching = useIsFetching({ queryKey: [VIEW_QUERY_KEY] }) > 0;
 
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleRail = useCallback(() => {
@@ -90,7 +94,6 @@ export function Layout() {
         </div>
         <nav className="rail-nav" aria-label="Dashboard sections">
           {NAV.map((item) => {
-            const disabled = item.healthOnly && !hasHealth;
             const Ico = item.icon;
             return (
               <Link
@@ -99,8 +102,7 @@ export function Layout() {
                 className="rail-link"
                 activeOptions={{ exact: item.to === "/" }}
                 activeProps={{ "aria-current": "page" }}
-                aria-disabled={disabled || undefined}
-                title={disabled ? "No Claude sessions — friction signals require native Claude transcripts" : item.label}
+                title={item.label}
               >
                 <Ico className="rail-icon" size={18} strokeWidth={1.75} aria-hidden />
                 <span className="rail-label">{item.label}</span>
@@ -133,17 +135,9 @@ export function Layout() {
         </div>
       </aside>
       <div className="content">
-        <FilterBar refreshing={query.isFetching} />
+        <FilterBar refreshing={fetching} />
         <main>
-          {query.isPending ? (
-            <div className="center-state">Reading transcripts…</div>
-          ) : query.isError ? (
-            <div className="center-state">Couldn't load data: {(query.error as Error).message}</div>
-          ) : (
-            <SnapshotProvider value={snap!}>
-              <Outlet />
-            </SnapshotProvider>
-          )}
+          <Outlet />
         </main>
       </div>
     </div>

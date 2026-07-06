@@ -2,21 +2,12 @@ import { Link } from "@tanstack/react-router";
 import { DataTable, type Column } from "../components/DataTable";
 import { StatCards, type Stat } from "../components/StatCards";
 import { compactProject, fmt } from "../lib/format";
-import { useDashboard } from "../lib/snapshot";
-import type { FrictionTotals, NamedUsage } from "../types";
+import { useDashboardFilters, useHealthQuery, viewGate } from "../lib/views";
+import type { FrictionTotals } from "../types";
 
 /** A project with observable friction, flattened for the table. */
 interface ProjectFriction extends FrictionTotals {
   project: string;
-}
-
-function projectFriction(byProject: NamedUsage[]): ProjectFriction[] {
-  const rows: ProjectFriction[] = [];
-  for (const p of byProject) {
-    const friction = p.meta?.friction as FrictionTotals | undefined;
-    if (friction && friction.observableSessions > 0) rows.push({ project: p.name, ...friction });
-  }
-  return rows;
 }
 
 const projectColumns: Column<ProjectFriction>[] = [
@@ -36,8 +27,13 @@ const projectColumns: Column<ProjectFriction>[] = [
 ];
 
 export function Health() {
-  const d = useDashboard();
-  const ft = d.frictionTotals;
+  const filters = useDashboardFilters();
+  const q = useHealthQuery(filters);
+  const gate = viewGate([q]);
+  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
+
+  const ft = q.data!.frictionTotals;
   const n = ft.observableSessions;
 
   if (n <= 0) {
@@ -51,7 +47,9 @@ export function Health() {
     { label: "Turns", value: <>{fmt(ft.turns)} <small>{(ft.turns / n).toFixed(0)}/session</small></> },
   ];
 
-  const projects = projectFriction(d.byProject);
+  const projects: ProjectFriction[] = q.data!.byProject
+    .filter((p) => p.friction.observableSessions > 0)
+    .map((p) => ({ project: p.project, ...p.friction }));
 
   return (
     <>

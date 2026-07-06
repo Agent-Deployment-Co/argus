@@ -1,4 +1,4 @@
-import type { Dashboard } from "../types.ts";
+import type { FrictionTotals, PluginRow } from "../types.ts";
 
 export type RecommendationSeverity = "tip" | "warning";
 
@@ -10,8 +10,17 @@ export interface Recommendation {
   detail: string;
 }
 
-export function computeRecommendations(d: Dashboard): Recommendation[] {
-  const rules: Array<(d: Dashboard) => Recommendation | null> = [
+/** The exact slice of the dashboard the recommendation rules read (#217) — narrowed from the whole
+ *  `Dashboard` so GET /api/recommendations can assemble only these four inputs. */
+export interface RecommendationInputs {
+  byPlugin: PluginRow[];
+  highTokenGrowthSessions: number;
+  frictionTotals: FrictionTotals;
+  unpriced: string[];
+}
+
+export function computeRecommendations(d: RecommendationInputs): Recommendation[] {
+  const rules: Array<(d: RecommendationInputs) => Recommendation | null> = [
     ruleUnusedPlugins,
     ruleTokenGrowth,
     ruleHighInterruptions,
@@ -22,7 +31,7 @@ export function computeRecommendations(d: Dashboard): Recommendation[] {
   return rules.map((r) => r(d)).filter((r): r is Recommendation => r !== null);
 }
 
-function ruleUnusedPlugins(d: Dashboard): Recommendation | null {
+function ruleUnusedPlugins(d: RecommendationInputs): Recommendation | null {
   const unused = d.byPlugin.filter((p) => p.enabled && !p.used);
   if (unused.length === 0) return null;
   const names = unused.map((p) => p.name).join(", ");
@@ -34,7 +43,7 @@ function ruleUnusedPlugins(d: Dashboard): Recommendation | null {
   };
 }
 
-function ruleTokenGrowth(d: Dashboard): Recommendation | null {
+function ruleTokenGrowth(d: RecommendationInputs): Recommendation | null {
   const highCount = d.highTokenGrowthSessions;
   if (highCount === 0) return null;
   const obs = d.frictionTotals.observableSessions || highCount;
@@ -47,7 +56,7 @@ function ruleTokenGrowth(d: Dashboard): Recommendation | null {
   };
 }
 
-function ruleHighInterruptions(d: Dashboard): Recommendation | null {
+function ruleHighInterruptions(d: RecommendationInputs): Recommendation | null {
   const { observableSessions, interruptions } = d.frictionTotals;
   if (!observableSessions || !interruptions) return null;
   const avg = interruptions / observableSessions;
@@ -60,7 +69,7 @@ function ruleHighInterruptions(d: Dashboard): Recommendation | null {
   };
 }
 
-function ruleRejections(d: Dashboard): Recommendation | null {
+function ruleRejections(d: RecommendationInputs): Recommendation | null {
   const { rejections } = d.frictionTotals;
   if (!rejections) return null;
   return {
@@ -71,7 +80,7 @@ function ruleRejections(d: Dashboard): Recommendation | null {
   };
 }
 
-function ruleFrequentCompactions(d: Dashboard): Recommendation | null {
+function ruleFrequentCompactions(d: RecommendationInputs): Recommendation | null {
   const { observableSessions, compactions } = d.frictionTotals;
   if (!observableSessions || !compactions) return null;
   const rate = compactions / observableSessions;
@@ -84,7 +93,7 @@ function ruleFrequentCompactions(d: Dashboard): Recommendation | null {
   };
 }
 
-function ruleUnpriced(d: Dashboard): Recommendation | null {
+function ruleUnpriced(d: RecommendationInputs): Recommendation | null {
   if (!d.unpriced.length) return null;
   return {
     id: "unpriced-models",

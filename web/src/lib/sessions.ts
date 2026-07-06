@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { fetchOrOffline, jsonOrThrow } from "./http";
-import { KNOWN_SOURCES, type SnapshotFilters } from "./snapshot";
-import type { SessionListResponse, SessionRow, SessionSort } from "../types";
+import { APP_HEADER, fetchOrOffline, jsonOrThrow } from "./http";
+import { KNOWN_SOURCES, type SnapshotFilters } from "./filters";
+import type { SessionListResponse, SessionRow, SessionSort, TaskMetrics } from "../types";
 
 /** Everything that narrows the paginated session list: the global snapshot filters (date/source)
  *  plus the Sessions-local refinements (project label, free text, generated toggle) and the sort. */
@@ -63,5 +63,38 @@ export function useSessionDetailQuery(sessionId: string | undefined) {
     queryKey: ["session", sessionId],
     queryFn: () => fetchSessionDetail(sessionId!),
     enabled: Boolean(sessionId),
+  });
+}
+
+export interface ReindexResponse {
+  tasks: NonNullable<SessionRow["tasks"]>;
+  diagnostics?: { message: string }[];
+}
+
+/** Re-index a single session: re-read its transcript from disk and refresh it in the local store
+ *  (sessions/messages/tools/tasks), with task processing on. Throws with a clear message when the
+ *  transcript is gone (the session can't be reindexed). */
+export async function reindexSession(sessionId: string): Promise<ReindexResponse> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/reindex`, {
+    method: "POST",
+    headers: { ...APP_HEADER },
+  });
+  return jsonOrThrow<ReindexResponse>(res, "Failed to refresh");
+}
+
+/** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
+ *  server-side from the messages attributed to each task. Backs both the task list (tokens per row)
+ *  and the detail drawer. */
+export async function fetchSessionTaskMetrics(sessionId: string): Promise<Record<string, TaskMetrics>> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/task-metrics`);
+  return (await jsonOrThrow<{ metrics: Record<string, TaskMetrics> }>(res, "Failed to load task metrics")).metrics;
+}
+
+/** Shared query for a session's per-task metrics. The list and the drawer both call this with the
+ *  same key, so React Query dedupes them into one request. */
+export function useSessionTaskMetrics(sessionId: string) {
+  return useQuery({
+    queryKey: ["session-task-metrics", sessionId],
+    queryFn: () => fetchSessionTaskMetrics(sessionId),
   });
 }

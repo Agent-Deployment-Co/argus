@@ -252,9 +252,9 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
       // already-materialized store, never reconcile/materialize on a page load. Writing on read
       // silently destroyed extracted tasks (and firstPrompt) for any session whose transcript changed
       // since the last index. The store is maintained by `index` / `argus run`. See #98.
-      // includeSessions:false — the web app reads the per-session array from the paginated
-      // /api/sessions resource, so it's omitted from the bulk /api/snapshot payload.
-      build: { source: "all", readOnly: true, includeSessions: false },
+      // The web app reads sessions from the paginated /api/sessions resource; the per-view dashboard
+      // endpoints never build a per-session array.
+      build: { source: "all", readOnly: true },
       // Per-session reindex (POST /api/sessions/:id/reindex) honors the argus.json task-extraction
       // setting (flag > env > argus.json > default), resolved here from config rather than a CLI flag.
       taskExtraction: taskExtractionOptions({}),
@@ -572,7 +572,7 @@ const debugArg = {
   },
 } as const;
 
-/** Inputs shared by serve and sync (everything `buildDashboard` reads). */
+/** Source/date/project selection flags shared by serve and sync. */
 const buildArgs = {
   ...sourceArg,
   ...filterArgs,

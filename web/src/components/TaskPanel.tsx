@@ -1,7 +1,7 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { dtAmPm, fmt, usd } from "../lib/format";
-import { useSessionTaskMetrics } from "../lib/snapshot";
+import { useSessionTaskMetrics } from "../lib/sessions";
 import type { SessionRow } from "../types";
 
 // The task shape comes straight from the snapshot (TaskFact, re-exported via SessionRow).

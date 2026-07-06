@@ -1,24 +1,51 @@
-// Local web server for the interactive dashboard (`argus serve`). Hono exposes the analyzed
-// Dashboard as a JSON API and serves the compiled React app from dist/web. This is the foundation
-// the future argusd daemon will run; today it builds the dashboard on demand, narrowed by the
-// /api/snapshot filter query params (since/until/project/source), collapsing concurrent identical
-// builds and leaning on the client's staleTime instead of a server-side cache.
+// Local web server for the interactive dashboard (`argus serve`). Hono exposes each dashboard view as
+// its own small JSON API (the per-view endpoints under /api/*) and serves the compiled React app from
+// dist/web. Every view reads exactly what it needs from argus.db on demand, narrowed by the shared
+// filter query params (since/until/project/source); there is no server-side cache and no monolithic
+// snapshot build. The `index` leg of `argus run` is the sole writer, so serve's reads are read-only.
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Dashboard } from "../reporting/aggregate.ts";
-import { ALL_SOURCES, buildSnapshot, sourcesFor, type BuildDashboardOptions } from "../reporting/dashboard-builder.ts";
+import { ALL_SOURCES, sourcesFor, type BuildDashboardOptions } from "../reporting/dashboard-builder.ts";
+import { loadPlugins } from "../reporting/inventory.ts";
+import { unpricedModels } from "../pricing.ts";
+import type { ResolvedQuery, Store } from "../store/store-contract.ts";
 import type { TranscriptSource } from "../types.ts";
+import {
+  buildUsageByModel,
+  buildUsageByProject,
+  buildUsageBySource,
+  buildUsageDaily,
+  type UsageByModelResponse,
+  type UsageByProjectResponse,
+  type UsageBySourceResponse,
+  type UsageDailyResponse,
+} from "./usage.ts";
+import {
+  buildByMcpServer,
+  buildByTool,
+  buildByToolCategory,
+  buildHeaviestResults,
+  buildSkills,
+  type ByMcpServerResponse,
+  type ByToolCategoryResponse,
+  type ByToolResponse,
+  foldBySkill,
+  type HeaviestResultsResponse,
+  type SkillsResponse,
+} from "./tools.ts";
+import { buildPlugins, type PluginsResponse } from "./plugins.ts";
+import { buildHealth, type HealthResponse } from "./health.ts";
 import {
   buildSessionDetail,
   buildSessionList,
   type SessionListResponse,
   type SessionSort,
 } from "./session-list.ts";
-import type { SessionRow } from "../types.ts";
+import type { PluginRow, SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
@@ -52,10 +79,9 @@ export interface ServeHandle {
   close(): Promise<void>;
 }
 
-export interface Snapshot {
-  dashboard: Dashboard;
+/** GET /api/recommendations payload. */
+export interface RecommendationsResponse {
   recommendations: Recommendation[];
-  generatedAtMs: number;
 }
 
 export interface ReindexResponse {
@@ -86,9 +112,9 @@ export interface SessionDetailResponse {
   session: SessionRow;
 }
 
-/** Server-side filters parsed from the /api/snapshot query string. Each narrows the dashboard at
- *  store-read time (pushed into buildDashboard's since/until/project/source); omitted fields fall
- *  back to the serve process's base options. */
+/** Server-side filters parsed from a dashboard view's query string. Each narrows the store read
+ *  (since/until/project/source); omitted fields fall back to the serve process's base options. Every
+ *  per-view endpoint takes the same set. */
 export interface SnapshotFilters {
   since?: string;
   until?: string;
@@ -96,9 +122,25 @@ export interface SnapshotFilters {
   source?: "all" | TranscriptSource;
 }
 
-/** Builds the snapshot for a request, narrowed by `filters`. `force` requests a fresh build
- *  (the `?refresh` seam) rather than joining an in-flight build for the same filters. */
-export type SnapshotSource = (filters: SnapshotFilters, force: boolean) => Promise<Snapshot>;
+/** A per-view reader: builds one view's response from the store, narrowed by `filters`. */
+export type ViewReader<T> = (filters: SnapshotFilters) => Promise<T>;
+
+/** The per-view readers serve wires into the dashboard endpoints (#217). Each opens the store, reads
+ *  only the breakdown its endpoint needs, and shapes it — there is no monolithic Dashboard build. */
+export interface ViewReaders {
+  usageDaily: ViewReader<UsageDailyResponse>;
+  usageByModel: ViewReader<UsageByModelResponse>;
+  usageBySource: ViewReader<UsageBySourceResponse>;
+  usageByProject: ViewReader<UsageByProjectResponse>;
+  skills: ViewReader<SkillsResponse>;
+  toolsByTool: ViewReader<ByToolResponse>;
+  toolsByCategory: ViewReader<ByToolCategoryResponse>;
+  toolsByMcpServer: ViewReader<ByMcpServerResponse>;
+  toolsHeaviestResults: ViewReader<HeaviestResultsResponse>;
+  plugins: ViewReader<PluginsResponse>;
+  health: ViewReader<HealthResponse>;
+  recommendations: ViewReader<RecommendationsResponse>;
+}
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
@@ -110,6 +152,9 @@ export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | nu
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
 interface AppOptions {
+  /** The per-view dashboard readers. Omitted in processes that don't read the store (the routes then
+   *  answer 503); tests pass stubs to exercise routing without a store. */
+  views?: ViewReaders;
   reindex?: SessionReindexer;
   /** Called after a successful reindex so the caller can drop its cached snapshot. */
   onStoreChanged?: () => void;
@@ -203,7 +248,7 @@ function placeholderHtml(): string {
 <h1>Argus is running</h1>
 <p>The web app hasn't been built yet. Build it once with <code>bun run build:web</code>, or run the
 dev server with <code>bun run dev:web</code> for live-reloading development.</p>
-<p>The data API is live at <a href="/api/snapshot">/api/snapshot</a>.</p></body>`;
+<p>The data API is live at <a href="/api/usage/daily">/api/usage/daily</a>.</p></body>`;
 }
 
 function taskCountLabel(count: number): string {
@@ -274,9 +319,10 @@ function rejectUnsafeHost(c: Context): Response | null {
 
 const SNAPSHOT_SOURCES = new Set<string>(["all", ...ALL_SOURCES]);
 
-/** Parse the /api/snapshot filter query params, or return an error message string for a 400.
- *  Dates are passed through as YYYY-MM-DD strings (the store compares them lexically); only
- *  `source` is validated against the known set so a typo doesn't silently widen the result. */
+/** Parse the shared dashboard-view filter query params (since/until/project/source), or return an
+ *  error message string for a 400. Dates are passed through as YYYY-MM-DD strings (the store compares
+ *  them lexically); only `source` is validated against the known set so a typo doesn't silently widen
+ *  the result. Every per-view endpoint uses this. */
 function parseSnapshotFilters(c: Context): SnapshotFilters | string {
   const filters: SnapshotFilters = {};
   const since = c.req.query("since");
@@ -324,22 +370,40 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
 
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
-export function createApp(getSnapshot: SnapshotSource, webRoot: string | null, opts: AppOptions = {}): Hono {
+export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
 
-  // Cheap liveness check: no store/snapshot access, just confirms the server is answering. The
-  // desktop app's front-door proxy polls this to know when a restarting sidecar is back up.
+  // Cheap liveness check: no store access, just confirms the server is answering. The desktop app's
+  // front-door proxy polls this to know when a restarting sidecar is back up.
   app.get("/healthz", (c) => c.json({ ok: true }));
 
-  app.get("/api/snapshot", async (c) => {
-    const filters = parseSnapshotFilters(c);
-    if (typeof filters === "string") return c.json({ error: filters }, 400);
-    const snap = await getSnapshot(filters, c.req.query("refresh") != null);
-    return c.json(snap);
-  });
+  // Per-view dashboard endpoints (#217): each reads exactly what its view needs from argus.db on
+  // demand — no monolithic snapshot. All share the since/until/project/source filter contract (unknown
+  // source → 400), and answer 503 when the reader isn't wired in this process.
+  const views = opts.views;
+  const viewRoute = <T,>(path: string, reader: ViewReader<T> | undefined): void => {
+    app.get(path, async (c) => {
+      if (!reader) return c.json({ error: "Dashboard data is unavailable in this process." }, 503);
+      const filters = parseSnapshotFilters(c);
+      if (typeof filters === "string") return c.json({ error: filters }, 400);
+      return c.json(await reader(filters));
+    });
+  };
+  viewRoute("/api/usage/daily", views?.usageDaily);
+  viewRoute("/api/usage/by-model", views?.usageByModel);
+  viewRoute("/api/usage/by-source", views?.usageBySource);
+  viewRoute("/api/usage/by-project", views?.usageByProject);
+  viewRoute("/api/skills", views?.skills);
+  viewRoute("/api/tools/by-tool", views?.toolsByTool);
+  viewRoute("/api/tools/by-category", views?.toolsByCategory);
+  viewRoute("/api/tools/by-mcp-server", views?.toolsByMcpServer);
+  viewRoute("/api/tools/heaviest-results", views?.toolsHeaviestResults);
+  viewRoute("/api/plugins", views?.plugins);
+  viewRoute("/api/health", views?.health);
+  viewRoute("/api/recommendations", views?.recommendations);
 
-  // Paginated, filtered, sorted session list — backed by SQL session aggregates, not the bulk
-  // snapshot (the full per-session array no longer ships in /api/snapshot).
+  // Paginated, filtered, sorted session list — backed by SQL session aggregates (no per-message JS
+  // walk). The dashboard views are separate per-view endpoints; sessions were never in them.
   app.get("/api/sessions", async (c) => {
     if (!opts.sessionList) return c.json({ error: "Session listing is unavailable in this process." }, 503);
     const query = parseSessionListQuery(c);
@@ -543,44 +607,122 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   // Settings load. Computed eagerly and passed in as the field's placeholder.
   const claudeBinary = resolveClaudeBinary();
 
-  // No server-side snapshot cache: each request builds its filtered slice fresh. The heavy work is
-  // a store read + aggregation; the client (TanStack Query) holds a short staleTime so rapid page
-  // reloads don't refetch, and the in-flight map below collapses concurrent identical requests into
-  // one build. `?refresh` (force) starts a fresh build rather than joining an in-flight one. This is
-  // the seam a warm argusd store will later replace.
-  const inFlight = new Map<string, Promise<Snapshot>>();
-
-  const buildOptionsFor = (filters: SnapshotFilters): BuildDashboardOptions => ({
-    ...opts.build,
-    source: filters.source ?? opts.build.source,
+  // No server-side cache: every view endpoint reads exactly what it needs from argus.db per request
+  // (the client's TanStack Query staleTime absorbs rapid reloads). Map a request's filters onto a
+  // store query, falling back to the serve process's base options for anything the request omits.
+  const queryFor = (filters: SnapshotFilters): ResolvedQuery => ({
+    sources: sourcesFor(filters.source ?? opts.build.source),
     since: filters.since ?? opts.build.since,
     until: filters.until ?? opts.build.until,
-    project: filters.project ?? opts.build.project,
+    projectSubstring: filters.project ?? opts.build.project,
   });
+  // One read connection reused across every view + session request. Opening a store runs an integrity
+  // scan (PRAGMA quick_check) + WAL setup, so re-opening per request — 4-6× per page load as the views
+  // fan out — is wasteful. serve only reads; the store is WAL (one writer + many concurrent readers),
+  // and every read here is autocommit (the `all()` helper is a bare SELECT, no BEGIN), so each query
+  // starts a fresh snapshot that sees the `index` leg's latest committed writes and holds no lock
+  // between requests. That's what makes a long-lived reader safe under `argus run`: it never goes
+  // stale, and it can't pin the WAL and starve wal_autocheckpoint. Opened lazily (memoized on the
+  // promise, so concurrent first-callers share one open) and closed on shutdown. The reindex path
+  // keeps its own writable connection.
+  let readStorePromise: Promise<Store> | undefined;
+  const readStore = (): Promise<Store> => (readStorePromise ??= openStore());
 
-  async function snapshot(filters: SnapshotFilters, force: boolean): Promise<Snapshot> {
-    const buildOpts = buildOptionsFor(filters);
-    const key = JSON.stringify(buildOpts);
-    if (!force) {
-      const existing = inFlight.get(key);
-      if (existing) return existing;
-    }
-    const pending = (async () => {
-      // Built from SQL GROUP BY rollups (#121): the snapshot no longer materializes every usage row.
-      const dashboard = await buildSnapshot(buildOpts, log);
-      return {
-        dashboard,
-        recommendations: computeRecommendations(dashboard),
-        generatedAtMs: dashboard.generatedAtMs,
-      } satisfies Snapshot;
-    })();
-    inFlight.set(key, pending);
-    try {
-      return await pending;
-    } finally {
-      if (inFlight.get(key) === pending) inFlight.delete(key);
-    }
-  }
+  const withStore = async <T>(
+    filters: SnapshotFilters,
+    fn: (store: Store, query: ResolvedQuery) => Promise<T>,
+  ): Promise<T> => fn(await readStore(), queryFor(filters));
+
+  // Assemble the per-plugin rows for a query — shared by the /api/plugins view and the unused-plugins
+  // recommendation so the two can't drift for the same filters. Folding bySkill here also prices every
+  // model seen (unattributed usage included), which populates the unpriced-model list the recommendation
+  // rule reads.
+  const byPluginFor = async (store: Store, query: ResolvedQuery): Promise<PluginRow[]> => {
+    const plugins = loadPlugins();
+    const [skillRows, mcpServers] = await Promise.all([
+      store.readUsageBySkillModel(query),
+      store.readMcpServers(query),
+    ]);
+    return buildPlugins(foldBySkill(skillRows, plugins), mcpServers, plugins).byPlugin;
+  };
+
+  const views: ViewReaders = {
+    usageDaily: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [rows, sessions] = await Promise.all([
+          store.readUsageByDateModel(query),
+          store.readSessionsBySource(query),
+        ]);
+        return buildUsageDaily(rows, sessions.reduce((n, r) => n + r.sessions, 0));
+      }),
+    usageByModel: (filters) =>
+      withStore(filters, async (store, query) => buildUsageByModel(await store.readUsageByDateModel(query))),
+    usageBySource: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [rows, sessions] = await Promise.all([
+          store.readUsageBySourceModel(query),
+          store.readSessionsBySource(query),
+        ]);
+        return buildUsageBySource(rows, sessions);
+      }),
+    usageByProject: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [rows, sessions] = await Promise.all([
+          store.readUsageByProjectModel(query),
+          store.readSessionsByProject(query),
+        ]);
+        return buildUsageByProject(rows, sessions);
+      }),
+    skills: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [rows, byDate, dates] = await Promise.all([
+          store.readUsageBySkillModel(query),
+          store.readSkillTokensByDate(query),
+          store.readActiveDates(query),
+        ]);
+        return buildSkills(rows, byDate, dates, loadPlugins());
+      }),
+    toolsByTool: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [stats, results] = await Promise.all([store.readToolStats(query), store.readToolResultStats(query)]);
+        return buildByTool(stats, results);
+      }),
+    toolsByCategory: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [categories, stats, results] = await Promise.all([
+          store.readToolCategoryStats(query),
+          store.readToolStats(query),
+          store.readToolResultStats(query),
+        ]);
+        return buildByToolCategory(categories, stats, results);
+      }),
+    toolsByMcpServer: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [servers, serverTools, results] = await Promise.all([
+          store.readMcpServers(query),
+          store.readMcpServerTools(query),
+          store.readToolResultStats(query),
+        ]);
+        return buildByMcpServer(servers, serverTools, results);
+      }),
+    toolsHeaviestResults: (filters) =>
+      withStore(filters, async (store, query) => buildHeaviestResults(await store.readToolResultStats(query))),
+    plugins: (filters) => withStore(filters, async (store, query) => ({ byPlugin: await byPluginFor(store, query) })),
+    health: (filters) => withStore(filters, async (store, query) => buildHealth(await store.readHealthRollups(query))),
+    recommendations: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [byPlugin, health] = await Promise.all([byPluginFor(store, query), store.readHealthRollups(query)]);
+        return {
+          recommendations: computeRecommendations({
+            byPlugin,
+            highTokenGrowthSessions: health.highTokenGrowthSessions,
+            frictionTotals: health.frictionTotals,
+            // byPluginFor priced every model above, so the unpriced list is complete here.
+            unpriced: unpricedModels(),
+          }),
+        };
+      }),
+  };
 
   const reindex: SessionReindexer = async (sessionId) => {
     // Honor the local text-retention opt-out (#120) on the web Refresh path: resolve it from config
@@ -601,51 +743,40 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   };
 
   const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
-    const store = await openStore();
-    try {
-      const byTask = await store.readSessionTaskMessages(sessionId);
-      const out: Record<string, TaskMetrics> = {};
-      for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
-      return out;
-    } finally {
-      await store.close();
-    }
+    const store = await readStore();
+    const byTask = await store.readSessionTaskMessages(sessionId);
+    const out: Record<string, TaskMetrics> = {};
+    for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+    return out;
   };
 
   const sessionList: SessionListReader = async (query) => {
-    const store = await openStore();
-    try {
-      const aggregates = await store.readSessionAggregates({
-        sources: sourcesFor(query.source ?? opts.build.source),
-        since: query.since ?? opts.build.since,
-        until: query.until ?? opts.build.until,
-      });
-      return buildSessionList(aggregates, {
-        sort: query.sort,
-        limit: query.limit,
-        offset: query.offset,
-        project: query.project,
-        q: query.q,
-        includeGenerated: query.includeGenerated,
-      });
-    } finally {
-      await store.close();
-    }
+    const store = await readStore();
+    const aggregates = await store.readSessionAggregates({
+      sources: sourcesFor(query.source ?? opts.build.source),
+      since: query.since ?? opts.build.since,
+      until: query.until ?? opts.build.until,
+    });
+    return buildSessionList(aggregates, {
+      sort: query.sort,
+      limit: query.limit,
+      offset: query.offset,
+      project: query.project,
+      q: query.q,
+      includeGenerated: query.includeGenerated,
+    });
   };
 
   const sessionDetail: SessionDetailReader = async (sessionId) => {
-    const store = await openStore();
-    try {
-      const messages = await store.readSessionMessages(sessionId);
-      if (!messages.length) return null;
-      const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
-      return buildSessionDetail(sessionId, messages, meta, tasks);
-    } finally {
-      await store.close();
-    }
+    const store = await readStore();
+    const messages = await store.readSessionMessages(sessionId);
+    if (!messages.length) return null;
+    const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
+    return buildSessionDetail(sessionId, messages, meta, tasks);
   };
 
-  const app = createApp(snapshot, webRoot, {
+  const app = createApp(webRoot, {
+    views,
     reindex,
     sessionTaskMetrics,
     sessionList,
@@ -672,8 +803,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   });
   let isListening = false;
 
-  // Bind to loopback only. /api/snapshot exposes transcript-derived data and `serve` is documented
-  // as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
+  // Bind to loopback only. The dashboard endpoints expose transcript-derived data and `serve` is
+  // documented as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
   // would expose that data to anyone on the network.
   const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
     isListening = true;
@@ -682,8 +813,9 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     if (!webRoot) {
       logWarn(log, "The web app isn't built yet. Showing a placeholder. Run `bun run build:web` first.");
     }
-    // Warm the unfiltered build so the first page load is fast; failures surface on the first request.
-    void snapshot({}, false).catch(() => {});
+    // Warm the store + unfiltered Activity read so the first page load is fast; failures surface on
+    // the first real request.
+    void views.usageDaily({}).catch(() => {});
     if (opts.open) spawnSync("open", [url]);
     resolveListening();
   });
@@ -707,7 +839,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   const close = (): Promise<void> => {
     if (!closing) {
       closing = true;
-      server.close(() => resolveClosed());
+      server.close(() => {
+        // Close the shared read connection (if it was ever opened) before signalling done.
+        const closeStore = readStorePromise ? readStorePromise.then((s) => s.close()).catch(() => {}) : Promise.resolve();
+        void closeStore.finally(() => resolveClosed());
+      });
     }
     return closed;
   };

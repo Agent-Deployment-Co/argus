@@ -19,7 +19,6 @@ import {
   type ParserDiagnostic,
   type ResolvedQuery,
   type Store,
-  type DashboardAggregates,
 } from "../store/store-contract.ts";
 import { openStore, rebuildStore } from "../store/store.ts";
 import { collectClientFingerprint } from "../client-fingerprint.ts";
@@ -620,19 +619,6 @@ export async function readStore(
     read: (store, query) => store.readResolved(query),
   });
   return { parsed: result, stats, diagnostics };
-}
-
-/** Pure read of the pre-grouped dashboard aggregates for the serve snapshot (#121) — same degrade
- *  behavior as readStore, but reads SQL GROUP BY rollups instead of materializing every usage row. */
-export async function readSnapshotAggregates(
-  opts: IncrementalParseOptions = {},
-): Promise<{ aggregates: DashboardAggregates; stats: SyncStats; diagnostics: ParserDiagnostic[] }> {
-  const { result, stats, diagnostics } = await runPipeline(opts, {
-    sync: false,
-    degradeOnError: true,
-    read: (store, query) => store.readDashboardAggregates(query),
-  });
-  return { aggregates: result, stats, diagnostics };
 }
 
 export async function parseAllIncremental(
