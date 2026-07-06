@@ -417,14 +417,14 @@ fn open_dashboard(app: &AppHandle) {
 }
 
 /// Build the served URL and hand it to the default browser. Assumes the front-door proxy is already
-/// listening (`open_dashboard` guarantees that). Lands on the welcome overlay (`?first_run=1`)
+/// listening (`open_dashboard` guarantees that). Lands on the welcome overlay (`?firstRun=1`)
 /// instead of the bare dashboard until the modal's "Don't show this again" checkbox has been ticked
 /// — the same `state.onboardingCompleted` flag `argus serve --open` checks.
 fn open_dashboard_now(app: &AppHandle) {
     let port = app.state::<AppState>().front_port.load(Ordering::SeqCst);
     let mut url = format!("http://localhost:{port}");
     if !onboarding_completed() {
-        url.push_str("?first_run=1");
+        url.push_str("?firstRun=1");
     }
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
         log::error!("opening the dashboard: {err}");
@@ -453,7 +453,7 @@ async fn wait_for_proxy_ready(app: &AppHandle) -> bool {
 ///
 /// The onboarding flow is macOS-only for now: Windows never reads or writes
 /// `state.onboardingCompleted`, so this always reads as "completed" there, which means
-/// `open_dashboard` never appends `?first_run=1` and `maybe_open_on_first_run` never auto-opens.
+/// `open_dashboard` never appends `?firstRun=1` and `maybe_open_on_first_run` never auto-opens.
 fn onboarding_completed() -> bool {
     if !cfg!(target_os = "macos") {
         return true;

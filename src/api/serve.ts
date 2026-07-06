@@ -844,7 +844,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       const onboardingCompleted =
         process.platform !== "darwin" ||
         (loadConfig(opts.configPath).state?.onboardingCompleted ?? false);
-      spawnSync("open", [onboardingCompleted ? url : `${url}?first_run=1`]);
+      spawnSync("open", [onboardingCompleted ? url : `${url}?firstRun=1`]);
     }
     resolveListening();
   });

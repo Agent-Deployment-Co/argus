@@ -12,7 +12,7 @@ import { Tools } from "./routes/Tools";
  *  parents only the data views — so /settings (incl. the Debug tab), which doesn't use them, stays out of scope and
  *  never carry these params in their URL. `retainSearchParams` keeps them in the URL as the user moves
  *  between the data views (so e.g. a date range survives switching tabs). `firstRun` is a one-shot
- *  trigger (`?first_run=1`) for the welcome modal — deliberately left out of `retainSearchParams` so
+ *  trigger (`?firstRun=1`) for the welcome modal — deliberately left out of `retainSearchParams` so
  *  it drops out of the URL as soon as the user navigates anywhere. */
 export interface RootSearch {
   since?: string;
@@ -42,10 +42,10 @@ const dashboardRoute = createRoute({
     since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
     until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
     source: typeof search.source === "string" && search.source ? search.source : undefined,
-    // The default search parser JSON-parses values, so `?first_run=1` arrives as the number 1, not
+    // The default search parser JSON-parses values, so `?firstRun=1` arrives as the number 1, not
     // the string "1" — accept both, plus the literal boolean, and nothing else.
     firstRun:
-      search.first_run === 1 || search.first_run === "1" || search.first_run === true ? true : undefined,
+      search.firstRun === 1 || search.firstRun === "1" || search.firstRun === true ? true : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until", "source"])] },
 });
