@@ -98,6 +98,15 @@ export interface ArgusConfig {
    *  transcripts from disk (#120). Stored text is local-only — never uploaded by `sync`. On by
    *  default; set to false to keep session text out of `argus.db` entirely. */
   retainText?: boolean;
+  /** App-persisted state: things Argus itself records about what's already happened (a completion
+   *  marker, a dismissed prompt), as opposed to a user-editable preference. Never shown in the
+   *  settings surface — there's no `ui` on these, so they never land in `EDITABLE`/`LAYOUT`. */
+  state?: {
+    /** Set once the user has dismissed the welcome modal (the "Don't show this again" checkbox),
+     *  so it isn't shown again. Off by default (unset/false = not yet completed) — `argus serve
+     *  --open` reads this to decide whether to append `?first_run=1` to the URL it opens. */
+    onboardingCompleted?: boolean;
+  };
 }
 
 export type ConfigWarn = (message: string) => void;
@@ -309,6 +318,18 @@ const RETENTION_SETTINGS = {
     env: "ARGUS_RETAIN_TEXT",
     flag: "retain-text",
     default: true,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+};
+
+/** App-persisted state (see `ArgusConfig.state`) — completion/dismissal markers Argus itself
+ *  records, never a user-facing preference. No `ui` on any of these, so they never land in the
+ *  settings surface's `EDITABLE`/`LAYOUT`. */
+export const STATE_SETTINGS = {
+  onboardingCompleted: {
+    path: "state.onboardingCompleted",
+    env: "ARGUS_STATE_ONBOARDING_COMPLETED",
+    default: false,
     parse: parseBool,
   } satisfies Setting<boolean>,
 };
@@ -610,6 +631,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(AUTO_UPDATE_SETTINGS),
     ...Object.values(RETENTION_SETTINGS),
     ...Object.values(LOG_SETTINGS),
+    ...Object.values(STATE_SETTINGS),
   ].map((s) => [s.path, s as Setting<unknown>]),
 );
 

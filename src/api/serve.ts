@@ -53,7 +53,7 @@ import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
-import { applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
+import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
 import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "../logger.ts";
@@ -71,6 +71,9 @@ export interface ServeOptions {
   installSignalHandlers?: boolean;
   /** When the caller owns signals, aborting this stops the server. */
   signal?: AbortSignal;
+  /** Override the `argus.json` path. Defaults to CONFIG_FILE; injected by tests so they never touch
+   *  the real config. */
+  configPath?: string;
 }
 
 /** Control surface for a running server. `closed` resolves once it has fully shut down. */
@@ -504,6 +507,21 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ setting: result.setting });
   });
 
+  // The welcome modal's "Don't show this again" checkbox (not a settings-surface field — see
+  // `applyOnboardingCompleted`). Same CSRF/DNS-rebinding hardening as the other mutating endpoints.
+  app.put("/api/onboarding", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    let completed: unknown;
+    try {
+      completed = (await c.req.json())?.completed;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a "completed" boolean.' }, 400);
+    }
+    applyOnboardingCompleted(Boolean(completed), opts.configPath);
+    return c.json({ completed: Boolean(completed) });
+  });
+
   // BYO LLM API keys (#132). Both routes are guarded against CSRF (rejectCrossSite) and
   // DNS-rebinding (rejectUnsafeHost), accept only allowlisted secret names, and NEVER return or log
   // the raw value — GET reports masked status only, POST echoes back masked status after writing.
@@ -784,6 +802,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
     claudeBinary,
+    configPath: opts.configPath,
     log,
   });
 
@@ -816,7 +835,17 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     // Warm the store + unfiltered Activity read so the first page load is fast; failures surface on
     // the first real request.
     void views.usageDaily({}).catch(() => {});
-    if (opts.open) spawnSync("open", [url]);
+    if (opts.open) {
+      // Fresh install (or the welcome modal hasn't been dismissed yet): land on the welcome
+      // overlay instead of the bare dashboard. `state.onboardingCompleted` is the same flag the
+      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding. Onboarding is
+      // macOS-only (mirrors `onboarding_completed()` in desktop/src-tauri/src/lib.rs): other
+      // platforms never read `state.onboardingCompleted` and always land on the bare dashboard.
+      const onboardingCompleted =
+        process.platform !== "darwin" ||
+        (loadConfig(opts.configPath).state?.onboardingCompleted ?? false);
+      spawnSync("open", [onboardingCompleted ? url : `${url}?first_run=1`]);
+    }
     resolveListening();
   });
 

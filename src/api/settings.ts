@@ -16,6 +16,7 @@ import {
   resolveSetting,
   resolveTaskExtraction,
   setPath,
+  STATE_SETTINGS,
   TASK_SETTINGS,
   writeConfigAtomic,
   type ArgusConfig,
@@ -336,6 +337,18 @@ export function applySetting(path: string, raw: unknown, configPath: string = CO
   setPath(file as Record<string, unknown>, path, value);
   writeConfigAtomic(file, configPath);
   return { ok: true, setting: describe(setting, file) };
+}
+
+/**
+ * Persist `state.onboardingCompleted` (the welcome modal's "Don't show this again" checkbox).
+ * Separate from `applySetting`: app-persisted state has no `ui` and doesn't belong in the settings
+ * surface, so it isn't in `EDITABLE` — it's a completion marker Argus itself records, not a
+ * user-facing preference to edit there.
+ */
+export function applyOnboardingCompleted(completed: boolean, configPath: string = CONFIG_FILE): void {
+  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+  setPath(file as Record<string, unknown>, STATE_SETTINGS.onboardingCompleted.path, completed);
+  writeConfigAtomic(file, configPath);
 }
 
 export interface ConnectionTestResult {
