@@ -954,23 +954,29 @@ fn check_for_updates_from_menu(app: &AppHandle) {
     });
 }
 
-/// Auto-open the dashboard on a fresh install, once the service is up and the very first update
-/// check has settled — so a signed update being auto-installed (which restarts the whole app, see
-/// `install_update`) always wins the race instead of racing a stale sidecar. Only ever called once,
-/// right after the first background update check in `start_update_check_loop`; a completed update
+/// Auto-open the dashboard on a fresh install, once the service is up and an update check has
+/// settled — so a signed update being auto-installed (which restarts the whole app, see
+/// `install_update`) always wins the race instead of racing a stale sidecar. Called after every
+/// background update check in `start_update_check_loop` until it returns `true`; a completed update
 /// install never reaches this point in the same process (it restarts before `run_background_update_check`
 /// returns), so on relaunch this runs again against the now-current version. If auto-update is off and
 /// an update just sits available for manual approval, that shouldn't block first-run forever, so this
 /// still opens.
-fn maybe_open_on_first_run(app: &AppHandle) {
+///
+/// Returns `true` once the first-run decision has settled (onboarding already complete, or the
+/// dashboard was just opened) — `false` only when the sidecar's initial spawn hasn't succeeded yet,
+/// so the caller keeps retrying on later ticks instead of giving up on this launch permanently.
+fn maybe_open_on_first_run(app: &AppHandle) -> bool {
     if onboarding_completed() {
-        return;
+        return true;
     }
     if app.state::<AppState>().child.lock().unwrap().is_none() {
-        // The sidecar isn't running (it failed to start) — nothing to open yet.
-        return;
+        // The sidecar isn't running yet (or its initial spawn failed) — nothing to open yet; try
+        // again on the next update check rather than giving up for the rest of this launch.
+        return false;
     }
     open_dashboard(app);
+    true
 }
 
 async fn sleep_update_interval() {
@@ -1025,18 +1031,18 @@ async fn run_background_update_check(app: AppHandle) {
     }
 }
 
-/// Check for updates immediately, then repeat using `autoUpdate.checkIntervalMinutes`. The very
-/// first check gates the first-run auto-open (`maybe_open_on_first_run`) so it never races an
-/// update install.
+/// Check for updates immediately, then repeat using `autoUpdate.checkIntervalMinutes`. Each check
+/// gates the first-run auto-open (`maybe_open_on_first_run`) so it never races an update install;
+/// it keeps retrying on later ticks until that settles, rather than a single first-iteration try
+/// that could permanently no-op if the sidecar hadn't started yet.
 fn start_update_check_loop(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let mut first_check = true;
+        let mut first_run_pending = true;
         loop {
             run_background_update_check(handle.clone()).await;
-            if first_check {
-                first_check = false;
-                maybe_open_on_first_run(&handle);
+            if first_run_pending {
+                first_run_pending = !maybe_open_on_first_run(&handle);
             }
             sleep_update_interval().await;
         }
