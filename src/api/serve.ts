@@ -838,8 +838,12 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     if (opts.open) {
       // Fresh install (or the welcome modal hasn't been dismissed yet): land on the welcome
       // overlay instead of the bare dashboard. `state.onboardingCompleted` is the same flag the
-      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding.
-      const onboardingCompleted = loadConfig(opts.configPath).state?.onboardingCompleted ?? false;
+      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding. Onboarding is
+      // macOS-only (mirrors `onboarding_completed()` in desktop/src-tauri/src/lib.rs): other
+      // platforms never read `state.onboardingCompleted` and always land on the bare dashboard.
+      const onboardingCompleted =
+        process.platform !== "darwin" ||
+        (loadConfig(opts.configPath).state?.onboardingCompleted ?? false);
       spawnSync("open", [onboardingCompleted ? url : `${url}?first_run=1`]);
     }
     resolveListening();
