@@ -10,6 +10,7 @@ import {
   llmFieldName,
   loadConfig,
   LLM_SETTINGS,
+  LOG_SETTINGS,
   present,
   resolveActiveProvider,
   resolveSetting,
@@ -166,6 +167,9 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     sections: [
       { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled] },
       { label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] },
+      // Terminal verbosity for this `argus serve` process. A change here applies to the running
+      // logger immediately (see the PUT /api/settings handler), not just the next start.
+      { label: "Logging", settings: [LOG_SETTINGS.level] },
     ],
   },
   {

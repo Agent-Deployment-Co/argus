@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
 import { createApp, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
+import { logger } from "../src/logger.ts";
 import type { TaskFact } from "../src/store/store-contract.ts";
 import type { SessionRow } from "../src/types.ts";
 
@@ -258,6 +259,37 @@ describe("serve API", () => {
     expect(crossSite.status).toBe(403);
 
     expect(changed).toBe(0);
+  });
+
+  test("PUT /api/settings/log.level writes the file and updates the running logger immediately", async () => {
+    const configPath = join(mkdtempSync(join(tmpdir(), "argus-serve-log-")), "argus.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const app = createApp(null, { configPath });
+
+    const before = logger.getLevel?.();
+    try {
+      const put = (value: string) =>
+        app.request("/api/settings/log.level", {
+          method: "PUT",
+          headers: { "X-Argus-App": "1", Host: "localhost", "content-type": "application/json" },
+          body: JSON.stringify({ value }),
+        });
+
+      const res = await put("trace");
+      expect(res.status).toBe(200);
+      expect((await res.json()).setting.effectiveValue).toBe("trace");
+      // Persisted to argus.json...
+      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({ log: { level: "trace" } });
+      // ...and applied to this serve process's logger without a restart.
+      expect(logger.getLevel?.()).toBe("trace");
+
+      // An invalid value is rejected (400) and leaves the running level untouched.
+      const bad = await put("loud");
+      expect(bad.status).toBe(400);
+      expect(logger.getLevel?.()).toBe("trace");
+    } finally {
+      if (before) logger.setLevel?.(before); // don't leak the level into other tests
+    }
   });
 
   test("GET /api/sessions/:id/task-metrics returns per-task metrics keyed by task id", async () => {

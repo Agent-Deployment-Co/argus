@@ -26,7 +26,7 @@ function tmpConfig(contents = "{}"): string {
   return path;
 }
 
-const TOUCHED_ENV = ["ARGUS_LLM_PROVIDER", "ARGUS_TASK_ENABLED"];
+const TOUCHED_ENV = ["ARGUS_LLM_PROVIDER", "ARGUS_TASK_ENABLED", "ARGUS_LOG_LEVEL"];
 afterEach(() => {
   for (const key of TOUCHED_ENV) delete process.env[key];
 });
@@ -48,7 +48,7 @@ describe("describeSettings", () => {
   test("General exposes auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
-    expect(paths).toEqual(["autoUpdate.enabled", "hub.url"]);
+    expect(paths).toEqual(["autoUpdate.enabled", "hub.url", "log.level"]);
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
     expect(paths).not.toContain("hub.key");
     const hubKey = general.sections.flatMap((s) => s.secretFields ?? []).find((f) => f.key === "hub.key")!;
@@ -185,6 +185,35 @@ describe("describeSettings", () => {
     expect(provider.effectiveValue).toBe("gemini"); // but the env var wins
     expect(provider.override).toEqual({ layer: "env", name: "ARGUS_LLM_PROVIDER" });
   });
+
+  test("log.level is a select in General with the levels in verbosity order and info as default", () => {
+    const level = findSetting({}, "log.level");
+    expect(level.ui.control).toBe("select");
+    expect(level.ui.label).toBe("Log level");
+    // Pinned unset choice labeled with the default, a separator, then the levels least→most verbose
+    // (a meaningful ranking, so not alphabetical — CLAUDE.md's UI ordering rule).
+    expect(level.ui.options).toEqual([
+      { value: "", label: "Default (info)" },
+      "separator",
+      { value: "error", label: "error" },
+      { value: "warn", label: "warn" },
+      { value: "info", label: "info" },
+      { value: "debug", label: "debug" },
+      { value: "trace", label: "trace" },
+    ]);
+    // Unset in the file → effective value is the built-in default.
+    expect(level.fileValue).toBeNull();
+    expect(level.effectiveValue).toBe("info");
+    expect(level.override).toBeUndefined();
+  });
+
+  test("log.level surfaces ARGUS_LOG_LEVEL as an env override", () => {
+    process.env.ARGUS_LOG_LEVEL = "debug";
+    const level = findSetting({ log: { level: "warn" } }, "log.level");
+    expect(level.fileValue).toBe("warn"); // the file still says warn
+    expect(level.effectiveValue).toBe("debug"); // but the env var wins
+    expect(level.override).toEqual({ layer: "env", name: "ARGUS_LOG_LEVEL" });
+  });
 });
 
 describe("applySetting", () => {
@@ -234,6 +263,22 @@ describe("applySetting", () => {
       if (!result.ok) expect(result.status).toBe(404);
     }
     expect(loadConfig(path)).toEqual({});
+  });
+
+  test("validates and writes log.level to argus.json", () => {
+    const path = tmpConfig();
+    const result = applySetting("log.level", "debug", path);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.setting.effectiveValue).toBe("debug");
+    expect(loadConfig(path)).toEqual({ log: { level: "debug" } });
+  });
+
+  test("rejects an invalid log.level with a 400 and does not write", () => {
+    const path = tmpConfig('{"log":{"level":"info"}}');
+    const result = applySetting("log.level", "loud", path);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(400);
+    expect(loadConfig(path)).toEqual({ log: { level: "info" } }); // untouched
   });
 
   test("coerces a toggle value", () => {
