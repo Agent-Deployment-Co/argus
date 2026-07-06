@@ -397,7 +397,14 @@ fn open_dashboard(app: &AppHandle) {
 /// Whether the welcome modal has already been dismissed with "Don't show this again"
 /// (`state.onboardingCompleted` in `argus.json`). Tolerant: a missing/malformed config reads as
 /// "not completed", so a fresh install shows the welcome overlay.
+///
+/// The onboarding flow is macOS-only for now: Windows never reads or writes
+/// `state.onboardingCompleted`, so this always reads as "completed" there, which means
+/// `open_dashboard` never appends `?first_run=1` and `maybe_open_on_first_run` never auto-opens.
 fn onboarding_completed() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
     read_argus_config_json()
         .and_then(|json| json_bool_setting(json.get("state").and_then(|v| v.get("onboardingCompleted"))))
         .unwrap_or(false)
