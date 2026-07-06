@@ -103,6 +103,11 @@ describe("claude-cli sandbox", () => {
     realpath: (path: string) =>
       path === "/usr/local/bin/claude" ? "/Users/you/.claude/local/claude" : path,
   };
+  const homebrewClaude = "/opt/homebrew/bin/claude";
+  const homebrewClaudeRealpath = "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js";
+  const homebrewNode = "/opt/homebrew/bin/node";
+  const homebrewNodeRealpath = "/opt/homebrew/Cellar/node/26.0.0/bin/node";
+  const homebrewNodeRealDir = "/opt/homebrew/Cellar/node/26.0.0/bin";
 
   test("builds a deny-by-default profile with Claude, keychain, and temp access", () => {
     const profile = buildClaudeSandboxProfile({
@@ -137,7 +142,7 @@ describe("claude-cli sandbox", () => {
     expect(profile).not.toContain("/Users/you/code");
   });
 
-  test("denies exec'ing /usr/bin/git so a CLT-less Mac never pops the install dialog (#git-popup)", () => {
+  test("clamps process-exec to an allowlist so CLT stubs (git/python3) never pop the install dialog", () => {
     const profile = buildClaudeSandboxProfile({
       claudeBin: "/usr/local/bin/claude",
       realClaudeBin: "/Users/you/.claude/local/claude",
@@ -147,10 +152,23 @@ describe("claude-cli sandbox", () => {
       env,
     });
 
-    expect(profile).toContain('(deny process-exec\n  (literal "/usr/bin/git"))');
-    // The deny must come after the blanket allow so it takes precedence.
-    expect(profile.indexOf("(allow process*)")).toBeLessThan(
-      profile.indexOf("(deny process-exec"),
+    // No blanket process allow: exec is denied by default and re-allowed only for the allowlist.
+    expect(profile).not.toContain("(allow process*)");
+    expect(profile).toContain("(allow process-fork)");
+    expect(profile).toContain("(deny process-exec)");
+    // The allowlist: claude itself (+ realpath) and the mandatory keychain helper — nothing else.
+    expect(profile).toContain(
+      '(allow process-exec\n' +
+        '  (literal "/Users/you/.claude/local/claude")\n' +
+        '  (literal "/usr/bin/security")\n' +
+        '  (literal "/usr/local/bin/claude"))',
+    );
+    // The Apple CLT stubs are not on the allowlist, so they stay denied by the blanket rule.
+    expect(profile).not.toContain('(literal "/usr/bin/git")');
+    expect(profile).not.toContain('(literal "/usr/bin/python3")');
+    // The allow must come after the blanket deny so it takes precedence.
+    expect(profile.indexOf("(deny process-exec)")).toBeLessThan(
+      profile.indexOf("(allow process-exec"),
     );
   });
 
@@ -162,6 +180,36 @@ describe("claude-cli sandbox", () => {
     expect(command.args[0]).toBe("-p");
     expect(command.args[1]).toContain("/Users/you/.claude/local/claude");
     expect(command.args.slice(2)).toEqual(["/usr/local/bin/claude", "-p", "-"]);
+  });
+
+  test("allowlists the interpreter chain for Homebrew-style env node wrappers", () => {
+    const command = claudeSandboxCommand(homebrewClaude, ["-p", "-"], {
+      ...sandboxDeps,
+      env: { ...env, PATH: "/usr/bin" },
+      isExecutable: (path) =>
+        path === "/usr/bin/sandbox-exec" || path === homebrewNode,
+      realpath: (path) => {
+        if (path === homebrewClaude) return homebrewClaudeRealpath;
+        if (path === homebrewNode) return homebrewNodeRealpath;
+        return path;
+      },
+      readFilePrefix: (path) =>
+        path === homebrewClaude || path === homebrewClaudeRealpath
+          ? "#!/usr/bin/env node\n"
+          : undefined,
+    });
+
+    expect(command.sandboxed).toBe(true);
+    const profile = command.args[1]!;
+    expect(profile).toContain(`(literal "${homebrewClaude}")`);
+    expect(profile).toContain(`(literal "${homebrewClaudeRealpath}")`);
+    expect(profile).toContain('(literal "/usr/bin/env")');
+    expect(profile).toContain(`(literal "${homebrewNode}")`);
+    expect(profile).toContain(`(literal "${homebrewNodeRealpath}")`);
+    expect(profile).toContain(`(subpath "${homebrewNodeRealDir}")`);
+    expect(profile).not.toContain('(literal "/usr/bin/git")');
+    expect(profile).not.toContain('(literal "/usr/bin/python3")');
+    expect(command.args.slice(2)).toEqual([homebrewNode, homebrewClaude, "-p", "-"]);
   });
 
   test("missing sandbox-exec logs and runs direct claude", async () => {

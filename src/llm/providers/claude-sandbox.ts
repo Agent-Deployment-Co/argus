@@ -4,12 +4,20 @@
 // module owns the profile generation, the command wrapping, and the process-lifetime "sandbox failed,
 // stop trying" latch; local.ts calls claudeSandboxCommand() and, on a sandboxed failure at runtime,
 // disableClaudeSandbox() before retrying unsandboxed.
-import { accessSync, constants, realpathSync } from "node:fs";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  openSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import type { LlmResult } from "../types.ts";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+const SHEBANG_READ_BYTES = 512;
 
 /** Set once (process-lifetime) when a sandboxed `claude -p` call fails at runtime: later calls then
  *  skip the sandbox instead of paying the failed attempt + retry every time. */
@@ -42,6 +50,7 @@ export interface ClaudeSandboxProfileOptions {
   claudeDir?: string;
   tmpDir?: string;
   env?: NodeJS.ProcessEnv;
+  extraProcessExecPaths?: string[];
 }
 
 export interface ClaudeSandboxRuntimeOptions extends Omit<ClaudeSandboxProfileOptions, "claudeBin" | "realClaudeBin"> {
@@ -49,6 +58,7 @@ export interface ClaudeSandboxRuntimeOptions extends Omit<ClaudeSandboxProfileOp
   sandboxExecPath?: string;
   isExecutable?: (path: string) => boolean;
   realpath?: (path: string) => string;
+  readFilePrefix?: (path: string, bytes: number) => string | undefined;
 }
 
 export interface ClaudeSandboxCommand {
@@ -111,12 +121,22 @@ const CLAUDE_WRITABLE_SUPPORT_DIRS = [
   "telemetry",
 ];
 
-/** `claude -p` probes for a git repo (e.g. to attach branch/status context) even for a one-shot,
- *  non-interactive call. On a Mac without Xcode Command Line Tools installed, `/usr/bin/git` is
- *  Apple's stub that pops the "install command line tools" dialog the instant it's exec'd — jarring
- *  for a background task-extraction call the user never asked to run interactively. Deny exec'ing it
- *  specifically: the CLI already tolerates "not a git repo", so this just skips the git context. */
-const SANDBOX_DENY_PROCESS_EXEC_LITERALS = ["/usr/bin/git"];
+/** With `process-exec` denied by default (see the clauses below), the sandboxed `claude -p` may exec
+ *  ONLY these binaries: its own path (+ realpath), the interpreter chain for shebang wrappers, and
+ *  `/usr/bin/security`. `security` is the one mandatory helper — `claude -p` shells out to it to read
+ *  login-keychain credentials, and a denied exec there is a *fatal* uncaught EPERM (not the graceful
+ *  "no git context" degradation). Everything else is blocked on purpose, which is the whole point of
+ *  the allowlist:
+ *   - Apple's Command Line Tools *stubs* in `/usr/bin` (git, python3, clang, …). On a Mac without
+ *     Xcode CLT installed, exec'ing one pops the "install command line tools" dialog — jarring for a
+ *     background call the user never asked to run. `claude -p` probes git for repo context and may
+ *     touch others; the CLI tolerates each being unavailable, so blocking them just skips that step.
+ *   - Hook/plugin subprocesses (e.g. a SessionEnd hook's `/bin/sh`). A background task-extraction call
+ *     shouldn't be running the user's hooks as a side effect anyway; denying the exec is tolerated.
+ *  If a future CLI version needs another mandatory helper, the denied exec surfaces "operation not
+ *  permitted", which `isClaudeSandboxFailure` matches — so the caller fails open (retry unsandboxed)
+ *  rather than breaking task extraction. */
+const SANDBOX_ALLOW_PROCESS_EXEC_LITERALS = ["/usr/bin/security"];
 
 function uniqueSorted(paths: Array<string | undefined>): string[] {
   return [...new Set(paths.filter((path): path is string => !!path?.trim()))].sort();
@@ -174,12 +194,167 @@ function tryRealpath(path: string, realpath: (path: string) => string): string {
   }
 }
 
+function defaultReadFilePrefix(path: string, bytes: number): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(bytes);
+    const length = readSync(fd, buffer, 0, bytes, 0);
+    return buffer.subarray(0, length).toString("utf8");
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function splitShebangArgs(input: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+
+  for (const char of input.trim()) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = undefined;
+      else current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) current += "\\";
+  if (current) args.push(current);
+  return args;
+}
+
+function executableAliases(path: string, realpath: (path: string) => string): string[] {
+  if (!isAbsolute(path)) return [];
+  return [...new Set([path, tryRealpath(path, realpath)])];
+}
+
+function resolveExecutableOnPath(
+  command: string | undefined,
+  env: NodeJS.ProcessEnv,
+  canExecute: (path: string) => boolean,
+  realpath: (path: string) => string,
+  extraSearchDirs: string[] = [],
+): string[] {
+  if (!command) return [];
+  if (command.includes("/")) return executableAliases(command, realpath);
+
+  const pathValue = env.PATH ?? process.env.PATH ?? "";
+  for (const dir of uniqueSorted([...pathValue.split(delimiter), ...extraSearchDirs])) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    if (canExecute(candidate)) return executableAliases(candidate, realpath);
+  }
+  return [];
+}
+
+function envShebangCommand(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "-S") return args[i + 1];
+    if (arg.startsWith("-S") && arg.length > 2)
+      return splitShebangArgs(arg.slice(2))[0];
+    if (arg === "--") return args[i + 1];
+    if (arg === "-u" || arg === "--unset" || arg === "-P" || arg === "--path") {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--unset=") || arg.startsWith("--path=")) continue;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(arg)) continue;
+    if (arg.startsWith("-")) continue;
+    return arg;
+  }
+  return undefined;
+}
+
+interface ShebangSandboxResolution {
+  processExecPaths: string[];
+  launchFile?: string;
+  launchArgsPrefix?: string[];
+}
+
+function shebangSandboxResolution(
+  paths: string[],
+  env: NodeJS.ProcessEnv,
+  canExecute: (path: string) => boolean,
+  realpath: (path: string) => string,
+  readFilePrefix: (path: string, bytes: number) => string | undefined,
+): ShebangSandboxResolution {
+  const processExecPaths: string[] = [];
+  let launchFile: string | undefined;
+  let launchArgsPrefix: string[] | undefined;
+
+  for (const path of uniqueSorted(paths)) {
+    const prefix = readFilePrefix(path, SHEBANG_READ_BYTES);
+    const line = prefix?.split(/\r?\n/, 1)[0]?.trim();
+    if (!line?.startsWith("#!")) continue;
+
+    const [interpreter, ...args] = splitShebangArgs(line.slice(2));
+    const interpreterPaths = resolveExecutableOnPath(
+      interpreter,
+      env,
+      canExecute,
+      realpath,
+    );
+    processExecPaths.push(...interpreterPaths);
+
+    const realInterpreter = tryRealpath(interpreterPaths[0] ?? "", realpath);
+    if (basename(realInterpreter) !== "env") continue;
+    const envCommandPaths = resolveExecutableOnPath(
+      envShebangCommand(args),
+      env,
+      canExecute,
+      realpath,
+      [dirname(path)],
+    );
+    processExecPaths.push(...envCommandPaths);
+    if (!launchFile && basename(envCommandPaths[0] ?? "") === "node") {
+      launchFile = envCommandPaths[0];
+      launchArgsPrefix = [path];
+    }
+  }
+  return {
+    processExecPaths: uniqueSorted(processExecPaths),
+    ...(launchFile ? { launchFile, launchArgsPrefix } : {}),
+  };
+}
+
 export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): string {
   const env = opts.env ?? process.env;
   const home = opts.homeDir ?? homedir();
   const claudeDir = opts.claudeDir ?? claudeConfigDir(env, home);
   const effectiveTmpDir = opts.tmpDir ?? tmpdir();
   const realClaudeBin = opts.realClaudeBin ?? opts.claudeBin;
+  const processExecPaths = uniqueSorted([
+    opts.claudeBin,
+    realClaudeBin,
+    ...SANDBOX_ALLOW_PROCESS_EXEC_LITERALS,
+    ...(opts.extraProcessExecPaths ?? []),
+  ]);
   const loginKeychain = join(home, "Library", "Keychains", "login.keychain-db");
   const userTextEncoding = join(home, ".CFUserTextEncoding");
   const tmpAliases = uniqueSorted([
@@ -191,8 +366,7 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
     "/",
     "/dev/dtracehelper",
     ...SANDBOX_MACOS_READ_LITERALS,
-    opts.claudeBin,
-    realClaudeBin,
+    ...processExecPaths,
     loginKeychain,
     userTextEncoding,
     join(home, ".claude.json"),
@@ -216,6 +390,7 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
     ...SANDBOX_SYSTEM_READ_SUBPATHS,
     dirname(opts.claudeBin),
     dirname(realClaudeBin),
+    ...processExecPaths.flatMap((path) => parentDirectories(path).slice(0, 1)),
     ...CLAUDE_SUPPORT_DIRS.map((dir) => join(claudeDir, dir)),
   ]);
   const readWriteLiterals = uniqueSorted([
@@ -234,13 +409,21 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
   const clauses = [
     "(version 1)",
     "(deny default)",
-    "(allow process*)",
+    // Allow forking and process introspection, but NOT arbitrary exec — that's clamped to an
+    // allowlist below. (This replaces the old blanket `(allow process*)`.)
+    "(allow process-fork)",
+    "(allow process-info*)",
     "(allow network*)",
     "(allow sysctl-read)",
     "(allow mach-lookup)",
-    // More specific than the blanket `(allow process*)` above; Seatbelt gives the later, more
-    // specific rule precedence, so this still blocks the stub even though process* is allowed.
-    sandboxClause("process-exec", SANDBOX_DENY_PROCESS_EXEC_LITERALS.map(sandboxLiteral), "deny"),
+    // Deny exec by default, then re-allow only claude itself and the mandatory keychain helper.
+    // Seatbelt gives the later, more-specific `allow` precedence over this blanket `deny`, so every
+    // other exec — the Apple CLT stubs (git/python3/…) and any hook subprocesses — stays blocked.
+    "(deny process-exec)",
+    sandboxClause(
+      "process-exec",
+      processExecPaths.map(sandboxLiteral),
+    ),
     sandboxClause("file-ioctl", [sandboxLiteral("/dev/dtracehelper")]),
     sandboxClause("file-read-metadata", readMetadataLiterals.map(sandboxLiteral)),
     sandboxClause("file-read*", [
@@ -301,10 +484,33 @@ export function claudeSandboxCommand(
   try {
     const realpath = opts.realpath ?? realpathSync.native;
     const realClaudeBin = tryRealpath(bin, realpath);
-    const profile = buildClaudeSandboxProfile({ ...opts, claudeBin: bin, realClaudeBin });
+    const env = opts.env ?? process.env;
+    const readFilePrefix = opts.readFilePrefix ?? defaultReadFilePrefix;
+    const shebang = shebangSandboxResolution(
+      [bin, realClaudeBin],
+      env,
+      canExecute,
+      realpath,
+      readFilePrefix,
+    );
+    const profile = buildClaudeSandboxProfile({
+      ...opts,
+      claudeBin: bin,
+      realClaudeBin,
+      extraProcessExecPaths: [
+        ...(opts.extraProcessExecPaths ?? []),
+        ...shebang.processExecPaths,
+      ],
+    });
     return {
       file: sandboxExecPath,
-      args: ["-p", profile, bin, ...args],
+      args: [
+        "-p",
+        profile,
+        shebang.launchFile ?? bin,
+        ...(shebang.launchArgsPrefix ?? []),
+        ...args,
+      ],
       sandboxed: true,
     };
   } catch (error) {
