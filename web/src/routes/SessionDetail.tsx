@@ -22,7 +22,8 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
 // How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
-// right-side panel. Flip this to compare; the drawer (TaskPanel) is kept, just suppressed in "card".
+// side panel next to the content. Flip this to compare; the drawer (TaskPanel) is kept, just
+// suppressed in "card".
 const TASK_VIEW: "card" | "drawer" = "drawer";
 
 export function SessionDetail() {
@@ -66,7 +67,10 @@ export function SessionDetail() {
 
   const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);
   const tasks = s.tasks ?? [];
-  const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
+  const selectedTaskIndex = tasks.findIndex((t) => t.id === selectedTaskId);
+  const selectedTask = selectedTaskIndex >= 0 ? tasks[selectedTaskIndex] : null;
+  const prevTask = selectedTaskIndex > 0 ? tasks[selectedTaskIndex - 1] : null;
+  const nextTask = selectedTaskIndex >= 0 && selectedTaskIndex < tasks.length - 1 ? tasks[selectedTaskIndex + 1] : null;
   const refreshingThisSession = refresh.isPending && refresh.variables === s.sessionId;
   const refreshError =
     !refresh.isPending && refresh.variables === s.sessionId && refresh.error instanceof Error
@@ -198,7 +202,13 @@ export function SessionDetail() {
       )}
     </div>
     {TASK_VIEW === "drawer" && selectedTask && (
-      <TaskPanel sessionId={s.sessionId} task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+      <TaskPanel
+        sessionId={s.sessionId}
+        task={selectedTask}
+        onClose={() => setSelectedTaskId(null)}
+        onPrev={prevTask ? () => setSelectedTaskId(prevTask.id) : undefined}
+        onNext={nextTask ? () => setSelectedTaskId(nextTask.id) : undefined}
+      />
     )}
     </>
   );

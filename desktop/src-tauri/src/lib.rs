@@ -165,10 +165,45 @@ fn mirror_sidecar_log(_bytes: &[u8]) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{append_sidecar_log_with_limit, rotated_sidecar_log_file};
+    use super::{append_sidecar_log_with_limit, parse_git_config_user_email, rotated_sidecar_log_file};
     use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn parses_user_email_from_a_user_section() {
+        assert_eq!(
+            parse_git_config_user_email("[user]\n\tname = Ada Lovelace\n\temail = ada@example.com\n"),
+            Some("ada@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_other_and_subsections_named_user() {
+        assert_eq!(
+            parse_git_config_user_email(
+                "[user \"work\"]\n\temail = not-this@example.com\n[core]\n\temail = nope@example.com\n"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn skips_comments_and_blank_lines() {
+        assert_eq!(
+            parse_git_config_user_email(
+                "; comment\n[user]\n# another comment\n\nemail = grace@example.com\n"
+            ),
+            Some("grace@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_for_missing_or_blank_email() {
+        assert_eq!(parse_git_config_user_email("[user]\nname = only@example.com\n"), None);
+        assert_eq!(parse_git_config_user_email("[user]\nemail =   \n"), None);
+        assert_eq!(parse_git_config_user_email(""), None);
+    }
 
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -602,8 +637,51 @@ fn os_hostname() -> Option<String> {
     non_empty_env("HOSTNAME").or_else(|| command_stdout("hostname", &[]))
 }
 
+/// Parse the `user.email` value out of a git config file's contents (INI-like: `[section]`
+/// headers, `key = value` lines, `;`/`#` comments). Only looks at top-level `[user]` sections —
+/// subsections like `[user "foo"]` aren't git identity and are skipped. Mirrors
+/// `parseGitConfigUserName` in `src/client-fingerprint.ts` (same rationale: avoid shelling out to
+/// `git`, which pops up a Xcode Command Line Tools install prompt on macOS when they're missing).
+fn parse_git_config_user_email(contents: &str) -> Option<String> {
+    let mut in_user_section = false;
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            let inner = &line[1..line.len() - 1];
+            in_user_section = inner.trim().eq_ignore_ascii_case("user");
+            continue;
+        }
+        if !in_user_section {
+            continue;
+        }
+        if let Some(rest) = line.split_once('=') {
+            let (key, value) = rest;
+            if key.trim().eq_ignore_ascii_case("email") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Read the user's git email from their global gitconfig — `$GIT_CONFIG_GLOBAL` if set, else
+/// `$HOME/.gitconfig` — without invoking the `git` binary.
+fn git_config_user_email() -> Option<String> {
+    let path = non_empty_env("GIT_CONFIG_GLOBAL")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|dir| dir.join(".gitconfig")))?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    parse_git_config_user_email(&contents)
+}
+
 fn sync_user_id() -> String {
-    if let Some(email) = command_stdout("git", &["config", "user.email"]) {
+    if let Some(email) = git_config_user_email() {
         return email;
     }
     if let (Some(username), Some(hostname)) = (os_username(), os_hostname()) {

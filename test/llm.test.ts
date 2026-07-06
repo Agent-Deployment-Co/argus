@@ -137,6 +137,23 @@ describe("claude-cli sandbox", () => {
     expect(profile).not.toContain("/Users/you/code");
   });
 
+  test("denies exec'ing /usr/bin/git so a CLT-less Mac never pops the install dialog (#git-popup)", () => {
+    const profile = buildClaudeSandboxProfile({
+      claudeBin: "/usr/local/bin/claude",
+      realClaudeBin: "/Users/you/.claude/local/claude",
+      homeDir: "/Users/you",
+      claudeDir: "/Users/you/.claude",
+      tmpDir: "/var/folders/zz/argus/T",
+      env,
+    });
+
+    expect(profile).toContain('(deny process-exec\n  (literal "/usr/bin/git"))');
+    // The deny must come after the blanket allow so it takes precedence.
+    expect(profile.indexOf("(allow process*)")).toBeLessThan(
+      profile.indexOf("(deny process-exec"),
+    );
+  });
+
   test("wraps claude with sandbox-exec on macOS when sandboxing is available", () => {
     const command = claudeSandboxCommand("/usr/local/bin/claude", ["-p", "-"], sandboxDeps);
 

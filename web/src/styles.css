@@ -135,6 +135,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .rail-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; text-decoration: none; }
 .rail-icon-btn:hover { color: var(--heading); border-color: var(--muted); }
 .rail-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rail-icon-btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 
 .theme-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; }
 .theme-choice { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; padding: 7px; background: transparent; color: var(--muted); cursor: pointer; }
@@ -187,9 +188,11 @@ main:has(.sessions-split) { padding: 0; }
 .session-item-stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; color: var(--muted); font: 600 10.5px var(--font-ui); }
 .session-empty-row { padding: 18px 14px; color: var(--muted); font-size: 13px; }
 
-.session-detail { overflow-y: auto; min-height: 0; }
-.session-detail-inner { padding: 28px 32px 64px; }
-.session-empty { display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
+/* Flex row: the scrolling content pane plus the task panel, which lays out inline beside it (not
+   over it) and shrinks the content pane to fit — see .task-panel below. */
+.session-detail { display: flex; min-height: 0; }
+.session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
+.session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .session-detail-headline { min-width: 0; }
 .session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
@@ -249,21 +252,32 @@ main:has(.sessions-split) { padding: 0; }
    .task-panel-body for the field layout. */
 .task-card { border-top: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 
-/* Task detail drawer. */
-.task-panel-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 40; animation: panel-fade-in .22s ease both; }
-.task-panel-backdrop.closing { animation: panel-fade-out .2s ease both; }
-.task-panel { position: fixed; top: 0; right: 0; height: 100vh; width: min(440px, 92vw); display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.25); z-index: 41; animation: panel-slide-in .24s cubic-bezier(.4,0,.2,1) both; }
+/* Task detail panel: a flex sibling of .session-detail-inner within .session-detail, so it takes
+   its own column instead of floating over the content (which shrinks via flex to make room). */
+.task-panel { flex: 0 0 auto; width: min(400px, 38vw); min-width: 280px; display: flex; flex-direction: column; background: color-mix(in srgb, var(--surface) 50%, var(--bg)); border-left: 1px solid var(--line); animation: panel-slide-in .24s cubic-bezier(.4,0,.2,1) both; }
 .task-panel.closing { animation: panel-slide-out .2s cubic-bezier(.4,0,1,1) both; }
 @keyframes panel-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes panel-slide-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
-@keyframes panel-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes panel-fade-out { from { opacity: 1; } to { opacity: 0; } }
 /* Keep a tiny duration under reduced-motion so onAnimationEnd still fires and the panel unmounts. */
 @media (prefers-reduced-motion: reduce) {
-  .task-panel, .task-panel.closing, .task-panel-backdrop, .task-panel-backdrop.closing { animation-duration: 1ms; }
+  .task-panel, .task-panel.closing { animation-duration: 1ms; }
+}
+/* Below this width the session list's own min-width floor leaves too little room for the panel to
+   sit beside the content without squeezing it to a sliver, so stack the panel under it instead. */
+@media (max-width: 900px) {
+  .session-detail { flex-direction: column; }
+  .task-panel { width: 100%; min-width: 0; max-height: 55vh; border-left: none; border-top: 1px solid var(--line); animation: panel-slide-up .24s cubic-bezier(.4,0,.2,1) both; }
+  .task-panel.closing { animation: panel-slide-down .2s cubic-bezier(.4,0,1,1) both; }
+}
+@keyframes panel-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes panel-slide-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .task-panel, .task-panel.closing { animation-duration: 1ms; }
 }
 .task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
+.task-panel-nav { display: flex; align-items: center; gap: 14px; }
+.task-panel-nav-group { display: flex; align-items: center; gap: 6px; }
 .task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
 .task-panel-field { display: grid; gap: 4px; }
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
