@@ -1,4 +1,4 @@
-.PHONY: build test typecheck publish clean desktop dmg version bump help
+.PHONY: install build test typecheck publish clean desktop dmg version bump help
 
 NPM_PUBLISH_FLAGS ?= --access public
 
@@ -6,6 +6,7 @@ NPM_PUBLISH_FLAGS ?= --access public
 
 help:
 	@echo "Targets:"
+	@echo "  install    Install dependencies"
 	@echo "  build      Build the npm packages"
 	@echo "  test       Run tests"
 	@echo "  typecheck  Run TypeScript type checking"
@@ -15,6 +16,9 @@ help:
 	@echo "  dmg        Build a macOS DMG (requires APPLE_ID and APPLE_PASSWORD)"
 	@echo "  version    Print the current version"
 	@echo "  bump       Bump the version (requires VERSION=major.minor.patch)"
+
+install:
+	bun install
 
 version:
 	@bun run get-version
