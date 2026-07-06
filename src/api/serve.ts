@@ -151,6 +151,11 @@ export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<str
 export type SessionListReader = (query: SessionListQuery) => Promise<SessionListResponse>;
 /** Full detail for one session (built on demand), or null if it has no messages / doesn't exist. */
 export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | null>;
+/** Reveal a session's transcript file in the OS file manager. `ok:false` when the session is unknown
+ *  (status 404), its transcript is gone from disk (422), or the file manager couldn't be opened (500). */
+export type SessionRevealer = (
+  sessionId: string,
+) => Promise<{ ok: true } | { ok: false; message: string; status: 404 | 422 | 500 }>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
@@ -164,6 +169,7 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
+  revealFile?: SessionRevealer;
   debugInfo?: DebugInfoReader;
   /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
   secrets?: SecretStore;
@@ -451,6 +457,22 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     opts.log?.(`Refreshed ${sessionId}: rebuilt ${taskCountLabel(result.tasks.length)}${issueNote}.`);
     opts.onStoreChanged?.();
     return c.json({ tasks: result.tasks, diagnostics } satisfies ReindexResponse);
+  });
+
+  // Reveal a session's transcript file in the OS file manager (Finder / Explorer / the Linux file
+  // manager). Local-only convenience: the path comes from the session's own stored metadata, not the
+  // client. 404 if the session is unknown, 422 if the transcript is no longer on disk.
+  app.post("/api/sessions/:id/reveal", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.revealFile) return c.json({ error: "Revealing files is unavailable in this process." }, 503);
+
+    const result = await opts.revealFile(sessionId);
+    if (!result.ok) return c.json({ error: result.message }, result.status);
+    return c.json({ ok: true });
   });
 
   // Per-task metrics for a whole session, computed on demand from the messages attributed to each
@@ -790,7 +812,27 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
     const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
-    return buildSessionDetail(sessionId, messages, meta, tasks);
+    const row = buildSessionDetail(sessionId, messages, meta, tasks);
+    // "if it exists": only offer the transcript path when the file is still on disk.
+    if (row.filePath && !existsSync(row.filePath)) row.filePath = null;
+    return row;
+  };
+
+  const revealFile: SessionRevealer = async (sessionId) => {
+    const store = await readStore();
+    const meta = await store.readSessionMeta(sessionId);
+    if (!meta?.filePath) return { ok: false, message: "Session not found.", status: 404 };
+    const path = meta.filePath;
+    if (!existsSync(path)) return { ok: false, message: "The session file is no longer on disk.", status: 422 };
+    // Reveal the file in the OS file manager. macOS/Windows select the file; Linux opens its folder.
+    const reveal =
+      process.platform === "darwin"
+        ? spawnSync("open", ["-R", path])
+        : process.platform === "win32"
+          ? spawnSync("explorer", [`/select,${path}`])
+          : spawnSync("xdg-open", [dirname(path)]);
+    if (reveal.error) return { ok: false, message: "Couldn't open the file manager.", status: 500 };
+    return { ok: true };
   };
 
   const app = createApp(webRoot, {
@@ -799,6 +841,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionTaskMetrics,
     sessionList,
     sessionDetail,
+    revealFile,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
     claudeBinary,

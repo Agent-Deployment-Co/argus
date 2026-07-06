@@ -83,6 +83,7 @@ function fixtureSession(sessionId: string): SessionRow {
       tokenGrowth: null,
     },
     tasks: [],
+    filePath: null,
   };
 }
 
@@ -237,6 +238,32 @@ describe("serve API", () => {
   test("POST /api/sessions/:id/reindex is 503 when reindexing isn't wired up", async () => {
     const app = createApp(null);
     const res = await app.request("/api/sessions/whatever/reindex", SAME_ORIGIN);
+    expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/:id/reveal calls the revealer and returns ok", async () => {
+    let revealed = "";
+    const app = createApp(null, {
+      revealFile: async (id) => { revealed = id; return { ok: true }; },
+    });
+    const res = await app.request("/api/sessions/codex:sess1/reveal", SAME_ORIGIN);
+    expect(res.status).toBe(200);
+    expect(revealed).toBe("codex:sess1");
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  test("POST /api/sessions/:id/reveal surfaces the revealer's status and message", async () => {
+    const app = createApp(null, {
+      revealFile: async () => ({ ok: false, status: 422, message: "The session file is no longer on disk." }),
+    });
+    const res = await app.request("/api/sessions/missing/reveal", SAME_ORIGIN);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "The session file is no longer on disk." });
+  });
+
+  test("POST /api/sessions/:id/reveal is 503 when revealing isn't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/whatever/reveal", SAME_ORIGIN);
     expect(res.status).toBe(503);
   });
 

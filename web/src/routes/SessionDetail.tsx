@@ -1,12 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { RefreshCw } from "lucide-react";
+import { FolderOpen, RefreshCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Dash, Skills } from "../components/pills";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
-import { reindexSession, useSessionTaskMetrics } from "../lib/sessions";
+import { reindexSession, revealSessionFile, useSessionTaskMetrics } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 
@@ -47,6 +47,8 @@ export function SessionDetail() {
       window.location.reload();
     },
   });
+
+  const reveal = useMutation({ mutationFn: revealSessionFile });
 
   if (detail.isPending) {
     return <div className="session-empty">Loading session…</div>;
@@ -191,6 +193,28 @@ export function SessionDetail() {
           <ul className="file-list">
             {s.filesTouched.slice(0, 30).map((f) => <li key={f} title={f}>{f}</li>)}
           </ul>
+        </section>
+      )}
+
+      {s.filePath && (
+        <section>
+          <h3 className="t-subhead">Session file</h3>
+          <div className="session-file">
+            <code className="session-file-path" title={s.filePath}>{s.filePath}</code>
+            <button
+              type="button"
+              className="task-action"
+              onClick={() => reveal.mutate(s.sessionId)}
+              disabled={reveal.isPending}
+              title="Show this session's transcript file in your file manager"
+            >
+              <FolderOpen size={14} strokeWidth={1.75} aria-hidden />
+              <span>{reveal.isPending ? "Revealing…" : "Reveal file"}</span>
+            </button>
+          </div>
+          {reveal.error instanceof Error && (
+            <div className="task-error" role="alert">{reveal.error.message}</div>
+          )}
         </section>
       )}
 

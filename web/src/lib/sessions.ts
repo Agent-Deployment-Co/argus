@@ -82,6 +82,17 @@ export async function reindexSession(sessionId: string): Promise<ReindexResponse
   return jsonOrThrow<ReindexResponse>(res, "Failed to refresh");
 }
 
+/** Reveal a session's transcript file in the OS file manager (Finder / Explorer / Linux file
+ *  manager). Local-only; the server resolves the path from the session's stored metadata. Throws with
+ *  a clear message when the file is gone from disk. */
+export async function revealSessionFile(sessionId: string): Promise<void> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/reveal`, {
+    method: "POST",
+    headers: { ...APP_HEADER },
+  });
+  await jsonOrThrow<{ ok: true }>(res, "Couldn't reveal the session file");
+}
+
 /** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
  *  server-side from the messages attributed to each task. Backs both the task list (tokens per row)
  *  and the detail drawer. */

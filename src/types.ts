@@ -36,6 +36,9 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   health: SessionHealth;
   /** CLI-only: tasks generated for this session via session task extraction. */
   tasks?: TaskFact[];
+  /** CLI-only: the source transcript's path on disk. Local-only (never on the sync wire); null when
+   *  the file is no longer on disk or the source exposes no single transcript path. */
+  filePath: string | null;
 };
 
 /**

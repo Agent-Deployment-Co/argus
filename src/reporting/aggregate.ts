@@ -170,5 +170,6 @@ export function buildSessionRow(
       turns: meta?.rawTurns ?? meta?.friction?.turns ?? null,
     },
     tasks,
+    filePath: meta?.filePath ?? null,
   };
 }
