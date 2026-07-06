@@ -104,7 +104,7 @@ export interface ArgusConfig {
   state?: {
     /** Set once the user has dismissed the welcome modal (the "Don't show this again" checkbox),
      *  so it isn't shown again. Off by default (unset/false = not yet completed) — `argus serve
-     *  --open` reads this to decide whether to append `?first_run=1` to the URL it opens. */
+     *  --open` reads this to decide whether to append `?firstRun=1` to the URL it opens. */
     onboardingCompleted?: boolean;
   };
 }

@@ -2,11 +2,11 @@ import { AppWindow, Lock, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { saveOnboardingCompleted } from "../lib/onboarding";
 
-/** First-run orientation, shown as a modal over the dashboard when the URL carries `?first_run=1`
+/** First-run orientation, shown as a modal over the dashboard when the URL carries `?firstRun=1`
  *  (see `RootSearch.firstRun` in router.tsx) rather than as its own page. Purely informational: what
  *  Argus is, where to find it, and that everything stays local by default. No setup steps here —
  *  those live in Settings. Dismissing just hides this layer (local state) without touching the URL
- *  or reloading. `argus serve --open` adds `first_run=1` itself when `state.onboardingCompleted`
+ *  or reloading. `argus serve --open` adds `firstRun=1` itself when `state.onboardingCompleted`
  *  isn't set yet (see `startServer` in `api/serve.ts`), so seeing this modal at all means onboarding
  *  hasn't been marked complete yet: mark it on mount so it doesn't show again next startup. */
 export function WelcomeModal() {

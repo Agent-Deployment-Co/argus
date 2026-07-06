@@ -67,7 +67,7 @@ export function Layout() {
   const location = useRouterState({ select: (s) => s.location });
   const lastApp = useRef<{ pathname: string; search: Record<string, unknown> }>({ pathname: "/", search: {} });
   if (!isSettings) lastApp.current = { pathname: location.pathname, search: location.search as Record<string, unknown> };
-  // The welcome modal is a one-shot overlay triggered by `?first_run=1` on the dashboard route (not
+  // The welcome modal is a one-shot overlay triggered by `?firstRun=1` on the dashboard route (not
   // a separate page) — it sits on top of the app shell rather than replacing it.
   const firstRun = Boolean((location.search as { firstRun?: boolean }).firstRun);
   // Each dashboard view fetches its own data now, so there's no single snapshot query to gate on;

@@ -2,7 +2,7 @@
 // that port never has to change even though the sidecar's actual port is re-picked on every
 // restart. It splices bytes bidirectionally rather than parsing HTTP, so it transparently carries
 // whatever the Hono server does (chunked responses, keep-alive, any future SSE/WebSocket upgrade).
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -73,7 +73,13 @@ fn reconnecting_response() -> &'static [u8] {
 /// `front_port` live, so they pick up the corrected value — and notifies the user with the actual
 /// URL, since a silent fallback would otherwise leave "Open Argus" (and any already-open tab)
 /// pointed at a port nothing is listening on.
-pub fn start_proxy(preferred_port: u16, backend_port: Arc<AtomicU16>, front_port: Arc<AtomicU16>, app: AppHandle) {
+pub fn start_proxy(
+    preferred_port: u16,
+    backend_port: Arc<AtomicU16>,
+    front_port: Arc<AtomicU16>,
+    proxy_ready: Arc<AtomicBool>,
+    app: AppHandle,
+) {
     tauri::async_runtime::spawn(async move {
         let listener = match bind_front_door(preferred_port).await {
             Ok(BoundPort::Preferred(listener)) => listener,
@@ -98,6 +104,9 @@ pub fn start_proxy(preferred_port: u16, backend_port: Arc<AtomicU16>, front_port
                 return;
             }
         };
+        // The port is bound and `front_port` reflects the real value; the browser can now be opened
+        // without racing the bind. Flip readiness before entering the accept loop.
+        proxy_ready.store(true, Ordering::SeqCst);
         run_accept_loop(listener, backend_port).await;
     });
 }
