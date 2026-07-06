@@ -1,6 +1,6 @@
 # Quick Start
 
-Argus analyzes your AI agent usage to help you be more productive with AI. It's built for non-coders using agents to do business tasks like account research, drafting content, editing spreadsheets and building workflows.
+Argus analyzes your AI agent usage to help you be more productive with AI. It's built for anyone using agents to do business tasks like account research, drafting content, editing spreadsheets and building workflows.
 
 Argus indexes [sessions](/terminology#session) from your AI [agents](/terminology#agent) like Claude and Codex, bringing all your AI agent work into one app running locally on your computer. It's free and open source.
 
