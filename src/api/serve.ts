@@ -567,7 +567,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   app.post("/api/settings/test-connection", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
-    return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore() }));
+    return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore(), log: opts.log }));
   });
 
   // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards; returns

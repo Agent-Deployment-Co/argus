@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { applySetting, describeSettings, testLlmConnection } from "../src/api/settings.ts";
 import { loadConfig } from "../src/config.ts";
 import { FileSecretStore } from "../src/secrets.ts";
+import type { Log } from "../src/logger.ts";
 
 /** A fetch stub returning a single canned JSON response. */
 function fakeFetch(body: unknown): typeof fetch {
@@ -17,6 +18,19 @@ function fakeFetch(body: unknown): typeof fetch {
 
 function tmpSecrets(): FileSecretStore {
   return new FileSecretStore(join(mkdtempSync(join(tmpdir(), "argus-secrets-")), "secrets.json"));
+}
+
+/** A Log that records each message with the level it was logged at. */
+function recordingLog(): { log: Log; entries: Array<{ level: string; message: string }> } {
+  const entries: Array<{ level: string; message: string }> = [];
+  const at = (level: string) => (message: string) => entries.push({ level, message });
+  const log = at("info") as Log;
+  log.info = at("info");
+  log.warn = at("warn");
+  log.debug = at("debug");
+  log.error = at("error");
+  log.trace = at("trace");
+  return { log, entries };
 }
 
 function tmpConfig(contents = "{}"): string {
@@ -358,5 +372,90 @@ describe("testLlmConnection", () => {
     const result = await testLlmConnection({ configPath, secrets: tmpSecrets() });
     expect(result.ok).toBe(false);
     expect(result.provider).toBe("off");
+  });
+
+  test("logs start (INFO), the invocation (DEBUG), and success (INFO)", async () => {
+    const configPath = tmpConfig('{"llm":{"provider":"openai","model":"gpt-5"}}');
+    const secrets = tmpSecrets();
+    await secrets.set("OPENAI_API_KEY", "sk-live-1234");
+    const { log, entries } = recordingLog();
+    await testLlmConnection({
+      configPath,
+      secrets,
+      fetch: fakeFetch({ choices: [{ message: { content: "OK" } }] }),
+      log,
+    });
+    expect(entries.some((e) => e.level === "info" && /Testing the openai/.test(e.message))).toBe(true);
+    const debug = entries.find((e) => e.level === "debug");
+    expect(debug?.message).toContain("provider=openai");
+    expect(debug?.message).toContain("model=gpt-5");
+    expect(entries.some((e) => e.level === "info" && /succeeded/.test(e.message))).toBe(true);
+    // The API key must never appear in any log line.
+    expect(entries.every((e) => !e.message.includes("sk-live-1234"))).toBe(true);
+    expect(entries.some((e) => e.level === "warn")).toBe(false);
+  });
+
+  test("redacts command-provider contents from the connection-test debug log", async () => {
+    const command = "sh -c 'printf OK' -- --token command-secret /Users/alice/private-wrapper";
+    const configPath = tmpConfig(JSON.stringify({
+      llm: { provider: "command", providerConfigs: { command: { command } } },
+    }));
+    const { log, entries } = recordingLog();
+
+    const result = await testLlmConnection({ configPath, secrets: tmpSecrets(), log });
+
+    expect(result.ok).toBe(true);
+    const debug = entries.find((e) => e.level === "debug");
+    expect(debug?.message).toContain("provider=command");
+    expect(debug?.message).toContain("command=<configured>");
+    expect(debug?.message).not.toContain("command-secret");
+    expect(debug?.message).not.toContain("/Users/alice");
+    expect(debug?.message).not.toContain("private-wrapper");
+  });
+
+  test("redacts base URL credentials, query, and fragment from the connection-test debug log", async () => {
+    const configPath = tmpConfig(JSON.stringify({
+      llm: {
+        provider: "openai",
+        providerConfigs: {
+          openai: {
+            model: "gpt-5",
+            baseUrl: "https://user:base-url-secret@example.com/v1?api_key=query-secret#frag-secret",
+          },
+        },
+      },
+    }));
+    const secrets = tmpSecrets();
+    await secrets.set("OPENAI_API_KEY", "sk-live-1234");
+    const { log, entries } = recordingLog();
+
+    await testLlmConnection({
+      configPath,
+      secrets,
+      fetch: fakeFetch({ choices: [{ message: { content: "OK" } }] }),
+      log,
+    });
+
+    const debug = entries.find((e) => e.level === "debug");
+    expect(debug?.message).toContain("baseUrl=https://example.com/v1");
+    expect(debug?.message).not.toContain("user");
+    expect(debug?.message).not.toContain("base-url-secret");
+    expect(debug?.message).not.toContain("query-secret");
+    expect(debug?.message).not.toContain("frag-secret");
+    expect(entries.every((e) => !e.message.includes("sk-live-1234"))).toBe(true);
+  });
+
+  test("logs a WARN with the diagnostic when the test fails", async () => {
+    const configPath = tmpConfig('{"llm":{"provider":"openai"}}');
+    const { log, entries } = recordingLog();
+    await testLlmConnection({
+      configPath,
+      secrets: tmpSecrets(), // no key stored
+      fetch: fakeFetch({ choices: [] }),
+      log,
+    });
+    const warn = entries.find((e) => e.level === "warn");
+    expect(warn?.message).toMatch(/Connection test failed for openai/);
+    expect(warn?.message).toBeTruthy();
   });
 });
