@@ -8,6 +8,11 @@ import { accessSync, constants, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { LlmResult } from "../types.ts";
+import {
+  defaultReadFilePrefix,
+  resolveShebangSandbox,
+  type ReadFilePrefix,
+} from "./shebang.ts";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
@@ -42,6 +47,7 @@ export interface ClaudeSandboxProfileOptions {
   claudeDir?: string;
   tmpDir?: string;
   env?: NodeJS.ProcessEnv;
+  extraProcessExecPaths?: string[];
 }
 
 export interface ClaudeSandboxRuntimeOptions extends Omit<ClaudeSandboxProfileOptions, "claudeBin" | "realClaudeBin"> {
@@ -49,6 +55,7 @@ export interface ClaudeSandboxRuntimeOptions extends Omit<ClaudeSandboxProfileOp
   sandboxExecPath?: string;
   isExecutable?: (path: string) => boolean;
   realpath?: (path: string) => string;
+  readFilePrefix?: ReadFilePrefix;
 }
 
 export interface ClaudeSandboxCommand {
@@ -111,12 +118,22 @@ const CLAUDE_WRITABLE_SUPPORT_DIRS = [
   "telemetry",
 ];
 
-/** `claude -p` probes for a git repo (e.g. to attach branch/status context) even for a one-shot,
- *  non-interactive call. On a Mac without Xcode Command Line Tools installed, `/usr/bin/git` is
- *  Apple's stub that pops the "install command line tools" dialog the instant it's exec'd — jarring
- *  for a background task-extraction call the user never asked to run interactively. Deny exec'ing it
- *  specifically: the CLI already tolerates "not a git repo", so this just skips the git context. */
-const SANDBOX_DENY_PROCESS_EXEC_LITERALS = ["/usr/bin/git"];
+/** With `process-exec` denied by default (see the clauses below), the sandboxed `claude -p` may exec
+ *  ONLY these binaries: its own path (+ realpath), the interpreter chain for shebang wrappers, and
+ *  `/usr/bin/security`. `security` is the one mandatory helper — `claude -p` shells out to it to read
+ *  login-keychain credentials, and a denied exec there is a *fatal* uncaught EPERM (not the graceful
+ *  "no git context" degradation). Everything else is blocked on purpose, which is the whole point of
+ *  the allowlist:
+ *   - Apple's Command Line Tools *stubs* in `/usr/bin` (git, python3, clang, …). On a Mac without
+ *     Xcode CLT installed, exec'ing one pops the "install command line tools" dialog — jarring for a
+ *     background call the user never asked to run. `claude -p` probes git for repo context and may
+ *     touch others; the CLI tolerates each being unavailable, so blocking them just skips that step.
+ *   - Hook/plugin subprocesses (e.g. a SessionEnd hook's `/bin/sh`). A background task-extraction call
+ *     shouldn't be running the user's hooks as a side effect anyway; denying the exec is tolerated.
+ *  If a future CLI version needs another mandatory helper, the denied exec surfaces "operation not
+ *  permitted", which `isClaudeSandboxFailure` matches — so the caller fails open (retry unsandboxed)
+ *  rather than breaking task extraction. */
+const SANDBOX_ALLOW_PROCESS_EXEC_LITERALS = ["/usr/bin/security"];
 
 function uniqueSorted(paths: Array<string | undefined>): string[] {
   return [...new Set(paths.filter((path): path is string => !!path?.trim()))].sort();
@@ -180,6 +197,12 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
   const claudeDir = opts.claudeDir ?? claudeConfigDir(env, home);
   const effectiveTmpDir = opts.tmpDir ?? tmpdir();
   const realClaudeBin = opts.realClaudeBin ?? opts.claudeBin;
+  const processExecPaths = uniqueSorted([
+    opts.claudeBin,
+    realClaudeBin,
+    ...SANDBOX_ALLOW_PROCESS_EXEC_LITERALS,
+    ...(opts.extraProcessExecPaths ?? []),
+  ]);
   const loginKeychain = join(home, "Library", "Keychains", "login.keychain-db");
   const userTextEncoding = join(home, ".CFUserTextEncoding");
   const tmpAliases = uniqueSorted([
@@ -191,8 +214,7 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
     "/",
     "/dev/dtracehelper",
     ...SANDBOX_MACOS_READ_LITERALS,
-    opts.claudeBin,
-    realClaudeBin,
+    ...processExecPaths,
     loginKeychain,
     userTextEncoding,
     join(home, ".claude.json"),
@@ -216,6 +238,7 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
     ...SANDBOX_SYSTEM_READ_SUBPATHS,
     dirname(opts.claudeBin),
     dirname(realClaudeBin),
+    ...processExecPaths.flatMap((path) => parentDirectories(path).slice(0, 1)),
     ...CLAUDE_SUPPORT_DIRS.map((dir) => join(claudeDir, dir)),
   ]);
   const readWriteLiterals = uniqueSorted([
@@ -234,13 +257,21 @@ export function buildClaudeSandboxProfile(opts: ClaudeSandboxProfileOptions): st
   const clauses = [
     "(version 1)",
     "(deny default)",
-    "(allow process*)",
+    // Allow forking and process introspection, but NOT arbitrary exec — that's clamped to an
+    // allowlist below. (This replaces the old blanket `(allow process*)`.)
+    "(allow process-fork)",
+    "(allow process-info*)",
     "(allow network*)",
     "(allow sysctl-read)",
     "(allow mach-lookup)",
-    // More specific than the blanket `(allow process*)` above; Seatbelt gives the later, more
-    // specific rule precedence, so this still blocks the stub even though process* is allowed.
-    sandboxClause("process-exec", SANDBOX_DENY_PROCESS_EXEC_LITERALS.map(sandboxLiteral), "deny"),
+    // Deny exec by default, then re-allow only claude itself and the mandatory keychain helper.
+    // Seatbelt gives the later, more-specific `allow` precedence over this blanket `deny`, so every
+    // other exec — the Apple CLT stubs (git/python3/…) and any hook subprocesses — stays blocked.
+    "(deny process-exec)",
+    sandboxClause(
+      "process-exec",
+      processExecPaths.map(sandboxLiteral),
+    ),
     sandboxClause("file-ioctl", [sandboxLiteral("/dev/dtracehelper")]),
     sandboxClause("file-read-metadata", readMetadataLiterals.map(sandboxLiteral)),
     sandboxClause("file-read*", [
@@ -301,10 +332,33 @@ export function claudeSandboxCommand(
   try {
     const realpath = opts.realpath ?? realpathSync.native;
     const realClaudeBin = tryRealpath(bin, realpath);
-    const profile = buildClaudeSandboxProfile({ ...opts, claudeBin: bin, realClaudeBin });
+    const env = opts.env ?? process.env;
+    const readFilePrefix = opts.readFilePrefix ?? defaultReadFilePrefix;
+    const shebang = resolveShebangSandbox({
+      paths: [bin, realClaudeBin],
+      env,
+      canExecute,
+      realpath,
+      readFilePrefix,
+    });
+    const profile = buildClaudeSandboxProfile({
+      ...opts,
+      claudeBin: bin,
+      realClaudeBin,
+      extraProcessExecPaths: [
+        ...(opts.extraProcessExecPaths ?? []),
+        ...shebang.processExecPaths,
+      ],
+    });
     return {
       file: sandboxExecPath,
-      args: ["-p", profile, bin, ...args],
+      args: [
+        "-p",
+        profile,
+        shebang.launchFile ?? bin,
+        ...(shebang.launchArgsPrefix ?? []),
+        ...args,
+      ],
       sandboxed: true,
     };
   } catch (error) {
