@@ -45,6 +45,11 @@ mod proxy;
 struct AppState {
     front_port: Arc<AtomicU16>,
     backend_port: Arc<AtomicU16>,
+    /// Set once the front-door proxy has actually bound its port and is accepting connections
+    /// (`proxy::start_proxy`). Opening the browser before this is `true` races the bind and lands
+    /// on a refused connection ("Safari Can't Open the page") instead of the proxy's holding page,
+    /// so `open_dashboard` waits on it.
+    proxy_ready: Arc<AtomicBool>,
     child: Mutex<Option<CommandChild>>,
     stopping: AtomicBool,
     status_item: MenuItem<Wry>,
@@ -68,6 +73,12 @@ const DESKTOP_LOG_MAX_BYTES: u64 = 5_000_000;
 /// The CLI's own default port (`src/cli.ts`'s `DEFAULT_PORT`). Tried first for the front-door proxy
 /// so `http://localhost:4242` keeps working whether Argus is run standalone or via the desktop app.
 const PREFERRED_FRONT_PORT: u16 = 4242;
+/// How often `open_dashboard` polls for the front-door proxy to finish binding, and how long it
+/// waits before giving up and telling the user Argus is still starting. The proxy normally binds in
+/// milliseconds; the timeout only bites if it never comes up — a hard failure `start_proxy` already
+/// notifies about on its own.
+const PROXY_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged.
 pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -380,10 +391,36 @@ fn stop(app: &AppHandle) {
     refresh_status(app);
 }
 
-/// Open the served dashboard in the user's default browser. Lands on the welcome overlay
-/// (`?first_run=1`) instead of the bare dashboard until the modal's "Don't show this again"
-/// checkbox has been ticked — the same `state.onboardingCompleted` flag `argus serve --open` checks.
+/// Open the served dashboard in the user's default browser, once the front-door proxy is actually
+/// listening. On a cold launch the proxy binds its port a beat after the app starts; opening before
+/// then hits a refused connection ("Safari Can't Open the page") rather than the proxy's own
+/// "Reconnecting to Argus…" holding page. If the proxy is already up we open immediately; otherwise
+/// a background task waits for the bind (bounded — a proxy that never comes up notifies instead of
+/// opening a doomed tab) so this never blocks the tray/menu thread.
 fn open_dashboard(app: &AppHandle) {
+    if app.state::<AppState>().proxy_ready.load(Ordering::SeqCst) {
+        open_dashboard_now(app);
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if wait_for_proxy_ready(&app).await {
+            open_dashboard_now(&app);
+        } else {
+            notify(
+                &app,
+                "Argus is still starting",
+                "The dashboard isn't ready yet. Choose Open Argus again in a moment.",
+            );
+        }
+    });
+}
+
+/// Build the served URL and hand it to the default browser. Assumes the front-door proxy is already
+/// listening (`open_dashboard` guarantees that). Lands on the welcome overlay (`?first_run=1`)
+/// instead of the bare dashboard until the modal's "Don't show this again" checkbox has been ticked
+/// — the same `state.onboardingCompleted` flag `argus serve --open` checks.
+fn open_dashboard_now(app: &AppHandle) {
     let port = app.state::<AppState>().front_port.load(Ordering::SeqCst);
     let mut url = format!("http://localhost:{port}");
     if !onboarding_completed() {
@@ -392,6 +429,22 @@ fn open_dashboard(app: &AppHandle) {
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
         log::error!("opening the dashboard: {err}");
     }
+}
+
+/// Poll until the front-door proxy has bound its port, up to `PROXY_READY_TIMEOUT`. Clones the flag
+/// out of app state so the `State` guard isn't held across an `.await`. Returns whether it became
+/// ready in time.
+async fn wait_for_proxy_ready(app: &AppHandle) -> bool {
+    let ready = app.state::<AppState>().proxy_ready.clone();
+    let mut waited = Duration::ZERO;
+    while waited < PROXY_READY_TIMEOUT {
+        if ready.load(Ordering::SeqCst) {
+            return true;
+        }
+        tokio::time::sleep(PROXY_READY_POLL_INTERVAL).await;
+        waited += PROXY_READY_POLL_INTERVAL;
+    }
+    ready.load(Ordering::SeqCst)
 }
 
 /// Whether the welcome modal has already been dismissed with "Don't show this again"
@@ -1104,16 +1157,19 @@ pub fn run() {
             // (and notifies the user) if that port turns out to be unavailable when it actually binds.
             let front_port = Arc::new(AtomicU16::new(PREFERRED_FRONT_PORT));
             let backend_port = Arc::new(AtomicU16::new(0));
+            let proxy_ready = Arc::new(AtomicBool::new(false));
             proxy::start_proxy(
                 PREFERRED_FRONT_PORT,
                 backend_port.clone(),
                 front_port.clone(),
+                proxy_ready.clone(),
                 app.handle().clone(),
             );
 
             app.manage(AppState {
                 front_port,
                 backend_port,
+                proxy_ready,
                 child: Mutex::new(None),
                 stopping: AtomicBool::new(false),
                 status_item: status,
