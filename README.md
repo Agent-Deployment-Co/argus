@@ -1,43 +1,54 @@
-# Argus by ADC
+# Argus
 
 Argus analyzes how you use your AI agents (Claude Code, Claude Cowork, Claude Chat, Codex and
-Gemini CLI) so you can get more out of them. It can:
+Gemini CLI) so you can get more out of them. It brings all your agent work into one place, running
+locally on your computer. Argus is free, [open source](LICENSE) software from [The Agent Deployment Company](https://www.agentdeployment.co).
 
-- **Serve an interactive web app** at a local web address (`serve`) — the preferred way to
-  explore your usage.
-- Upload usage snapshots to an [Argus Hub](https://argus.agentdeployment.co), where
-  you can keep and analyze your data over time (`sync`).
-- **Run all of it as one always-on process** (`run`) — keep the local data current, serve the
-  web app, and upload on a schedule, so it's live whenever you want it.
+**📖 Full documentation: [argus.agentdeployment.co](https://argus.agentdeployment.co)** — the best
+place to start if you're here to *use* Argus.
 
-The web app includes:
+## Get started
+
+The easiest way to run Argus is the **desktop app** — a native app that lives in your menu bar, keeps
+your local session data current, and opens Argus in your browser with no separate setup. The macOS
+build is available now; Windows is coming soon.
+
+**→ [Download the app](https://argus.agentdeployment.co/download)**
+
+Once it's running, look for the Argus icon in your menu bar and open it to see your usage. For a tour
+of what everything means, see the [documentation](https://argus.agentdeployment.co).
+
+## What you'll see
 
 - Tokens and estimated cost over time
-- Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI source breakdowns
-- Skill, tool, MCP server, plugin, model, and project attribution
-- Tools that return the most content to your context
+- A breakdown by source: Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI
+- The skills, tools, MCP servers, plugins, models, and projects you use most
+- The tools that return the most content to your agent's context
 - Per-session duration, tokens, cost, prompts, and summaries
 
-## Quick start
+Everything runs on your machine. Nothing is uploaded unless you choose to sync usage to an
+[Argus Hub](https://argus.agentdeployment.co/argus-hub) run by your company.
 
-Run `argus` directly with `npx`.
+## CLI
 
-Argus's published CLI requires Node.js 20.17 or newer. The repository uses Bun for
-development and tests, but the installed npm executable runs under Node.
+You don't need the app. Argus also ships as a command-line tool for more technical users. The
+sections below are a quick reference; the [CLI Reference](https://argus.agentdeployment.co/cli-reference)
+on the docs site is the full version.
 
-Open the interactive web app in your browser (recommended):
+The published CLI runs on Node.js 20.17 or newer. (The repository uses Bun for development and tests,
+but the installed npm executable runs under Node.) Run it with `npx`:
 
 ```bash
 npx @agentdeploymentco/argus serve --open
 ```
 
-This starts a local web server (default `http://localhost:4242`) and opens it. Press `Ctrl-C`
-to stop. Nothing leaves your machine — it finds and indexes your local sessions and serves them locally.
+This starts a local web server (default `http://localhost:4242`) and opens it in your browser. Press
+`Ctrl-C` to stop. Nothing leaves your machine — Argus finds and indexes your local sessions and
+serves them locally.
 
-## Web app
+### Web app (`serve`)
 
-`serve` is the preferred, interactive way to explore your usage: a live local web app that's the
-foundation for richer features over time.
+`serve` runs the interactive web app: a live local web app for exploring your usage.
 
 ```bash
 npx @agentdeploymentco/argus serve --open          # http://localhost:4242
@@ -54,11 +65,10 @@ re-parse every transcript on each page load. Session titles use an instant heuri
 from the first prompt, skills, tools, and edited files. To narrow which sources or dates land in the
 store, use the `index` command's filters.
 
-## The local store
+### The local store (`index`)
 
 Argus keeps your parsed sessions in a private local store so unchanged transcripts don't need to
-be reparsed on every run. `serve` and `sync` both read from it. The `index` command keeps
-it current:
+be reparsed on every run. `serve` and `sync` both read from it. The `index` command keeps it current:
 
 ```bash
 npx @agentdeploymentco/argus index                  # read new and changed sessions (fast, incremental)
@@ -78,7 +88,7 @@ npx @agentdeploymentco/argus status                  # show the store location a
 `index`, `index rebuild`, and `index refresh` accept `--source <claude|codex|gemini|cowork|all>`
 to scope which transcript sources are read.
 
-## Task interpretation
+### Task interpretation
 
 Argus can interpret each session into the **tasks** you asked for and how they turned out — a
 description, the span of the session it covers, and a judged outcome (success / failure / unclear)
@@ -107,10 +117,10 @@ only the task description and outcome are. See
 [docs/internals/configuration.md](docs/internals/configuration.md) and
 [docs/internals/task-interpretation.md](docs/internals/task-interpretation.md).
 
-## Keep and analyze data over time
+### Keep and analyze data over time (`sync`)
 
 The local web app shows the sessions currently available on your machine. An
-[Argus Hub](https://argus.agentdeployment.co) stores pushed snapshots so you can
+[Argus Hub](https://argus.agentdeployment.co/argus-hub) stores pushed snapshots so you can
 analyze usage over time, compare users, filter the organization view, and review trends.
 
 Configure Argus Hub, then upload your current usage with `sync`:
@@ -130,7 +140,7 @@ online:
 npx @agentdeploymentco/argus sync --watch --interval 30
 ```
 
-## Run as a service
+### Run as a service (`run`)
 
 `argus run` does all three jobs in one long-running process — it reads new sessions, serves the web
 app, and uploads on a schedule, against one shared store:
@@ -182,6 +192,14 @@ launchd (`~/Library/LaunchAgents/co.agentdeployment.argus.plist`): set `ProgramA
   ```json
   { "gpt-5.5": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite5m": 0, "cacheWrite1h": 0 } }
   ```
+
+For more on privacy and what stays local, see
+[Privacy and Security](https://argus.agentdeployment.co/privacy).
+
+## Contributing
+
+Argus is developed with [Bun](https://bun.sh). See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
+architecture, and how to run the tests.
 
 ## License
 
