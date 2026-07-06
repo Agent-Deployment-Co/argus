@@ -380,13 +380,27 @@ fn stop(app: &AppHandle) {
     refresh_status(app);
 }
 
-/// Open the served dashboard in the user's default browser.
+/// Open the served dashboard in the user's default browser. Lands on the welcome overlay
+/// (`?first_run=1`) instead of the bare dashboard until the modal's "Don't show this again"
+/// checkbox has been ticked — the same `state.onboardingCompleted` flag `argus serve --open` checks.
 fn open_dashboard(app: &AppHandle) {
     let port = app.state::<AppState>().front_port.load(Ordering::SeqCst);
-    let url = format!("http://localhost:{port}");
+    let mut url = format!("http://localhost:{port}");
+    if !onboarding_completed() {
+        url.push_str("?first_run=1");
+    }
     if let Err(err) = app.opener().open_url(url, None::<&str>) {
         log::error!("opening the dashboard: {err}");
     }
+}
+
+/// Whether the welcome modal has already been dismissed with "Don't show this again"
+/// (`state.onboardingCompleted` in `argus.json`). Tolerant: a missing/malformed config reads as
+/// "not completed", so a fresh install shows the welcome overlay.
+fn onboarding_completed() -> bool {
+    read_argus_config_json()
+        .and_then(|json| json_bool_setting(json.get("state").and_then(|v| v.get("onboardingCompleted"))))
+        .unwrap_or(false)
 }
 
 fn non_empty_env(name: &str) -> Option<String> {

@@ -448,3 +448,27 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .setting-control { align-items: stretch; min-width: 0; }
   .setting-input, .setting-textarea, .setting-select, .secret-line { width: 100%; }
 }
+
+/* ── Welcome (first-run orientation, shown as a modal over the dashboard) ─────── */
+.welcome-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 32px; background: rgba(0, 0, 0, 0.5); overflow-y: auto; }
+.welcome-card { max-width: 760px; width: 100%; padding: 40px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35); }
+.welcome-grid { display: grid; grid-template-columns: 1fr 260px; align-items: center; gap: 40px; }
+.welcome-shot { margin: 0; }
+.welcome-shot img { display: block; width: 100%; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); }
+.welcome-shot figcaption { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
+@media (max-width: 640px) {
+  .welcome-grid { grid-template-columns: 1fr; gap: 24px; }
+  .welcome-shot { max-width: 220px; margin: 0 auto; }
+}
+.welcome-title { margin: 0 0 10px; color: var(--heading); font-family: var(--font-ui); font-size: 26px; font-weight: 700; letter-spacing: -0.04em; }
+.welcome-lede { margin: 0 0 28px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.welcome-points { display: flex; flex-direction: column; gap: 18px; }
+.welcome-point { display: flex; align-items: flex-start; gap: 12px; }
+.welcome-point-icon { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
+.welcome-point-title { color: var(--heading); font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.welcome-point-body { color: var(--muted); font-size: 13px; line-height: 1.5; }
+/* Actions row: centered as a block below the two-column grid, not stuck inside the text column. */
+.welcome-actions { display: flex; align-items: center; justify-content: center; margin-top: 32px; }
+.welcome-cta { display: inline-flex; align-items: center; justify-content: center; padding: 11px 28px; border: 0; border-radius: 8px; background: var(--accent); color: var(--porcelain); font: 600 14px var(--font-ui); cursor: pointer; }
+.welcome-cta:hover { background: color-mix(in srgb, var(--accent) 88%, black); }
+.welcome-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

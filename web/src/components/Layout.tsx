@@ -5,11 +5,12 @@ import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { VIEW_QUERY_KEY } from "../lib/views";
 import { SettingsSurface } from "../routes/Settings";
+import { WelcomeModal } from "../routes/Welcome";
 
 // The Argus arch mark — the ADC chevron un-bent into a rounded archway (a proto-"A"), four bands
 // in the ADC accent colors. Shown alone when the rail is collapsed; otherwise it's the symbol at the
 // head of the wordmark below. Colors are fixed (brand), so the mark reads the same in either theme.
-const ArchMark = () => (
+export const ArchMark = () => (
   <svg className="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Argus">
     <path d="M46 466 L46 256 A210 210 0 0 1 466 256 L466 466 L426 466 L426 256 A170 170 0 0 0 86 256 L86 466 Z" fill="#e2302c" />
     <path d="M92 466 L92 256 A164 164 0 0 1 420 256 L420 466 L380 466 L380 256 A124 124 0 0 0 132 256 L132 466 Z" fill="#ef8920" />
@@ -22,7 +23,7 @@ const ArchMark = () => (
 // when the rail is expanded. The letterforms use currentColor so the lockup recolors per theme
 // (Coffee Bean on light, Soft Apricot on dark) via .brand-wordmark in styles.css; the arch keeps its
 // four brand colors on both. Geometry mirrors the canonical wordmark asset (kb Identity/logos).
-const Wordmark = () => (
+export const Wordmark = () => (
   <svg className="brand-wordmark" xmlns="http://www.w3.org/2000/svg" viewBox="-0.50 -18.44 98.60 19.11" role="img" aria-label="Argus">
     <g transform="translate(0 -17.734) scale(0.042224) translate(-46 -46)">
       <path d="M46 466 L46 256 A210 210 0 0 1 466 256 L466 466 L426 466 L426 256 A170 170 0 0 0 86 256 L86 466 Z" fill="#e2302c" />
@@ -66,6 +67,9 @@ export function Layout() {
   const location = useRouterState({ select: (s) => s.location });
   const lastApp = useRef<{ pathname: string; search: Record<string, unknown> }>({ pathname: "/", search: {} });
   if (!isSettings) lastApp.current = { pathname: location.pathname, search: location.search as Record<string, unknown> };
+  // The welcome modal is a one-shot overlay triggered by `?first_run=1` on the dashboard route (not
+  // a separate page) — it sits on top of the app shell rather than replacing it.
+  const firstRun = Boolean((location.search as { firstRun?: boolean }).firstRun);
   // Each dashboard view fetches its own data now, so there's no single snapshot query to gate on;
   // any in-flight dashboard-view query drives the FilterBar's refreshing indicator. Scoped to the
   // view query prefix so unrelated fetches (session detail, list pagination, task-metrics, /debug)
@@ -140,6 +144,7 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+      {firstRun && <WelcomeModal />}
     </div>
   );
 }
