@@ -947,6 +947,25 @@ fn check_for_updates_from_menu(app: &AppHandle) {
     });
 }
 
+/// Auto-open the dashboard on a fresh install, once the service is up and the very first update
+/// check has settled — so a signed update being auto-installed (which restarts the whole app, see
+/// `install_update`) always wins the race instead of racing a stale sidecar. Only ever called once,
+/// right after the first background update check in `start_update_check_loop`; a completed update
+/// install never reaches this point in the same process (it restarts before `run_background_update_check`
+/// returns), so on relaunch this runs again against the now-current version. If auto-update is off and
+/// an update just sits available for manual approval, that shouldn't block first-run forever, so this
+/// still opens.
+fn maybe_open_on_first_run(app: &AppHandle) {
+    if onboarding_completed() {
+        return;
+    }
+    if app.state::<AppState>().child.lock().unwrap().is_none() {
+        // The sidecar isn't running (it failed to start) — nothing to open yet.
+        return;
+    }
+    open_dashboard(app);
+}
+
 async fn sleep_update_interval() {
     let minutes = auto_update_check_interval_minutes();
     let seconds = minutes.saturating_mul(60);
@@ -999,12 +1018,19 @@ async fn run_background_update_check(app: AppHandle) {
     }
 }
 
-/// Check for updates immediately, then repeat using `autoUpdate.checkIntervalMinutes`.
+/// Check for updates immediately, then repeat using `autoUpdate.checkIntervalMinutes`. The very
+/// first check gates the first-run auto-open (`maybe_open_on_first_run`) so it never races an
+/// update install.
 fn start_update_check_loop(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        let mut first_check = true;
         loop {
             run_background_update_check(handle.clone()).await;
+            if first_check {
+                first_check = false;
+                maybe_open_on_first_run(&handle);
+            }
             sleep_update_interval().await;
         }
     });
