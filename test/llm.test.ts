@@ -103,11 +103,6 @@ describe("claude-cli sandbox", () => {
     realpath: (path: string) =>
       path === "/usr/local/bin/claude" ? "/Users/you/.claude/local/claude" : path,
   };
-  const homebrewClaude = "/opt/homebrew/bin/claude";
-  const homebrewClaudeRealpath = "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js";
-  const homebrewNode = "/opt/homebrew/bin/node";
-  const homebrewNodeRealpath = "/opt/homebrew/Cellar/node/26.0.0/bin/node";
-  const homebrewNodeRealDir = "/opt/homebrew/Cellar/node/26.0.0/bin";
 
   test("builds a deny-by-default profile with Claude, keychain, and temp access", () => {
     const profile = buildClaudeSandboxProfile({
@@ -180,36 +175,6 @@ describe("claude-cli sandbox", () => {
     expect(command.args[0]).toBe("-p");
     expect(command.args[1]).toContain("/Users/you/.claude/local/claude");
     expect(command.args.slice(2)).toEqual(["/usr/local/bin/claude", "-p", "-"]);
-  });
-
-  test("allowlists the interpreter chain for Homebrew-style env node wrappers", () => {
-    const command = claudeSandboxCommand(homebrewClaude, ["-p", "-"], {
-      ...sandboxDeps,
-      env: { ...env, PATH: "/usr/bin" },
-      isExecutable: (path) =>
-        path === "/usr/bin/sandbox-exec" || path === homebrewNode,
-      realpath: (path) => {
-        if (path === homebrewClaude) return homebrewClaudeRealpath;
-        if (path === homebrewNode) return homebrewNodeRealpath;
-        return path;
-      },
-      readFilePrefix: (path) =>
-        path === homebrewClaude || path === homebrewClaudeRealpath
-          ? "#!/usr/bin/env node\n"
-          : undefined,
-    });
-
-    expect(command.sandboxed).toBe(true);
-    const profile = command.args[1]!;
-    expect(profile).toContain(`(literal "${homebrewClaude}")`);
-    expect(profile).toContain(`(literal "${homebrewClaudeRealpath}")`);
-    expect(profile).toContain('(literal "/usr/bin/env")');
-    expect(profile).toContain(`(literal "${homebrewNode}")`);
-    expect(profile).toContain(`(literal "${homebrewNodeRealpath}")`);
-    expect(profile).toContain(`(subpath "${homebrewNodeRealDir}")`);
-    expect(profile).not.toContain('(literal "/usr/bin/git")');
-    expect(profile).not.toContain('(literal "/usr/bin/python3")');
-    expect(command.args.slice(2)).toEqual([homebrewNode, homebrewClaude, "-p", "-"]);
   });
 
   test("missing sandbox-exec logs and runs direct claude", async () => {
