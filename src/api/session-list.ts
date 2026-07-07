@@ -18,6 +18,11 @@ export interface SessionListItem {
   source: AgentSource;
   project: string;
   firstPrompt: string | null;
+  /** The model-generated title when the session has been interpreted (#234), else null — the UI falls
+   *  back to `firstPrompt`. */
+  title: string | null;
+  /** The model-generated one-line summary when interpreted (#234), else null. */
+  summary: string | null;
   start: number;
   end: number;
   userMessages: number | null;
@@ -71,6 +76,8 @@ function listItem(agg: SessionAggregate): SessionListItem {
     source: meta.source,
     project: meta.project,
     firstPrompt: meta.firstPrompt ?? null,
+    title: agg.title ?? null,
+    summary: agg.summary ?? null,
     start: agg.firstTs ?? 0,
     end: agg.lastTs ?? 0,
     userMessages: meta.userMessages ?? null,
@@ -97,7 +104,8 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
     if (!params.includeGenerated && isArgusGeneratedSession(it.firstPrompt)) return false;
     if (project && !it.project.toLowerCase().includes(project)) return false;
     if (term) {
-      const title = (it.firstPrompt ?? "").toLowerCase();
+      // Match the model title (when present), the first prompt, the project, and the source.
+      const title = `${it.title ?? ""} ${it.firstPrompt ?? ""}`.toLowerCase();
       if (!title.includes(term) && !it.project.toLowerCase().includes(term) && !it.source.toLowerCase().includes(term)) {
         return false;
       }
@@ -113,13 +121,19 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
 
 /** Build the full detail row for one session from its messages (oldest first) — the same SessionRow
  *  the dashboard would produce, computed on demand so heavy per-session content never rides the bulk
- *  payload. The summary uses the shared `summaryFactsFromMessages` so it matches the dashboard exactly. */
+ *  payload. Prefers the model-generated title/summary when the session has been interpreted (#234),
+ *  falling back to the first prompt / heuristic summary so an un-interpreted session doesn't regress.
+ *  The heuristic summary uses the shared `summaryFactsFromMessages` so it matches the dashboard. */
 export function buildSessionDetail(
   sessionId: string,
   messages: MessageRecord[],
   meta: SessionMeta | undefined,
   tasks: TaskFact[],
+  interpretation?: { title: string | null; summary: string | null },
 ): SessionRow {
-  const summary = heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
-  return buildSessionRow(sessionId, messages, meta, summary, tasks);
+  const summary =
+    interpretation?.summary ||
+    heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
+  const title = interpretation?.title || null;
+  return buildSessionRow(sessionId, messages, meta, summary, tasks, title);
 }

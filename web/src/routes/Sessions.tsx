@@ -34,9 +34,12 @@ function extractFilterToken(raw: string, requireTerminator: boolean): { key: Fil
   return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
 }
 
-/** A human-facing title for a session: its opening prompt, else the heuristic summary (detail only),
- *  else a placeholder. Accepts both the list-lite item and the full row. */
-export function sessionTitle(s: { firstPrompt?: string | null; summary?: string }): string {
+/** A human-facing title for a session: the model-generated title when the session has been interpreted
+ *  (#234), else its opening prompt, else the summary, else a placeholder. Accepts both the list-lite
+ *  item and the full row. */
+export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null; summary?: string | null }): string {
+  const title = s.title?.trim();
+  if (title) return title;
   const prompt = s.firstPrompt?.trim();
   if (prompt) return prompt.length > 90 ? prompt.slice(0, 90) + "…" : prompt;
   const summary = s.summary?.trim().replace(/^"|"$/g, "");
