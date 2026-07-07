@@ -31,6 +31,9 @@ import type {
   ReconstructedFragments,
   ResolvedQuery,
   SessionAggregate,
+  SessionSearchMatch,
+  SessionSearchQuery,
+  SessionSearchResult,
   SourceCoverageRow,
   StoreStats,
   TaskSeqInteraction,
@@ -562,6 +565,18 @@ function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+/** Escape freeform user input into a valid FTS5 MATCH query (#155): split on whitespace, wrap each
+ *  token in double quotes (escaping embedded `"` as `""`), join with spaces for an implicit AND of
+ *  quoted tokens. Avoids syntax errors from FTS5 operators in the raw text (`-`, `*`, `:`, …) and
+ *  gives plain word/phrase matching instead. */
+function toFtsMatchQuery(raw: string): string {
+  return raw
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => `"${token.replaceAll('"', '""')}"`)
+    .join(" ");
 }
 
 // The single definition of "eligible for (re)interpretation" (#153), shared by the drain's session
@@ -2182,6 +2197,112 @@ export class SqliteStore implements Store {
         lastTs: row.last_ts,
         messageCount: row.message_count,
       }));
+    });
+  }
+
+  // Session search (#155): resolves the `/sessions` box's freeform `text` + `file:` term to a
+  // candidate id set + per-session snippet/count, computed in SQL. Reuses the same source/date/project
+  // narrowing readSessionAggregates builds, so search honors the global filters.
+  searchSessions(query: SessionSearchQuery): Promise<SessionSearchResult> {
+    return this.schedule(async () => {
+      const sessionConds: string[] = ["s.archived = 0"];
+      const sessionParams: unknown[] = [];
+      if (query.sources?.length) {
+        sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
+        sessionParams.push(...query.sources);
+      }
+      if (query.projectSubstring) {
+        sessionConds.push("instr(s.cwd, ?) > 0");
+        sessionParams.push(query.projectSubstring);
+      }
+      const dateConds: string[] = [];
+      const dateParams: unknown[] = [];
+      if (query.since) {
+        dateConds.push("m.date >= ?");
+        dateParams.push(query.since);
+      }
+      if (query.until) {
+        dateConds.push("m.date <= ?");
+        dateParams.push(query.until);
+      }
+      if (dateConds.length) {
+        sessionConds.push(
+          `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
+        );
+        sessionParams.push(...dateParams);
+      }
+
+      // file: term — substring match on file_path (not FTS: the tokenizer would split paths on '/' and '.').
+      if (query.file) {
+        sessionConds.push(
+          "EXISTS (SELECT 1 FROM resolved_invocations i WHERE i.session_id = s.session_id AND instr(lower(i.file_path), lower(?)) > 0)",
+        );
+        sessionParams.push(query.file);
+      }
+
+      // Freeform text: title/project/source substring (today's behavior) OR either FTS table matches.
+      // Both FTS subqueries reuse the SAME escaped MATCH query string. Either table may be empty
+      // (retention off, task interpretation never run) — an empty table just contributes no rows, no error.
+      const trimmed = query.text?.trim();
+      const matchQuery = trimmed ? toFtsMatchQuery(trimmed) : undefined;
+      if (trimmed) {
+        sessionConds.push(
+          `(instr(lower(coalesce(s.first_prompt, '')), ?) > 0
+            OR instr(lower(s.project), ?) > 0
+            OR instr(lower(s.source), ?) > 0
+            OR s.session_id IN (SELECT session_id FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?)
+            OR s.session_id IN (SELECT session_id FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?))`,
+        );
+        const lowered = trimmed.toLowerCase();
+        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery);
+      }
+
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT s.session_id AS session_id FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
+        sessionParams,
+      );
+      const ids = new Set(rows.map((row) => row.session_id));
+
+      const matches = new Map<string, SessionSearchMatch>();
+      if (matchQuery) {
+        // snippet() must be evaluated per matched row while the FTS cursor is positioned on it — it
+        // cannot combine with GROUP BY ("unable to use function snippet in the requested context").
+        // So fetch ungrouped rows (one per matching FTS row) and fold per-session in JS instead.
+        // Column index 1 = `text` (column 0 is the UNINDEXED session_id carried on the row).
+        const interactionRows = await all<{ session_id: string; snip: string }>(
+          this.db,
+          `SELECT session_id, snippet(resolved_interaction_text_fts, 1, char(1), char(2), '…', 12) AS snip
+           FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?`,
+          [matchQuery],
+        );
+        const taskRows = await all<{ session_id: string; snip: string }>(
+          this.db,
+          `SELECT session_id, snippet(resolved_tasks_fts, 1, char(1), char(2), '…', 12) AS snip
+           FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?`,
+          [matchQuery],
+        );
+        for (const row of interactionRows) {
+          const existing = matches.get(row.session_id);
+          matches.set(row.session_id, {
+            count: (existing?.count ?? 0) + 1,
+            snippet: existing?.snippet ?? row.snip,
+            source: existing?.source ?? "conversation",
+          });
+        }
+        // Task text is the distilled, more readable restatement — prefer its snippet when a session
+        // matched both tables, and sum the counts so the UI shows the combined match strength.
+        for (const row of taskRows) {
+          const existing = matches.get(row.session_id);
+          matches.set(row.session_id, {
+            count: (existing?.count ?? 0) + 1,
+            snippet: row.snip,
+            source: existing ? "both" : "task",
+          });
+        }
+      }
+
+      return { ids, matches };
     });
   }
 

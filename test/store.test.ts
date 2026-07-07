@@ -1650,3 +1650,200 @@ describe("conversation text retention (#120)", () => {
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 });
+
+describe("session search (#155)", () => {
+  const sid = "claude:search";
+  const pos = (i: number) => ({ originKey: "f", recordIndex: i, itemIndex: 0 });
+  const sessionFixture = () => ({
+    meta: { source: "claude" as const, sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+    messages: [
+      {
+        source: "claude" as const, sessionId: sid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1000,
+        date: "2026-06-01", model: "claude-opus-4",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null, interactionSeq: 0,
+        toolUses: [{ name: "Edit", category: "file-io" as const, filePath: "src/pricing.ts" }],
+      },
+    ],
+    interactions: [
+      {
+        id: "i0", source: "claude" as const, sourceSessionId: sid, seq: 0, initiator: "human" as const,
+        disposition: "completed" as const, compactionCount: 0, timestampMs: 1000,
+        promptPosition: pos(0), position: pos(0),
+        promptText: "let's discuss the flibbertigibbet outage", responseText: "fixed the flibbertigibbet outage",
+      },
+    ],
+  });
+  const otherSid = "claude:search-other";
+  const otherSessionFixture = () => ({
+    meta: { source: "claude" as const, sessionId: otherSid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r2.jsonl" },
+    messages: [
+      {
+        source: "claude" as const, sessionId: otherSid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 2000,
+        date: "2026-06-02", model: "claude-opus-4",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null, interactionSeq: 0, toolUses: [],
+      },
+    ],
+    interactions: [
+      {
+        id: "j0", source: "claude" as const, sourceSessionId: otherSid, seq: 0, initiator: "human" as const,
+        disposition: "completed" as const, compactionCount: 0, timestampMs: 2000,
+        promptPosition: pos(0), position: pos(0),
+        promptText: "totally unrelated small talk", responseText: "sure thing",
+      },
+    ],
+  });
+
+  test("finds a session by a word in retained conversation text, with a snippet", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      const result = await store.searchSessions({ text: "flibbertigibbet" });
+      expect(result.ids).toEqual(new Set([sid]));
+      const match = result.matches.get(sid);
+      expect(match?.source).toBe("conversation");
+      expect(match?.count).toBeGreaterThan(0);
+      expect(match?.snippet).toContain("flibbertigibbet");
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("finds a session by file: substring, independent of text search", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      const result = await store.searchSessions({ file: "pricing" });
+      expect(result.ids).toEqual(new Set([sid]));
+      expect(result.matches.size).toBe(0); // file: is metadata-only, no FTS snippet
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a non-matching term returns nothing", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      const result = await store.searchSessions({ text: "nonexistentxyz" });
+      expect(result.ids.size).toBe(0);
+      expect(result.matches.size).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("finds a session via task text (description/outcomeReason/signals), tagged source: task", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:search",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "Investigate the quuxwidget regression",
+        outcomeReason: "Resolved after a config change",
+        signals: ["frustration:low"],
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+
+      const result = await store.searchSessions({ text: "quuxwidget" });
+      expect(result.ids).toEqual(new Set([sid]));
+      expect(result.matches.get(sid)?.source).toBe("task");
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a word appearing only in .evidence does not match (evidence is deliberately excluded)", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:evidence-only",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "Look into the reported slowdown",
+        evidence: "interactions: 0, 1",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+
+      const result = await store.searchSessions({ text: "interactions" });
+      expect(result.ids.size).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a session matching both FTS tables reports source: both and sums the counts", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:both",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "The flibbertigibbet outage, summarized",
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+
+      const result = await store.searchSessions({ text: "flibbertigibbet" });
+      expect(result.ids).toEqual(new Set([sid]));
+      const match = result.matches.get(sid);
+      expect(match?.source).toBe("both");
+      expect(match?.count).toBe(3); // 2 conversation chunks (prompt+response) + 1 task
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("v19 -> v20 migration backfills both FTS indexes from existing data", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:migrate",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "The flibbertigibbet outage, summarized",
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+    } finally {
+      await store.close();
+    }
+    // Degrade to v19: drop the v20 additions and set the version back, simulating an older store
+    // that already has interaction text + task data on disk but no search index yet.
+    await withRawDatabase(path, (db) => {
+      rawExec(db, "DROP TABLE resolved_interaction_text_fts");
+      rawExec(db, "DROP TABLE resolved_tasks_fts");
+      rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
+      rawExec(db, "PRAGMA user_version = 19");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      const result = await migrated.searchSessions({ text: "flibbertigibbet" });
+      expect(result.ids).toEqual(new Set([sid]));
+      expect(result.matches.get(sid)?.source).toBe("both");
+    } finally {
+      await migrated.close();
+    }
+    const version = await withRawDatabase(path, (db) =>
+      rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+});
