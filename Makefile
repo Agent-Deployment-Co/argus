@@ -1,4 +1,4 @@
-.PHONY: install build test typecheck publish clean desktop dmg version bump help
+.PHONY: install build test typecheck changelog publish clean desktop dmg version bump help
 
 NPM_PUBLISH_FLAGS ?= --access public
 
@@ -10,6 +10,7 @@ help:
 	@echo "  build      Build the npm packages"
 	@echo "  test       Run tests"
 	@echo "  typecheck  Run TypeScript type checking"
+	@echo "  changelog  Rebuild docs/changelog.md from GitHub releases"
 	@echo "  publish    Build and publish to npm"
 	@echo "  clean      Remove dist/"
 	@echo "  desktop    Build the desktop app"
@@ -37,6 +38,9 @@ test: install
 
 typecheck: install
 	bun run typecheck
+
+changelog: install
+	bun run docs:changelog
 
 publish: install build
 	@set -eu; \
