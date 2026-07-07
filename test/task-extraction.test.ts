@@ -74,18 +74,31 @@ describe("task extraction", () => {
     expect(prompt).toContain('"text": "do it"'); // the user prompt is intact
   });
 
-  test("bounds the whole prompt for a many-message session without dropping any message (#234)", () => {
-    // 400 messages, each with a large prompt + response — no per-message cap alone would bound this.
-    const many = Array.from({ length: 400 }, (_, i) =>
+  test("hard-bounds the whole prompt for a many-message session without dropping any message (#234)", () => {
+    // 1000 messages, each with a large prompt + response (~6MB of raw content). The budget is shared
+    // equally with NO per-message floor, so the total can't balloon with message count — a per-message
+    // floor (the earlier bug) would have yielded ~200+ chars/msg ≈ 250KB+ here.
+    const many = Array.from({ length: 1000 }, (_, i) =>
       candidate(i, `task ${i}: ` + "p".repeat(3000), undefined, "r".repeat(3000)),
     );
     const prompt = buildTaskExtractionPrompt("codex:one", many, "Return JSON.");
-    // The assembled text stays near the budget (marker overhead aside), not ~2.4MB of raw content.
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(120_000);
-    // Every message keeps its index slot with real text — an interior pivot is never dropped.
+    // Comfortably bounded (budget 60KB text + JSON scaffolding), not the ~250KB a floor would produce.
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(180_000);
+    // Every message keeps its index slot — an interior pivot is never dropped, however many there are.
     expect(prompt).toContain('"index": 0');
-    expect(prompt).toContain('"index": 399');
-    expect(prompt).toContain("task 399:");
+    expect(prompt).toContain('"index": 999');
+    expect(prompt).toContain("task 999:");
+  });
+
+  test("drops a field to empty rather than a content-free marker when its cap is tiny (#234)", () => {
+    // A cap in (0, ELISION_MARKER_CHARS] can't hold head+tail+marker; the field must be "" (no overshoot).
+    // 300 messages → perMsg = 200; a ~198-char prompt leaves the response only ~2 chars of budget.
+    const many = Array.from({ length: 300 }, (_, i) =>
+      candidate(i, "p".repeat(500), undefined, "r".repeat(500)),
+    );
+    const prompt = buildTaskExtractionPrompt("codex:one", many, "Return JSON.");
+    // No message emits a response that is only an elision marker with empty content.
+    expect(prompt).not.toMatch(/"response":\s*"\s*…\[\d+ chars elided\]"/);
   });
 
   test("parses title/summary/tasks JSON and markdown-fenced JSON (#234)", () => {

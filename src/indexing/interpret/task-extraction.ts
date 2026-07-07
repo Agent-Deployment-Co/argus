@@ -201,18 +201,25 @@ function resolveInstructions(
 // field is truncated head+tail, so both the setup and the outcome of a long message survive.
 export const PROMPT_CHAR_LIMIT = 4000;
 export const RESPONSE_GROUNDING_CHAR_LIMIT = 1000;
-/** Total character budget for the assembled per-message text (~4 chars/token, so ~15k tokens). */
+/** Total character budget for the assembled per-message text (~4 chars/token, so ~15k tokens). It is a
+ *  HARD cap: each message's share is `budget / n` with no per-message floor, so the summed text can
+ *  never exceed the budget regardless of message count. On a pathological many-message session each
+ *  share shrinks toward zero — a message's text may reduce to just its index slot (preserving
+ *  messageIndexes) — rather than the total growing. */
 export const PASS1_TOTAL_CHAR_BUDGET = 60_000;
-/** Floor so even a very long session keeps a readable snippet per message (a pivot still shows). */
-const MIN_MSG_CHARS = 200;
+/** The elision marker overhead reserved inside a truncated field; a cap this small can't hold head +
+ *  tail + marker, so the field is dropped to "" instead of emitting a content-free marker. */
+const ELISION_MARKER_CHARS = 24;
 
 /** Truncate to `maxChars` keeping the head and the tail (the setup and the conclusion), with an
- *  elision marker naming how much was cut. `<= 0` yields "". */
+ *  elision marker naming how much was cut. Returns "" when `maxChars` is too small to hold any content
+ *  alongside the marker (≤ ELISION_MARKER_CHARS, incl. non-positive), rather than a marker-only string
+ *  that would overshoot the cap and carry no grounding. */
 function truncateHeadTail(text: string, maxChars: number): string {
   const t = text.trim();
-  if (maxChars <= 0) return "";
   if (t.length <= maxChars) return t;
-  const usable = Math.max(0, maxChars - 24); // leave room for the marker
+  const usable = maxChars - ELISION_MARKER_CHARS;
+  if (usable <= 0) return "";
   const headLen = Math.ceil(usable * 0.65);
   const tailLen = Math.floor(usable * 0.35);
   const head = t.slice(0, headLen).trimEnd();
@@ -227,13 +234,14 @@ export function buildTaskExtractionPrompt(
   instructions = DEFAULT_TASK_EXTRACTION_PROMPT,
   limits?: { titleMaxChars: number; summaryMaxChars: number },
 ): string {
-  // Equal share of the budget per message; the prompt takes up to its own cap (and the share), the
-  // response takes whatever share is left (up to its cap). No message is dropped — every index slot
-  // keeps real, if aggressively truncated, text so messageIndexes stays meaningful.
+  // Equal, HARD share of the budget per message (no floor, so the total can't exceed the budget however
+  // many messages there are): the prompt takes up to its own cap and the share, the response takes
+  // whatever share is left (up to its cap). No message is dropped — every index slot is kept so
+  // messageIndexes stays meaningful — but on a huge session a message's text truncates toward "".
   const n = Math.max(1, candidates.length);
   const perMsg = Math.floor(PASS1_TOTAL_CHAR_BUDGET / n);
   const messages = candidates.map((candidate, index) => {
-    const promptCap = Math.min(PROMPT_CHAR_LIMIT, Math.max(MIN_MSG_CHARS, perMsg));
+    const promptCap = Math.min(PROMPT_CHAR_LIMIT, perMsg);
     const text = truncateHeadTail(candidate.promptText ?? "", promptCap);
     const responseCap = Math.min(RESPONSE_GROUNDING_CHAR_LIMIT, Math.max(0, perMsg - text.length));
     const response = candidate.responseText ? truncateHeadTail(candidate.responseText, responseCap) : "";
@@ -641,6 +649,14 @@ async function mapWithLimit<T, R>(
   return results;
 }
 
+/** Append `value` to the array at `key`, creating it on first use. Avoids the allocate-a-throwaway-`[]`
+ *  + re-probe idiom; number-keyed, unlike the string-keyed `groupBy` in pipeline.ts. */
+function pushGroup<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  let list = map.get(key);
+  if (!list) map.set(key, (list = []));
+  list.push(value);
+}
+
 /**
  * The full two-pass extraction (#91/#122): pass 1 segments the session's human interaction openings
  * (the only task candidates) into tasks; pass 2 judges each task's outcome from the dialogue projected
@@ -653,7 +669,9 @@ export async function extractTasksWithOutcome(
   sessionId: string,
   interactions: InteractionFact[],
   options: ResolvedSessionInterpretation | undefined,
-  invocations: SessionInvocation[] = [],
+  // Loaded lazily so a no-task session (common in the drain) never pays for the invocations query —
+  // it's only needed for the pass-2 tool-usage summary, past the tasks-length guard below.
+  loadInvocations?: () => Promise<SessionInvocation[]>,
 ): Promise<SessionInterpretationResult> {
   // Task candidates are the human interaction openings that carry task text (#122).
   const candidates = interactions.filter(
@@ -671,15 +689,12 @@ export async function extractTasksWithOutcome(
     (a, b) => (a.timestampMs ?? Infinity) - (b.timestampMs ?? Infinity),
   );
 
-  // Group invocations by their owning interaction seq (#234). Read from resolved_invocations, keyed by
-  // interaction_seq — NOT task_seq (which writeSessionTasks assigns only after this pass runs).
+  // Group invocations by their owning interaction seq (#234) — read only now that pass 1 produced tasks.
+  // Keyed by interaction_seq, NOT task_seq (which writeSessionTasks assigns only after this pass runs).
+  const invocations = loadInvocations ? await loadInvocations() : [];
   const invocationsByInteraction = new Map<number, SessionInvocation[]>();
   for (const inv of invocations) {
-    if (inv.interactionSeq == null) continue;
-    const list = invocationsByInteraction.get(inv.interactionSeq) ?? [];
-    if (!invocationsByInteraction.has(inv.interactionSeq))
-      invocationsByInteraction.set(inv.interactionSeq, list);
-    list.push(inv);
+    if (inv.interactionSeq != null) pushGroup(invocationsByInteraction, inv.interactionSeq, inv);
   }
 
   // Group each task's owned interactions via the same bookmark the materializer stamps onto
@@ -689,11 +704,7 @@ export async function extractTasksWithOutcome(
   const interactionsByTask = new Map<number, InteractionFact[]>();
   for (const interaction of interactions) {
     const taskIndex = taskSeqByInteraction.get(interaction.seq);
-    if (taskIndex == null) continue;
-    const list = interactionsByTask.get(taskIndex) ?? [];
-    if (!interactionsByTask.has(taskIndex))
-      interactionsByTask.set(taskIndex, list);
-    list.push(interaction);
+    if (taskIndex != null) pushGroup(interactionsByTask, taskIndex, interaction);
   }
   logTaskExtractionDebug(
     options,

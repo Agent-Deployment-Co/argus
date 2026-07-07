@@ -73,12 +73,13 @@ export async function interpretSession(
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[]; interpreted: boolean }> {
   const resolved = await withResolvedApiKey(taskExtraction);
   const interactions = await store.readSessionInteractions(sessionId);
-  const invocations = await store.readSessionInvocations(sessionId);
+  // Invocations are only needed for the pass-2 tool-usage summary; pass a loader so a no-task session
+  // (common in the drain) skips the query entirely (see extractTasksWithOutcome's tasks-length guard).
   const { title, summary, tasks, diagnostics } = await extractTasksWithOutcome(
     sessionId,
     interactions,
     resolved,
-    invocations,
+    () => store.readSessionInvocations(sessionId),
   );
   if (diagnostics.some((d) => EXTRACTION_FAILURE_CODES.has(d.code))) {
     return { tasks, diagnostics, interpreted: false };
