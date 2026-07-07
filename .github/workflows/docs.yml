@@ -37,6 +37,10 @@ jobs:
           bun-version: latest
       - uses: actions/configure-pages@v5
       - run: bun install --frozen-lockfile
+      - name: Refresh changelog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun run docs:changelog
       - run: bun run docs:build
       - uses: actions/upload-pages-artifact@v3
         with:
