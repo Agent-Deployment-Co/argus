@@ -31,16 +31,26 @@ design features, write copy, or choose examples/taxonomies, assume this range an
 developer. (See the `docs/index.md` positioning and the `docs/contributing/` voice guides; don't
 call them "non-coders" or talk down.)
 
-Argus is a Bun + TypeScript CLI that audits local Claude Code, Claude Cowork, Claude Chat, Codex,
-and Gemini usage. It reads local session transcripts (`~/.claude/projects/**/*.jsonl`,
-`~/.codex/sessions/**/*.jsonl`, …) and presents them two ways: an interactive local web app
-(`serve` — the preferred UI; see `docs/internals/web-app.md`), or per-(org, user) usage data
-uploaded to a private Cloudflare Worker backend (`sync`, formerly `push`). `argus run` ties the long-running pieces together: it keeps the local
-store current (`index --watch`), serves the web app, and uploads on a schedule (`sync --watch`) in
-one supervised foreground process. Nothing is uploaded during `serve`/`index`; all parsing is local.
+Argus audits local agent usage — Claude Code, Claude Cowork, Claude Chat, Codex, and Gemini — by
+reading local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`,
+…). All parsing is local. **Most users run the desktop app**, and it's the preferred way to interact
+with Argus: a Tauri **tray app** (`desktop/`) that wraps the CLI — it bundles the compiled `argus`
+binary plus the web assets, supervises `argus run` in the background, opens the dashboard in the
+user's default browser through a stable local front-door port (default `4242`, proxied so an open
+tab survives background restarts), and auto-updates. The tray app is the front door; the CLI is the
+engine underneath.
 
-The Worker + D1 dashboard backend lives in a **separate public repo**, `agentdeploymentco/argus-hub`.
-This repo is the public CLI only.
+That engine is a Bun + TypeScript CLI, and the more technical end of the audience can run it
+directly. `serve` runs the local **web app** — a React SPA (see `docs/internals/web-app.md`) that is
+the dashboard the desktop app opens. `index` reads transcripts into the local store (`argus.db`).
+`sync` (formerly `push`) uploads per-(org, user) usage data to a private Cloudflare Worker backend.
+`run` ties the long-running pieces together (`index --watch` + `serve`, plus `sync --watch` when a
+Hub is configured) in one supervised process — this is what the desktop app runs. Nothing is
+uploaded during `serve`/`index`; the only data that ever leaves the machine is what `sync` sends.
+
+This repo is the public CLI, its web app (`web/`), and the desktop tray shell (`desktop/`). The
+Worker + D1 backend that `sync` uploads to lives in a **separate public repo**,
+`agentdeploymentco/argus-hub`.
 
 ## Commands
 
