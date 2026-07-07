@@ -460,6 +460,57 @@ describe("openrouter provider", () => {
   });
 });
 
+describe("structured output + effort (#234)", () => {
+  const SCHEMA = {
+    type: "object",
+    additionalProperties: false,
+    properties: { title: { type: "string" } },
+    required: ["title"],
+  };
+
+  test("openai request carries response_format + reasoning_effort; no retry on success", async () => {
+    const { fetch, calls } = fakeFetch([json({ choices: [{ message: { content: '{"title":"x"}' } }] })]);
+    await complete(
+      { prompt: "p", schema: SCHEMA },
+      cfg({ provider: "openai", model: "gpt-5", effort: "high" }),
+      { fetch },
+    );
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "output", schema: SCHEMA, strict: true },
+    });
+    expect(body.reasoning_effort).toBe("high");
+  });
+
+  test("retries once WITHOUT schema/effort when an endpoint 400s on them (#234 regression guard)", async () => {
+    const { fetch, calls } = fakeFetch([
+      json({ error: { message: "response_format is not supported" } }, { status: 400 }),
+      json({ choices: [{ message: { content: "plain answer" } }] }),
+    ]);
+    const res = await complete(
+      { prompt: "p", schema: SCHEMA },
+      cfg({ provider: "openai", model: "local-model", effort: "high" }),
+      { fetch },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.text).toBe("plain answer");
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0]!.init.body as string).response_format).toBeDefined();
+    const retry = JSON.parse(calls[1]!.init.body as string);
+    expect(retry.response_format).toBeUndefined();
+    expect(retry.reasoning_effort).toBeUndefined();
+  });
+
+  test("does not retry a 400 when no schema/effort was sent", async () => {
+    const { fetch, calls } = fakeFetch([json({ error: { message: "bad request" } }, { status: 400 })]);
+    const res = await complete({ prompt: "p" }, cfg({ provider: "openai", model: "gpt-5" }), { fetch });
+    expect(res.ok).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("gemini provider", () => {
   test("model in the path, x-goog-api-key, parts extraction", async () => {
     const { fetch, calls } = fakeFetch([

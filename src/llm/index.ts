@@ -8,7 +8,7 @@
 // Dispatch is registry-driven (see registry.ts): the client looks the provider up and calls its
 // `complete`, with no per-provider branching here. Adding a provider doesn't touch this file.
 import { getProvider } from "./registry.ts";
-import type { LlmProvider, LlmRequest, LlmResult, ResolvedLlmConfig } from "./types.ts";
+import type { LlmProvider, LlmRequest, LlmResult, ProviderCall, ResolvedLlmConfig } from "./types.ts";
 
 export {
   getProvider,
@@ -67,7 +67,7 @@ export async function complete(
   // cap (providers reject it or return an empty completion), so treat it as absent — unlike `??`,
   // which would forward the `0` verbatim.
   const maxTokens = request.maxTokens || config.maxTokens || DEFAULT_MAX_TOKENS;
-  return provider.complete({
+  const call: ProviderCall = {
     system: request.system,
     prompt: request.prompt,
     model: request.model ?? config.model ?? provider.defaultModel ?? "",
@@ -83,5 +83,20 @@ export async function complete(
     log: config.log,
     fetch: deps.fetch ?? fetch,
     signal: request.signal,
-  });
+  };
+  const result = await provider.complete(call);
+  // Tolerant fallback (#234): an HTTP provider can 400 on the structured-output / effort fields we
+  // attach — e.g. an OpenAI-compatible endpoint (vLLM/Ollama/LM Studio/older Azure, or OpenRouter to a
+  // model without structured-output support) that doesn't accept `response_format` / `reasoning_effort`,
+  // or a Gemini model that rejects `thinkingConfig`. Unlike the local providers these have no prompt-
+  // instruction fallback of their own, so retry once without those fields (the caller's prompt already
+  // states the desired JSON shape, parsed tolerantly) rather than failing every call. A 400 is terminal
+  // in the transport, so this costs at most one extra request and only when we actually sent them.
+  if (!result.ok && result.status === 400 && (call.schema != null || call.effort != null)) {
+    call.log?.(
+      "provider rejected the structured-output/effort request (HTTP 400); retrying without schema/effort",
+    );
+    return provider.complete({ ...call, schema: undefined, effort: undefined });
+  }
+  return result;
 }
