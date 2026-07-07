@@ -53,6 +53,11 @@ export interface LlmProviderConfig {
 
 /** The typed shape of `argus.json`. Designed to grow; task extraction is the first LLM consumer. */
 export interface ArgusConfig {
+  /** Desktop shell behavior. */
+  desktop?: {
+    /** Start the desktop app automatically when the user signs in. On by default. */
+    startAtLogin?: boolean;
+  };
   /** Desktop app updates. Enabled by default so signed releases install automatically. */
   autoUpdate?: {
     enabled?: boolean;
@@ -298,6 +303,20 @@ function parseLogLevel(raw: unknown): ArgusLogLevel | undefined {
 }
 
 const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
+
+export const DESKTOP_SETTINGS = {
+  startAtLogin: {
+    path: "desktop.startAtLogin",
+    env: "ARGUS_DESKTOP_START_AT_LOGIN",
+    default: true,
+    ui: {
+      label: "Start when you sign in",
+      description: "Open the desktop app automatically when you sign in to this computer.",
+      control: "toggle",
+    },
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+};
 
 export const HUB_SETTINGS = {
   url: {
@@ -726,6 +745,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
   [
     ...Object.values(LLM_SETTINGS),
     ...Object.values(SESSION_INTERPRETATION_SETTINGS),
+    ...Object.values(DESKTOP_SETTINGS),
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
     ...Object.values(RETENTION_SETTINGS),
@@ -996,6 +1016,14 @@ export function resolveAutoUpdateCheckIntervalMinutes(
   file: ArgusConfig = loadConfig(),
 ): number {
   return resolveSetting(AUTO_UPDATE_SETTINGS.checkIntervalMinutes, flags, file);
+}
+
+/** Whether the desktop app starts when the user signs in. Defaults on. */
+export function resolveDesktopStartAtLogin(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(DESKTOP_SETTINGS.startAtLogin, flags, file);
 }
 
 /** Whether to keep prompt/response text in the local store (#120). Defaults on; local-only. */

@@ -27,6 +27,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry,
 };
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
@@ -565,6 +566,118 @@ fn json_minutes_setting(value: Option<&serde_json::Value>) -> Option<u64> {
         serde_json::Value::String(value) => parse_minutes_setting(value),
         _ => None,
     }
+}
+
+/// Whether the desktop shell should start automatically when the user signs in. Defaults to true,
+/// matching the shared `desktop.startAtLogin` setting in `argus.json`.
+fn desktop_start_at_login_enabled() -> bool {
+    if let Some(value) = non_empty_env("ARGUS_DESKTOP_START_AT_LOGIN") {
+        return parse_bool_setting(&value).unwrap_or(true);
+    }
+    read_argus_config_json()
+        .and_then(|json| json_bool_setting(json.get("desktop").and_then(|v| v.get("startAtLogin"))))
+        .unwrap_or(true)
+}
+
+/// Keep the OS startup registration in sync with `desktop.startAtLogin`. The setting is saved by the
+/// sidecar's web API, so the native shell reconciles it independently instead of requiring a restart.
+///
+/// Never touches the OS registration in debug builds: a dev build's login item would point at the
+/// `cargo`/dev binary. The guard lives here so every caller (the sync loop and the quit handler) is
+/// covered by one rule.
+fn sync_autostart_setting(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let desired = desktop_start_at_login_enabled();
+    let autostart = app.autolaunch();
+    let current = match autostart.is_enabled() {
+        Ok(value) => value,
+        Err(err) => {
+            log::warn!("checking start-at-login setting: {err}");
+            return;
+        }
+    };
+    if current == desired {
+        return;
+    }
+    let result = if desired {
+        autostart.enable()
+    } else {
+        autostart.disable()
+    };
+    match result {
+        Ok(()) => log::info!(
+            "start-at-login {}",
+            if desired { "enabled" } else { "disabled" }
+        ),
+        Err(err) => log::warn!(
+            "{} start-at-login: {err}",
+            if desired { "enabling" } else { "disabling" }
+        ),
+    }
+}
+
+/// Reconcile the OS startup registration once at launch, then again whenever `argus.json` changes.
+/// The web Settings toggle is written by the sidecar (a separate process), so instead of polling we
+/// watch the config directory and react to writes. Watching the *directory* (not the file) survives
+/// the atomic write-temp-then-rename that config writers use — which swaps the file's inode — and
+/// also catches the file being created for the first time.
+fn start_autostart_sync_watcher(app: &AppHandle) {
+    // `sync_autostart_setting` already no-ops in debug builds; skip the watcher entirely so a dev
+    // build never touches the login item.
+    if cfg!(debug_assertions) {
+        log::info!("start-at-login sync is disabled in debug builds");
+        return;
+    }
+    let handle = app.clone();
+    // Pick up first-run default-on and any change made while the app wasn't running.
+    sync_autostart_setting(&handle);
+
+    let Some(config_dir) = argus_config_dir() else {
+        log::warn!("start-at-login sync: no config directory to watch");
+        return;
+    };
+    // notify's watcher delivers events on its own thread and stops the moment it's dropped, so keep
+    // it alive by owning it for the life of this blocking receive loop.
+    std::thread::spawn(move || {
+        use notify::Watcher;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(tx) {
+            Ok(watcher) => watcher,
+            Err(err) => {
+                log::warn!("start-at-login sync: cannot create watcher: {err}");
+                return;
+            }
+        };
+        if let Err(err) = watcher.watch(&config_dir, notify::RecursiveMode::NonRecursive) {
+            log::warn!("start-at-login sync: cannot watch config directory: {err}");
+            return;
+        }
+        while let Ok(first) = rx.recv() {
+            // Coalesce the burst of events a single save emits, and only reconcile when one of them
+            // actually touched argus.json (the directory also holds argus.db, token.json, etc.).
+            let mut event = Some(first);
+            let mut touched_config = false;
+            loop {
+                match event {
+                    Some(Ok(ev)) => {
+                        if ev.paths.iter().any(|path| {
+                            path.file_name().and_then(|name| name.to_str()) == Some("argus.json")
+                        }) {
+                            touched_config = true;
+                        }
+                    }
+                    Some(Err(err)) => log::warn!("start-at-login sync: watch error: {err}"),
+                    None => break,
+                }
+                event = rx.try_recv().ok();
+            }
+            if touched_config {
+                sync_autostart_setting(&handle);
+            }
+        }
+    });
 }
 
 /// Whether the desktop shell should install signed updates automatically. Defaults to true, matching
@@ -1108,6 +1221,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("Argus")
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // The sidecar writes its own timestamped log lines directly to argus.log. Keep the
@@ -1198,6 +1316,7 @@ pub fn run() {
                     "updates" => check_for_updates_from_menu(app),
                     "about" => show_about(app),
                     "quit" => {
+                        sync_autostart_setting(app);
                         stop(app);
                         app.exit(0);
                     }
@@ -1208,6 +1327,10 @@ pub fn run() {
             // Start the background work immediately so the dashboard is live by the time the user
             // clicks "Open Argus".
             start(app.handle());
+
+            // Register the desktop shell to start at login by default and keep that OS setting in
+            // sync with the web Settings toggle.
+            start_autostart_sync_watcher(app.handle());
 
             // Check for a newer signed build in the background; the menu item lets the user ask for
             // the same check immediately.

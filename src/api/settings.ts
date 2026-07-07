@@ -5,6 +5,7 @@
 // fields. This module only *groups* and *serializes* — the value contract stays in `config.ts`.
 import {
   AUTO_UPDATE_SETTINGS,
+  DESKTOP_SETTINGS,
   getPath,
   HUB_SETTINGS,
   llmFieldName,
@@ -169,6 +170,7 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     id: "general",
     label: "General",
     sections: [
+      { label: "Startup", settings: [DESKTOP_SETTINGS.startAtLogin] },
       { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled] },
       { label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] },
       // Terminal verbosity for this `argus serve` process. A change here applies to the running

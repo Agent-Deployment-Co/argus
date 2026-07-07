@@ -27,5 +27,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2.5.1"
+notify = "8"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros", "time"] }

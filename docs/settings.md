@@ -7,6 +7,8 @@ opens Settings, grouped into a few categories.
 
 - **Appearance** sets the color theme: follow your system, or force light or
   dark.
+- **Startup** controls whether the desktop app starts automatically when you sign
+  in to this computer. It's on by default.
 - **Updates** controls whether the desktop app installs new versions
   automatically. With it off, Argus tells you when an update is ready and you
   install it from the menu bar.
