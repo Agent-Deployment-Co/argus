@@ -139,7 +139,8 @@ export async function runInterpretationDrain(
   let failures = 0;
   let n = 0;
   for (const sessionId of batch) {
-    log?.(`  [${++n}/${batch.length}] ${sessionId.replace(/^[^:]+:/, "").slice(0, 8)}…`);
+    // Full id (not truncated) so it can be copied straight into the web UI / `index refresh <id>`.
+    log?.(`  [${++n}/${batch.length}] ${sessionId}`);
     try {
       const { interpreted, diagnostics } = await interpretSession(store, sessionId, resolved);
       if (interpreted) {
