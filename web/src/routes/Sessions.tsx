@@ -12,7 +12,6 @@ export interface SessionsSearch {
   project?: string;
   source?: string;
   file?: string;
-  showGenerated?: boolean;
   sort?: SessionSort;
   q?: string;
 }
@@ -83,7 +82,6 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
     project: typeof search.project === "string" ? search.project : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
     file: typeof search.file === "string" && search.file ? search.file : undefined,
-    includeGenerated: search.showGenerated === true,
     sort: (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent",
   };
 }
@@ -97,7 +95,6 @@ function SessionList() {
   const project = typeof search.project === "string" ? search.project : undefined;
   const source = typeof search.source === "string" ? search.source : undefined;
   const file = typeof search.file === "string" ? search.file : undefined;
-  const showGenerated = search.showGenerated === true;
   const sort: SessionSort = (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent";
   const committedQ = typeof search.q === "string" ? search.q : "";
 
@@ -181,14 +178,6 @@ function SessionList() {
               <span className="filter-pill-x" aria-hidden>×</span>
             </button>
           ))}
-          <label className="filter-toggle">
-            <input
-              type="checkbox"
-              checked={showGenerated}
-              onChange={(event) => setSearch({ showGenerated: event.target.checked || undefined })}
-            />
-            <span>Argus sessions</span>
-          </label>
         </div>
       </div>
       <ul className="session-items">
