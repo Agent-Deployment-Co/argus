@@ -21,6 +21,12 @@ When you need example data, synthesize it. Use redacted, obviously-fake fixtures
 
 ## What this is
 
+**Who it's for.** Argus is built for **business users** who use AI agents to do business work —
+account research, drafting and editing content, working in spreadsheets, building workflows — not
+for software engineers. When you design features, write UI copy, or choose examples/taxonomies,
+assume this audience: their tasks are knowledge work, not coding. (Don't call them "non-coders" or
+talk down; see the `docs/index.md` positioning and the `docs/contributing/` voice guides.)
+
 Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
 local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, …) and
 presents them two ways: an interactive local web app (`serve` — the preferred UI; see
