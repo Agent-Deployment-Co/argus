@@ -9,6 +9,7 @@ import {
   migrateLlmFlatToProviderConfigs,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
+  resolveDesktopStartAtLogin,
   resolveLogLevel,
   resolveRetainText,
   resolveSetting,
@@ -27,6 +28,7 @@ function tmpConfig(contents: string): string {
 const CONFIG_ENV = [
   "ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES",
   "ARGUS_AUTO_UPDATE_ENABLED",
+  "ARGUS_DESKTOP_START_AT_LOGIN",
   "ARGUS_TASK_ENABLED",
   "ARGUS_TASK_PROVIDER",
   "ARGUS_TASK_MODEL",
@@ -241,6 +243,10 @@ describe("resolveLogLevel", () => {
 });
 
 describe("Setting secret flag", () => {
+  test("desktop settings are known and not secret", () => {
+    expect(ALL_SETTINGS["desktop.startAtLogin"]?.secret).toBeFalsy();
+  });
+
   test("auto-update settings are known and not secret", () => {
     expect(ALL_SETTINGS["autoUpdate.enabled"]?.secret).toBeFalsy();
     expect(ALL_SETTINGS["autoUpdate.checkIntervalMinutes"]?.secret).toBeFalsy();
@@ -258,6 +264,21 @@ describe("Setting secret flag", () => {
     for (const key of ["taskExtraction.enabled", "taskExtraction.provider", "taskExtraction.model"]) {
       expect(ALL_SETTINGS[key]?.secret).toBeFalsy();
     }
+  });
+});
+
+describe("resolveDesktopStartAtLogin", () => {
+  test("defaults to enabled", () => {
+    expect(resolveDesktopStartAtLogin({}, {})).toBe(true);
+  });
+
+  test("argus.json can disable start at login", () => {
+    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: false } })).toBe(false);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_DESKTOP_START_AT_LOGIN = "yes";
+    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: false } })).toBe(true);
   });
 });
 

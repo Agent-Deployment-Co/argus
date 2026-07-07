@@ -40,7 +40,7 @@ function tmpConfig(contents = "{}"): string {
   return path;
 }
 
-const TOUCHED_ENV = ["ARGUS_LLM_PROVIDER", "ARGUS_TASK_ENABLED", "ARGUS_LOG_LEVEL"];
+const TOUCHED_ENV = ["ARGUS_DESKTOP_START_AT_LOGIN", "ARGUS_LLM_PROVIDER", "ARGUS_TASK_ENABLED", "ARGUS_LOG_LEVEL"];
 afterEach(() => {
   for (const key of TOUCHED_ENV) delete process.env[key];
 });
@@ -59,10 +59,13 @@ describe("describeSettings", () => {
     expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
   });
 
-  test("General exposes auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
+  test("General exposes startup, auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
-    expect(paths).toEqual(["autoUpdate.enabled", "hub.url", "log.level"]);
+    expect(paths).toEqual(["desktop.startAtLogin", "autoUpdate.enabled", "hub.url", "log.level"]);
+    const startAtLogin = findSetting({}, "desktop.startAtLogin");
+    expect(startAtLogin.ui.control).toBe("toggle");
+    expect(startAtLogin.effectiveValue).toBe(true);
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
     expect(paths).not.toContain("hub.key");
     const hubKey = general.sections.flatMap((s) => s.secretFields ?? []).find((f) => f.key === "hub.key")!;
