@@ -4,13 +4,12 @@ import { KNOWN_SOURCES, type SnapshotFilters } from "./filters";
 import type { SessionListResponse, SessionRow, SessionSort, TaskMetrics } from "../types";
 
 /** Everything that narrows the paginated session list: the global snapshot filters (date/source)
- *  plus the Sessions-local refinements (project label, free text, file path, generated toggle) and
- *  the sort. `q`/`file` (#155) run a store-side search (conversation/task text, file-path substring). */
+ *  plus the Sessions-local refinements (project label, free text, file path) and the sort. `q`/`file`
+ *  (#155) run a store-side search (conversation/task text, file-path substring). */
 export interface SessionListFilters extends SnapshotFilters {
   project?: string;
   q?: string;
   file?: string;
-  includeGenerated?: boolean;
   sort: SessionSort;
 }
 
@@ -30,7 +29,6 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
   if (filters.project) params.set("project", filters.project);
   if (filters.q) params.set("q", filters.q);
   if (filters.file) params.set("file", filters.file);
-  if (filters.includeGenerated) params.set("includeGenerated", "1");
   return `/api/sessions?${params}`;
 }
 
