@@ -137,6 +137,15 @@ describe("serve API", () => {
     });
   });
 
+  test("GET /api/sessions parses a file: term (#155) alongside q", async () => {
+    let seen: unknown;
+    const app = createApp(null, {
+      sessionList: async (query) => { seen = query; return { rows: [], total: 0, offset: 0, limit: 50 }; },
+    });
+    await app.request("/api/sessions?q=pricing&file=store.ts");
+    expect(seen).toMatchObject({ q: "pricing", file: "store.ts" });
+  });
+
   test("GET /api/sessions clamps limit and rejects an unknown sort", async () => {
     let seen: { limit?: number } = {};
     const app = createApp(null, {

@@ -70,6 +70,27 @@ describe("buildSessionList", () => {
     expect(buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, project: "web" }).rows.map((r) => r.sessionId)).toEqual(["a"]);
     expect(buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, q: "flag" }).rows.map((r) => r.sessionId)).toEqual(["b"]);
   });
+
+  test("attaches a search match onto its row without touching non-matching rows (#155)", () => {
+    const mixed = [
+      agg("a", { input: 1, start: 1, project: "web/app", firstPrompt: "totally unrelated" }),
+      agg("b", { input: 1, start: 2, project: "cli/tool", firstPrompt: "totally unrelated too" }),
+    ];
+    const matches = new Map([["b", { count: 2, snippet: "the pricing bug", source: "conversation" as const }]]);
+    const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
+    expect(page.rows.find((r) => r.sessionId === "a")?.match).toBeUndefined();
+    expect(page.rows.find((r) => r.sessionId === "b")?.match).toEqual(matches.get("b"));
+  });
+
+  test("omitting q when matches is set doesn't re-apply the plain metadata substring filter", () => {
+    // Simulates the serve-side wiring: a session that matched ONLY via FTS (title/project/source
+    // don't contain the search term) must survive here — the caller passes q: undefined once a
+    // store-side search already ran, so this plain metadata check must not re-exclude it.
+    const mixed = [agg("a", { input: 1, start: 1, project: "p", firstPrompt: "no keyword here" })];
+    const matches = new Map([["a", { count: 1, snippet: "s", source: "task" as const }]]);
+    const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
+    expect(page.rows.map((r) => r.sessionId)).toEqual(["a"]);
+  });
 });
 
 describe("buildSessionDetail", () => {

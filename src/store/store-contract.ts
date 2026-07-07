@@ -496,6 +496,11 @@ export interface ResolvedQuery {
   since?: string;
   until?: string;
   projectSubstring?: string;
+  /** Restrict to exactly these session ids (#155): how `searchSessions`'s candidate set threads into
+   *  `readSessionAggregates`. An empty array means "no matches" (returns no rows), distinct from
+   *  omitting the field (no restriction) — a caller that ran a search and got zero hits must not fall
+   *  back to an unfiltered read. */
+  sessionIds?: string[];
 }
 
 /** Search input for `searchSessions` (#155): the same source/date/project narrowing as `ResolvedQuery`,

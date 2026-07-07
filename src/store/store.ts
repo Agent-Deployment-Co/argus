@@ -2110,11 +2110,18 @@ export class SqliteStore implements Store {
 
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]> {
     return this.schedule(async () => {
+      // sessionIds (#155): the searchSessions candidate set, when a search ran. Empty array means "no
+      // matches" — short-circuit rather than emit `IN ()`, which is invalid SQL.
+      if (query?.sessionIds && query.sessionIds.length === 0) return [];
       // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
       // model) token sums from the promoted columns. A date filter only selects sessions (included if
       // they have a message in range, via EXISTS); the token sums below are whole-session, not windowed.
       const sessionConds: string[] = ["s.archived = 0"];
       const sessionParams: unknown[] = [];
+      if (query?.sessionIds) {
+        sessionConds.push(`s.session_id IN (${query.sessionIds.map(() => "?").join(", ")})`);
+        sessionParams.push(...query.sessionIds);
+      }
       if (query?.sources?.length) {
         sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
         sessionParams.push(...query.sources);
