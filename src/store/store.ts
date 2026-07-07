@@ -252,6 +252,24 @@ const RESOLVED_TASKS_FTS_DDL = `
     session_id UNINDEXED, text
   );`;
 
+// Full-text search over the model-generated session title + summary (#234). Same plain-FTS5-table
+// shape as resolved_interaction_text_fts above (see its comment on why triggers aren't used); the
+// indexed text is `title || ' ' || summary`. One row per session. Maintained by writeSessionTasks (the
+// sole writer of those columns) and carried forward by materialize's wholesale session replace, both
+// via ordinary DELETE-then-INSERT DML — folded into the same v20 -> v21 migration that adds the columns
+// (no backfill: the columns are brand-new at that point, so there is no existing title/summary to index).
+const RESOLVED_SESSIONS_FTS_DDL = `
+  CREATE VIRTUAL TABLE resolved_sessions_fts USING fts5(
+    session_id UNINDEXED, text
+  );`;
+
+/** The indexed text for a session's title/summary FTS row (#234): the two model fields joined. Empty
+ *  when both are null → the caller writes no row, so un-interpreted / title-less sessions stay out of
+ *  the index. Shared by the two maintenance sites (writeSessionTasks, materialize). */
+function sessionFtsText(title: string | null, summary: string | null): string {
+  return [title ?? "", summary ?? ""].join(" ").trim();
+}
+
 // Partial index on file_path (#155). The file: search term matches with
 // instr(lower(file_path), lower(?)) — a substring test the SQLite planner can't satisfy from a
 // b-tree index, so that query is a full scan of resolved_invocations regardless of this index
@@ -453,6 +471,9 @@ const CREATE_SCHEMA_SQL = `
 
   -- Full-text search over task-interpretation text (#155). Local-only; never synced.
   ${RESOLVED_TASKS_FTS_DDL}
+
+  -- Full-text search over the model-generated session title + summary (#234). Local-only; never synced.
+  ${RESOLVED_SESSIONS_FTS_DDL}
 
   -- Per-source freshness attestation: lets a consumer know whether the store is current.
   CREATE TABLE source_coverage (
@@ -1312,12 +1333,15 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   },
   // 20 -> 21: session interpretation 2.0 (#234). Add the model-generated title + summary columns to
   // resolved_sessions, written by writeSessionTasks alongside the interpretation stamp. NULL until a
-  // session is (re)interpreted; the read paths fall back to first prompt / heuristic summary.
+  // session is (re)interpreted; the read paths fall back to first prompt / heuristic summary. Also
+  // create the title/summary FTS index (#234) so search covers interpretation text — no backfill, since
+  // the columns are brand-new here (nothing to index); it fills as sessions get interpreted.
   20: {
     to: 21,
     sql: `
       ALTER TABLE resolved_sessions ADD COLUMN title TEXT;
       ALTER TABLE resolved_sessions ADD COLUMN summary TEXT;
+      ${RESOLVED_SESSIONS_FTS_DDL}
     `,
   },
 };
@@ -1402,6 +1426,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, seq, interaction_seq, type, text FROM resolved_interaction_text LIMIT 1");
     await get(db, "SELECT session_id, text FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH 'x' LIMIT 1");
     await get(db, "SELECT session_id, text FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH 'x' LIMIT 1");
+    await get(db, "SELECT session_id, text FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH 'x' LIMIT 1");
     await get(db, "SELECT session_id, tool, category, file_path FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
@@ -2085,6 +2110,13 @@ export class SqliteStore implements Store {
           "UPDATE resolved_sessions SET interpreted_at_ms = ?, interpretation_version = ?, title = ?, summary = ? WHERE session_id = ?",
           [Date.now(), version, title, summary, sessionId],
         );
+        // Keep the title/summary search index (#234) in sync with the same wholesale replace, via
+        // ordinary DML (not a trigger — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment).
+        await run(this.db, "DELETE FROM resolved_sessions_fts WHERE session_id = ?", [sessionId]);
+        const ftsText = sessionFtsText(title, summary);
+        if (ftsText) {
+          await run(this.db, "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)", [sessionId, ftsText]);
+        }
       });
       secureSqliteFiles(this.path);
     });
@@ -2325,10 +2357,11 @@ export class SqliteStore implements Store {
             OR instr(lower(s.project), ?) > 0
             OR instr(lower(s.source), ?) > 0
             OR s.session_id IN (SELECT session_id FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?)
-            OR s.session_id IN (SELECT session_id FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?))`,
+            OR s.session_id IN (SELECT session_id FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?)
+            OR s.session_id IN (SELECT session_id FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH ?))`,
         );
         const lowered = trimmed.toLowerCase();
-        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery);
+        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery, matchQuery);
       }
 
       const rows = await all<{ session_id: string }>(
@@ -2344,7 +2377,7 @@ export class SqliteStore implements Store {
         // cannot combine with GROUP BY ("unable to use function snippet in the requested context").
         // So fetch ungrouped rows (one per matching FTS row) and fold per-session in JS instead.
         // Column index 1 = `text` (column 0 is the UNINDEXED session_id carried on the row).
-        const [interactionRows, taskRows] = await Promise.all([
+        const [interactionRows, taskRows, sessionRows] = await Promise.all([
           all<{ session_id: string; snip: string }>(
             this.db,
             `SELECT session_id, snippet(resolved_interaction_text_fts, 1, char(1), char(2), '…', 12) AS snip
@@ -2357,6 +2390,12 @@ export class SqliteStore implements Store {
              FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?`,
             [matchQuery],
           ),
+          all<{ session_id: string; snip: string }>(
+            this.db,
+            `SELECT session_id, snippet(resolved_sessions_fts, 1, char(1), char(2), '…', 12) AS snip
+             FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH ?`,
+            [matchQuery],
+          ),
         ]);
         for (const row of interactionRows) {
           const existing = matches.get(row.session_id);
@@ -2366,14 +2405,18 @@ export class SqliteStore implements Store {
             source: existing?.source ?? "conversation",
           });
         }
-        // Task text is the distilled, more readable restatement — prefer its snippet when a session
-        // matched both tables, and sum the counts so the UI shows the combined match strength.
-        for (const row of taskRows) {
+        // The task text and the session title/summary are both distilled, more readable restatements
+        // (not raw dialogue) — prefer their snippet over a conversation snippet and mark the match
+        // `task`/`both` (the raw-vs-distilled distinction the UI surfaces), summing counts across tables.
+        for (const row of [...taskRows, ...sessionRows]) {
           const existing = matches.get(row.session_id);
+          const distilledAlready = existing !== undefined && existing.source !== "conversation";
           matches.set(row.session_id, {
             count: (existing?.count ?? 0) + 1,
-            snippet: row.snip,
-            source: existing ? "both" : "task",
+            // Prefer a distilled snippet; keep the first distilled one if several distilled tables hit.
+            snippet: distilledAlready ? existing!.snippet : row.snip,
+            // conversation + distilled → "both"; otherwise distilled ("task"), preserving an existing "both".
+            source: existing?.source === "conversation" ? "both" : (existing?.source ?? "task"),
           });
         }
       }
@@ -2770,10 +2813,12 @@ export class SqliteStore implements Store {
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
-          // The search FTS index (#155) is NOT linked by foreign key, so the CASCADE above does not
-          // reach it — clear it explicitly here; it's rebuilt below (if retainText) alongside
-          // resolved_interaction_text, which the CASCADE does clear.
+          // The search FTS indexes (#155, #234) are NOT linked by foreign key, so the CASCADE above does
+          // not reach them — clear them explicitly here. The conversation index is rebuilt below (if
+          // retainText) alongside resolved_interaction_text; the title/summary index is rebuilt from the
+          // carried-forward title/summary right after the session row is re-inserted.
           await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
+          await run(this.db, "DELETE FROM resolved_sessions_fts WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
           const lastTs = timestamps.length ? Math.max(...timestamps) : null;
@@ -2810,6 +2855,11 @@ export class SqliteStore implements Store {
               JSON.stringify(session.meta),
             ],
           );
+          // Re-index the carried-forward title/summary (#234) — same wholesale replace as the row above.
+          const sessionFts = sessionFtsText(title, summary);
+          if (sessionFts) {
+            await run(this.db, "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)", [sid, sessionFts]);
+          }
           // Assign each interaction to its owning task (#122), bookmark semantics over the tasks we're
           // about to write (incoming or the preserved snapshot), so attribution stays consistent with
           // resolved_tasks.seq and survives a re-materialization that reuses the stored tasks. The leaf

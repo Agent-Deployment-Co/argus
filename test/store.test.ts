@@ -212,6 +212,7 @@ function dropPostV18Schema(db: Database): void {
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
   rawExec(db, "DROP TABLE IF EXISTS resolved_interaction_text_fts");
   rawExec(db, "DROP TABLE IF EXISTS resolved_tasks_fts");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
   rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
 }
 
@@ -1761,6 +1762,23 @@ describe("session search (#155)", () => {
     }
   });
 
+  test("finds a session via the model title/summary, tagged source: task (#234)", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      // No tasks — only the model title/summary, which the #234 FTS index must make searchable.
+      await store.writeSessionTasks(sid, [], "v2", "Zephyrmodule refactor", "Reworked the glorbfunction loader and its tests.");
+
+      const byTitle = await store.searchSessions({ text: "Zephyrmodule" });
+      expect(byTitle.ids).toEqual(new Set([sid]));
+      expect(byTitle.matches.get(sid)?.source).toBe("task"); // distilled interpretation, not raw dialogue
+      // A term appearing only in the summary matches too.
+      expect((await store.searchSessions({ text: "glorbfunction" })).ids).toEqual(new Set([sid]));
+    } finally {
+      await store.close();
+    }
+  });
+
   test("a word appearing only in .evidence does not match (evidence is deliberately excluded)", async () => {
     const store = await openStore({ path: storePath() });
     try {
@@ -1832,6 +1850,7 @@ describe("session search (#155)", () => {
     await withRawDatabase(path, (db) => {
       rawExec(db, "DROP TABLE resolved_interaction_text_fts");
       rawExec(db, "DROP TABLE resolved_tasks_fts");
+      rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
       rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
       rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
       rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");

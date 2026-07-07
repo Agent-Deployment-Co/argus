@@ -13,7 +13,8 @@ The tables fall into three tiers plus a small operational set:
    per-message content; a touched session is re-materialized by re-parsing its files.
 2. **`resolved_*` — the read model.** The trusted, materialized content every reader hits: sessions,
    the interaction spine, per-turn usage, per-tool invocations, tasks, and (opt-in, local-only)
-   retained conversation text — plus two FTS5 search indexes over that text and over task summaries.
+   retained conversation text — plus three FTS5 search indexes over that text, over task summaries, and
+   over the model-generated session title/summary.
 3. **`source_coverage` / `session_ownership` — freshness & ownership.** Per-source freshness
    attestation and which producer owns each canonical session.
 4. **Operational / sync.** `store_metadata` (key/value bag), `client_fingerprint` (append-only
@@ -49,6 +50,7 @@ erDiagram
 
   resolved_interaction_text ||..o{ resolved_interaction_text_fts : "session_id (soft, no FK — see below)"
   resolved_tasks ||..o{ resolved_tasks_fts : "session_id (soft, no FK — see below)"
+  resolved_sessions ||..o{ resolved_sessions_fts : "session_id (soft, no FK — see below)"
 
   resolved_sessions ||..|| session_ownership : "session_id (soft)"
   resolved_sessions ||..o{ hub_session_cursors : "session_id (soft)"
@@ -167,6 +169,10 @@ erDiagram
   resolved_tasks_fts {
     string session_id "UNINDEXED, no PK/FK (FTS5 virtual table)"
     string text "indexed, local-only, never synced"
+  }
+  resolved_sessions_fts {
+    string session_id "UNINDEXED, no PK/FK (FTS5 virtual table)"
+    string text "title + summary, indexed, local-only, never synced"
   }
 
   source_coverage {
@@ -320,6 +326,15 @@ at the same point it replaces `resolved_tasks` wholesale. Task interpretation is
 later than indexing (or never), so this table is frequently empty for a given session; `searchSessions`
 treats that the same as an empty `resolved_interaction_text_fts` — no error, just no contribution from
 that side.
+
+### `resolved_sessions_fts` (#234)
+Full-text search over the model-generated session **title + summary**, same plain-FTS5-table approach
+as the two indexes above (`fts5(session_id UNINDEXED, text)`, no triggers). One row per interpreted
+session; the indexed `text` is `title` + `summary` joined. Maintained at the two sites that write those
+columns — `writeSessionTasks` (the sole writer) and `materialize` (which carries them forward on
+re-index) — each doing a wholesale delete-then-insert. Like `resolved_tasks_fts`, it's empty until a
+session is interpreted; `searchSessions` folds its matches into the distilled (`task`/`both`) source
+alongside task text.
 
 ## Tier 3 — freshness & ownership
 
