@@ -152,7 +152,7 @@ erDiagram
     string mcp_server
     string mcp_tool
     string skill
-    string file_path "indexed (partial, WHERE NOT NULL)"
+    string file_path "partial index (WHERE NOT NULL), doesn't speed up file: search (see below)"
     string date
     string args
     int approx_result_tokens
@@ -298,9 +298,11 @@ retention was never on for a session (graceful degradation, not an error).
 ### `resolved_invocations`
 One row per tool invocation (call + its paired result), so `byTool` / `byToolCategory` /
 `byMcpServer` / `skillInvocations` / heaviest-results are `GROUP BY` queries. Carries `tool`,
-`category`, the MCP facets (`mcp_server`, `mcp_tool`), `skill`, `file_path` (a partial index,
-`WHERE file_path IS NOT NULL`, backs file-usage search — #155), the denormalized owning `date`/`cwd`
-(for windowed breakdowns), the `args` sample, and `approx_result_tokens` (the folded result size).
+`category`, the MCP facets (`mcp_server`, `mcp_tool`), `skill`, `file_path` (has a partial index,
+`WHERE file_path IS NOT NULL`, but file-usage search — #155 — matches with `instr(lower(file_path),
+...)`, a substring test a b-tree index can't accelerate; that search is a full scan of this table),
+the denormalized owning `date`/`cwd` (for windowed breakdowns), the `args` sample, and
+`approx_result_tokens` (the folded result size).
 `interaction_seq` soft-links the owning interaction. PK `(session_id, seq)`, FK → `resolved_sessions`.
 
 ### `resolved_tasks`

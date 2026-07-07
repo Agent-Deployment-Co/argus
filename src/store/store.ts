@@ -251,8 +251,10 @@ const RESOLVED_TASKS_FTS_DDL = `
     session_id UNINDEXED, text
   );`;
 
-// File-usage search (#155): substring match on file_path needs a plain index, not FTS (FTS5's
-// tokenizer would split paths on '/' and '.'). Partial: most invocation rows have no file_path.
+// Partial index on file_path (#155). The file: search term matches with
+// instr(lower(file_path), lower(?)) — a substring test the SQLite planner can't satisfy from a
+// b-tree index, so that query is a full scan of resolved_invocations regardless of this index
+// (verified via EXPLAIN QUERY PLAN). Accepted: file_path substring search is a full scan today.
 const RESOLVED_INVOCATIONS_FILE_PATH_INDEX = `
   CREATE INDEX resolved_invocations_file_path ON resolved_invocations(file_path) WHERE file_path IS NOT NULL;`;
 
@@ -565,6 +567,40 @@ function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+/** Shared session-filter conditions for `readSessionAggregates` and `searchSessions` (#155): archived
+ *  status, source, project (cwd substring), and date window (a session is included if it has a message
+ *  in range, via EXISTS over resolved_usage — not a per-message window). Callers append their own
+ *  additional conditions (sessionIds, file:, freeform text) to the returned conds/params. */
+function buildSessionFilterConds(
+  query: Pick<ResolvedQuery, "sources" | "projectSubstring" | "since" | "until"> | undefined,
+): { conds: string[]; params: unknown[] } {
+  const conds: string[] = ["s.archived = 0"];
+  const params: unknown[] = [];
+  if (query?.sources?.length) {
+    conds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
+    params.push(...query.sources);
+  }
+  if (query?.projectSubstring) {
+    conds.push("instr(s.cwd, ?) > 0");
+    params.push(query.projectSubstring);
+  }
+  const dateConds: string[] = [];
+  const dateParams: unknown[] = [];
+  if (query?.since) {
+    dateConds.push("m.date >= ?");
+    dateParams.push(query.since);
+  }
+  if (query?.until) {
+    dateConds.push("m.date <= ?");
+    dateParams.push(query.until);
+  }
+  if (dateConds.length) {
+    conds.push(`EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`);
+    params.push(...dateParams);
+  }
+  return { conds, params };
 }
 
 /** Escape freeform user input into a valid FTS5 MATCH query (#155): split on whitespace, wrap each
@@ -2116,35 +2152,10 @@ export class SqliteStore implements Store {
       // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
       // model) token sums from the promoted columns. A date filter only selects sessions (included if
       // they have a message in range, via EXISTS); the token sums below are whole-session, not windowed.
-      const sessionConds: string[] = ["s.archived = 0"];
-      const sessionParams: unknown[] = [];
+      const { conds: sessionConds, params: sessionParams } = buildSessionFilterConds(query);
       if (query?.sessionIds) {
         sessionConds.push(`s.session_id IN (${query.sessionIds.map(() => "?").join(", ")})`);
         sessionParams.push(...query.sessionIds);
-      }
-      if (query?.sources?.length) {
-        sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
-        sessionParams.push(...query.sources);
-      }
-      if (query?.projectSubstring) {
-        sessionConds.push("instr(s.cwd, ?) > 0");
-        sessionParams.push(query.projectSubstring);
-      }
-      const dateConds: string[] = [];
-      const dateParams: unknown[] = [];
-      if (query?.since) {
-        dateConds.push("m.date >= ?");
-        dateParams.push(query.since);
-      }
-      if (query?.until) {
-        dateConds.push("m.date <= ?");
-        dateParams.push(query.until);
-      }
-      if (dateConds.length) {
-        sessionConds.push(
-          `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
-        );
-        sessionParams.push(...dateParams);
       }
       const sessionRows = await all<{
         session_id: string;
@@ -2212,32 +2223,7 @@ export class SqliteStore implements Store {
   // narrowing readSessionAggregates builds, so search honors the global filters.
   searchSessions(query: SessionSearchQuery): Promise<SessionSearchResult> {
     return this.schedule(async () => {
-      const sessionConds: string[] = ["s.archived = 0"];
-      const sessionParams: unknown[] = [];
-      if (query.sources?.length) {
-        sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
-        sessionParams.push(...query.sources);
-      }
-      if (query.projectSubstring) {
-        sessionConds.push("instr(s.cwd, ?) > 0");
-        sessionParams.push(query.projectSubstring);
-      }
-      const dateConds: string[] = [];
-      const dateParams: unknown[] = [];
-      if (query.since) {
-        dateConds.push("m.date >= ?");
-        dateParams.push(query.since);
-      }
-      if (query.until) {
-        dateConds.push("m.date <= ?");
-        dateParams.push(query.until);
-      }
-      if (dateConds.length) {
-        sessionConds.push(
-          `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
-        );
-        sessionParams.push(...dateParams);
-      }
+      const { conds: sessionConds, params: sessionParams } = buildSessionFilterConds(query);
 
       // file: term — substring match on file_path (not FTS: the tokenizer would split paths on '/' and '.').
       if (query.file) {
