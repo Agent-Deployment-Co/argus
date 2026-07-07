@@ -27,17 +27,26 @@ opens Settings, grouped into a few categories.
 
 ## Sessions
 
-- **Extract tasks** turns on [task interpretation](/tasks), the pass that groups
-  each [session](/terminology#session) into the tasks you worked on and judges how
-  each one went. It's on by default. This is the one thing Argus does with an
-  outside model, so turning it on reveals the model settings below. See
-  [Tasks](/tasks) for what it captures and how to choose a provider.
+- **Interpret sessions** turns on [session interpretation](/tasks), the pass that
+  gives each [session](/terminology#session) a title and summary, groups it into the
+  tasks you worked on, and judges how each one went. It's on by default. This is the
+  one thing Argus does with an outside model, so turning it on reveals the model
+  settings below. See [Tasks](/tasks) for what it captures and how to choose a provider.
 - **Max sessions per hour** caps how many sessions Argus interprets
   automatically each hour. Refreshing a session by hand isn't limited.
-- **Model provider**, **Model** and **Claude CLI path** choose which model
-  backend does the interpretation. Argus stores any API key in your operating
-  system's secure store, never in its settings file, and a **Test connection**
-  button confirms it works.
+- **Title length limit** and **Summary length limit** cap the length of the
+  generated title and summary (100 and 500 characters by default).
+- **Model provider**, **Model**, **Reasoning effort** and **Claude CLI path** choose
+  which model backend does the interpretation and how hard it works. The cheap
+  defaults (Claude Haiku on the local Claude CLI) are good enough out of the box; for
+  sharper titles, summaries, and outcome calls, point Argus at a stronger model such
+  as Claude Sonnet or Opus. Argus stores any API key in your operating system's secure
+  store, never in its settings file, and a **Test connection** button confirms it works.
+- **Reasoning effort** is passed straight through to the provider, so use the value
+  that provider expects: `low`, `medium`, `high` (and `xhigh`, `max` on the newest
+  models) for Claude and OpenAI; a thinking level for Gemini. Leave it blank for the
+  provider default. The cheapest default models don't accept an effort setting, so only
+  set it once you've chosen a model that supports it.
 
 <div class="screenshot">
 
