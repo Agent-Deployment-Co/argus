@@ -2263,18 +2263,20 @@ export class SqliteStore implements Store {
         // cannot combine with GROUP BY ("unable to use function snippet in the requested context").
         // So fetch ungrouped rows (one per matching FTS row) and fold per-session in JS instead.
         // Column index 1 = `text` (column 0 is the UNINDEXED session_id carried on the row).
-        const interactionRows = await all<{ session_id: string; snip: string }>(
-          this.db,
-          `SELECT session_id, snippet(resolved_interaction_text_fts, 1, char(1), char(2), '…', 12) AS snip
-           FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?`,
-          [matchQuery],
-        );
-        const taskRows = await all<{ session_id: string; snip: string }>(
-          this.db,
-          `SELECT session_id, snippet(resolved_tasks_fts, 1, char(1), char(2), '…', 12) AS snip
-           FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?`,
-          [matchQuery],
-        );
+        const [interactionRows, taskRows] = await Promise.all([
+          all<{ session_id: string; snip: string }>(
+            this.db,
+            `SELECT session_id, snippet(resolved_interaction_text_fts, 1, char(1), char(2), '…', 12) AS snip
+             FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?`,
+            [matchQuery],
+          ),
+          all<{ session_id: string; snip: string }>(
+            this.db,
+            `SELECT session_id, snippet(resolved_tasks_fts, 1, char(1), char(2), '…', 12) AS snip
+             FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?`,
+            [matchQuery],
+          ),
+        ]);
         for (const row of interactionRows) {
           const existing = matches.get(row.session_id);
           matches.set(row.session_id, {
