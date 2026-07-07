@@ -839,8 +839,12 @@ export function resolveActiveProvider(
  * there are no flat values. An already-scoped value wins (never clobbered). Returns true if it moved
  * anything. Called on serve start, mirroring the Hub-key migration.
  */
-export function migrateLlmFlatToProviderConfigs(configPath: string = CONFIG_FILE): boolean {
-  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+export function migrateLlmFlatToProviderConfigs(
+  configPath: string = CONFIG_FILE,
+  // Optional pre-loaded config so the caller can run both startup migrations off a single disk read;
+  // both mutate this same object and each writes the cumulative state, so order can't clobber.
+  file: ArgusConfig & Record<string, unknown> = loadConfig(configPath) as ArgusConfig & Record<string, unknown>,
+): boolean {
   const scoped = Object.values(LLM_SETTINGS).filter((s) => (s as Setting<unknown>).providerScoped) as Setting<unknown>[];
   const flat = scoped.filter((s) => present(getPath(file, s.path)));
   if (!flat.length) return false;
@@ -862,8 +866,11 @@ export function migrateLlmFlatToProviderConfigs(configPath: string = CONFIG_FILE
  * persist config still resolve the legacy keys via each setting's `legacyPath`/`legacyEnv`, so this is
  * about making the new key canonical on disk, not about correctness of resolution.
  */
-export function migrateTaskExtractionToSessionInterpretation(configPath: string = CONFIG_FILE): boolean {
-  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+export function migrateTaskExtractionToSessionInterpretation(
+  configPath: string = CONFIG_FILE,
+  // Optional pre-loaded config (see migrateLlmFlatToProviderConfigs) so serve start reads argus.json once.
+  file: ArgusConfig & Record<string, unknown> = loadConfig(configPath) as ArgusConfig & Record<string, unknown>,
+): boolean {
   const legacy = getPath(file, "taskExtraction");
   if (legacy == null || typeof legacy !== "object" || Array.isArray(legacy)) return false;
   const current = getPath(file, "sessionInterpretation");
