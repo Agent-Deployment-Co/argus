@@ -15,6 +15,7 @@ import { Database } from "bun:sqlite";
 import {
   STORE_APPLICATION_ID,
   STORE_SCHEMA_VERSION,
+  LabelError,
   StoreError,
   openStore,
   rebuildStore,
@@ -543,6 +544,107 @@ describe("SQLite store", () => {
       await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     ]);
     expect(tableBack?.name).toBe("hub_session_cursors");
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("repairs an early v22 store stamped before label tables existed", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:v22-label-repair",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+      },
+    ]);
+    await initial.close();
+
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS label_assignments");
+      await rawExec(db, "DROP TABLE IF EXISTS labels");
+      await rawExec(db, "PRAGMA user_version = 22");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:v22-label-repair")).toBe(true);
+      expect(await migrated.listLabels()).toEqual([]);
+    } finally {
+      await migrated.close();
+    }
+
+    const [labels, assignments, version] = await withRawDatabase(path, async (db) => [
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'labels'",
+      ),
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'label_assignments'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(labels?.name).toBe("labels");
+    expect(assignments?.name).toBe("label_assignments");
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("repairs a store stamped past the session title migration without title artifacts", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:title-repair",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+      },
+    ]);
+    await initial.close();
+
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
+      await rawExec(db, `PRAGMA user_version = ${STORE_SCHEMA_VERSION}`);
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:title-repair")).toBe(true);
+      expect(await migrated.searchSessions({ text: "anything" })).toEqual({
+        ids: new Set(),
+        matches: new Map(),
+      });
+    } finally {
+      await migrated.close();
+    }
+
+    const [title, summary, fts, version] = await withRawDatabase(path, async (db) => [
+      rawAll<{ name: string }>(db, "PRAGMA table_info(resolved_sessions)")
+        .map((row) => row.name)
+        .includes("title"),
+      rawAll<{ name: string }>(db, "PRAGMA table_info(resolved_sessions)")
+        .map((row) => row.name)
+        .includes("summary"),
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resolved_sessions_fts'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(title).toBe(true);
+    expect(summary).toBe(true);
+    expect(fts?.name).toBe("resolved_sessions_fts");
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 
@@ -1869,5 +1971,251 @@ describe("session search (#155)", () => {
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+});
+
+describe("session/task labels", () => {
+  async function open() {
+    const cache = await openStore({ path: storePath() });
+    return cache;
+  }
+
+  // Materialize a bare session so label_assignments has a real session to point at (though there is
+  // no FK). A re-materialize (even empty -> empty, which is not "fewer" messages, so the don't-regress
+  // guard doesn't skip it) rewrites the session via DELETE + CASCADE — the case labels must survive.
+  async function materialize(
+    cache: Awaited<ReturnType<typeof openStore>>,
+    sessionId: string,
+  ): Promise<void> {
+    await cache.materializeSessions("claude", [
+      {
+        meta: {
+          source: "claude",
+          sessionId,
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: `/tmp/p/${sessionId}.jsonl`,
+        },
+        messages: [],
+      },
+    ]);
+  }
+
+  test("creates, lists (name-sorted), and enforces case-insensitive uniqueness among active labels", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      expect(bug.id).toStartWith("label:");
+      expect(bug.origin).toBe("user");
+      expect(bug.deletedAtMs).toBeUndefined();
+      await cache.createLabel({ name: "  urgent  " }); // trimmed
+      await cache.createLabel({ name: "Alpha", origin: "system" });
+
+      const labels = await cache.listLabels();
+      expect(labels.map((l) => l.name)).toEqual(["Alpha", "bug", "urgent"]);
+      expect(labels.find((l) => l.name === "Alpha")?.origin).toBe("system");
+
+      // Case-insensitive duplicate is rejected.
+      await expect(cache.createLabel({ name: "BUG" })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "name_conflict",
+      });
+      // Empty / whitespace name is rejected.
+      await expect(cache.createLabel({ name: "   " })).rejects.toBeInstanceOf(LabelError);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("renames a label and blocks a rename that collides with another active label", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await cache.createLabel({ name: "feature" });
+
+      const renamed = await cache.renameLabel(bug.id, "defect");
+      expect(renamed.name).toBe("defect");
+      expect((await cache.listLabels()).map((l) => l.name)).toEqual(["defect", "feature"]);
+
+      await expect(cache.renameLabel(bug.id, "FEATURE")).rejects.toMatchObject({
+        code: "name_conflict",
+      });
+      await expect(cache.renameLabel("label:missing", "whatever")).rejects.toMatchObject({
+        code: "not_found",
+      });
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("soft-deletes: drops from the active list, frees the name for reuse, hides from reads", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+
+      await cache.deleteLabel(bug.id);
+      expect(await cache.listLabels()).toEqual([]);
+      expect((await cache.listLabels({ includeDeleted: true })).length).toBe(1);
+      // A deleted label's application no longer surfaces.
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+
+      // The freed name can be created again (a fresh, distinct label).
+      const reborn = await cache.createLabel({ name: "bug" });
+      expect(reborn.id).not.toBe(bug.id);
+      expect((await cache.listLabels()).map((l) => l.name)).toEqual(["bug"]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("assigns/unassigns to sessions and tasks, dedups re-application, and folds reads by target", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      const urgent = await cache.createLabel({ name: "urgent", origin: "system" });
+      await materialize(cache, "s1");
+
+      // Session-level: bug (user), urgent (system-applied).
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(urgent.id, { sessionId: "s1" }, "system");
+      // Re-applying is a no-op (no duplicate row, original provenance kept).
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+
+      // Task-level: bug on task 0, urgent on task 2.
+      await cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: 0 });
+      await cache.assignLabel(urgent.id, { sessionId: "s1", taskSeq: 2 });
+
+      const labels = await cache.readSessionLabels("s1");
+      expect(labels.session.map((l) => l.name)).toEqual(["bug", "urgent"]);
+      expect(labels.session.find((l) => l.name === "bug")?.appliedBy).toBe("user");
+      expect(labels.session.find((l) => l.name === "urgent")?.appliedBy).toBe("system");
+      expect(Object.keys(labels.tasks).sort()).toEqual(["0", "2"]);
+      expect(labels.tasks[0]?.map((l) => l.name)).toEqual(["bug"]);
+      expect(labels.tasks[2]?.map((l) => l.name)).toEqual(["urgent"]);
+
+      // Unassign the session-level bug; the task-level bug is untouched.
+      await cache.unassignLabel(bug.id, { sessionId: "s1" });
+      const after = await cache.readSessionLabels("s1");
+      expect(after.session.map((l) => l.name)).toEqual(["urgent"]);
+      expect(after.tasks[0]?.map((l) => l.name)).toEqual(["bug"]);
+
+      // Unassigning something not applied is a no-op.
+      await cache.unassignLabel(bug.id, { sessionId: "s1", taskSeq: 99 });
+      expect((await cache.readSessionLabels("s1")).tasks[0]?.length).toBe(1);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("assigning a missing or deleted label rejects as a caller-fixable not_found error", async () => {
+    const cache = await open();
+    try {
+      await materialize(cache, "s1");
+      await expect(cache.assignLabel("label:missing", { sessionId: "s1" })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "not_found",
+      });
+
+      const bug = await cache.createLabel({ name: "bug" });
+      await cache.deleteLabel(bug.id);
+      await expect(cache.assignLabel(bug.id, { sessionId: "s1" })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "not_found",
+      });
+      expect(await cache.readSessionLabels("s1")).toEqual({ session: [], tasks: {} });
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("rejects invalid task positions before they can collide with session-level assignments", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+
+      await expect(cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: -1 })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "invalid_target",
+      });
+      await expect(cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: 1.5 })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "invalid_target",
+      });
+      await expect(cache.unassignLabel(bug.id, { sessionId: "s1", taskSeq: -1 })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "invalid_target",
+      });
+
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      const labels = await cache.readSessionLabels("s1");
+      expect(labels.session.map((l) => l.name)).toEqual(["bug"]);
+      expect(labels.tasks).toEqual({});
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("labels survive re-materialize of their session (they are not FK-CASCADEd)", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: 0 });
+
+      // Re-materialize with more messages so the write path rewrites the session (DELETE + CASCADE).
+      await materialize(cache, "s1");
+      expect((await cache.readResolved()).sessions.has("s1")).toBe(true);
+
+      const labels = await cache.readSessionLabels("s1");
+      expect(labels.session.map((l) => l.name)).toEqual(["bug"]);
+      expect(labels.tasks[0]?.map((l) => l.name)).toEqual(["bug"]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("readSessionLabelsForSessions batches session-level labels and excludes task labels", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      const vip = await cache.createLabel({ name: "vip" });
+      await materialize(cache, "s1");
+      await materialize(cache, "s2");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(vip.id, { sessionId: "s1" });
+      await cache.assignLabel(bug.id, { sessionId: "s2" });
+      // A task-level label must NOT appear in the session-list batch read.
+      await cache.assignLabel(vip.id, { sessionId: "s2", taskSeq: 0 });
+
+      const byId = await cache.readSessionLabelsForSessions(["s1", "s2", "s3"]);
+      expect(byId.get("s1")?.map((l) => l.name)).toEqual(["bug", "vip"]);
+      expect(byId.get("s2")?.map((l) => l.name)).toEqual(["bug"]); // task-level vip excluded
+      expect(byId.has("s3")).toBe(false); // no labels → absent
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("retractSessions removes a deleted session's label applications", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await materialize(cache, "s2");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(bug.id, { sessionId: "s2" });
+
+      await cache.retractSessions(["s1"]);
+      // s1's application is gone; the label definition and s2's application remain.
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+      expect((await cache.readSessionLabels("s2")).session.map((l) => l.name)).toEqual(["bug"]);
+      expect((await cache.listLabels()).map((l) => l.name)).toEqual(["bug"]);
+    } finally {
+      await cache.close();
+    }
   });
 });
