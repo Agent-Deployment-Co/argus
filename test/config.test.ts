@@ -163,11 +163,20 @@ describe("resolveSessionInterpretation", () => {
     expect(resolveSessionInterpretation({}, file).enabled).toBe(true);
   });
 
-  test("flag overrides env and file", () => {
+  test("flag overrides env and file (deprecated --task-* aliases still resolve)", () => {
     process.env.ARGUS_TASK_PROVIDER = "command";
     const resolved = resolveSessionInterpretation(
       { "task-provider": "off", "task-model": "haiku" },
       { taskExtraction: { provider: "claude-cli" } },
+    );
+    expect(resolved.llm.provider).toBe("off");
+    expect(resolved.llm.model).toBe("haiku");
+  });
+
+  test("#234: the canonical --interpret-* override flags resolve", () => {
+    const resolved = resolveSessionInterpretation(
+      { "interpret-provider": "off", "interpret-model": "haiku" },
+      {},
     );
     expect(resolved.llm.provider).toBe("off");
     expect(resolved.llm.model).toBe("haiku");
