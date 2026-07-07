@@ -64,7 +64,7 @@ with `bun build --compile` (it uses `bun:sqlite`, so it needs no Node/node-gyp).
 emits per-OS packages under `dist/npm/` — a launcher package (`@agentdeploymentco/argus`, the
 published `bin`) plus `@agentdeploymentco/argus-<os>-<cpu>` prebuilt-binary packages it pulls in as
 optional dependencies. The web app builds to `dist/web` and ships beside each binary. The desktop
-tray app lives in `desktop/` (see `docs/`/issue #71) and bundles the compiled CLI as a sidecar.
+tray app lives in `desktop/` and bundles the compiled CLI as a sidecar.
 The repo root `package.json` is `private` (a dev workspace); the published artifacts are generated
 into `dist/npm/` and the desktop bundles, not the root package.
 
@@ -118,28 +118,26 @@ site (`srcExclude`).
 
 ## Architecture
 
-The pipeline is a one-way data flow. `src/` is laid out by stage (see `docs/internals/architecture.md`):
-**`src/indexing/`** (the pipeline: `pipeline.ts` coordinator, `discover.ts`, `producer.ts`,
-`reconcile.ts`, `friction.ts`, `parse/producers/*`, `interpret/*`), **`src/store/`** (`store.ts`,
-`store-contract.ts`, `session-store.ts`), **`src/reporting/`** (`aggregate.ts`,
-`dashboard-builder.ts`, `inventory.ts`), and **`src/api/`**. Cross-cutting modules (`types.ts`,
-`config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`, **`src/llm/`** [the shared LLM access
-layer], **`secrets.ts`** [BYO API-key storage]) and the CLI/runtime layer (`cli.ts`,
-`run.ts`, `watch.ts`, `index-ops.ts`, …) stay at `src/` root.
+The pipeline is a one-way data flow, and `src/` is laid out by stage (full map in
+`docs/internals/architecture.md`): **`src/indexing/`** (the pipeline — discover, parse, reconcile,
+materialize, plus the interpret drain), **`src/store/`** (the `argus.db` layer + its parse→store
+contract), **`src/reporting/`** (per-session and plugin aggregation), and **`src/api/`** (the serve
+layer). Cross-cutting modules (`types.ts`, `config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`,
+**`src/llm/`** [the shared LLM access layer], **`secrets.ts`** [BYO API-key storage]) and the
+CLI/runtime layer (`cli.ts`, `run.ts`, `watch.ts`, `index-ops.ts`) stay at `src/` root.
 
 The data flow:
 
 `indexing/` (Discover → Parse → Reconcile → Materialize; Interpret runs afterwards as a decoupled, throttled drain — model-driven, default-on but toggleable) → `store/` → (`api/serve.ts` per-view endpoints for the web app | `push.ts` raw-row upload for `sync`)
 
 Neither read path assembles a monolithic `Dashboard`: `serve` answers one small endpoint per view,
-each reading only what it needs straight off `argus.db` (#217), and `sync` uploads raw `resolved_*`
+each reading only what it needs straight off `argus.db`, and `sync` uploads raw `resolved_*`
 rows that the Hub aggregates server-side. `reporting/dashboard-builder.ts` is now just the shared
-source-selection helpers (`ALL_SOURCES`/`sourcesFor`/`BuildDashboardOptions`).
+source-selection helpers.
 
 The HTTP API layer lives under **`src/api/`**: `serve.ts` (the Hono server + routes) plus the
-serve-only modules that build its responses — `session-list.ts`, `recommendations.ts`,
-`task-metrics.ts`, `debug-info.ts`. The indexing pipeline and `push.ts` don't import anything under
-`src/api/` (only `cli.ts`/`run.ts` do, to start the server).
+serve-only modules that build its responses. The indexing pipeline and `push.ts` don't import
+anything under `src/api/` (only `cli.ts`/`run.ts` do, to start the server).
 
 - **`indexing/parse/producers/*`** — Per-source readers (claude/codex/gemini/cowork) that turn raw
   `.jsonl` transcripts into normalized facts. This is the most subtle layer; accuracy lives here:
@@ -148,21 +146,21 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
     sessions re-append earlier messages verbatim — same approach as `ccusage`.
   - Claude and Codex have **different transcript shapes** and are parsed by separate branches. Claude
     usage comes from `assistant` messages with `message.usage`; Codex usage comes from `event_msg`
-    `token_count` events, with tool calls accumulated as `pendingInvocations` and flushed per token-count event.
+    `token_count` events, with tool calls accumulated per turn and flushed on each token-count event.
   - Cache accounting: Anthropic splits cache writes into 5m/1h ephemeral buckets; Codex `cached_input_tokens`
     is treated as cache **read** (it's a subset of total input).
   - Tool *results* (output dumped back into context) are attributed to the producing tool via the
     `tool_use_id`/`call_id` → tool-name maps, for the "heaviest tool results" view.
 
 - **`reporting/aggregate.ts`** — Per-session row assembly + plugin folding (the monolithic dashboard
-  `aggregate()` was removed in #217). `buildSessionRow` turns one session's messages + metadata into a
-  `SessionRow` — including per-session health (#38): friction counts, median/max turn duration,
+  `aggregate()` is gone). `buildSessionRow` turns one session's messages + metadata into a
+  `SessionRow` — including per-session health: friction counts, median/max turn duration,
   stop-reason mix, token-growth trend — and is shared by the on-demand `/api/session/:id` detail and
   the paginated `/api/sessions` list. `foldPlugins` folds per-skill + per-MCP-server usage into
   per-plugin rows (used by the `/api/plugins` builder). Cost is priced per message here (via `cost()`);
   the per-view builders price per `(dimension, model)` row from the store's SQL sums.
 
-- **`indexing/friction.ts`** — Session-level friction signals (#37): detection of interruptions,
+- **`indexing/friction.ts`** — Session-level friction signals: detection of interruptions,
   permission rejections, compactions, and turn durations from raw Claude JSONL records, plus
   the per-session fold. The claude producer emits `SessionFact.frictionEvents` that the pipeline
   (`indexing/reconcile.ts`) dedupes and folds. Events
@@ -179,14 +177,12 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 - **`pricing.ts`** — USD/Mtok price table keyed by model *family* (substring match: opus/sonnet/haiku/gpt-5.x).
   Unknown models cost 0 and are tracked in `unpricedModels()`. Override prices via `$ARGUS_CONFIG_DIR/pricing.json`.
 
-- **`src/llm/`** — The shared LLM access layer (#132; design in `docs/internals/llm-providers.md`). `registry.ts`
-  is the single source of truth: a list of `ProviderDescriptor`s (`providers/*` — `local.ts` =
-  `claude-cli`/`command`; `claude-api`/`openai`/`gemini` = direct HTTP over `http.ts`, which owns
-  429/5xx retry + a size cap; `openrouter` = a preset over the openai transport). `index.ts`'s
-  `complete(request, config)` dispatches through the registry with
-  **no per-provider branching**; `config.ts`'s apiKeyEnv default and `secrets.ts`'s allowlist derive
-  from it too, so adding a provider is one descriptor + one registry entry. Never throws —
-  `off`/no-key/network/bad-shape → `ok:false`. Pure of secret access (the consumer fills
+- **`src/llm/`** — The shared LLM access layer (design in `docs/internals/llm-providers.md`).
+  `registry.ts` is the single source of truth: a list of `ProviderDescriptor`s (local CLI/command
+  providers plus direct-HTTP API providers). `complete(request, config)` dispatches through the
+  registry with **no per-provider branching**, and `config.ts`'s key-env defaults and `secrets.ts`'s
+  allowlist derive from it too, so adding a provider is one descriptor + one registry entry. Never
+  throws — off/no-key/network/bad-shape → `ok:false`. Pure of secret access (the consumer fills
   `config.apiKey`), so it's testable against an injected `fetch`. Task extraction is the first consumer.
 
 - **`secrets.ts`** — BYO API-key storage: a `SecretStore` with platform backends (macOS keychain via
@@ -200,35 +196,25 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 - **`indexing/interpret/summarize.ts`** — Per-session heuristic summary (`heuristicSummary`): a free one-liner built
   from the first prompt, top skills, top tools, and edited-file count. Fills `SessionRow.summary`
   for the web app's session-title fallback. (The old opt-in `claude -p` summarizer was removed in
-  favor of #88's task interpretation.)
+  favor of task interpretation.)
 
 - **`api/serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer`
-  to listen via `@hono/node-server`) serving the React+Vite SPA in `web/` from `dist/web` (SPA fallback
-  to `index.html`) and exposing the JSON API. There is **no monolithic `/api/snapshot`** (#217): each
-  dashboard view has its own small endpoint, built on demand with no server-side cache (the client's
-  React Query `staleTime` absorbs reloads). All the view endpoints share the same
-  `since`/`until`/`project`/`source` filter contract (unknown source → 400):
-  - **Views** — `GET /api/usage/daily` (totals + per-day buckets + unpriced models), `/api/usage/by-model`,
-    `/api/usage/by-source`, `/api/usage/by-project`, `/api/skills`, `/api/tools/by-tool`,
-    `/api/tools/by-category`, `/api/tools/by-mcp-server`, `/api/tools/heaviest-results`, `/api/plugins`,
-    `/api/health`, `/api/recommendations`. Each is a promoted store method (`readUsageByDateModel`,
-    `readToolStats`, `readHealthRollups`, … in `store/store.ts`) plus a small pure builder in
-    `api/{usage,tools,plugins,health}.ts` that folds + prices it. `computeRecommendations`
-    (`api/recommendations.ts`) takes only its four real inputs (byPlugin/highTokenGrowthSessions/
-    frictionTotals/unpriced).
-  - `GET /api/sessions` — paginated/filtered/sorted session list (`api/session-list.ts` over
-    `store.readSessionAggregates`, a SQL `GROUP BY` — no per-message JS walk).
-  - `GET /api/session/:id` — one session's full `SessionRow`, built on demand from its messages.
-  - `POST /api/sessions/:id/reindex`, `GET /api/sessions/:id/task-metrics`, `GET /api/debug`.
+  to listen) serving the React+Vite SPA in `web/` from `dist/web` (SPA fallback to `index.html`) and
+  exposing the JSON API. There is **no monolithic `/api/snapshot`**: each dashboard view has its own
+  small endpoint, built on demand with no server-side cache (the client's React Query `staleTime`
+  absorbs reloads). The view endpoints (usage, tools, skills, plugins, health, recommendations, the
+  session list, per-session detail, …; see `serve.ts` for the live route list) share one
+  `since`/`until`/`project`/`source` filter contract (unknown source → 400). Each view is a promoted
+  store read plus a small pure builder in `api/` that folds + prices it; the session list is a SQL
+  `GROUP BY` (no per-message JS walk) and per-session detail is built on demand from that session's
+  messages.
 
-  The frontend stack (React, Vite, TanStack Router/Query/Table, Chart.js via react-chartjs-2) is
-  **devDependencies only** — bundled into `dist/web` at build, never installed by end users; the
-  web server's only runtime deps are `hono`+`@hono/node-server`. `web/src/types.ts` imports the CLI `Dashboard` types
+  The frontend stack (React, Vite, TanStack Router/Query/Table, Chart.js) is **devDependencies
+  only** — bundled into `dist/web` at build, never installed by end users; the web server's only
+  runtime deps are `hono`+`@hono/node-server`. `web/src/types.ts` imports the CLI response types
   **type-only** from `src/` (incl. `src/api/`), so the API payload and UI can't drift. The preferred
-  UI; full design + rationale in **`docs/internals/web-app.md`**. `serve` takes only `--port`/`-p` and `--open`
-  (the date/source filters are per-request query params, not CLI flags) and resolves per-session-reindex
-  task extraction from `argus.json`. New `/api/sessions`+`/api/session/:id` response shapes are
-  local-only (not on the `@agentdeploymentco/argus-schema` sync wire).
+  UI; full design in **`docs/internals/web-app.md`**. `serve` takes only `--port`/`-p` and `--open`
+  (date/source filters are per-request query params, not CLI flags).
 
 - **`push.ts`** — The upload mechanics behind `argus sync` (the command was renamed from `push`; the
   module keeps its name). Identifies the client by a per-install id plus a git `user.name`
@@ -246,19 +232,15 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   default` (empty values count as absent). `resolveTaskExtraction` produces the effective
   `TaskExtractionOptions` + `enabled` toggle. Settings only — `token.json`/`pricing.json` stay separate.
 
-- **`indexing/interpret/` (`index.ts`, `task-extraction.ts`, `task-candidates.ts`, `summarize.ts`)** —
-  The Interpret stage: the one model-driven step (default-on but toggleable; #88/#91; full design in
-  `docs/internals/task-interpretation.md`). `interpret/index.ts` is the stage entry (`interpretSession`,
-  `runInterpretationDrain`, `taskExtractionActive`) the pipeline calls. `task-candidates.ts`
-  filters user-authored text into task candidates and recognizes Argus's own `claude -p` prompts
-  so they aren't mistaken for user tasks. `task-extraction.ts` runs the two passes — pass 1 segments
-  tasks/chapters, pass 2 judges per-task outcome/frustration from the prompt/response dialogue
-  projected straight from the reconciled interactions — via the shared LLM layer (`src/llm/`),
-  defaulting to the `claude-cli` provider (`claude -p --no-session-persistence --model haiku -`). The
-  per-interaction prompt/response text is kept **out of the stored interaction records** but is
-  retained separately, **default-on (toggleable) and local-only**, in `resolved_interaction_text` (#120;
-  `retainText` setting) — a tall, typed table (`type` = prompt/response, narration-ready) shaped like
-  `resolved_usage`/`resolved_invocations` (own `seq` + soft-link `interaction_seq`), never on the sync wire.
+- **`indexing/interpret/`** — The Interpret stage: the one model-driven step (default-on but
+  toggleable; full design in `docs/internals/task-interpretation.md`). It filters user-authored text
+  into task candidates (recognizing Argus's own `claude -p` prompts so they aren't mistaken for user
+  tasks), then runs two passes — pass 1 segments tasks/chapters, pass 2 judges per-task
+  outcome/frustration from the reconstructed prompt/response dialogue — via the shared LLM layer
+  (`src/llm/`), defaulting to the `claude-cli` provider (a cheap local model). The per-interaction
+  prompt/response text is kept **out of the stored interaction records** but is retained separately,
+  **default-on (toggleable) and local-only**, in `resolved_interaction_text` (the `retainText`
+  setting), never on the sync wire.
 
 - **`cli.ts`** — The executable entry point (npm `bin`). Defines the subcommands (`serve`,
   `index` [+ `rebuild`/`refresh`/`delete` subcommands and `--watch`], `sync` [the upload, formerly
@@ -267,11 +249,10 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   is no default command: a bare `argus` (no subcommand) prints the usage/help. `serve` exposes only
   `--port`/`-p` and `--open`. `index refresh` takes space-separated session ids (per-session reindex,
   matching `index delete`); `--extract-tasks <true|false>` on `index`/`rebuild`/`refresh` overrides the
-  `argus.json` task-interpretation setting for the run. Holds the `run*` handlers that wire flags into
-  `reporting/dashboard-builder.ts` and the pipeline. Note: citty runs a parent command's `run` *even
-  after* dispatching to a subcommand, so `index`'s parent `run` bails via `dispatchedSubcommand(ctx)`
-  when a subcommand handled the call. The store-maintenance bodies live in `index-ops.ts`; the
-  long-running `--watch` loops and the orchestrator are in `watch.ts` / `run.ts` (see below).
+  `argus.json` task-interpretation setting for the run. (citty quirk: a parent command's `run` fires
+  even after a subcommand dispatches, so `index`'s parent guards against double-running.) The
+  store-maintenance bodies live in `index-ops.ts`; the long-running `--watch` loops and the
+  orchestrator are in `watch.ts` / `run.ts` (see below).
 
 - **`index-ops.ts`** — The `argus index` command bodies (`runIndex`, `runIndexRebuild` with its
   confirmation prompt, `runIndexRefresh`, `runIndexDelete`), extracted so both `cli.ts` and the watch
@@ -299,8 +280,8 @@ Stable types come from the external package `@agentdeploymentco/argus-schema` (p
 (e.g. `bySource`, `source`). The schema package is the single source of truth shared with `argus-hub`.
 
 `sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads raw `resolved_*` rows and the
-Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check (`test/contract.test.ts`)
-was removed in #217. The `@agentdeploymentco/argus-schema` `Dashboard` type still backs the web app's
+Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check is gone. The
+`@agentdeploymentco/argus-schema` `Dashboard` type still backs the web app's
 per-view response types (imported type-only by `web/src/types.ts`); the wire contract itself is being
 reworked separately.
 
