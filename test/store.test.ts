@@ -199,14 +199,18 @@ function rawExec(db: Database, sql: string): void {
   db.run(sql);
 }
 
-/** Strip the v19 interpretation columns + partial index (#153) so a test that degrades a current-schema
- *  store to a pre-19 version can re-run the 18 -> 19 migration without colliding with columns the
- *  current CREATE_SCHEMA_SQL already created. Mirrors how these tests strip every other post-version add. */
-function dropInterpretationColumns(db: Database): void {
+/** Strip the v19 interpretation columns + partial index (#153) and the v20 search FTS tables +
+ *  file_path index (#155) so a test that degrades a current-schema store to a pre-19/pre-20 version
+ *  can re-run the migration chain without colliding with things the current CREATE_SCHEMA_SQL already
+ *  created. Mirrors how these tests strip every other post-version add. */
+function dropPostV18Schema(db: Database): void {
   rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_interpret_pending");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN content_indexed_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpreted_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpretation_version");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_interaction_text_fts");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_tasks_fts");
+  rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
 }
 
 function rawGet<T>(db: Database, sql: string): T | undefined {
@@ -472,7 +476,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 4");
     });
 
@@ -515,7 +519,7 @@ describe("SQLite store", () => {
     // A store upgraded by that build reaches v16 without the table. Drop it and stamp v16.
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP TABLE IF EXISTS hub_session_cursors");
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 16");
     });
 
@@ -1072,7 +1076,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 8");
     });
 
@@ -1229,7 +1233,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 10");
     });
 
@@ -1313,7 +1317,7 @@ describe("SQLite store", () => {
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
       await rawExec(db, `INSERT INTO resolved_tool_results VALUES ('${sid}', 'Bash', 2, 100), ('${sid}', 'Read', 1, 30)`);
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 11");
     });
 
@@ -1382,7 +1386,7 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_usage ADD COLUMN task_seq INTEGER");
       await rawExec(db, "CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq)");
       await rawExec(db, `UPDATE resolved_usage SET task_seq = 0 WHERE session_id = '${sid}'`);
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 12");
     });
 
@@ -1628,7 +1632,7 @@ describe("conversation text retention (#120)", () => {
     // Degrade to v17: drop the v18 table and set the version back, simulating an older store.
     await withRawDatabase(path, async (db) => {
       rawExec(db, "DROP TABLE resolved_interaction_text");
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       rawExec(db, "PRAGMA user_version = 17");
     });
 

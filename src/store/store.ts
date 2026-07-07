@@ -51,7 +51,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 19;
+export const STORE_SCHEMA_VERSION = 20;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -215,6 +215,43 @@ const RESOLVED_INTERACTION_TEXT_DDL = `
     text TEXT NOT NULL,
     PRIMARY KEY (session_id, seq)
   );`;
+
+// Full-text search over retained conversation text (#155). A PLAIN (not external-content) FTS5 table:
+// external-content-table triggers were the original design, but this store deliberately runs with
+// `PRAGMA trusted_schema = OFF` (hardening against a tampered db file), and SQLite categorically
+// disallows virtual tables from being touched by triggers/views when trusted_schema is off — verified
+// against bun:sqlite; there's no per-vtable "innocuous" override for this. So the FTS index is
+// maintained by ordinary top-level DML at the same call sites that already do the wholesale
+// DELETE-then-INSERT of resolved_interaction_text (materialize), not by triggers. `session_id` is
+// duplicated onto the FTS row (UNINDEXED — not tokenized, just carried through) so a match can be
+// grouped by session without a join back to the base table.
+const RESOLVED_INTERACTION_TEXT_FTS_DDL = `
+  CREATE VIRTUAL TABLE resolved_interaction_text_fts USING fts5(
+    session_id UNINDEXED, text
+  );`;
+
+// Full-text search over task-interpretation text (#155). Same plain-FTS5-table approach as
+// resolved_interaction_text_fts above (see its comment for why triggers aren't used). task_json is
+// opaque JSON with no queryable text column, so the indexed text is derived at write time from
+// description + outcomeReason + signals[] — deliberately excluding .evidence, which holds
+// interaction-index bookkeeping ("interactions: 1, 2"), not prose (see SEARCH_DOC.md). Maintained by
+// writeSessionTasks, which is also wholesale DELETE-then-INSERT. RESOLVED_TASKS_FTS_TEXT_EXPR is used
+// only by the migration backfill (a plain SQL INSERT...SELECT, unaffected by trusted_schema since it's
+// not run from a trigger); writeSessionTasks derives the same text in JS from the TaskFact it already
+// has, not by re-deriving it in SQL.
+const RESOLVED_TASKS_FTS_TEXT_EXPR = `
+    COALESCE(json_extract(%ALIAS%.task_json, '$.description'), '') || ' ' ||
+    COALESCE(json_extract(%ALIAS%.task_json, '$.outcomeReason'), '') || ' ' ||
+    COALESCE((SELECT group_concat(value, ' ') FROM json_each(%ALIAS%.task_json, '$.signals')), '')`;
+const RESOLVED_TASKS_FTS_DDL = `
+  CREATE VIRTUAL TABLE resolved_tasks_fts USING fts5(
+    session_id UNINDEXED, text
+  );`;
+
+// File-usage search (#155): substring match on file_path needs a plain index, not FTS (FTS5's
+// tokenizer would split paths on '/' and '.'). Partial: most invocation rows have no file_path.
+const RESOLVED_INVOCATIONS_FILE_PATH_INDEX = `
+  CREATE INDEX resolved_invocations_file_path ON resolved_invocations(file_path) WHERE file_path IS NOT NULL;`;
 
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
@@ -383,10 +420,14 @@ const CREATE_SCHEMA_SQL = `
   -- Opt-in (default-on) local prompt/response text retention (#120). Local-only; never synced.
   ${RESOLVED_INTERACTION_TEXT_DDL}
 
+  -- Full-text search over retained conversation text (#155). Local-only; never synced.
+  ${RESOLVED_INTERACTION_TEXT_FTS_DDL}
+
   -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
   -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
   ${RESOLVED_INVOCATIONS_DDL}
   ${RESOLVED_INVOCATIONS_INDEXES}
+  ${RESOLVED_INVOCATIONS_FILE_PATH_INDEX}
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -398,6 +439,9 @@ const CREATE_SCHEMA_SQL = `
   );
   CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
   CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
+
+  -- Full-text search over task-interpretation text (#155). Local-only; never synced.
+  ${RESOLVED_TASKS_FTS_DDL}
 
   -- Per-source freshness attestation: lets a consumer know whether the store is current.
   CREATE TABLE source_coverage (
@@ -1183,6 +1227,25 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         WHERE content_indexed_at_ms > COALESCE(interpreted_at_ms, 0);
     `,
   },
+  // 19 -> 20: session search (#155). Two plain FTS5 indexes (conversation text, task text) plus a
+  // plain partial index for file-path substring search. Backfill both FTS tables from existing rows so
+  // `argus index rebuild` is not required for existing users; going forward materialize/writeSessionTasks
+  // maintain them directly (no triggers — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment for why).
+  19: {
+    to: 20,
+    sql: `
+      ${RESOLVED_INTERACTION_TEXT_FTS_DDL}
+      INSERT INTO resolved_interaction_text_fts(session_id, text)
+        SELECT session_id, text FROM resolved_interaction_text;
+
+      ${RESOLVED_TASKS_FTS_DDL}
+      INSERT INTO resolved_tasks_fts(session_id, text)
+        SELECT session_id, ${RESOLVED_TASKS_FTS_TEXT_EXPR.replaceAll("%ALIAS%", "resolved_tasks")}
+        FROM resolved_tasks;
+
+      ${RESOLVED_INVOCATIONS_FILE_PATH_INDEX}
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -1263,7 +1326,9 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
     await get(db, "SELECT session_id, seq, interaction_seq, type, text FROM resolved_interaction_text LIMIT 1");
-    await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
+    await get(db, "SELECT session_id, text FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH 'x' LIMIT 1");
+    await get(db, "SELECT session_id, text FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH 'x' LIMIT 1");
+    await get(db, "SELECT session_id, tool, category, file_path FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
     await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
@@ -1846,6 +1911,19 @@ export class SqliteStore implements Store {
             task.source,
             task.timestampMs ?? null,
             JSON.stringify(task),
+          ]),
+        );
+        // Keep the search index (#155) in sync with the same wholesale replace, via ordinary DML (not
+        // a trigger — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment). Indexes description +
+        // outcomeReason + signals[] only — deliberately excludes .evidence (bookkeeping, not prose).
+        await run(this.db, "DELETE FROM resolved_tasks_fts WHERE session_id = ?", [sessionId]);
+        await insertRows(
+          this.db,
+          "resolved_tasks_fts",
+          ["session_id", "text"],
+          tasks.map((task) => [
+            sessionId,
+            [task.description, task.outcomeReason ?? "", ...(task.signals ?? [])].join(" "),
           ]),
         );
         const interactionRows = await all<{ seq: number; ts: number | null }>(
@@ -2466,6 +2544,7 @@ export class SqliteStore implements Store {
             // "turn retention off and re-index removes stored text" holds even on this short-parse path (#120).
             if (!retainText) {
               await run(this.db, "DELETE FROM resolved_interaction_text WHERE session_id = ?", [sid]);
+              await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
             }
             continue;
           }
@@ -2490,6 +2569,10 @@ export class SqliteStore implements Store {
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
+          // The search FTS index (#155) is NOT linked by foreign key, so the CASCADE above does not
+          // reach it — clear it explicitly here; it's rebuilt below (if retainText) alongside
+          // resolved_interaction_text, which the CASCADE does clear.
+          await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
           const lastTs = timestamps.length ? Math.max(...timestamps) : null;
@@ -2634,6 +2717,14 @@ export class SqliteStore implements Store {
               "resolved_interaction_text",
               ["session_id", "seq", "interaction_seq", "type", "text"],
               textRows,
+            );
+            // Search FTS index (#155), kept in sync by direct DML (not a trigger — see
+            // RESOLVED_INTERACTION_TEXT_FTS_DDL's comment). One FTS row per text chunk, mirroring textRows.
+            await insertRows(
+              this.db,
+              "resolved_interaction_text_fts",
+              ["session_id", "text"],
+              textRows.map((row) => [sid, row[4]]),
             );
           }
           // Per-tool-use rows (#113 Part B / #130) from the reconciled messages' toolUses, so byTool/
