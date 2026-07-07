@@ -58,19 +58,26 @@ note and the running level stays at the env value.
 }
 ```
 
-### Desktop updates
+### Desktop app
 
-The desktop tray app checks for signed updates on an interval. Automatic installs are enabled by
-default; set `autoUpdate.enabled` to `false` to leave available updates waiting behind the tray
+The desktop tray app starts automatically when you sign in. Set `desktop.startAtLogin` to `false`
+to turn that off.
+
+The desktop tray app also checks for signed updates on an interval. Automatic installs are enabled
+by default; set `autoUpdate.enabled` to `false` to leave available updates waiting behind the tray
 menu's `Install Update` item.
 
 | Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
 |---|---|---|---|
+| start at login | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | — |
 | automatic desktop updates | `autoUpdate.enabled` | `ARGUS_AUTO_UPDATE_ENABLED` | — |
 | update check interval, minutes | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | — |
 
 ```json
 {
+  "desktop": {
+    "startAtLogin": false
+  },
   "autoUpdate": {
     "enabled": false,
     "checkIntervalMinutes": 60
