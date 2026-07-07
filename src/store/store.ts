@@ -31,6 +31,7 @@ import type {
   ReconstructedFragments,
   ResolvedQuery,
   SessionAggregate,
+  SessionInvocation,
   SourceCoverageRow,
   StoreStats,
   TaskSeqInteraction,
@@ -51,7 +52,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 19;
+export const STORE_SCHEMA_VERSION = 20;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -327,6 +328,11 @@ const CREATE_SCHEMA_SQL = `
     content_indexed_at_ms INTEGER,
     interpreted_at_ms INTEGER,
     interpretation_version TEXT,
+    -- Model-generated title + summary (#234), written by writeSessionTasks alongside the interpretation
+    -- stamp (interpretation-owned, carried forward by materialize). NULL until a session is interpreted;
+    -- the read paths fall back to the first prompt / heuristic summary. Local-only, never on the wire.
+    title TEXT,
+    summary TEXT,
     meta_json TEXT NOT NULL
   );
   CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
@@ -544,6 +550,9 @@ interface ResolvedSessionSnapshot {
   contentIndexedAtMs: number | null;
   interpretedAtMs: number | null;
   interpretationVersion: string | null;
+  // Model title/summary (#234) — interpretation-owned like interpretedAtMs, so carried forward here.
+  title: string | null;
+  summary: string | null;
 }
 
 async function readResolvedSessionSnapshot(
@@ -555,9 +564,11 @@ async function readResolvedSessionSnapshot(
     content_indexed_at_ms: number | null;
     interpreted_at_ms: number | null;
     interpretation_version: string | null;
+    title: string | null;
+    summary: string | null;
   }>(
     db,
-    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version FROM resolved_sessions WHERE session_id = ?",
+    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary FROM resolved_sessions WHERE session_id = ?",
     [sessionId],
   );
   if (!row) return undefined;
@@ -578,6 +589,8 @@ async function readResolvedSessionSnapshot(
     contentIndexedAtMs: row.content_indexed_at_ms,
     interpretedAtMs: row.interpreted_at_ms,
     interpretationVersion: row.interpretation_version,
+    title: row.title,
+    summary: row.summary,
   };
 }
 
@@ -1183,6 +1196,16 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         WHERE content_indexed_at_ms > COALESCE(interpreted_at_ms, 0);
     `,
   },
+  // 19 -> 20: session interpretation 2.0 (#234). Add the model-generated title + summary columns to
+  // resolved_sessions, written by writeSessionTasks alongside the interpretation stamp. NULL until a
+  // session is (re)interpreted; the read paths fall back to first prompt / heuristic summary.
+  19: {
+    to: 20,
+    sql: `
+      ALTER TABLE resolved_sessions ADD COLUMN title TEXT;
+      ALTER TABLE resolved_sessions ADD COLUMN summary TEXT;
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -1258,7 +1281,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
   try {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
-    await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT session_id, archived, title, summary FROM resolved_sessions LIMIT 1");
     await get(db, "SELECT input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
@@ -1765,6 +1788,21 @@ export class SqliteStore implements Store {
     });
   }
 
+  // The model-generated title/summary for one session (#234), or nulls when not yet interpreted. Backs
+  // the on-demand detail view's title/summary, which fall back to first prompt / heuristic summary.
+  readSessionInterpretation(
+    sessionId: string,
+  ): Promise<{ title: string | null; summary: string | null } | undefined> {
+    return this.schedule(async () => {
+      const row = await get<{ title: string | null; summary: string | null }>(
+        this.db,
+        "SELECT title, summary FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row ? { title: row.title, summary: row.summary } : undefined;
+    });
+  }
+
   readSessionTasks(sessionId: string): Promise<TaskFact[]> {
     return this.schedule(async () => {
       const rows = await all<{ task_json: string }>(
@@ -1810,6 +1848,34 @@ export class SqliteStore implements Store {
     });
   }
 
+  // All tool invocations for a session with their owning interaction seq (#234). Read straight off
+  // resolved_invocations — deliberately NOT joined to task_seq, which writeSessionTasks assigns only
+  // after pass 2 runs, so a task-grain read would come back empty mid-interpretation.
+  readSessionInvocations(sessionId: string): Promise<SessionInvocation[]> {
+    return this.schedule(async () => {
+      const rows = await all<{
+        interaction_seq: number | null;
+        tool: string;
+        category: string;
+        mcp_server: string | null;
+        mcp_tool: string | null;
+        file_path: string | null;
+      }>(
+        this.db,
+        "SELECT interaction_seq, tool, category, mcp_server, mcp_tool, file_path FROM resolved_invocations WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      return rows.map((row) => ({
+        interactionSeq: row.interaction_seq,
+        tool: row.tool,
+        category: row.category,
+        ...(row.mcp_server != null ? { mcpServer: row.mcp_server } : {}),
+        ...(row.mcp_tool != null ? { mcpTool: row.mcp_tool } : {}),
+        ...(row.file_path != null ? { filePath: row.file_path } : {}),
+      }));
+    });
+  }
+
   // Canonical ids of sessions eligible for (re)interpretation (#153), newest-first, capped at `limit`.
   // The eligibility predicate is INTERPRETATION_ELIGIBLE_SQL, shared with interpretationProgress.
   readPendingInterpretationSessions(limit: number): Promise<string[]> {
@@ -1829,10 +1895,18 @@ export class SqliteStore implements Store {
   // The SOLE writer of resolved_tasks + interpretation state (#153). Replaces a session's tasks without
   // re-materializing its messages/interactions/text, re-derives task↔interaction membership
   // (resolved_interactions.task_seq) over the new tasks, and stamps interpreted_at_ms +
-  // interpretation_version. ALWAYS stamps — even for an empty task list — so a session with no
-  // extractable tasks de-queues instead of being re-interpreted on every drain tick. Survives a later
-  // unchanged re-materialize via materialize's carry-forward; discarded only when content changes.
-  writeSessionTasks(sessionId: string, tasks: TaskFact[], version: string): Promise<void> {
+  // interpretation_version plus the model title/summary (#234). ALWAYS stamps — even for an empty task
+  // list — so a session with no extractable tasks de-queues instead of being re-interpreted on every
+  // drain tick. Survives a later unchanged re-materialize via materialize's carry-forward; discarded
+  // only when content changes. `title`/`summary` default to null (cleared) — the interpret stage always
+  // passes the values it generated.
+  writeSessionTasks(
+    sessionId: string,
+    tasks: TaskFact[],
+    version: string,
+    title: string | null = null,
+    summary: string | null = null,
+  ): Promise<void> {
     return this.schedule(async () => {
       await transaction(this.db, async () => {
         await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
@@ -1876,8 +1950,8 @@ export class SqliteStore implements Store {
         }
         await run(
           this.db,
-          "UPDATE resolved_sessions SET interpreted_at_ms = ?, interpretation_version = ? WHERE session_id = ?",
-          [Date.now(), version, sessionId],
+          "UPDATE resolved_sessions SET interpreted_at_ms = ?, interpretation_version = ?, title = ?, summary = ? WHERE session_id = ?",
+          [Date.now(), version, title, summary, sessionId],
         );
       });
       secureSqliteFiles(this.path);
@@ -2051,10 +2125,12 @@ export class SqliteStore implements Store {
         first_ts: number | null;
         last_ts: number | null;
         message_count: number;
+        title: string | null;
+        summary: string | null;
         meta_json: string;
       }>(
         this.db,
-        `SELECT session_id, first_ts, last_ts, message_count, meta_json
+        `SELECT session_id, first_ts, last_ts, message_count, title, summary, meta_json
          FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
         sessionParams,
       );
@@ -2103,6 +2179,8 @@ export class SqliteStore implements Store {
         firstTs: row.first_ts,
         lastTs: row.last_ts,
         messageCount: row.message_count,
+        title: row.title,
+        summary: row.summary,
       }));
     });
   }
@@ -2487,6 +2565,10 @@ export class SqliteStore implements Store {
           const contentIndexedAtMs = contentChanged ? nowMs : (existingSnapshot!.contentIndexedAtMs ?? nowMs);
           const interpretedAtMs = existingSnapshot?.interpretedAtMs ?? null;
           const interpretationVersion = existingSnapshot?.interpretationVersion ?? null;
+          // Title/summary are interpretation-owned (#234): carried forward so a re-index never wipes
+          // them. Only writeSessionTasks sets them; a brand-new session has none.
+          const title = existingSnapshot?.title ?? null;
+          const summary = existingSnapshot?.summary ?? null;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
@@ -2501,8 +2583,8 @@ export class SqliteStore implements Store {
             `INSERT INTO resolved_sessions(
                session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived,
                friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms,
-               content_indexed_at_ms, interpreted_at_ms, interpretation_version, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               sid,
               owner,
@@ -2521,6 +2603,8 @@ export class SqliteStore implements Store {
               contentIndexedAtMs,
               interpretedAtMs,
               interpretationVersion,
+              title,
+              summary,
               JSON.stringify(session.meta),
             ],
           );
