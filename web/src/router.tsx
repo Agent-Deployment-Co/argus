@@ -5,6 +5,7 @@ import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
+import { SessionsInbox, SessionsInboxEmpty } from "./routes/SessionsInbox";
 import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
@@ -69,6 +70,18 @@ const sessionsRoute = createRoute({
   }),
 });
 
+// A Gmail-inspired testing bed for a future /sessions redesign (#sessions-inbox). Deliberately not
+// added to Layout.tsx's NAV array, so it stays out of the rail and is reachable only by direct URL.
+const sessionsInboxRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/sessions-inbox",
+  component: SessionsInbox,
+  validateSearch: (search: Record<string, unknown>): { folder?: "inbox" | "archived"; q?: string } => ({
+    folder: search.folder === "archived" ? "archived" : undefined,
+    q: typeof search.q === "string" && search.q ? search.q : undefined,
+  }),
+});
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute.addChildren([
     createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: Activity }),
@@ -76,6 +89,10 @@ const routeTree = rootRoute.addChildren([
     sessionsRoute.addChildren([
       createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
       createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
+    ]),
+    sessionsInboxRoute.addChildren([
+      createRoute({ getParentRoute: () => sessionsInboxRoute, path: "/", component: SessionsInboxEmpty }),
+      createRoute({ getParentRoute: () => sessionsInboxRoute, path: "$sessionId", component: SessionDetail }),
     ]),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/tools", component: Tools }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/health", component: Health }),

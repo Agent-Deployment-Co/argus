@@ -73,6 +73,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .app-shell { --rail-w: 184px; display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
 .app-shell.rail-collapsed { --rail-w: 60px; }
 .content { min-width: 0; --filter-bar-h: 53px; }
+.content--no-filterbar { --filter-bar-h: 0px; }
 
 /* Global filter bar pinned above every view. Fixed height so the full-height Sessions split can
    subtract it (see .sessions-split) without overflowing the viewport. */
@@ -187,6 +188,47 @@ main:has(.sessions-split) { padding: 0; }
 .session-item-snippet-text mark { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--text); border-radius: 2px; padding: 0 1px; }
 .session-item-snippet-meta { display: block; margin-top: 2px; color: var(--muted); font: 600 10px var(--font-ui); }
 .session-empty-row { padding: 18px 14px; color: var(--muted); font-size: 13px; }
+
+/* /sessions-inbox: a Gmail-inspired prototype (not in the rail nav). A full-width search bar over a
+   three-pane body — inner folder nav, the row list, and the reading pane (.session-detail, reused
+   from /sessions). Kept as its own class namespace so it doesn't perturb /sessions' layout. */
+main:has(.inbox-shell) { padding: 0; }
+.inbox-shell { display: flex; flex-direction: column; height: calc(100vh - var(--filter-bar-h)); }
+.inbox-toolbar { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.inbox-search-icon { flex: 0 0 auto; color: var(--muted); }
+.inbox-search { flex: 1 1 auto; max-width: 640px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; color: var(--text); font: 13.5px "Aleo", Georgia, serif; }
+.inbox-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.inbox-body { display: grid; grid-template-columns: 176px minmax(260px, 340px) 1fr; flex: 1 1 auto; min-height: 0; }
+
+.inbox-nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); overflow-y: auto; }
+.inbox-nav-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: none; border-radius: 999px; background: transparent; color: var(--muted); font: 600 13px var(--font-ui); cursor: pointer; text-align: left; }
+.inbox-nav-item:hover { background: var(--hover); color: var(--heading); }
+.inbox-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.inbox-nav-item span:first-of-type { flex: 1 1 auto; }
+.inbox-nav-count { color: inherit; opacity: .75; font-size: 11px; font-variant-numeric: tabular-nums; }
+.inbox-nav-labels { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.inbox-nav-labels-head { display: flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--muted); font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; }
+.inbox-nav-labels-empty { padding: 8px 10px 0; color: var(--muted); font-size: 12px; }
+
+.inbox-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+/* The archive button overlays the row (absolute, right-aligned) rather than reserving its own flex
+   column, so the title/meta text always runs the full width of the cell; it only appears on hover. */
+.inbox-row-wrap { position: relative; border-bottom: 1px solid var(--line); }
+.inbox-row-wrap:hover { background: var(--hover); }
+.inbox-row { display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; padding: 9px 12px; border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
+.inbox-row:hover { color: var(--text); }
+.inbox-row.active { background: color-mix(in srgb, var(--accent) 13%, transparent); border-left-color: var(--accent); }
+.inbox-row-subject { min-width: 0; color: var(--heading); font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-row-meta { display: flex; min-width: 0; color: var(--muted); font: 600 11px var(--font-ui); }
+.inbox-row-meta .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Full row-height backdrop behind the icon (mostly opaque, hard-edged) so it masks the truncated
+   text underneath rather than floating bare on top of it. */
+.inbox-row-archive-btn { position: absolute; top: 0; bottom: 0; right: 0; width: 40px; display: grid; place-items: center; border: none; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .1s; }
+.inbox-row-wrap:hover .inbox-row-archive-btn { opacity: 1; }
+.inbox-row-archive-btn:hover { color: var(--accent); }
+.inbox-row-archive-btn:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.inbox-detail { display: flex; min-height: 0; min-width: 0; }
 
 /* Flex row: the scrolling content pane plus the task panel, which lays out inline beside it (not
    over it) and shrinks the content pane to fit — see .task-panel below. */
