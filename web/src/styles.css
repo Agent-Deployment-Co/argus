@@ -194,9 +194,10 @@ main:has(.sessions-split) { padding: 0; }
    from /sessions). Kept as its own class namespace so it doesn't perturb /sessions' layout. */
 main:has(.inbox-shell) { padding: 0; }
 .inbox-shell { display: flex; flex-direction: column; height: calc(100vh - var(--filter-bar-h)); }
-.inbox-toolbar { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
-.inbox-search-icon { flex: 0 0 auto; color: var(--muted); }
-.inbox-search { flex: 1 1 auto; max-width: 640px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; color: var(--text); font: 13.5px "Aleo", Georgia, serif; }
+.inbox-toolbar { display: flex; align-items: center; flex: 0 0 auto; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.inbox-search-wrap { position: relative; flex: 1 1 auto; max-width: 640px; }
+.inbox-search-icon { position: absolute; top: 50%; left: 12px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.inbox-search { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px 8px 36px; color: var(--text); font: 13.5px "Aleo", Georgia, serif; }
 .inbox-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .inbox-body { display: grid; grid-template-columns: 176px minmax(260px, 340px) 1fr; flex: 1 1 auto; min-height: 0; }
 

@@ -36,15 +36,17 @@ function InboxSearchBar({ value, onChange }: { value: string; onChange: (v: stri
   }, [text]);
   return (
     <div className="inbox-toolbar">
-      <Search className="inbox-search-icon" size={16} strokeWidth={1.75} aria-hidden />
-      <input
-        className="inbox-search"
-        type="search"
-        placeholder="Search sessions"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        aria-label="Search sessions"
-      />
+      <div className="inbox-search-wrap">
+        <Search className="inbox-search-icon" size={16} strokeWidth={1.75} aria-hidden />
+        <input
+          className="inbox-search"
+          type="search"
+          placeholder="Search sessions"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          aria-label="Search sessions"
+        />
+      </div>
     </div>
   );
 }
@@ -145,6 +147,16 @@ export function SessionsInbox() {
   const archivedRows = rows.filter((r) => archived.has(inboxKey(r.source, r.sessionId)));
   const visible = folder === "inbox" ? inboxRows : archivedRows;
 
+  // "Archived" is a local-only concept (no server truth for it), so its total is just what's loaded;
+  // "Inbox" reports the server's real total for the current filters, minus what's been archived
+  // locally out of the loaded page.
+  const total =
+    folder === "archived" ? archivedRows.length : (query.data?.pages[0]?.total ?? inboxRows.length) - archivedRows.length;
+  const lower = visible.length ? 1 : 0;
+  const upper = visible.length;
+  const rangeLabel =
+    total > 0 ? `${lower}-${upper} of ${total} session${total === 1 ? "" : "s"}` : "0 sessions";
+
   return (
     <div className="inbox-shell">
       <InboxSearchBar value={q} onChange={(v) => setSearch({ q: v || undefined })} />
@@ -155,7 +167,7 @@ export function SessionsInbox() {
           onSelect={(f) => setSearch({ folder: f === "inbox" ? undefined : f, q: undefined })}
         />
         <div className="inbox-list-col">
-          <div className="inbox-list-bar">{visible.length} session{visible.length === 1 ? "" : "s"}</div>
+          <div className="inbox-list-bar">{rangeLabel}</div>
           <ul className="inbox-list">
             {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
             {query.isPending && <li className="session-empty-row">Loading sessions…</li>}
