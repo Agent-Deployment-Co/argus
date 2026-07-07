@@ -2,7 +2,7 @@
 // Rebuild docs/changelog.md from the public GitHub releases list.
 //
 // Usage: bun run scripts/generate-docs-changelog.ts
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 type GitHubRelease = {
@@ -239,6 +239,23 @@ function escapeText(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-const releases = await fetchReleases();
+let releases: GitHubRelease[];
+try {
+  releases = await fetchReleases();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  // A transient GitHub API hiccup shouldn't take down an otherwise-fine docs
+  // deploy. If a changelog is already committed, keep it and warn; only fail
+  // hard when there's nothing to fall back to.
+  if (existsSync(outputPath)) {
+    console.warn(
+      `Could not refresh the changelog from GitHub (${message}). Keeping the existing docs/changelog.md.`,
+    );
+    process.exit(0);
+  }
+  throw new Error(
+    `Could not fetch releases from GitHub and no docs/changelog.md exists to fall back to: ${message}`,
+  );
+}
 writeFileSync(outputPath, renderChangelog(releases));
 console.log(`Wrote ${releases.length} releases to docs/changelog.md`);
