@@ -1,7 +1,7 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Archive, ArchiveRestore, Inbox as InboxIcon, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { compactProject, dayStamp, fmt } from "../lib/format";
+import { compactProject, dayStamp } from "../lib/format";
 import { inboxKey, useInboxArchive } from "../lib/inboxArchive";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import type { SessionListItem } from "../types";
@@ -51,34 +51,30 @@ function InboxSearchBar({ value, onChange }: { value: string; onChange: (v: stri
 
 function InboxNav({
   folder,
-  inboxCount,
-  archivedCount,
+  searching,
   onSelect,
 }: {
   folder: "inbox" | "archived";
-  inboxCount: number;
-  archivedCount: number;
+  searching: boolean;
   onSelect: (folder: "inbox" | "archived") => void;
 }) {
   return (
     <nav className="inbox-nav" aria-label="Sessions inbox folders">
       <button
         type="button"
-        className={`inbox-nav-item${folder === "inbox" ? " active" : ""}`}
+        className={`inbox-nav-item${!searching && folder === "inbox" ? " active" : ""}`}
         onClick={() => onSelect("inbox")}
       >
         <InboxIcon size={16} strokeWidth={1.75} aria-hidden />
         <span>Inbox</span>
-        <span className="inbox-nav-count">{fmt(inboxCount)}</span>
       </button>
       <button
         type="button"
-        className={`inbox-nav-item${folder === "archived" ? " active" : ""}`}
+        className={`inbox-nav-item${!searching && folder === "archived" ? " active" : ""}`}
         onClick={() => onSelect("archived")}
       >
         <Archive size={16} strokeWidth={1.75} aria-hidden />
         <span>Archived</span>
-        <span className="inbox-nav-count">{fmt(archivedCount)}</span>
       </button>
     </nav>
   );
@@ -155,31 +151,33 @@ export function SessionsInbox() {
       <div className="inbox-body">
         <InboxNav
           folder={folder}
-          inboxCount={inboxRows.length}
-          archivedCount={archivedRows.length}
-          onSelect={(f) => setSearch({ folder: f === "inbox" ? undefined : f })}
+          searching={Boolean(q)}
+          onSelect={(f) => setSearch({ folder: f === "inbox" ? undefined : f, q: undefined })}
         />
-        <ul className="inbox-list">
-          {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
-          {query.isPending && <li className="session-empty-row">Loading sessions…</li>}
-          {!query.isPending && !query.isError && !visible.length && (
-            <li className="session-empty-row">
-              {folder === "inbox" ? "No sessions match your filters." : "No archived sessions."}
-            </li>
-          )}
-          {visible.map((s) => {
-            const key = inboxKey(s.source, s.sessionId);
-            return (
-              <InboxRow
-                key={key}
-                s={s}
-                selectedId={selectedId}
-                archived={folder === "archived"}
-                onArchiveToggle={() => (folder === "archived" ? unarchive(key) : archive(key))}
-              />
-            );
-          })}
-        </ul>
+        <div className="inbox-list-col">
+          <div className="inbox-list-bar">{visible.length} session{visible.length === 1 ? "" : "s"}</div>
+          <ul className="inbox-list">
+            {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
+            {query.isPending && <li className="session-empty-row">Loading sessions…</li>}
+            {!query.isPending && !query.isError && !visible.length && (
+              <li className="session-empty-row">
+                {folder === "inbox" ? "No sessions match your filters." : "No archived sessions."}
+              </li>
+            )}
+            {visible.map((s) => {
+              const key = inboxKey(s.source, s.sessionId);
+              return (
+                <InboxRow
+                  key={key}
+                  s={s}
+                  selectedId={selectedId}
+                  archived={folder === "archived"}
+                  onArchiveToggle={() => (folder === "archived" ? unarchive(key) : archive(key))}
+                />
+              );
+            })}
+          </ul>
+        </div>
         <div className="inbox-detail">
           <Outlet />
         </div>
