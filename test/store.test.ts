@@ -1705,7 +1705,7 @@ describe("session search (#155)", () => {
       const result = await store.searchSessions({ text: "flibbertigibbet" });
       expect(result.ids).toEqual(new Set([sid]));
       const match = result.matches.get(sid);
-      expect(match?.source).toBe("conversation");
+      expect(match?.sources).toEqual(["conversation"]);
       expect(match?.count).toBeGreaterThan(0);
       expect(match?.snippet).toContain("flibbertigibbet");
     } finally {
@@ -1756,13 +1756,13 @@ describe("session search (#155)", () => {
 
       const result = await store.searchSessions({ text: "quuxwidget" });
       expect(result.ids).toEqual(new Set([sid]));
-      expect(result.matches.get(sid)?.source).toBe("task");
+      expect(result.matches.get(sid)?.sources).toEqual(["task"]);
     } finally {
       await store.close();
     }
   });
 
-  test("finds a session via the model title/summary, tagged source: task (#234)", async () => {
+  test("finds a session via the model title/summary, tagged source: summary (#234)", async () => {
     const store = await openStore({ path: storePath() });
     try {
       await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
@@ -1771,7 +1771,7 @@ describe("session search (#155)", () => {
 
       const byTitle = await store.searchSessions({ text: "Zephyrmodule" });
       expect(byTitle.ids).toEqual(new Set([sid]));
-      expect(byTitle.matches.get(sid)?.source).toBe("task"); // distilled interpretation, not raw dialogue
+      expect(byTitle.matches.get(sid)?.sources).toEqual(["summary"]); // distinct summary source (#234), not "task"
       // A term appearing only in the summary matches too.
       expect((await store.searchSessions({ text: "glorbfunction" })).ids).toEqual(new Set([sid]));
     } finally {
@@ -1801,7 +1801,7 @@ describe("session search (#155)", () => {
     }
   });
 
-  test("a session matching both FTS tables reports source: both and sums the counts", async () => {
+  test("a session matching conversation + task lists both sources and sums the counts", async () => {
     const store = await openStore({ path: storePath() });
     try {
       await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
@@ -1819,7 +1819,7 @@ describe("session search (#155)", () => {
       const result = await store.searchSessions({ text: "flibbertigibbet" });
       expect(result.ids).toEqual(new Set([sid]));
       const match = result.matches.get(sid);
-      expect(match?.source).toBe("both");
+      expect(match?.sources).toEqual(["task", "conversation"]); // ordered most-distilled-first
       expect(match?.count).toBe(3); // 2 conversation chunks (prompt+response) + 1 task
     } finally {
       await store.close();
@@ -1861,7 +1861,7 @@ describe("session search (#155)", () => {
     try {
       const result = await migrated.searchSessions({ text: "flibbertigibbet" });
       expect(result.ids).toEqual(new Set([sid]));
-      expect(result.matches.get(sid)?.source).toBe("both");
+      expect(result.matches.get(sid)?.sources).toEqual(["task", "conversation"]);
     } finally {
       await migrated.close();
     }

@@ -333,8 +333,8 @@ as the two indexes above (`fts5(session_id UNINDEXED, text)`, no triggers). One 
 session; the indexed `text` is `title` + `summary` joined. Maintained at the two sites that write those
 columns — `writeSessionTasks` (the sole writer) and `materialize` (which carries them forward on
 re-index) — each doing a wholesale delete-then-insert. Like `resolved_tasks_fts`, it's empty until a
-session is interpreted; `searchSessions` folds its matches into the distilled (`task`/`both`) source
-alongside task text.
+session is interpreted; `searchSessions` reports it as a distinct `summary` entry in a match's
+`sources[]` (alongside `conversation`/`task`), so the UI labels a title/summary hit precisely.
 
 ## Tier 3 — freshness & ownership
 

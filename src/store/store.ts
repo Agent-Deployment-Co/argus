@@ -35,6 +35,7 @@ import type {
   SessionSearchMatch,
   SessionSearchQuery,
   SessionSearchResult,
+  SessionSearchTextSource,
   SourceCoverageRow,
   StoreStats,
   TaskSeqInteraction,
@@ -2397,27 +2398,25 @@ export class SqliteStore implements Store {
             [matchQuery],
           ),
         ]);
-        for (const row of interactionRows) {
-          const existing = matches.get(row.session_id);
-          matches.set(row.session_id, {
-            count: (existing?.count ?? 0) + 1,
-            snippet: existing?.snippet ?? row.snip,
-            source: existing?.source ?? "conversation",
-          });
-        }
-        // The task text and the session title/summary are both distilled, more readable restatements
-        // (not raw dialogue) — prefer their snippet over a conversation snippet and mark the match
-        // `task`/`both` (the raw-vs-distilled distinction the UI surfaces), summing counts across tables.
-        for (const row of [...taskRows, ...sessionRows]) {
-          const existing = matches.get(row.session_id);
-          const distilledAlready = existing !== undefined && existing.source !== "conversation";
-          matches.set(row.session_id, {
-            count: (existing?.count ?? 0) + 1,
-            // Prefer a distilled snippet; keep the first distilled one if several distilled tables hit.
-            snippet: distilledAlready ? existing!.snippet : row.snip,
-            // conversation + distilled → "both"; otherwise distilled ("task"), preserving an existing "both".
-            source: existing?.source === "conversation" ? "both" : (existing?.source ?? "task"),
-          });
+        // Accumulate per session: total match count + the first snippet seen from each source kind.
+        const perSession = new Map<string, { count: number; snip: Partial<Record<SessionSearchTextSource, string>> }>();
+        const fold = (rows: { session_id: string; snip: string }[], source: SessionSearchTextSource) => {
+          for (const row of rows) {
+            let acc = perSession.get(row.session_id);
+            if (!acc) perSession.set(row.session_id, (acc = { count: 0, snip: {} }));
+            acc.count += 1;
+            acc.snip[source] ??= row.snip; // first row's snippet wins per source
+          }
+        };
+        fold(interactionRows, "conversation");
+        fold(taskRows, "task");
+        fold(sessionRows, "summary");
+        // Order the matched sources most-distilled-first (summary > task > conversation) so `sources[0]`
+        // is the snippet's origin and the UI can name each precisely. count sums across all of them.
+        const PREFERENCE: SessionSearchTextSource[] = ["summary", "task", "conversation"];
+        for (const [sessionId, acc] of perSession) {
+          const sources = PREFERENCE.filter((s) => acc.snip[s] !== undefined);
+          matches.set(sessionId, { count: acc.count, snippet: acc.snip[sources[0]!]!, sources });
         }
       }
 

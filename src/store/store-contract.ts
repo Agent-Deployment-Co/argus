@@ -524,18 +524,22 @@ export interface SessionSearchQuery extends ResolvedQuery {
   file?: string;
 }
 
-/** Which FTS table(s) a session's match came from — the web UI labels task matches ("in task
- *  summary") differently since that text is a distilled restatement, not raw dialogue. */
-export type SessionSearchMatchSource = "conversation" | "task" | "both";
+/** A text source a session's match can come from: raw `conversation` (transcript) vs the distilled
+ *  model restatements `task` (per-task text, #155) and `summary` (session title/summary, #234). The
+ *  web UI labels the distilled ones distinctly, since that text isn't verbatim dialogue. */
+export type SessionSearchTextSource = "conversation" | "task" | "summary";
 
 export interface SessionSearchMatch {
-  /** Combined match count across whichever FTS table(s) hit (summed when `source` is "both"). */
+  /** Combined match count across whichever FTS table(s) hit (summed across all matched `sources`). */
   count: number;
   /** A snippet with matched spans wrapped in char(1)/char(2) sentinels (not HTML — the web layer
-   *  splits and wraps in <mark> itself, so this is XSS-safe by construction). Prefers the task
-   *  snippet over the conversation snippet when both tables matched (more readable, distilled text). */
+   *  splits and wraps in <mark> itself, so this is XSS-safe by construction). Drawn from the most
+   *  distilled matched source (summary > task > conversation), i.e. the most readable restatement. */
   snippet: string;
-  source: SessionSearchMatchSource;
+  /** Every text source that matched, deduped and ordered most-distilled-first (summary, task,
+   *  conversation) — so `sources[0]` is the snippet's origin. Lets the UI name each precisely and show
+   *  combinations, instead of the old lossy conversation/task/both single value. */
+  sources: SessionSearchTextSource[];
 }
 
 /** Result of `searchSessions`: the matching session ids (already includes any metadata-only matches,
