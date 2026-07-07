@@ -3,9 +3,10 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
-import { createApp, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
+import { createApp, type LabelOps, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
+import { LabelError } from "../src/store/store.ts";
 import { logger } from "../src/logger.ts";
-import type { TaskFact } from "../src/store/store-contract.ts";
+import type { LabelRecord, LabelTarget, TaskFact } from "../src/store/store-contract.ts";
 import type { SessionRow } from "../src/types.ts";
 
 /** Same-origin marker the web app sends on mutating requests (see rejectCrossSite in serve.ts). */
@@ -579,5 +580,159 @@ describe("settings endpoints (#154)", () => {
       body: JSON.stringify({ value: "openai" }),
     });
     expect(res.status).toBe(403);
+  });
+});
+
+describe("label endpoints (session-and-task-labels)", () => {
+  const APP = { "X-Argus-App": "1", "content-type": "application/json" } as const;
+
+  function label(name: string): LabelRecord {
+    return { id: `label:${name}`, name, origin: "user", createdAtMs: 1 };
+  }
+
+  /** A recording fake of LabelOps so routing/guards can be tested without a store. */
+  function makeLabels(overrides: Partial<LabelOps> = {}): { labels: LabelOps; calls: string[] } {
+    const calls: string[] = [];
+    const labels: LabelOps = {
+      list: async () => [label("bug")],
+      create: async (name) => {
+        calls.push(`create:${name}`);
+        return label(name);
+      },
+      rename: async (id, name) => {
+        calls.push(`rename:${id}:${name}`);
+        return { ...label(name), id };
+      },
+      remove: async (id) => {
+        calls.push(`remove:${id}`);
+      },
+      readForSession: async () => ({ session: [], tasks: {} }),
+      assign: async (labelId, target: LabelTarget, appliedBy) => {
+        calls.push(`assign:${labelId}:${target.sessionId}:${target.taskSeq ?? "-"}:${appliedBy}`);
+      },
+      unassign: async (labelId, target: LabelTarget) => {
+        calls.push(`unassign:${labelId}:${target.sessionId}:${target.taskSeq ?? "-"}`);
+      },
+      ...overrides,
+    };
+    return { labels, calls };
+  }
+
+  test("GET /api/labels lists labels (no CSRF guard on the read)", async () => {
+    const { labels } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/labels");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ labels: [label("bug")] });
+  });
+
+  test("GET /api/labels is 503 when labels aren't wired up", async () => {
+    const app = createApp(null);
+    expect((await app.request("/api/labels")).status).toBe(503);
+  });
+
+  test("POST /api/labels creates a label", async () => {
+    const { labels, calls } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/labels", { method: "POST", headers: APP, body: JSON.stringify({ name: "urgent" }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ label: label("urgent") });
+    expect(calls).toEqual(["create:urgent"]);
+  });
+
+  test("POST /api/labels maps a name conflict to 409", async () => {
+    const { labels } = makeLabels({
+      create: async () => {
+        throw new LabelError("name_conflict", 'A label named "bug" already exists.');
+      },
+    });
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/labels", { method: "POST", headers: APP, body: JSON.stringify({ name: "bug" }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'A label named "bug" already exists.' });
+  });
+
+  test("POST /api/labels rejects a missing name (400) and cross-site requests (403)", async () => {
+    const { labels } = makeLabels();
+    const app = createApp(null, { labels });
+    expect((await app.request("/api/labels", { method: "POST", headers: APP, body: "{}" })).status).toBe(400);
+    // No X-Argus-App header → CSRF guard rejects.
+    expect((await app.request("/api/labels", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x" }) })).status).toBe(403);
+  });
+
+  test("PATCH /api/labels/:id renames; DELETE soft-deletes", async () => {
+    const { labels, calls } = makeLabels();
+    const app = createApp(null, { labels });
+    const patched = await app.request("/api/labels/label:bug", { method: "PATCH", headers: APP, body: JSON.stringify({ name: "defect" }) });
+    expect(patched.status).toBe(200);
+    expect(await patched.json()).toEqual({ label: { ...label("defect"), id: "label:bug" } });
+    const deleted = await app.request("/api/labels/label:bug", { method: "DELETE", headers: APP });
+    expect(deleted.status).toBe(200);
+    expect(calls).toEqual(["rename:label:bug:defect", "remove:label:bug"]);
+  });
+
+  test("assign/unassign a label on a session and on a task", async () => {
+    const { labels, calls } = makeLabels();
+    const app = createApp(null, { labels });
+    await app.request("/api/sessions/s1/labels", { method: "POST", headers: APP, body: JSON.stringify({ labelId: "label:bug" }) });
+    await app.request("/api/sessions/s1/labels/label:bug", { method: "DELETE", headers: APP });
+    await app.request("/api/sessions/s1/tasks/2/labels", { method: "POST", headers: APP, body: JSON.stringify({ labelId: "label:bug" }) });
+    await app.request("/api/sessions/s1/tasks/2/labels/label:bug", { method: "DELETE", headers: APP });
+    expect(calls).toEqual([
+      "assign:label:bug:s1:-:user",
+      "unassign:label:bug:s1:-",
+      "assign:label:bug:s1:2:user",
+      "unassign:label:bug:s1:2",
+    ]);
+  });
+
+  test("assigning a missing label maps to 404", async () => {
+    const { labels } = makeLabels({
+      assign: async () => {
+        throw new LabelError("not_found", "That label no longer exists.");
+      },
+    });
+    const app = createApp(null, { labels });
+
+    const sessionRes = await app.request("/api/sessions/s1/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ labelId: "label:missing" }),
+    });
+    expect(sessionRes.status).toBe(404);
+    expect(await sessionRes.json()).toEqual({ error: "That label no longer exists." });
+
+    const taskRes = await app.request("/api/sessions/s1/tasks/2/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ labelId: "label:missing" }),
+    });
+    expect(taskRes.status).toBe(404);
+    expect(await taskRes.json()).toEqual({ error: "That label no longer exists." });
+  });
+
+  test("GET /api/sessions/:id/labels returns the folded session labels", async () => {
+    const { labels } = makeLabels({
+      readForSession: async () => ({
+        session: [{ ...label("bug"), appliedBy: "user", appliedAtMs: 5 }],
+        tasks: { 0: [{ ...label("urgent"), appliedBy: "system", appliedAtMs: 6 }] },
+      }),
+    });
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/s1/labels");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      labels: {
+        session: [{ ...label("bug"), appliedBy: "user", appliedAtMs: 5 }],
+        tasks: { 0: [{ ...label("urgent"), appliedBy: "system", appliedAtMs: 6 }] },
+      },
+    });
+  });
+
+  test("a task label route rejects a malformed task position (400)", async () => {
+    const { labels } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/s1/tasks/notanumber/labels", { method: "POST", headers: APP, body: JSON.stringify({ labelId: "label:bug" }) });
+    expect(res.status).toBe(400);
   });
 });

@@ -52,7 +52,13 @@ import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { CONFIG_FILE } from "../paths.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
-import { openStore } from "../store/store.ts";
+import { LabelError, openStore } from "../store/store.ts";
+import type {
+  LabelAppliedBy,
+  LabelRecord,
+  LabelTarget,
+  SessionLabels,
+} from "../store/store-contract.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
@@ -118,6 +124,19 @@ export interface SessionDetailResponse {
   session: SessionRow;
 }
 
+/** GET /api/labels — every active label definition. */
+export interface LabelsResponse {
+  labels: LabelRecord[];
+}
+/** Response for a single label create/rename. */
+export interface LabelResponse {
+  label: LabelRecord;
+}
+/** GET /api/sessions/:id/labels — a session's labels plus its per-task labels. */
+export interface SessionLabelsResponse {
+  labels: SessionLabels;
+}
+
 /** Server-side filters parsed from a dashboard view's query string. Each narrows the store read
  *  (since/until/project/source); omitted fields fall back to the serve process's base options. Every
  *  per-view endpoint takes the same set. */
@@ -157,6 +176,20 @@ export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | nu
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
+/** The label operations serve wires into the label endpoints (session-and-task-labels). Reads use the
+ *  shared read connection; writes open a short-lived writable store (like reindex), keeping the reader
+ *  read-only. Writes may reject with a LabelError (bad name / duplicate / missing) the routes map to a
+ *  4xx. Labels are local-only — nothing here touches the sync path. */
+export interface LabelOps {
+  list(): Promise<LabelRecord[]>;
+  create(name: string): Promise<LabelRecord>;
+  rename(id: string, name: string): Promise<LabelRecord>;
+  remove(id: string): Promise<void>;
+  readForSession(sessionId: string): Promise<SessionLabels>;
+  assign(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
+  unassign(labelId: string, target: LabelTarget): Promise<void>;
+}
+
 interface AppOptions {
   /** The per-view dashboard readers. Omitted in processes that don't read the store (the routes then
    *  answer 503); tests pass stubs to exercise routing without a store. */
@@ -167,6 +200,8 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
+  /** Session/task label read + write operations. Omitted in processes without a store (503). */
+  labels?: LabelOps;
   debugInfo?: DebugInfoReader;
   /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
   secrets?: SecretStore;
@@ -375,6 +410,36 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
   };
 }
 
+/** Map a LabelError to its HTTP status (name conflict → 409, missing → 404, else 400); anything else
+ *  rethrows and becomes a 500. */
+function labelErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof LabelError) {
+    const status = err.code === "name_conflict" ? 409 : err.code === "not_found" ? 404 : 400;
+    return c.json({ error: err.message }, status);
+  }
+  throw err;
+}
+
+/** Read a required non-empty string field from a JSON body, or return a 400 Response. */
+async function readJsonStringField(c: Context, field: string): Promise<string | Response> {
+  let value: unknown;
+  try {
+    value = (await c.req.json())?.[field];
+  } catch {
+    return c.json({ error: `Expected a JSON body with a "${field}".` }, 400);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return c.json({ error: `Missing "${field}".` }, 400);
+  }
+  return value.trim();
+}
+
+/** Parse a non-negative integer task position from a route param, or null if malformed. */
+function parseTaskSeq(raw: string): number | null {
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
@@ -466,6 +531,123 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
     const metrics = await opts.sessionTaskMetrics(sessionId);
     return c.json({ metrics } satisfies SessionTaskMetricsResponse);
+  });
+
+  // Session/task labels (session-and-task-labels). Reads are open (like the other view endpoints);
+  // every write gets the same CSRF guard as reindex. Labels are local-only and never leave the machine.
+  const labels = opts.labels;
+  const labelsUnavailable = (c: Context) => c.json({ error: "Labels are unavailable in this process." }, 503);
+
+  app.get("/api/labels", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    return c.json({ labels: await labels.list() } satisfies LabelsResponse);
+  });
+
+  app.post("/api/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const name = await readJsonStringField(c, "name");
+    if (typeof name !== "string") return name;
+    try {
+      return c.json({ label: await labels.create(name) } satisfies LabelResponse);
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.patch("/api/labels/:id", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const id = c.req.param("id").trim();
+    if (!id) return c.json({ error: "Missing label id." }, 400);
+    const name = await readJsonStringField(c, "name");
+    if (typeof name !== "string") return name;
+    try {
+      return c.json({ label: await labels.rename(id, name) } satisfies LabelResponse);
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.delete("/api/labels/:id", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const id = c.req.param("id").trim();
+    if (!id) return c.json({ error: "Missing label id." }, 400);
+    await labels.remove(id);
+    return c.json({ ok: true });
+  });
+
+  // A session's labels + its per-task labels. Read path, so no CSRF guard.
+  app.get("/api/sessions/:id/labels", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    return c.json({ labels: await labels.readForSession(sessionId) } satisfies SessionLabelsResponse);
+  });
+
+  // Apply / remove a label on a session. The applier is a person using the web app, so applied_by is
+  // "user" — combined with a system-origin label, that's the "user-applied system label" case.
+  app.post("/api/sessions/:id/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    try {
+      await labels.assign(labelId, { sessionId }, "user");
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.delete("/api/sessions/:id/labels/:labelId", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    const labelId = c.req.param("labelId").trim();
+    if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
+    await labels.unassign(labelId, { sessionId });
+    return c.json({ ok: true });
+  });
+
+  // Apply / remove a label on a task, addressed by its position within the session.
+  app.post("/api/sessions/:id/tasks/:taskSeq/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
+    if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    try {
+      await labels.assign(labelId, { sessionId, taskSeq }, "user");
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.delete("/api/sessions/:id/tasks/:taskSeq/labels/:labelId", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    const labelId = c.req.param("labelId").trim();
+    if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
+    const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
+    if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
+    await labels.unassign(labelId, { sessionId, taskSeq });
+    return c.json({ ok: true });
   });
 
   // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
@@ -665,6 +847,18 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     fn: (store: Store, query: ResolvedQuery) => Promise<T>,
   ): Promise<T> => fn(await readStore(), queryFor(filters));
 
+  // Label writes are tiny but they mutate the store, so — like reindex — they run on a short-lived
+  // writable connection rather than the long-lived read connection, keeping the reader read-only.
+  // SQLite (WAL) serializes the write against the `index` leg via the busy timeout.
+  const withWriteStore = async <T>(fn: (store: Store) => Promise<T>): Promise<T> => {
+    const store = await openStore();
+    try {
+      return await fn(store);
+    } finally {
+      await store.close();
+    }
+  };
+
   // Assemble the per-plugin rows for a query — shared by the /api/plugins view and the unused-plugins
   // recommendation so the two can't drift for the same filters. Folding bySkill here also prices every
   // model seen (unattributed usage included), which populates the unpriced-model list the recommendation
@@ -798,7 +992,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       matches = search.matches;
     }
     const aggregates = await store.readSessionAggregates({ sources, since, until, sessionIds });
-    return buildSessionList(aggregates, {
+    const list = buildSessionList(aggregates, {
       sort: query.sort,
       limit: query.limit,
       offset: query.offset,
@@ -809,6 +1003,15 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       includeGenerated: query.includeGenerated,
       matches,
     });
+    // Attach session-level label chips — only for the paginated page, in one batched read.
+    const labelsBySession = await store.readSessionLabelsForSessions(list.rows.map((r) => r.sessionId));
+    if (labelsBySession.size) {
+      list.rows = list.rows.map((r) => {
+        const labels = labelsBySession.get(r.sessionId);
+        return labels && labels.length ? { ...r, labels } : r;
+      });
+    }
+    return list;
   };
 
   const sessionDetail: SessionDetailReader = async (sessionId) => {
@@ -823,12 +1026,23 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     return buildSessionDetail(sessionId, messages, meta, tasks, interpretation);
   };
 
+  const labels: LabelOps = {
+    list: async () => (await readStore()).listLabels(),
+    readForSession: async (sessionId) => (await readStore()).readSessionLabels(sessionId),
+    create: (name) => withWriteStore((store) => store.createLabel({ name })),
+    rename: (id, name) => withWriteStore((store) => store.renameLabel(id, name)),
+    remove: (id) => withWriteStore((store) => store.deleteLabel(id)),
+    assign: (labelId, target, appliedBy) => withWriteStore((store) => store.assignLabel(labelId, target, appliedBy)),
+    unassign: (labelId, target) => withWriteStore((store) => store.unassignLabel(labelId, target)),
+  };
+
   const app = createApp(webRoot, {
     views,
     reindex,
     sessionTaskMetrics,
     sessionList,
     sessionDetail,
+    labels,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
     claudeBinary,
