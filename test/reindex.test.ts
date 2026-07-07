@@ -88,6 +88,7 @@ describe("reindexSession", () => {
       expect(await store.readSessionInterpretation("codex:codex-sess1")).toEqual({
         title: "Say hello",
         summary: "The user greeted the agent.",
+        interpreted: true,
       });
     } finally {
       await store.close();
@@ -118,6 +119,7 @@ describe("reindexSession", () => {
       expect(await store.readSessionInterpretation("codex:codex-sess1")).toEqual({
         title: "Say hello",
         summary: "The user greeted the agent.",
+        interpreted: true,
       });
     } finally {
       await store.close();

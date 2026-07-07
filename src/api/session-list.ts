@@ -129,11 +129,11 @@ export function buildSessionDetail(
   messages: MessageRecord[],
   meta: SessionMeta | undefined,
   tasks: TaskFact[],
-  interpretation?: { title: string | null; summary: string | null },
+  interpretation?: { title: string | null; summary: string | null; interpreted: boolean },
 ): SessionRow {
   const summary =
     interpretation?.summary ||
     heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
   const title = interpretation?.title || null;
-  return buildSessionRow(sessionId, messages, meta, summary, tasks, title);
+  return buildSessionRow(sessionId, messages, meta, summary, tasks, title, interpretation?.interpreted ?? false);
 }

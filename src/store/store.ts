@@ -1788,18 +1788,21 @@ export class SqliteStore implements Store {
     });
   }
 
-  // The model-generated title/summary for one session (#234), or nulls when not yet interpreted. Backs
-  // the on-demand detail view's title/summary, which fall back to first prompt / heuristic summary.
+  // The model-generated title/summary for one session (#234), or nulls when not yet interpreted, plus
+  // whether interpretation has run at all (`interpreted_at_ms` is set). Backs the on-demand detail
+  // view's title/summary fallback and its "No tasks found." vs "Interpretation pending." distinction.
   readSessionInterpretation(
     sessionId: string,
-  ): Promise<{ title: string | null; summary: string | null } | undefined> {
+  ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined> {
     return this.schedule(async () => {
-      const row = await get<{ title: string | null; summary: string | null }>(
+      const row = await get<{ title: string | null; summary: string | null; interpreted_at_ms: number | null }>(
         this.db,
-        "SELECT title, summary FROM resolved_sessions WHERE session_id = ?",
+        "SELECT title, summary, interpreted_at_ms FROM resolved_sessions WHERE session_id = ?",
         [sessionId],
       );
-      return row ? { title: row.title, summary: row.summary } : undefined;
+      return row
+        ? { title: row.title, summary: row.summary, interpreted: row.interpreted_at_ms != null }
+        : undefined;
     });
   }
 

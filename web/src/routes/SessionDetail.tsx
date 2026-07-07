@@ -141,7 +141,7 @@ export function SessionDetail() {
             ))}
           </ol>
         ) : (
-          <p className="task-empty">No tasks yet.</p>
+          <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
         )}
       </section>
 

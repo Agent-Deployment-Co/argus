@@ -654,11 +654,12 @@ export interface ReadModelStore {
   ): Promise<string[]>;
   /** Metadata for a single resolved session, without loading messages or tasks. */
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
-  /** The model-generated title/summary for one session (#234), or undefined if the session doesn't
-   *  exist; both fields null until it's interpreted. Backs the detail view's title/summary fallback. */
+  /** The model-generated title/summary for one session (#234), plus whether interpretation has run at
+   *  all (`interpreted`), or undefined if the session doesn't exist; title/summary are null until it's
+   *  interpreted. Backs the detail view's title/summary fallback and its pending-vs-ran distinction. */
   readSessionInterpretation(
     sessionId: string,
-  ): Promise<{ title: string | null; summary: string | null } | undefined>;
+  ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined>;
   /** Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
    *  order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. A reader
    *  groups by `interactionSeq` as needed. Empty when retention was off at index time. Local-only —

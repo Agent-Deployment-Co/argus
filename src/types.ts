@@ -39,6 +39,9 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   /** CLI-only (#234): the model-generated session title, when interpreted; null otherwise. Not on the
    *  sync wire (`summary` already is; `title` stays local), stripped on push like `tasks`/`health`. */
   title?: string | null;
+  /** CLI-only (#234): whether session interpretation has run for this session. Lets the UI show "No
+   *  tasks found." (ran, produced none) vs "Interpretation pending." (not yet run). */
+  interpreted?: boolean;
 };
 
 /**
