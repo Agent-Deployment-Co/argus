@@ -159,7 +159,11 @@ main { padding: 30px 32px 64px; }
 /* Sessions: a full-height two-pane (selector list + detail). Drop main's padding for this route
    only so the list sits flush against the rail instead of floating inside the page gutters. */
 main:has(.sessions-split) { padding: 0; }
-.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) 1fr; height: calc(100vh - var(--filter-bar-h)); }
+/* Second track is minmax(0, 1fr), NOT 1fr: a bare 1fr track has an implicit min-width:auto, so a long
+   unbreakable task description would force the track (and the whole page) wider than the viewport and
+   defeat the .task-item-desc ellipsis. minmax(0, 1fr) lets the detail pane shrink below its content's
+   min-content width, so descendants truncate and the task drawer can claim its width. */
+.sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) minmax(0, 1fr); height: calc(100vh - var(--filter-bar-h)); }
 .session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .session-search-row { display: flex; align-items: center; gap: 8px; }
@@ -190,7 +194,7 @@ main:has(.sessions-split) { padding: 0; }
 
 /* Flex row: the scrolling content pane plus the task panel, which lays out inline beside it (not
    over it) and shrinks the content pane to fit — see .task-panel below. */
-.session-detail { display: flex; min-height: 0; }
+.session-detail { display: flex; min-height: 0; min-width: 0; }
 .session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
