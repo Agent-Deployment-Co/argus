@@ -199,14 +199,17 @@ function rawExec(db: Database, sql: string): void {
   db.run(sql);
 }
 
-/** Strip the v19 interpretation columns + partial index (#153) so a test that degrades a current-schema
- *  store to a pre-19 version can re-run the 18 -> 19 migration without colliding with columns the
- *  current CREATE_SCHEMA_SQL already created. Mirrors how these tests strip every other post-version add. */
+/** Strip the interpretation columns + partial index (v19 #153, v20 title/summary #234) so a test that
+ *  degrades a current-schema store to a pre-19/pre-20 version can re-run those migrations without
+ *  colliding with columns the current CREATE_SCHEMA_SQL already created. Mirrors how these tests strip
+ *  every other post-version add. */
 function dropInterpretationColumns(db: Database): void {
   rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_interpret_pending");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN content_indexed_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpreted_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpretation_version");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
 }
 
 function rawGet<T>(db: Database, sql: string): T | undefined {

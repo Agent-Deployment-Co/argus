@@ -23,6 +23,8 @@ function agg(sessionId: string, over: Partial<SessionMeta> & { input: number; st
     firstTs: start,
     lastTs: start,
     messageCount: 1,
+    title: null,
+    summary: null,
   };
 }
 
