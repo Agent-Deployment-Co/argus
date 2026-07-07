@@ -138,12 +138,15 @@ export function resetClaudeBinaryCache(): void {
  * (Note: `--bare` is deliberately NOT used — in `-p` mode it skips credential loading and the call
  * fails "Not logged in"; the tolerant output parsers already handle the normal fenced/wrapped output.)
  */
-export function claudeProviderArgs(model?: string): string[] {
+export function claudeProviderArgs(model?: string, effort?: string): string[] {
   return [
     "-p",
     "--no-session-persistence",
     "--model",
     model || DEFAULT_CLAUDE_PROVIDER_MODEL,
+    // Pass the reasoning-effort level through only when set (#234); the default model rejects it, so
+    // the flag is omitted for the default path.
+    ...(effort ? ["--effort", effort] : []),
     "-",
   ];
 }
@@ -283,7 +286,7 @@ export async function runClaudeProvider(
   runtime: ClaudeProviderRuntimeOptions = {},
 ): Promise<LlmResult> {
   const bin = resolveClaudeBinary(ctx.claudeCliPath);
-  const args = claudeProviderArgs(ctx.model);
+  const args = claudeProviderArgs(ctx.model, ctx.effort);
   const input = blob(ctx);
   const command = claudeSandboxCommand(bin, args, runtime);
   if (command.warning) logSandboxWarning(ctx, command.warning);
@@ -339,12 +342,13 @@ export async function runCommandProvider(
 export const claudeCliProvider: ProviderDescriptor = {
   name: "claude-cli",
   defaultModel: DEFAULT_CLAUDE_PROVIDER_MODEL,
-  configFields: ["model", "claudeCliPath"],
+  configFields: ["model", "claudeCliPath", "effort"],
   complete: (call: ProviderCall) =>
     runClaudeProvider({
       system: call.system,
       prompt: call.prompt,
       model: call.model,
+      effort: call.effort,
       claudeCliPath: call.claudeCliPath,
       log: call.log,
       signal: call.signal,

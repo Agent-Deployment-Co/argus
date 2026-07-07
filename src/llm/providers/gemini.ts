@@ -22,7 +22,7 @@ export const geminiProvider: ProviderDescriptor = {
   apiKeyEnv: "GEMINI_API_KEY",
   defaultModel: DEFAULT_GEMINI_MODEL,
   requiresApiKey: true,
-  configFields: ["model", "apiKeyEnv", "maxTokens"],
+  configFields: ["model", "apiKeyEnv", "maxTokens", "effort"],
   complete(call: ProviderCall) {
     return httpComplete(
       () => ({
@@ -36,7 +36,15 @@ export const geminiProvider: ProviderDescriptor = {
           body: JSON.stringify({
             ...(call.system ? { systemInstruction: { parts: [{ text: call.system }] } } : {}),
             contents: [{ parts: [{ text: call.prompt }] }],
-            generationConfig: { maxOutputTokens: call.maxTokens },
+            generationConfig: {
+              maxOutputTokens: call.maxTokens,
+              // Structured output: constrain the response to the JSON schema. Effort is passed through
+              // untranslated as the thinking level. Both omitted when unset.
+              ...(call.schema
+                ? { responseMimeType: "application/json", responseSchema: call.schema }
+                : {}),
+              ...(call.effort ? { thinkingConfig: { thinkingLevel: call.effort } } : {}),
+            },
           }),
         },
       }),

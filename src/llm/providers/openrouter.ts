@@ -13,7 +13,7 @@ export const openrouterProvider: ProviderDescriptor = {
   name: "openrouter",
   apiKeyEnv: "OPENROUTER_API_KEY",
   requiresApiKey: true,
-  configFields: ["model", "apiKeyEnv", "maxTokens"],
+  configFields: ["model", "apiKeyEnv", "maxTokens", "effort"],
   // No default model — OpenRouter ids are namespaced and the catalog changes, so the user picks one.
   complete: (call: ProviderCall) =>
     openaiCompatibleComplete(call, { baseUrl: OPENROUTER_BASE_URL, tokenParam: "max_tokens" }),

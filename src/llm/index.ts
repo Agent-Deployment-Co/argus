@@ -72,6 +72,10 @@ export async function complete(
     prompt: request.prompt,
     model: request.model ?? config.model ?? provider.defaultModel ?? "",
     maxTokens,
+    schema: request.schema,
+    // A per-request effort overrides the resolved config; both are omitted downstream when unset
+    // (empty string counts as absent — the cheap default models reject an effort parameter).
+    effort: request.effort || config.effort || undefined,
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     command: config.command,
