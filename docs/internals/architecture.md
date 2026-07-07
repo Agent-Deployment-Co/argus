@@ -7,7 +7,7 @@ one-directional:
 flowchart TD
   disk["Claude / Codex / Gemini transcripts on disk"]
   producers["native producers"]
-  coordinator["the coordinator (indexing)<br/>reconcile → interpret (opt-in) → materialize per session"]
+  coordinator["the coordinator (indexing)<br/>reconcile → materialize; interpret (default-on) runs after, decoupled"]
   store["the store (argus.db)"]
   consumers["consumers (read only)"]
   serve["serve"]
@@ -36,7 +36,7 @@ live, how to read them, and what it can observe. The registry is
 `src/indexing/parse/producers/index.ts` — **adding a source is a new directory plus one line there.**
 The contract is `src/indexing/producer.ts`.
 
-Producers are **native**: (`claude`, `codex`, `gemini`, `cowork`) they read local transcript files.
+Producers are **native**: (`claude`, `claude-chat`, `codex`, `gemini`, `cowork`) they read local transcript files.
   - `discoverTranscripts(ctx)` — find the source's files on disk (an authoritative list, or a
     "couldn't read" result).
   - `transcriptParser()` — read one file into a fragment of *normalized facts* (sessions, messages,
@@ -109,28 +109,30 @@ you add a source. (`src/indexing/reconcile.ts`.)
 
 ### What "materialize" means
 
-*Materialize* writes a reconciled session into the read-model tables (`resolved_sessions` /
-`resolved_messages` / `resolved_tool_results`) as finished rows — replacing any earlier rows for that
-session and recording which producer owns it (`materializeSessions` in `src/store/store.ts`). "Materialized"
+*Materialize* writes a reconciled session into the read-model tables (`resolved_sessions`,
+`resolved_usage`, `resolved_interactions`, `resolved_invocations`) as finished rows — replacing any
+earlier rows for that session and recording which producer owns it (`materializeSessions` in
+`src/store/store.ts`). It writes only structural rows; `resolved_tasks` is written later, by interpret.
+"Materialized"
 means **stored as real rows a consumer can `SELECT` as-is**, not a view recomputed on every read. It is
 the "save the answer" step that makes reads cheap and reconcile-free.
 
-### What "interpret" means (opt-in)
+### What "interpret" means (default-on)
 
 Reconcile and materialize produce **facts** — deterministic, one-right-answer output. *Interpret*
-(`src/indexing/interpret/`) is a separate, opt-in step between them that derives **interpretations**
-the transcript doesn't state: it runs an AI model over a session to extract its tasks ("chapters") and
-judge each task's outcome. It's
-non-deterministic and costs a model call per session, so it's off by default and gated by `argus.json`.
-When enabled, indexing a *changed* session also runs interpretation and attaches the tasks before the
-session is materialized (so its interactions get their `task_seq`, #122). Full design:
+(`src/indexing/interpret/`) derives **interpretations** the transcript doesn't state: it runs an AI
+model over a session to extract its tasks ("chapters") and judge each task's outcome. It's
+non-deterministic and costs a model call per session, so it's **decoupled** from the structural index
+and runs **afterwards** as a throttled drain (`runInterpretationDrain`) — default-on but toggleable in
+`argus.json`. Materialize writes no tasks; interpretation writes `resolved_tasks` and stamps each
+interaction's `task_seq` (#122) once it has run. Full design:
 [task-interpretation.md](./task-interpretation.md).
 
 ### Per run, per native producer
 
 1. Discover files; **parse only the ones whose fingerprint changed** (unchanged files are skipped).
-2. **Reconcile** each *touched* session; if interpretation is enabled, **interpret** the changed ones;
-   then **materialize** into `resolved_*` (replacing its old rows).
+2. **Reconcile** each *touched* session, then **materialize** it into `resolved_*` (replacing its old
+   rows). Interpretation runs separately, as a throttled drain after the structural index is current.
 3. **Archive, don't delete:** sessions the producer used to own that are no longer on disk are flagged
    `archived` and retained. (A partial re-read of a session whose files partly aged out can't shrink
    the stored copy — the fuller one wins.)
@@ -146,7 +148,7 @@ Both steps happen **here**, once, at write time — never on read.
 full discovery: it rediscovers that session's transcripts from disk (the producer's
 `discoverSessionTranscripts` — main file plus subagents), re-parses them, reconciles just that session
 **with** its auxiliary inputs (so Claude's `firstPrompt` and Gemini's project/cwd aren't lost), and
-materializes it — optionally running interpretation. It errors clearly when the session is unknown
+materializes it, then runs interpretation. It errors clearly when the session is unknown
 (404) or has no local transcript, e.g. an imported session (422). It's the shared primitive behind the
 CLI's `index refresh <id>` and the web Refresh.
 
@@ -195,6 +197,17 @@ transcripts are gone.
 
 ---
 
+## The desktop app
+
+Most users don't run the CLI directly — they run the **desktop app**, a Tauri **tray app**
+(`desktop/`, native code in `desktop/src-tauri/`) that wraps the CLI. It bundles the compiled `argus`
+binary and the web assets, spawns `argus run` as a supervised **sidecar** (`lib.rs`), and opens the
+dashboard in the user's default browser. A fixed **front-door port** (default `4242`, `proxy.rs`)
+proxies to whatever port the sidecar currently holds — re-picked on every restart — so an already-open
+dashboard tab keeps working across sidecar restarts. The app auto-updates from GitHub releases.
+
+---
+
 ## Key rules
 
 - **Reconcile at write, read raw.** Consumers never reconcile.
@@ -211,7 +224,7 @@ transcripts are gone.
 
 User settings live in `argus.json` under `$ARGUS_CONFIG_DIR` (the config peer of `argus.db`), resolved
 through a uniform `flag > env > argus.json > default` chain. It's the home for the task-interpretation
-opt-in and provider settings. See [configuration.md](./configuration.md).
+toggle and provider settings. See [configuration.md](./configuration.md).
 
 ## Adding a source
 
