@@ -50,7 +50,7 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
+import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ResolvedSessionInterpretation } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
@@ -65,7 +65,7 @@ export interface ServeOptions {
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
   /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
-  taskExtraction: ResolvedTaskExtraction;
+  taskExtraction: ResolvedSessionInterpretation;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
   installSignalHandlers?: boolean;
@@ -618,6 +618,15 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   } catch (err) {
     log(`Couldn't reorganize LLM settings by provider: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // Rename any legacy `taskExtraction.*` block to `sessionInterpretation.*` in place (#234), so the new
+  // key is canonical on disk. Idempotent; a no-op once migrated. Guarded so a write failure can't block
+  // startup — resolution still reads the legacy keys via each setting's legacy fallback.
+  try {
+    if (migrateTaskExtractionToSessionInterpretation())
+      log("Renamed task-extraction settings to session interpretation in argus.json.");
+  } catch (err) {
+    log(`Couldn't update session-interpretation settings: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Resolve the `claude` CLI path once, here at startup — never on a request. The resolver may spawn a
   // login shell (up to a few seconds when `claude` isn't on PATH, the GUI-launch case #159 targets),
@@ -751,7 +760,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     // to the config opt-in), keeping the configured provider/model — but only when we're retaining
     // text: with retention off we neither store the conversation nor run the model over it. A provider
     // explicitly set to "off" stays off.
-    const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: retainText };
+    const reindexTaskExtraction: ResolvedSessionInterpretation = { ...opts.taskExtraction, enabled: retainText };
     const store = await openStore();
     try {
       return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction, retainText });
@@ -789,8 +798,12 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
-    return buildSessionDetail(sessionId, messages, meta, tasks);
+    const [meta, tasks, interpretation] = await Promise.all([
+      store.readSessionMeta(sessionId),
+      store.readSessionTasks(sessionId),
+      store.readSessionInterpretation(sessionId),
+    ]);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation);
   };
 
   const app = createApp(webRoot, {
