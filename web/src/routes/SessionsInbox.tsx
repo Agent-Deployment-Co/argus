@@ -1,5 +1,5 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Archive, ArchiveRestore, Inbox as InboxIcon, Search, Tag } from "lucide-react";
+import { Archive, ArchiveRestore, Inbox as InboxIcon, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { compactProject, dayStamp, fmt } from "../lib/format";
 import { inboxKey, useInboxArchive } from "../lib/inboxArchive";
@@ -80,13 +80,6 @@ function InboxNav({
         <span>Archived</span>
         <span className="inbox-nav-count">{fmt(archivedCount)}</span>
       </button>
-      <div className="inbox-nav-labels">
-        <div className="inbox-nav-labels-head">
-          <Tag size={13} strokeWidth={1.75} aria-hidden />
-          <span>Labels</span>
-        </div>
-        <div className="inbox-nav-labels-empty">Coming soon</div>
-      </div>
     </nav>
   );
 }
