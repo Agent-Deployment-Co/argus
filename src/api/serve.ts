@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { ALL_SOURCES, sourcesFor, type BuildDashboardOptions } from "../reporting/dashboard-builder.ts";
 import { loadPlugins } from "../reporting/inventory.ts";
 import { unpricedModels } from "../pricing.ts";
-import type { ResolvedQuery, Store } from "../store/store-contract.ts";
+import type { ResolvedQuery, SessionSearchMatch, Store } from "../store/store-contract.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
   buildUsageByModel,
@@ -97,14 +97,16 @@ export interface SessionTaskMetricsResponse {
   metrics: Record<string, TaskMetrics>;
 }
 
-/** Parsed query for the paginated session list. Date/source narrow the store read; project/q/
- *  includeGenerated refine the human-facing list; sort/limit/offset paginate. */
+/** Parsed query for the paginated session list. Date/source narrow the store read; project/q/file/
+ *  includeGenerated refine the human-facing list; sort/limit/offset paginate. `q`/`file` (#155) run a
+ *  store-side search (conversation/task text FTS, file-path substring) before the aggregate read. */
 export interface SessionListQuery {
   since?: string;
   until?: string;
   source?: "all" | TranscriptSource;
   project?: string;
   q?: string;
+  file?: string;
   includeGenerated: boolean;
   sort: SessionSort;
   limit: number;
@@ -364,6 +366,7 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
     source: source ? (source as "all" | TranscriptSource) : undefined,
     project: c.req.query("project") || undefined,
     q: c.req.query("q") || undefined,
+    file: c.req.query("file") || undefined,
     includeGenerated,
     sort: sort as SessionSort,
     limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
@@ -770,18 +773,30 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
 
   const sessionList: SessionListReader = async (query) => {
     const store = await readStore();
-    const aggregates = await store.readSessionAggregates({
-      sources: sourcesFor(query.source ?? opts.build.source),
-      since: query.since ?? opts.build.since,
-      until: query.until ?? opts.build.until,
-    });
+    const sources = sourcesFor(query.source ?? opts.build.source);
+    const since = query.since ?? opts.build.since;
+    const until = query.until ?? opts.build.until;
+    // A `q` or `file:` term (#155) runs a store-side search first: it resolves the candidate session
+    // ids (+ per-session snippet/count) that then restrict the aggregate read, honoring the same
+    // source/date narrowing. When neither is present, skip the search entirely — an unrestricted read.
+    let sessionIds: string[] | undefined;
+    let matches: Map<string, SessionSearchMatch> | undefined;
+    if (query.q || query.file) {
+      const search = await store.searchSessions({ sources, since, until, text: query.q, file: query.file });
+      sessionIds = [...search.ids];
+      matches = search.matches;
+    }
+    const aggregates = await store.readSessionAggregates({ sources, since, until, sessionIds });
     return buildSessionList(aggregates, {
       sort: query.sort,
       limit: query.limit,
       offset: query.offset,
       project: query.project,
-      q: query.q,
+      // The store already applied the metadata-OR-FTS `q` logic above; re-running the plain metadata
+      // substring check here would wrongly drop a session that matched only via conversation/task FTS.
+      q: matches ? undefined : query.q,
       includeGenerated: query.includeGenerated,
+      matches,
     });
   };
 

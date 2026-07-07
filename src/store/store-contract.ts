@@ -496,6 +496,41 @@ export interface ResolvedQuery {
   since?: string;
   until?: string;
   projectSubstring?: string;
+  /** Restrict to exactly these session ids (#155): how `searchSessions`'s candidate set threads into
+   *  `readSessionAggregates`. An empty array means "no matches" (returns no rows), distinct from
+   *  omitting the field (no restriction) — a caller that ran a search and got zero hits must not fall
+   *  back to an unfiltered read. */
+  sessionIds?: string[];
+}
+
+/** Search input for `searchSessions` (#155): the same source/date/project narrowing as `ResolvedQuery`,
+ *  plus the two search dimensions the `/sessions` box adds. `text` freeform-matches title/project/
+ *  source AND conversation text AND task text; `file` substring-matches a touched file's path. */
+export interface SessionSearchQuery extends ResolvedQuery {
+  text?: string;
+  file?: string;
+}
+
+/** Which FTS table(s) a session's match came from — the web UI labels task matches ("in task
+ *  summary") differently since that text is a distilled restatement, not raw dialogue. */
+export type SessionSearchMatchSource = "conversation" | "task" | "both";
+
+export interface SessionSearchMatch {
+  /** Combined match count across whichever FTS table(s) hit (summed when `source` is "both"). */
+  count: number;
+  /** A snippet with matched spans wrapped in char(1)/char(2) sentinels (not HTML — the web layer
+   *  splits and wraps in <mark> itself, so this is XSS-safe by construction). Prefers the task
+   *  snippet over the conversation snippet when both tables matched (more readable, distilled text). */
+  snippet: string;
+  source: SessionSearchMatchSource;
+}
+
+/** Result of `searchSessions`: the matching session ids (already includes any metadata-only matches,
+ *  e.g. a `file:` term or a title/project/source substring hit with no FTS match) plus a snippet/count
+ *  for every session whose match came from an FTS table. Local-only (not on the sync wire). */
+export interface SessionSearchResult {
+  ids: Set<string>;
+  matches: Map<string, SessionSearchMatch>;
 }
 
 /** A cheap per-session rollup for the paginated session list: session columns + per-model token
@@ -678,6 +713,12 @@ export interface ReadModelStore {
    *  readResolved (sources/since/until/project). The date filter selects which sessions appear (those
    *  with a message in range); each row's token sums are whole-session, not windowed. */
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]>;
+  /** Session search (#155): resolves freeform text + `file:` terms to a candidate session id set plus
+   *  a per-session snippet/count, so the `/sessions` list can filter AND show a highlighted match.
+   *  Honors the same source/date/project narrowing as `readSessionAggregates`. Graceful degradation:
+   *  if retained conversation text or task interpretation was never on, that FTS table is simply empty
+   *  and contributes nothing — `text` still matches metadata and whichever FTS table does have data. */
+  searchSessions(query: SessionSearchQuery): Promise<SessionSearchResult>;
   // ---- Per-view dashboard reads (#217) ----
   // Each serve endpoint reads only the breakdown it needs — no monolithic Dashboard build. All match
   // readResolved's filters (sources/since/until/project), windowed by message date. Usage breakdowns
