@@ -1,5 +1,5 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Archive, ArchiveRestore, Inbox as InboxIcon, Search } from "lucide-react";
+import { Archive, ArchiveRestore, List, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { compactProject, dayStamp } from "../lib/format";
 import { inboxKey, useInboxArchive } from "../lib/inboxArchive";
@@ -67,8 +67,8 @@ function InboxNav({
         className={`inbox-nav-item${!searching && folder === "inbox" ? " active" : ""}`}
         onClick={() => onSelect("inbox")}
       >
-        <InboxIcon size={16} strokeWidth={1.75} aria-hidden />
-        <span>Inbox</span>
+        <List size={16} strokeWidth={1.75} aria-hidden />
+        <span>All</span>
       </button>
       <button
         type="button"
@@ -114,8 +114,8 @@ function InboxRow({
       <button
         type="button"
         className="inbox-row-archive-btn"
-        title={archived ? "Move to inbox" : "Archive"}
-        aria-label={archived ? "Move to inbox" : "Archive"}
+        title={archived ? "Unarchive" : "Archive"}
+        aria-label={archived ? "Unarchive" : "Archive"}
         onClick={(e) => {
           e.preventDefault();
           onArchiveToggle();
@@ -148,7 +148,7 @@ export function SessionsInbox() {
   const visible = folder === "inbox" ? inboxRows : archivedRows;
 
   // "Archived" is a local-only concept (no server truth for it), so its total is just what's loaded;
-  // "Inbox" reports the server's real total for the current filters, minus what's been archived
+  // "All" reports the server's real total for the current filters, minus what's been archived
   // locally out of the loaded page.
   const total =
     folder === "archived" ? archivedRows.length : (query.data?.pages[0]?.total ?? inboxRows.length) - archivedRows.length;
