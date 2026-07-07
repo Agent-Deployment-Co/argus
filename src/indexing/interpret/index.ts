@@ -141,20 +141,30 @@ export async function runInterpretationDrain(
   for (const sessionId of batch) {
     log?.(`  [${++n}/${batch.length}] ${sessionId.replace(/^[^:]+:/, "").slice(0, 8)}…`);
     try {
-      const { interpreted } = await interpretSession(store, sessionId, resolved);
+      const { interpreted, diagnostics } = await interpretSession(store, sessionId, resolved);
       if (interpreted) {
         done++;
         retryAfterMs.delete(sessionId);
       } else {
         failures++;
         retryAfterMs.set(sessionId, now + RETRY_COOLDOWN_MS);
+        // Surface WHY it failed — the pass-1 failure diagnostics carry the provider error / bad-output
+        // reason. Without this the drain only says "couldn't interpret N", hiding the cause. These are
+        // distinct per session and the failed session is on cooldown, so they don't spam every tick.
+        const reasons = diagnostics
+          .filter((d) => EXTRACTION_FAILURE_CODES.has(d.code))
+          .map((d) => d.message);
+        for (const reason of reasons.length ? reasons : ["no tasks and no diagnostic (unexpected)"]) {
+          if (log) logWarn(log, `  ${sessionId}: ${reason}`);
+        }
       }
-    } catch {
+    } catch (err) {
       // Routine per-session failure (e.g. a transient provider error surfacing as a throw): leave the
       // session eligible (unstamped) but back it off for the cooldown so the next tick isn't blocked on
       // it, then keep draining. It recovers automatically once the cooldown elapses.
       failures++;
       retryAfterMs.set(sessionId, now + RETRY_COOLDOWN_MS);
+      if (log) logWarn(log, `  ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
