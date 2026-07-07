@@ -1,4 +1,4 @@
-.PHONY: build test typecheck publish clean desktop dmg version bump help
+.PHONY: install build test typecheck changelog publish clean desktop dmg version bump help
 
 NPM_PUBLISH_FLAGS ?= --access public
 
@@ -6,9 +6,11 @@ NPM_PUBLISH_FLAGS ?= --access public
 
 help:
 	@echo "Targets:"
+	@echo "  install    Install dependencies"
 	@echo "  build      Build the npm packages"
 	@echo "  test       Run tests"
 	@echo "  typecheck  Run TypeScript type checking"
+	@echo "  changelog  Rebuild docs/changelog.md from GitHub releases"
 	@echo "  publish    Build and publish to npm"
 	@echo "  clean      Remove dist/"
 	@echo "  desktop    Build the desktop app"
@@ -16,25 +18,31 @@ help:
 	@echo "  version    Print the current version"
 	@echo "  bump       Bump the version (requires VERSION=major.minor.patch)"
 
-version:
+install:
+	bun install
+
+version: install
 	@bun run get-version
 
-bump:
+bump: install
 ifndef VERSION
 	$(error VERSION is not set; usage: make bump VERSION=0.2.0)
 endif
 	bun run bump-version $(VERSION)
 
-build:
+build: install
 	bun run build:npm
 
-test:
+test: install
 	bun test
 
-typecheck:
+typecheck: install
 	bun run typecheck
 
-publish: build
+changelog: install
+	bun run docs:changelog
+
+publish: install build
 	@set -eu; \
 	for dir in dist/npm/argus-* dist/npm/argus; do \
 		if [ -d "$$dir" ]; then \
@@ -48,13 +56,13 @@ publish: build
 		fi; \
 	done
 
-clean:
+clean: install
 	rm -rf dist/
 
-desktop:
+desktop: install
 	bun run desktop:build
 
-dmg:
+dmg: install
 ifndef APPLE_ID
 	$(error APPLE_ID is not set)
 endif

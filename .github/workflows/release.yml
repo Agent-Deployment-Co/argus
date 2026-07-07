@@ -20,7 +20,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["argus-v*", "v*"]
   workflow_dispatch:
 
 permissions:
@@ -101,8 +101,9 @@ jobs:
         with:
           tagName: argus-v__VERSION__
           releaseName: Argus v__VERSION__
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
+          generateReleaseNotes: true
           projectPath: desktop
           tauriScript: ${{ github.workspace }}/node_modules/.bin/tauri
           includeUpdaterJson: true

@@ -5,7 +5,7 @@
 // demand from one session's messages. These response shapes are local-only (not on the sync wire).
 import { buildSessionRow } from "../reporting/aggregate.ts";
 import { cost } from "../pricing.ts";
-import type { SessionAggregate, TaskFact } from "../store/store-contract.ts";
+import type { SessionAggregate, SessionSearchMatch, TaskFact } from "../store/store-contract.ts";
 import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
@@ -29,6 +29,10 @@ export interface SessionListItem {
   agentMessages: number | null;
   total: number;
   cost: number;
+  /** Present when a store-side search ran (#155) and this session matched an FTS table — the
+   *  conversation/task-text snippet + count the UI highlights. Absent for a metadata-only match
+   *  (title/project/source substring, or a bare `file:` search). Local-only, not on the sync wire. */
+  match?: SessionSearchMatch;
 }
 
 export interface SessionListResponse {
@@ -45,10 +49,15 @@ export interface SessionListParams {
   offset: number;
   /** Substring match on the human project label (not the cwd the store filters on). */
   project?: string;
-  /** Free-text over the session title / project / source. */
+  /** Free-text over the session title / project / source. Omit when the caller already ran a
+   *  store-side search (`matches` is set) — the store's metadata-OR-FTS logic already applied it,
+   *  and re-running this plain substring check would wrongly drop an FTS-only match. */
   q?: string;
   /** Include Argus's own task-extraction/analysis sessions (hidden by default). */
   includeGenerated?: boolean;
+  /** Per-session search match (#155), when the caller ran `store.searchSessions` first. Attached onto
+   *  the matching rows; sessions with no entry here had a metadata-only match (or no search ran). */
+  matches?: Map<string, SessionSearchMatch>;
 }
 
 /** Argus's own `claude -p` runs surface as sessions; recognize them by their canned first prompts so
@@ -100,6 +109,12 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
   const project = params.project?.toLowerCase();
   const term = params.q?.trim().toLowerCase();
   let items = aggregates.map(listItem);
+  if (params.matches) {
+    items = items.map((it) => {
+      const match = params.matches!.get(it.sessionId);
+      return match ? { ...it, match } : it;
+    });
+  }
   items = items.filter((it) => {
     if (!params.includeGenerated && isArgusGeneratedSession(it.firstPrompt)) return false;
     if (project && !it.project.toLowerCase().includes(project)) return false;

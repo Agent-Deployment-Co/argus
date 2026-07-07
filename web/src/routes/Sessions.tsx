@@ -1,17 +1,17 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { Select } from "../components/Select";
 import type { SessionListItem, SessionSort } from "../types";
 
-type FilterKey = "project" | "source";
+type FilterKey = "project" | "source" | "file";
 
 /** Sessions-local search params (the global date range + source live on the root route). */
 export interface SessionsSearch {
   project?: string;
   source?: string;
-  showGenerated?: boolean;
+  file?: string;
   sort?: SessionSort;
   q?: string;
 }
@@ -23,12 +23,14 @@ const SORT_LABELS: Record<SessionSort, string> = {
 };
 
 /**
- * Pull a `project:value` / `source:value` token out of the raw search text. While typing we only
- * commit a token terminated by whitespace (so "project:a" mid-type stays as text); on Enter we
- * commit it bare.
+ * Pull a `project:value` / `source:value` / `file:value` token out of the raw search text. While
+ * typing we only commit a token terminated by whitespace (so "project:a" mid-type stays as text); on
+ * Enter we commit it bare.
  */
 function extractFilterToken(raw: string, requireTerminator: boolean): { key: FilterKey; value: string; rest: string } | null {
-  const m = raw.match(requireTerminator ? /(^|\s)(project|source):(\S+)\s/i : /(^|\s)(project|source):(\S+)/i);
+  const m = raw.match(
+    requireTerminator ? /(^|\s)(project|source|file):(\S+)\s/i : /(^|\s)(project|source|file):(\S+)/i,
+  );
   if (!m) return null;
   const rest = (raw.slice(0, m.index) + raw.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim();
   return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
@@ -47,6 +49,33 @@ export function sessionTitle(s: { title?: string | null; firstPrompt?: string | 
   return "(untitled session)";
 }
 
+// The store wraps matched spans in these sentinel delimiters (char(1)/char(2)), not HTML, so we
+// split-and-wrap here instead of dangerouslySetInnerHTML (#155).
+const SNIPPET_MATCH_START = "";
+const SNIPPET_MATCH_END = "";
+
+/** Render a search-match snippet under a session row: the matched spans wrapped in <mark>, plus a
+ *  match count and — when the match came from task-interpretation text — a label clarifying that's a
+ *  distilled restatement rather than raw dialogue. */
+function SearchSnippet({ match }: { match: SessionListItem["match"] }) {
+  if (!match) return null;
+  const segments = match.snippet.split(SNIPPET_MATCH_START);
+  const nodes: ReactNode[] = [segments[0]];
+  for (let i = 1; i < segments.length; i++) {
+    const [hit, ...rest] = segments[i]!.split(SNIPPET_MATCH_END);
+    nodes.push(<mark key={i}>{hit}</mark>, rest.join(SNIPPET_MATCH_END));
+  }
+  return (
+    <div className="session-item-snippet">
+      <span className="session-item-snippet-text">{nodes}</span>
+      <span className="session-item-snippet-meta">
+        {match.count} match{match.count === 1 ? "" : "es"}
+        {(match.source === "task" || match.source === "both") && <> · in task summary</>}
+      </span>
+    </div>
+  );
+}
+
 /** Build the server-side query from the merged (global + Sessions-local) search params. */
 function filtersFromSearch(search: Record<string, unknown>): SessionListFilters {
   return {
@@ -55,7 +84,7 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
     source: typeof search.source === "string" ? search.source : undefined,
     project: typeof search.project === "string" ? search.project : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
-    includeGenerated: search.showGenerated === true,
+    file: typeof search.file === "string" && search.file ? search.file : undefined,
     sort: (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent",
   };
 }
@@ -68,7 +97,7 @@ function SessionList() {
 
   const project = typeof search.project === "string" ? search.project : undefined;
   const source = typeof search.source === "string" ? search.source : undefined;
-  const showGenerated = search.showGenerated === true;
+  const file = typeof search.file === "string" ? search.file : undefined;
   const sort: SessionSort = (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent";
   const committedQ = typeof search.q === "string" ? search.q : "";
 
@@ -113,7 +142,9 @@ function SessionList() {
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
 
-  const activeFilters = ([["project", project], ["source", source]] as const).filter(([, v]) => Boolean(v));
+  const activeFilters = (
+    [["project", project], ["source", source], ["file", file]] as const
+  ).filter(([, v]) => Boolean(v));
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -126,7 +157,7 @@ function SessionList() {
           <input
             className="session-search"
             type="search"
-            placeholder="Filter sessions…"
+            placeholder="Search text, file:path, source:…"
             value={text}
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={onQueryKeyDown}
@@ -150,14 +181,6 @@ function SessionList() {
               <span className="filter-pill-x" aria-hidden>×</span>
             </button>
           ))}
-          <label className="filter-toggle">
-            <input
-              type="checkbox"
-              checked={showGenerated}
-              onChange={(event) => setSearch({ showGenerated: event.target.checked || undefined })}
-            />
-            <span>Argus sessions</span>
-          </label>
         </div>
       </div>
       <ul className="session-items">
@@ -184,6 +207,7 @@ function SessionList() {
                 <span>{fmt(s.total)} tok</span>
                 <span>{usd(s.cost)}</span>
               </div>
+              <SearchSnippet match={s.match} />
             </Link>
           </li>
         ))}
@@ -228,6 +252,6 @@ export function SessionsEmpty() {
   }
   if (query.isPending) return <div className="session-empty">Loading sessions…</div>;
   if (query.isError) return <div className="session-empty">{(query.error as Error).message}</div>;
-  const filtered = Boolean(filters.project || filters.q || filters.source || filters.since || filters.until);
+  const filtered = Boolean(filters.project || filters.q || filters.file || filters.source || filters.since || filters.until);
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
 }

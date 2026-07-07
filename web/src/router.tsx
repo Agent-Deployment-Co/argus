@@ -60,9 +60,8 @@ const sessionsRoute = createRoute({
   // Sessions-local refinements.
   validateSearch: (
     search: Record<string, unknown>,
-  ): { project?: string; showGenerated?: boolean; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
+  ): { project?: string; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
     project: typeof search.project === "string" && search.project ? search.project : undefined,
-    showGenerated: search.showGenerated === true || search.showGenerated === "true" ? true : undefined,
     sort: SESSION_SORTS.includes(search.sort as (typeof SESSION_SORTS)[number])
       ? (search.sort as (typeof SESSION_SORTS)[number])
       : undefined,

@@ -14,6 +14,7 @@ import {
   runIndexRebuild,
   runIndexRefresh,
 } from "./index-ops.ts";
+import { runSearch } from "./search-ops.ts";
 import {
   pushSnapshotForOpts,
   watchIndex,
@@ -804,6 +805,55 @@ const status = defineCommand({
   run: handler(() => runStatus()),
 });
 
+const search = defineCommand({
+  meta: {
+    name: "search",
+    description:
+      "search session titles, conversation text, task summaries, and touched files",
+  },
+  args: {
+    query: {
+      type: "positional",
+      required: false,
+      description: "free-text search over titles, conversation, and task text",
+    },
+    file: {
+      type: "string",
+      description: "only sessions that touched a file path containing this text",
+      valueHint: "substr",
+    },
+    ...sourceArg,
+    ...filterArgs,
+    limit: {
+      type: "string",
+      default: "20",
+      description: "maximum number of sessions to print",
+      valueHint: "N",
+    },
+    json: {
+      type: "boolean",
+      default: false,
+      description: "print matches as JSON (the same shape as /api/sessions rows)",
+    },
+    ...logArgs,
+  },
+  run: handler((args) =>
+    runSearch(
+      {
+        source: toSource(args.source),
+        query: args._[0],
+        file: args.file,
+        project: args.project,
+        since: args.since,
+        until: args.until,
+        limit: Number(args.limit) || 20,
+        json: !!args.json,
+      },
+      log,
+    ),
+  ),
+});
+
 const sync = defineCommand({
   meta: { name: "sync", description: "upload usage data to Argus Hub" },
   args: {
@@ -1087,7 +1137,7 @@ const main = defineCommand({
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
   // even after their transcripts age off disk; only `argus index delete` removes them.
-  subCommands: { serve, index, sync, run: runCmd, status, config, secret },
+  subCommands: { serve, index, sync, run: runCmd, status, search, config, secret },
 });
 
 async function run() {

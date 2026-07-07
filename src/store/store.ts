@@ -32,6 +32,9 @@ import type {
   ResolvedQuery,
   SessionAggregate,
   SessionInvocation,
+  SessionSearchMatch,
+  SessionSearchQuery,
+  SessionSearchResult,
   SourceCoverageRow,
   StoreStats,
   TaskSeqInteraction,
@@ -52,7 +55,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 20;
+export const STORE_SCHEMA_VERSION = 21;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -216,6 +219,45 @@ const RESOLVED_INTERACTION_TEXT_DDL = `
     text TEXT NOT NULL,
     PRIMARY KEY (session_id, seq)
   );`;
+
+// Full-text search over retained conversation text (#155). A PLAIN (not external-content) FTS5 table:
+// external-content-table triggers were the original design, but this store deliberately runs with
+// `PRAGMA trusted_schema = OFF` (hardening against a tampered db file), and SQLite categorically
+// disallows virtual tables from being touched by triggers/views when trusted_schema is off — verified
+// against bun:sqlite; there's no per-vtable "innocuous" override for this. So the FTS index is
+// maintained by ordinary top-level DML at the same call sites that already do the wholesale
+// DELETE-then-INSERT of resolved_interaction_text (materialize), not by triggers. `session_id` is
+// duplicated onto the FTS row (UNINDEXED — not tokenized, just carried through) so a match can be
+// grouped by session without a join back to the base table.
+const RESOLVED_INTERACTION_TEXT_FTS_DDL = `
+  CREATE VIRTUAL TABLE resolved_interaction_text_fts USING fts5(
+    session_id UNINDEXED, text
+  );`;
+
+// Full-text search over task-interpretation text (#155). Same plain-FTS5-table approach as
+// resolved_interaction_text_fts above (see its comment for why triggers aren't used). task_json is
+// opaque JSON with no queryable text column, so the indexed text is derived at write time from
+// description + outcomeReason + signals[] — deliberately excluding .evidence, which holds
+// interaction-index bookkeeping ("interactions: 1, 2"), not prose (see SEARCH_DOC.md). Maintained by
+// writeSessionTasks, which is also wholesale DELETE-then-INSERT. RESOLVED_TASKS_FTS_TEXT_EXPR is used
+// only by the migration backfill (a plain SQL INSERT...SELECT, unaffected by trusted_schema since it's
+// not run from a trigger); writeSessionTasks derives the same text in JS from the TaskFact it already
+// has, not by re-deriving it in SQL.
+const RESOLVED_TASKS_FTS_TEXT_EXPR = `
+    COALESCE(json_extract(%ALIAS%.task_json, '$.description'), '') || ' ' ||
+    COALESCE(json_extract(%ALIAS%.task_json, '$.outcomeReason'), '') || ' ' ||
+    COALESCE((SELECT group_concat(value, ' ') FROM json_each(%ALIAS%.task_json, '$.signals')), '')`;
+const RESOLVED_TASKS_FTS_DDL = `
+  CREATE VIRTUAL TABLE resolved_tasks_fts USING fts5(
+    session_id UNINDEXED, text
+  );`;
+
+// Partial index on file_path (#155). The file: search term matches with
+// instr(lower(file_path), lower(?)) — a substring test the SQLite planner can't satisfy from a
+// b-tree index, so that query is a full scan of resolved_invocations regardless of this index
+// (verified via EXPLAIN QUERY PLAN). Accepted: file_path substring search is a full scan today.
+const RESOLVED_INVOCATIONS_FILE_PATH_INDEX = `
+  CREATE INDEX resolved_invocations_file_path ON resolved_invocations(file_path) WHERE file_path IS NOT NULL;`;
 
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
@@ -389,10 +431,14 @@ const CREATE_SCHEMA_SQL = `
   -- Opt-in (default-on) local prompt/response text retention (#120). Local-only; never synced.
   ${RESOLVED_INTERACTION_TEXT_DDL}
 
+  -- Full-text search over retained conversation text (#155). Local-only; never synced.
+  ${RESOLVED_INTERACTION_TEXT_FTS_DDL}
+
   -- Per-tool-use rows (#113 Part B): so byTool / byToolCategory / byMcpServer / skillInvocations
   -- become GROUP BY queries instead of re-walking record_json.toolUses in JS (the flip is #121).
   ${RESOLVED_INVOCATIONS_DDL}
   ${RESOLVED_INVOCATIONS_INDEXES}
+  ${RESOLVED_INVOCATIONS_FILE_PATH_INDEX}
 
   CREATE TABLE resolved_tasks (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -404,6 +450,9 @@ const CREATE_SCHEMA_SQL = `
   );
   CREATE INDEX resolved_tasks_source ON resolved_tasks(source);
   CREATE INDEX resolved_tasks_ts ON resolved_tasks(ts);
+
+  -- Full-text search over task-interpretation text (#155). Local-only; never synced.
+  ${RESOLVED_TASKS_FTS_DDL}
 
   -- Per-source freshness attestation: lets a consumer know whether the store is current.
   CREATE TABLE source_coverage (
@@ -524,6 +573,52 @@ function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+/** Shared session-filter conditions for `readSessionAggregates` and `searchSessions` (#155): archived
+ *  status, source, project (cwd substring), and date window (a session is included if it has a message
+ *  in range, via EXISTS over resolved_usage — not a per-message window). Callers append their own
+ *  additional conditions (sessionIds, file:, freeform text) to the returned conds/params. */
+function buildSessionFilterConds(
+  query: Pick<ResolvedQuery, "sources" | "projectSubstring" | "since" | "until"> | undefined,
+): { conds: string[]; params: unknown[] } {
+  const conds: string[] = ["s.archived = 0"];
+  const params: unknown[] = [];
+  if (query?.sources?.length) {
+    conds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
+    params.push(...query.sources);
+  }
+  if (query?.projectSubstring) {
+    conds.push("instr(s.cwd, ?) > 0");
+    params.push(query.projectSubstring);
+  }
+  const dateConds: string[] = [];
+  const dateParams: unknown[] = [];
+  if (query?.since) {
+    dateConds.push("m.date >= ?");
+    dateParams.push(query.since);
+  }
+  if (query?.until) {
+    dateConds.push("m.date <= ?");
+    dateParams.push(query.until);
+  }
+  if (dateConds.length) {
+    conds.push(`EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`);
+    params.push(...dateParams);
+  }
+  return { conds, params };
+}
+
+/** Escape freeform user input into a valid FTS5 MATCH query (#155): split on whitespace, wrap each
+ *  token in double quotes (escaping embedded `"` as `""`), join with spaces for an implicit AND of
+ *  quoted tokens. Avoids syntax errors from FTS5 operators in the raw text (`-`, `*`, `:`, …) and
+ *  gives plain word/phrase matching instead. */
+function toFtsMatchQuery(raw: string): string {
+  return raw
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => `"${token.replaceAll('"', '""')}"`)
+    .join(" ");
 }
 
 // The single definition of "eligible for (re)interpretation" (#153), shared by the drain's session
@@ -1196,11 +1291,30 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
         WHERE content_indexed_at_ms > COALESCE(interpreted_at_ms, 0);
     `,
   },
-  // 19 -> 20: session interpretation 2.0 (#234). Add the model-generated title + summary columns to
-  // resolved_sessions, written by writeSessionTasks alongside the interpretation stamp. NULL until a
-  // session is (re)interpreted; the read paths fall back to first prompt / heuristic summary.
+  // 19 -> 20: session search (#155). Two plain FTS5 indexes (conversation text, task text) plus a
+  // plain partial index for file-path substring search. Backfill both FTS tables from existing rows so
+  // `argus index rebuild` is not required for existing users; going forward materialize/writeSessionTasks
+  // maintain them directly (no triggers — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment for why).
   19: {
     to: 20,
+    sql: `
+      ${RESOLVED_INTERACTION_TEXT_FTS_DDL}
+      INSERT INTO resolved_interaction_text_fts(session_id, text)
+        SELECT session_id, text FROM resolved_interaction_text;
+
+      ${RESOLVED_TASKS_FTS_DDL}
+      INSERT INTO resolved_tasks_fts(session_id, text)
+        SELECT session_id, ${RESOLVED_TASKS_FTS_TEXT_EXPR.replaceAll("%ALIAS%", "resolved_tasks")}
+        FROM resolved_tasks;
+
+      ${RESOLVED_INVOCATIONS_FILE_PATH_INDEX}
+    `,
+  },
+  // 20 -> 21: session interpretation 2.0 (#234). Add the model-generated title + summary columns to
+  // resolved_sessions, written by writeSessionTasks alongside the interpretation stamp. NULL until a
+  // session is (re)interpreted; the read paths fall back to first prompt / heuristic summary.
+  20: {
+    to: 21,
     sql: `
       ALTER TABLE resolved_sessions ADD COLUMN title TEXT;
       ALTER TABLE resolved_sessions ADD COLUMN summary TEXT;
@@ -1286,7 +1400,9 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
     await get(db, "SELECT session_id, seq, interaction_seq, type, text FROM resolved_interaction_text LIMIT 1");
-    await get(db, "SELECT session_id, tool, category FROM resolved_invocations LIMIT 1");
+    await get(db, "SELECT session_id, text FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH 'x' LIMIT 1");
+    await get(db, "SELECT session_id, text FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH 'x' LIMIT 1");
+    await get(db, "SELECT session_id, tool, category, file_path FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
     await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
@@ -1925,6 +2041,19 @@ export class SqliteStore implements Store {
             JSON.stringify(task),
           ]),
         );
+        // Keep the search index (#155) in sync with the same wholesale replace, via ordinary DML (not
+        // a trigger — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment). Indexes description +
+        // outcomeReason + signals[] only — deliberately excludes .evidence (bookkeeping, not prose).
+        await run(this.db, "DELETE FROM resolved_tasks_fts WHERE session_id = ?", [sessionId]);
+        await insertRows(
+          this.db,
+          "resolved_tasks_fts",
+          ["session_id", "text"],
+          tasks.map((task) => [
+            sessionId,
+            [task.description, task.outcomeReason ?? "", ...(task.signals ?? [])].join(" "),
+          ]),
+        );
         const interactionRows = await all<{ seq: number; ts: number | null }>(
           this.db,
           "SELECT seq, ts FROM resolved_interactions WHERE session_id = ?",
@@ -2094,34 +2223,16 @@ export class SqliteStore implements Store {
 
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]> {
     return this.schedule(async () => {
+      // sessionIds (#155): the searchSessions candidate set, when a search ran. Empty array means "no
+      // matches" — short-circuit rather than emit `IN ()`, which is invalid SQL.
+      if (query?.sessionIds && query.sessionIds.length === 0) return [];
       // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
       // model) token sums from the promoted columns. A date filter only selects sessions (included if
       // they have a message in range, via EXISTS); the token sums below are whole-session, not windowed.
-      const sessionConds: string[] = ["s.archived = 0"];
-      const sessionParams: unknown[] = [];
-      if (query?.sources?.length) {
-        sessionConds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
-        sessionParams.push(...query.sources);
-      }
-      if (query?.projectSubstring) {
-        sessionConds.push("instr(s.cwd, ?) > 0");
-        sessionParams.push(query.projectSubstring);
-      }
-      const dateConds: string[] = [];
-      const dateParams: unknown[] = [];
-      if (query?.since) {
-        dateConds.push("m.date >= ?");
-        dateParams.push(query.since);
-      }
-      if (query?.until) {
-        dateConds.push("m.date <= ?");
-        dateParams.push(query.until);
-      }
-      if (dateConds.length) {
-        sessionConds.push(
-          `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
-        );
-        sessionParams.push(...dateParams);
+      const { conds: sessionConds, params: sessionParams } = buildSessionFilterConds(query);
+      if (query?.sessionIds) {
+        sessionConds.push(`s.session_id IN (${query.sessionIds.map(() => "?").join(", ")})`);
+        sessionParams.push(...query.sessionIds);
       }
       const sessionRows = await all<{
         session_id: string;
@@ -2185,6 +2296,89 @@ export class SqliteStore implements Store {
         title: row.title,
         summary: row.summary,
       }));
+    });
+  }
+
+  // Session search (#155): resolves the `/sessions` box's freeform `text` + `file:` term to a
+  // candidate id set + per-session snippet/count, computed in SQL. Reuses the same source/date/project
+  // narrowing readSessionAggregates builds, so search honors the global filters.
+  searchSessions(query: SessionSearchQuery): Promise<SessionSearchResult> {
+    return this.schedule(async () => {
+      const { conds: sessionConds, params: sessionParams } = buildSessionFilterConds(query);
+
+      // file: term — substring match on file_path (not FTS: the tokenizer would split paths on '/' and '.').
+      if (query.file) {
+        sessionConds.push(
+          "EXISTS (SELECT 1 FROM resolved_invocations i WHERE i.session_id = s.session_id AND instr(lower(i.file_path), lower(?)) > 0)",
+        );
+        sessionParams.push(query.file);
+      }
+
+      // Freeform text: title/project/source substring (today's behavior) OR either FTS table matches.
+      // Both FTS subqueries reuse the SAME escaped MATCH query string. Either table may be empty
+      // (retention off, task interpretation never run) — an empty table just contributes no rows, no error.
+      const trimmed = query.text?.trim();
+      const matchQuery = trimmed ? toFtsMatchQuery(trimmed) : undefined;
+      if (trimmed) {
+        sessionConds.push(
+          `(instr(lower(coalesce(s.first_prompt, '')), ?) > 0
+            OR instr(lower(s.project), ?) > 0
+            OR instr(lower(s.source), ?) > 0
+            OR s.session_id IN (SELECT session_id FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?)
+            OR s.session_id IN (SELECT session_id FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?))`,
+        );
+        const lowered = trimmed.toLowerCase();
+        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery);
+      }
+
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT s.session_id AS session_id FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
+        sessionParams,
+      );
+      const ids = new Set(rows.map((row) => row.session_id));
+
+      const matches = new Map<string, SessionSearchMatch>();
+      if (matchQuery) {
+        // snippet() must be evaluated per matched row while the FTS cursor is positioned on it — it
+        // cannot combine with GROUP BY ("unable to use function snippet in the requested context").
+        // So fetch ungrouped rows (one per matching FTS row) and fold per-session in JS instead.
+        // Column index 1 = `text` (column 0 is the UNINDEXED session_id carried on the row).
+        const [interactionRows, taskRows] = await Promise.all([
+          all<{ session_id: string; snip: string }>(
+            this.db,
+            `SELECT session_id, snippet(resolved_interaction_text_fts, 1, char(1), char(2), '…', 12) AS snip
+             FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?`,
+            [matchQuery],
+          ),
+          all<{ session_id: string; snip: string }>(
+            this.db,
+            `SELECT session_id, snippet(resolved_tasks_fts, 1, char(1), char(2), '…', 12) AS snip
+             FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?`,
+            [matchQuery],
+          ),
+        ]);
+        for (const row of interactionRows) {
+          const existing = matches.get(row.session_id);
+          matches.set(row.session_id, {
+            count: (existing?.count ?? 0) + 1,
+            snippet: existing?.snippet ?? row.snip,
+            source: existing?.source ?? "conversation",
+          });
+        }
+        // Task text is the distilled, more readable restatement — prefer its snippet when a session
+        // matched both tables, and sum the counts so the UI shows the combined match strength.
+        for (const row of taskRows) {
+          const existing = matches.get(row.session_id);
+          matches.set(row.session_id, {
+            count: (existing?.count ?? 0) + 1,
+            snippet: row.snip,
+            source: existing ? "both" : "task",
+          });
+        }
+      }
+
+      return { ids, matches };
     });
   }
 
@@ -2547,6 +2741,7 @@ export class SqliteStore implements Store {
             // "turn retention off and re-index removes stored text" holds even on this short-parse path (#120).
             if (!retainText) {
               await run(this.db, "DELETE FROM resolved_interaction_text WHERE session_id = ?", [sid]);
+              await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
             }
             continue;
           }
@@ -2575,6 +2770,10 @@ export class SqliteStore implements Store {
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
+          // The search FTS index (#155) is NOT linked by foreign key, so the CASCADE above does not
+          // reach it — clear it explicitly here; it's rebuilt below (if retainText) alongside
+          // resolved_interaction_text, which the CASCADE does clear.
+          await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
           const lastTs = timestamps.length ? Math.max(...timestamps) : null;
@@ -2721,6 +2920,14 @@ export class SqliteStore implements Store {
               "resolved_interaction_text",
               ["session_id", "seq", "interaction_seq", "type", "text"],
               textRows,
+            );
+            // Search FTS index (#155), kept in sync by direct DML (not a trigger — see
+            // RESOLVED_INTERACTION_TEXT_FTS_DDL's comment). One FTS row per text chunk, mirroring textRows.
+            await insertRows(
+              this.db,
+              "resolved_interaction_text_fts",
+              ["session_id", "text"],
+              textRows.map((row) => [sid, row[4]]),
             );
           }
           // Per-tool-use rows (#113 Part B / #130) from the reconciled messages' toolUses, so byTool/

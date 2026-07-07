@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { bannerText, printBanner } from "../src/banner.ts";
+import pkg from "../package.json" with { type: "json" };
 
 describe("banner", () => {
   test("renders the Argus wordmark", () => {
     const output = bannerText();
     expect(output).toContain("███████");
-    expect(output).toContain("Argus by ADC");
+    expect(output).toContain(`Argus by ADC - version ${pkg.version}`);
     expect(output).not.toContain("agent audit");
   });
 
