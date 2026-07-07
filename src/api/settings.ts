@@ -178,12 +178,12 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
   },
   {
     // Sessions = session interpretation + the LLM that powers it (its only consumer today). One group:
-    // the Interpret-sessions toggle, the hourly cap, the title/summary length limits, then the LLM
-    // provider + its provider-specific fields (model, reasoning effort), the API key, and the
-    // Test-connection action. (Custom prompt / prompt file aren't exposed yet; advanced / CLI-only and
-    // not shown here: `llm.apiKeyEnv` — the UI offers the key itself via API_KEY_FIELD — `llm.baseUrl`,
-    // and `llm.maxTokens`. `claudeCliPath`/`effort` show only for the providers that use them, per their
-    // configFields.)
+    // the Interpret-sessions toggle, the hourly cap, then the LLM provider + its provider-specific fields
+    // (model, reasoning effort), the API key, and the Test-connection action. (Custom prompt / prompt
+    // file aren't exposed yet; advanced / CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers the
+    // key itself via API_KEY_FIELD — `llm.baseUrl`, `llm.maxTokens`, and the title/summary length limits
+    // (`sessionInterpretation.titleMaxChars`/`summaryMaxChars`). `claudeCliPath`/`effort` show only for
+    // the providers that use them, per their configFields.)
     id: "sessions",
     label: "Sessions",
     sections: [
@@ -191,8 +191,6 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
         settings: [
           SESSION_INTERPRETATION_SETTINGS.enabled,
           SESSION_INTERPRETATION_SETTINGS.maxSessionsPerHour,
-          SESSION_INTERPRETATION_SETTINGS.titleMaxChars,
-          SESSION_INTERPRETATION_SETTINGS.summaryMaxChars,
           LLM_SETTINGS.provider,
           LLM_SETTINGS.model,
           LLM_SETTINGS.effort,

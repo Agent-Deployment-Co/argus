@@ -34,8 +34,6 @@ opens Settings, grouped into a few categories.
   settings below. See [Tasks](/tasks) for what it captures and how to choose a provider.
 - **Max sessions per hour** caps how many sessions Argus interprets
   automatically each hour. Refreshing a session by hand isn't limited.
-- **Title length limit** and **Summary length limit** cap the length of the
-  generated title and summary (100 and 500 characters by default).
 - **Model provider**, **Model**, **Reasoning effort** and **Claude CLI path** choose
   which model backend does the interpretation and how hard it works. The cheap
   defaults (Claude Haiku on the local Claude CLI) are good enough out of the box; for

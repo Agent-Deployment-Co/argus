@@ -547,7 +547,7 @@ export const LLM_SETTINGS = {
     ui: {
       label: "Reasoning effort",
       description:
-        "Reasoning-effort level passed to the model (provider-specific, e.g. low, medium, high). Leave blank for the provider default; the cheapest default models don't accept it.",
+        "Reasoning-effort level passed to the model (provider-specific, not supported by all models). Leave blank for the provider default.",
       control: "text",
       activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("effort"),
@@ -701,18 +701,14 @@ export const SESSION_INTERPRETATION_SETTINGS = {
   } satisfies Setting<OptionalNumber>,
   // Character limits for the generated title/summary (#234). Stated in the pass-1 prompt as
   // constraints and clamped defensively on write in case the model overruns.
+  // Config-file-only (no `ui`): too fiddgy to expose in the settings screen, so these resolve from
+  // argus.json / env / flag only (like `retainText`). They still register in ALL_SETTINGS for
+  // `argus config get/set`.
   titleMaxChars: {
     path: "sessionInterpretation.titleMaxChars",
     env: "ARGUS_INTERPRET_TITLE_MAX_CHARS",
     flag: "interpret-title-max-chars",
     default: DEFAULT_TITLE_MAX_CHARS as OptionalNumber,
-    ui: {
-      label: "Title length limit",
-      description: "Maximum number of characters in a generated session title.",
-      control: "number",
-      activeWhen: INTERPRETATION_GATE,
-      min: 1,
-    },
     parse: parsePositiveInt,
   } satisfies Setting<OptionalNumber>,
   summaryMaxChars: {
@@ -720,13 +716,6 @@ export const SESSION_INTERPRETATION_SETTINGS = {
     env: "ARGUS_INTERPRET_SUMMARY_MAX_CHARS",
     flag: "interpret-summary-max-chars",
     default: DEFAULT_SUMMARY_MAX_CHARS as OptionalNumber,
-    ui: {
-      label: "Summary length limit",
-      description: "Maximum number of characters in a generated session summary.",
-      control: "number",
-      activeWhen: INTERPRETATION_GATE,
-      min: 1,
-    },
     parse: parsePositiveInt,
   } satisfies Setting<OptionalNumber>,
 };
