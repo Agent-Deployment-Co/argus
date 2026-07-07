@@ -6,7 +6,7 @@ import { parseAllIncrementalDetailed, reindexSession } from "../src/indexing/pip
 import { runInterpretationDrain } from "../src/indexing/interpret/index.ts";
 import { runIndexRefresh } from "../src/index-ops.ts";
 import { openStore } from "../src/store/store.ts";
-import type { ResolvedTaskExtraction } from "../src/config.ts";
+import type { ResolvedSessionInterpretation } from "../src/config.ts";
 import type { AgentSource } from "../src/types.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
@@ -25,13 +25,14 @@ function tempRoot(): string {
 }
 
 // A fake "command" provider: the same command serves both passes, so branch on the prompt body —
-// pass 1 carries "Filtered user messages:", pass 2 carries "Dialogue:".
+// pass 1 carries "Filtered user messages", pass 2 carries "Dialogue:". Pass 1 now returns the #234
+// title/summary/tasks shape.
 function fakeProviderCommand(root: string): string {
   const script = join(root, "fake-extractor.js");
   writeFileSync(
     script,
     `let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{
-      if(s.includes("Filtered user messages:")){process.stdout.write(JSON.stringify({tasks:[{description:"say hello",messageIndexes:[0]}]}));}
+      if(s.includes("Filtered user messages")){process.stdout.write(JSON.stringify({title:"Say hello",summary:"The user greeted the agent.",tasks:[{description:"say hello",messageIndexes:[0]}]}));}
       else{process.stdout.write(JSON.stringify({outcome:"success",frustration:"moderate",signals:["greeted"],reason:"the agent replied"}));}
     });`,
     "utf8",
@@ -39,8 +40,14 @@ function fakeProviderCommand(root: string): string {
   return `"${process.execPath}" "${script}"`;
 }
 
-function commandExtraction(root: string): ResolvedTaskExtraction {
-  return { enabled: true, maxSessionsPerHour: 30, llm: { provider: "command", command: fakeProviderCommand(root) } };
+function commandExtraction(root: string): ResolvedSessionInterpretation {
+  return {
+    enabled: true,
+    maxSessionsPerHour: 30,
+    titleMaxChars: 100,
+    summaryMaxChars: 500,
+    llm: { provider: "command", command: fakeProviderCommand(root) },
+  };
 }
 
 async function indexCodex(root: string): Promise<string> {
@@ -77,6 +84,12 @@ describe("reindexSession", () => {
       // Persisted: reading the session's tasks back returns the same outcome.
       const stored = await store.readSessionTasks("codex:codex-sess1");
       expect(stored[0]?.outcome).toBe("success");
+      // #234: the model title/summary are stored on the session.
+      expect(await store.readSessionInterpretation("codex:codex-sess1")).toEqual({
+        title: "Say hello",
+        summary: "The user greeted the agent.",
+        interpreted: true,
+      });
     } finally {
       await store.close();
     }
@@ -90,6 +103,24 @@ describe("reindexSession", () => {
       const result = await reindexSession("codex:codex-sess1", { store });
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.tasks).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("#234: a plain re-index carries the title/summary forward (doesn't wipe them)", async () => {
+    const root = tempRoot();
+    const storePath = await indexCodex(root);
+    const store = await openStore({ path: storePath });
+    try {
+      await reindexSession("codex:codex-sess1", { store, taskExtraction: commandExtraction(root) });
+      // Re-index the same session with interpretation OFF: materialize must preserve title/summary.
+      await reindexSession("codex:codex-sess1", { store });
+      expect(await store.readSessionInterpretation("codex:codex-sess1")).toEqual({
+        title: "Say hello",
+        summary: "The user greeted the agent.",
+        interpreted: true,
+      });
     } finally {
       await store.close();
     }
@@ -204,6 +235,8 @@ describe("decoupled interpretation drain (#153)", () => {
       const tasks = await store.readSessionTasks("codex:codex-sess1");
       expect(tasks).toHaveLength(1);
       expect(tasks[0]?.outcome).toBe("success");
+      // #234: the drain also stores the model title/summary.
+      expect((await store.readSessionInterpretation("codex:codex-sess1"))?.title).toBe("Say hello");
       // Idempotent: a second drain pass finds nothing eligible and changes nothing.
       await runInterpretationDrain(store, commandExtraction(root));
       expect(await store.readSessionTasks("codex:codex-sess1")).toHaveLength(1);
@@ -229,8 +262,8 @@ describe("decoupled interpretation drain (#153)", () => {
     } finally {
       await store.close();
     }
-    expect(logs.some((l) => l.includes("Extracting tasks from 1 session this pass"))).toBe(true);
-    expect(logs.some((l) => l.includes("Extracted tasks from 1 session this pass"))).toBe(true);
+    expect(logs.some((l) => l.includes("Interpreting 1 session this pass"))).toBe(true);
+    expect(logs.some((l) => l.includes("Interpreted 1 session this pass"))).toBe(true);
   });
 });
 

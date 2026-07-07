@@ -31,9 +31,11 @@ import type {
   ReconstructedFragments,
   ResolvedQuery,
   SessionAggregate,
+  SessionInvocation,
   SessionSearchMatch,
   SessionSearchQuery,
   SessionSearchResult,
+  SessionSearchTextSource,
   SourceCoverageRow,
   StoreStats,
   TaskSeqInteraction,
@@ -54,7 +56,7 @@ import type { ToolCategory } from "../tool-categories.ts";
 import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 20;
+export const STORE_SCHEMA_VERSION = 21;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -251,6 +253,24 @@ const RESOLVED_TASKS_FTS_DDL = `
     session_id UNINDEXED, text
   );`;
 
+// Full-text search over the model-generated session title + summary (#234). Same plain-FTS5-table
+// shape as resolved_interaction_text_fts above (see its comment on why triggers aren't used); the
+// indexed text is `title || ' ' || summary`. One row per session. Maintained by writeSessionTasks (the
+// sole writer of those columns) and carried forward by materialize's wholesale session replace, both
+// via ordinary DELETE-then-INSERT DML — folded into the same v20 -> v21 migration that adds the columns
+// (no backfill: the columns are brand-new at that point, so there is no existing title/summary to index).
+const RESOLVED_SESSIONS_FTS_DDL = `
+  CREATE VIRTUAL TABLE resolved_sessions_fts USING fts5(
+    session_id UNINDEXED, text
+  );`;
+
+/** The indexed text for a session's title/summary FTS row (#234): the two model fields joined. Empty
+ *  when both are null → the caller writes no row, so un-interpreted / title-less sessions stay out of
+ *  the index. Shared by the two maintenance sites (writeSessionTasks, materialize). */
+function sessionFtsText(title: string | null, summary: string | null): string {
+  return [title ?? "", summary ?? ""].join(" ").trim();
+}
+
 // Partial index on file_path (#155). The file: search term matches with
 // instr(lower(file_path), lower(?)) — a substring test the SQLite planner can't satisfy from a
 // b-tree index, so that query is a full scan of resolved_invocations regardless of this index
@@ -369,6 +389,11 @@ const CREATE_SCHEMA_SQL = `
     content_indexed_at_ms INTEGER,
     interpreted_at_ms INTEGER,
     interpretation_version TEXT,
+    -- Model-generated title + summary (#234), written by writeSessionTasks alongside the interpretation
+    -- stamp (interpretation-owned, carried forward by materialize). NULL until a session is interpreted;
+    -- the read paths fall back to the first prompt / heuristic summary. Local-only, never on the wire.
+    title TEXT,
+    summary TEXT,
     meta_json TEXT NOT NULL
   );
   CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
@@ -447,6 +472,9 @@ const CREATE_SCHEMA_SQL = `
 
   -- Full-text search over task-interpretation text (#155). Local-only; never synced.
   ${RESOLVED_TASKS_FTS_DDL}
+
+  -- Full-text search over the model-generated session title + summary (#234). Local-only; never synced.
+  ${RESOLVED_SESSIONS_FTS_DDL}
 
   -- Per-source freshness attestation: lets a consumer know whether the store is current.
   CREATE TABLE source_coverage (
@@ -639,6 +667,9 @@ interface ResolvedSessionSnapshot {
   contentIndexedAtMs: number | null;
   interpretedAtMs: number | null;
   interpretationVersion: string | null;
+  // Model title/summary (#234) — interpretation-owned like interpretedAtMs, so carried forward here.
+  title: string | null;
+  summary: string | null;
 }
 
 async function readResolvedSessionSnapshot(
@@ -650,9 +681,11 @@ async function readResolvedSessionSnapshot(
     content_indexed_at_ms: number | null;
     interpreted_at_ms: number | null;
     interpretation_version: string | null;
+    title: string | null;
+    summary: string | null;
   }>(
     db,
-    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version FROM resolved_sessions WHERE session_id = ?",
+    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary FROM resolved_sessions WHERE session_id = ?",
     [sessionId],
   );
   if (!row) return undefined;
@@ -673,6 +706,8 @@ async function readResolvedSessionSnapshot(
     contentIndexedAtMs: row.content_indexed_at_ms,
     interpretedAtMs: row.interpreted_at_ms,
     interpretationVersion: row.interpretation_version,
+    title: row.title,
+    summary: row.summary,
   };
 }
 
@@ -1297,6 +1332,19 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ${RESOLVED_INVOCATIONS_FILE_PATH_INDEX}
     `,
   },
+  // 20 -> 21: session interpretation 2.0 (#234). Add the model-generated title + summary columns to
+  // resolved_sessions, written by writeSessionTasks alongside the interpretation stamp. NULL until a
+  // session is (re)interpreted; the read paths fall back to first prompt / heuristic summary. Also
+  // create the title/summary FTS index (#234) so search covers interpretation text — no backfill, since
+  // the columns are brand-new here (nothing to index); it fills as sessions get interpreted.
+  20: {
+    to: 21,
+    sql: `
+      ALTER TABLE resolved_sessions ADD COLUMN title TEXT;
+      ALTER TABLE resolved_sessions ADD COLUMN summary TEXT;
+      ${RESOLVED_SESSIONS_FTS_DDL}
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -1372,13 +1420,14 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
   try {
     await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
-    await get(db, "SELECT session_id, archived FROM resolved_sessions LIMIT 1");
+    await get(db, "SELECT session_id, archived, title, summary FROM resolved_sessions LIMIT 1");
     await get(db, "SELECT input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
     await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
     await get(db, "SELECT session_id, seq, interaction_seq, type, text FROM resolved_interaction_text LIMIT 1");
     await get(db, "SELECT session_id, text FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH 'x' LIMIT 1");
     await get(db, "SELECT session_id, text FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH 'x' LIMIT 1");
+    await get(db, "SELECT session_id, text FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH 'x' LIMIT 1");
     await get(db, "SELECT session_id, tool, category, file_path FROM resolved_invocations LIMIT 1");
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
@@ -1881,6 +1930,24 @@ export class SqliteStore implements Store {
     });
   }
 
+  // The model-generated title/summary for one session (#234), or nulls when not yet interpreted, plus
+  // whether interpretation has run at all (`interpreted_at_ms` is set). Backs the on-demand detail
+  // view's title/summary fallback and its "No tasks found." vs "Interpretation pending." distinction.
+  readSessionInterpretation(
+    sessionId: string,
+  ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined> {
+    return this.schedule(async () => {
+      const row = await get<{ title: string | null; summary: string | null; interpreted_at_ms: number | null }>(
+        this.db,
+        "SELECT title, summary, interpreted_at_ms FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row
+        ? { title: row.title, summary: row.summary, interpreted: row.interpreted_at_ms != null }
+        : undefined;
+    });
+  }
+
   readSessionTasks(sessionId: string): Promise<TaskFact[]> {
     return this.schedule(async () => {
       const rows = await all<{ task_json: string }>(
@@ -1926,6 +1993,34 @@ export class SqliteStore implements Store {
     });
   }
 
+  // All tool invocations for a session with their owning interaction seq (#234). Read straight off
+  // resolved_invocations — deliberately NOT joined to task_seq, which writeSessionTasks assigns only
+  // after pass 2 runs, so a task-grain read would come back empty mid-interpretation.
+  readSessionInvocations(sessionId: string): Promise<SessionInvocation[]> {
+    return this.schedule(async () => {
+      const rows = await all<{
+        interaction_seq: number | null;
+        tool: string;
+        category: string;
+        mcp_server: string | null;
+        mcp_tool: string | null;
+        file_path: string | null;
+      }>(
+        this.db,
+        "SELECT interaction_seq, tool, category, mcp_server, mcp_tool, file_path FROM resolved_invocations WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      return rows.map((row) => ({
+        interactionSeq: row.interaction_seq,
+        tool: row.tool,
+        category: row.category,
+        ...(row.mcp_server != null ? { mcpServer: row.mcp_server } : {}),
+        ...(row.mcp_tool != null ? { mcpTool: row.mcp_tool } : {}),
+        ...(row.file_path != null ? { filePath: row.file_path } : {}),
+      }));
+    });
+  }
+
   // Canonical ids of sessions eligible for (re)interpretation (#153), newest-first, capped at `limit`.
   // The eligibility predicate is INTERPRETATION_ELIGIBLE_SQL, shared with interpretationProgress.
   readPendingInterpretationSessions(limit: number): Promise<string[]> {
@@ -1945,10 +2040,18 @@ export class SqliteStore implements Store {
   // The SOLE writer of resolved_tasks + interpretation state (#153). Replaces a session's tasks without
   // re-materializing its messages/interactions/text, re-derives task↔interaction membership
   // (resolved_interactions.task_seq) over the new tasks, and stamps interpreted_at_ms +
-  // interpretation_version. ALWAYS stamps — even for an empty task list — so a session with no
-  // extractable tasks de-queues instead of being re-interpreted on every drain tick. Survives a later
-  // unchanged re-materialize via materialize's carry-forward; discarded only when content changes.
-  writeSessionTasks(sessionId: string, tasks: TaskFact[], version: string): Promise<void> {
+  // interpretation_version plus the model title/summary (#234). ALWAYS stamps — even for an empty task
+  // list — so a session with no extractable tasks de-queues instead of being re-interpreted on every
+  // drain tick. Survives a later unchanged re-materialize via materialize's carry-forward; discarded
+  // only when content changes. `title`/`summary` default to null (cleared) — the interpret stage always
+  // passes the values it generated.
+  writeSessionTasks(
+    sessionId: string,
+    tasks: TaskFact[],
+    version: string,
+    title: string | null = null,
+    summary: string | null = null,
+  ): Promise<void> {
     return this.schedule(async () => {
       await transaction(this.db, async () => {
         await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
@@ -2005,9 +2108,16 @@ export class SqliteStore implements Store {
         }
         await run(
           this.db,
-          "UPDATE resolved_sessions SET interpreted_at_ms = ?, interpretation_version = ? WHERE session_id = ?",
-          [Date.now(), version, sessionId],
+          "UPDATE resolved_sessions SET interpreted_at_ms = ?, interpretation_version = ?, title = ?, summary = ? WHERE session_id = ?",
+          [Date.now(), version, title, summary, sessionId],
         );
+        // Keep the title/summary search index (#234) in sync with the same wholesale replace, via
+        // ordinary DML (not a trigger — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment).
+        await run(this.db, "DELETE FROM resolved_sessions_fts WHERE session_id = ?", [sessionId]);
+        const ftsText = sessionFtsText(title, summary);
+        if (ftsText) {
+          await run(this.db, "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)", [sessionId, ftsText]);
+        }
       });
       secureSqliteFiles(this.path);
     });
@@ -2162,10 +2272,12 @@ export class SqliteStore implements Store {
         first_ts: number | null;
         last_ts: number | null;
         message_count: number;
+        title: string | null;
+        summary: string | null;
         meta_json: string;
       }>(
         this.db,
-        `SELECT session_id, first_ts, last_ts, message_count, meta_json
+        `SELECT session_id, first_ts, last_ts, message_count, title, summary, meta_json
          FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
         sessionParams,
       );
@@ -2214,6 +2326,8 @@ export class SqliteStore implements Store {
         firstTs: row.first_ts,
         lastTs: row.last_ts,
         messageCount: row.message_count,
+        title: row.title,
+        summary: row.summary,
       }));
     });
   }
@@ -2244,10 +2358,11 @@ export class SqliteStore implements Store {
             OR instr(lower(s.project), ?) > 0
             OR instr(lower(s.source), ?) > 0
             OR s.session_id IN (SELECT session_id FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH ?)
-            OR s.session_id IN (SELECT session_id FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?))`,
+            OR s.session_id IN (SELECT session_id FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?)
+            OR s.session_id IN (SELECT session_id FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH ?))`,
         );
         const lowered = trimmed.toLowerCase();
-        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery);
+        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery, matchQuery);
       }
 
       const rows = await all<{ session_id: string }>(
@@ -2263,7 +2378,7 @@ export class SqliteStore implements Store {
         // cannot combine with GROUP BY ("unable to use function snippet in the requested context").
         // So fetch ungrouped rows (one per matching FTS row) and fold per-session in JS instead.
         // Column index 1 = `text` (column 0 is the UNINDEXED session_id carried on the row).
-        const [interactionRows, taskRows] = await Promise.all([
+        const [interactionRows, taskRows, sessionRows] = await Promise.all([
           all<{ session_id: string; snip: string }>(
             this.db,
             `SELECT session_id, snippet(resolved_interaction_text_fts, 1, char(1), char(2), '…', 12) AS snip
@@ -2276,24 +2391,32 @@ export class SqliteStore implements Store {
              FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH ?`,
             [matchQuery],
           ),
+          all<{ session_id: string; snip: string }>(
+            this.db,
+            `SELECT session_id, snippet(resolved_sessions_fts, 1, char(1), char(2), '…', 12) AS snip
+             FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH ?`,
+            [matchQuery],
+          ),
         ]);
-        for (const row of interactionRows) {
-          const existing = matches.get(row.session_id);
-          matches.set(row.session_id, {
-            count: (existing?.count ?? 0) + 1,
-            snippet: existing?.snippet ?? row.snip,
-            source: existing?.source ?? "conversation",
-          });
-        }
-        // Task text is the distilled, more readable restatement — prefer its snippet when a session
-        // matched both tables, and sum the counts so the UI shows the combined match strength.
-        for (const row of taskRows) {
-          const existing = matches.get(row.session_id);
-          matches.set(row.session_id, {
-            count: (existing?.count ?? 0) + 1,
-            snippet: row.snip,
-            source: existing ? "both" : "task",
-          });
+        // Accumulate per session: total match count + the first snippet seen from each source kind.
+        const perSession = new Map<string, { count: number; snip: Partial<Record<SessionSearchTextSource, string>> }>();
+        const fold = (rows: { session_id: string; snip: string }[], source: SessionSearchTextSource) => {
+          for (const row of rows) {
+            let acc = perSession.get(row.session_id);
+            if (!acc) perSession.set(row.session_id, (acc = { count: 0, snip: {} }));
+            acc.count += 1;
+            acc.snip[source] ??= row.snip; // first row's snippet wins per source
+          }
+        };
+        fold(interactionRows, "conversation");
+        fold(taskRows, "task");
+        fold(sessionRows, "summary");
+        // Order the matched sources most-distilled-first (summary > task > conversation) so `sources[0]`
+        // is the snippet's origin and the UI can name each precisely. count sums across all of them.
+        const PREFERENCE: SessionSearchTextSource[] = ["summary", "task", "conversation"];
+        for (const [sessionId, acc] of perSession) {
+          const sources = PREFERENCE.filter((s) => acc.snip[s] !== undefined);
+          matches.set(sessionId, { count: acc.count, snippet: acc.snip[sources[0]!]!, sources });
         }
       }
 
@@ -2682,13 +2805,19 @@ export class SqliteStore implements Store {
           const contentIndexedAtMs = contentChanged ? nowMs : (existingSnapshot!.contentIndexedAtMs ?? nowMs);
           const interpretedAtMs = existingSnapshot?.interpretedAtMs ?? null;
           const interpretationVersion = existingSnapshot?.interpretationVersion ?? null;
+          // Title/summary are interpretation-owned (#234): carried forward so a re-index never wipes
+          // them. Only writeSessionTasks sets them; a brand-new session has none.
+          const title = existingSnapshot?.title ?? null;
+          const summary = existingSnapshot?.summary ?? null;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
-          // The search FTS index (#155) is NOT linked by foreign key, so the CASCADE above does not
-          // reach it — clear it explicitly here; it's rebuilt below (if retainText) alongside
-          // resolved_interaction_text, which the CASCADE does clear.
+          // The search FTS indexes (#155, #234) are NOT linked by foreign key, so the CASCADE above does
+          // not reach them — clear them explicitly here. The conversation index is rebuilt below (if
+          // retainText) alongside resolved_interaction_text; the title/summary index is rebuilt from the
+          // carried-forward title/summary right after the session row is re-inserted.
           await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
+          await run(this.db, "DELETE FROM resolved_sessions_fts WHERE session_id = ?", [sid]);
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
           const lastTs = timestamps.length ? Math.max(...timestamps) : null;
@@ -2700,8 +2829,8 @@ export class SqliteStore implements Store {
             `INSERT INTO resolved_sessions(
                session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived,
                friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms,
-               content_indexed_at_ms, interpreted_at_ms, interpretation_version, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               sid,
               owner,
@@ -2720,9 +2849,16 @@ export class SqliteStore implements Store {
               contentIndexedAtMs,
               interpretedAtMs,
               interpretationVersion,
+              title,
+              summary,
               JSON.stringify(session.meta),
             ],
           );
+          // Re-index the carried-forward title/summary (#234) — same wholesale replace as the row above.
+          const sessionFts = sessionFtsText(title, summary);
+          if (sessionFts) {
+            await run(this.db, "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)", [sid, sessionFts]);
+          }
           // Assign each interaction to its owning task (#122), bookmark semantics over the tasks we're
           // about to write (incoming or the preserved snapshot), so attribution stays consistent with
           // resolved_tasks.seq and survives a re-materialization that reuses the stored tasks. The leaf

@@ -58,6 +58,26 @@ Config lives in the `llm` block — see [configuration.md](./configuration.md). 
 secret access: the consumer resolves the API key (env var → secret store) and passes it on
 `config.apiKey`, so `complete()` stays trivially testable against an injected `fetch`.
 
+### Structured output and effort (#234)
+
+An `LlmRequest` may carry an optional JSON `schema` and an opaque `effort` string; both flow through
+`ProviderCall` untouched by `complete()` (no per-provider branching there — each transport places them
+in its own request field):
+
+| Provider | Schema | Effort |
+|---|---|---|
+| `claude-api` | `output_config.format` (`json_schema`) | `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`) |
+| `openai` / `openrouter` | `response_format` (`json_schema`, `strict`) | `reasoning_effort` |
+| `gemini` | `responseSchema` + `responseMimeType` | `thinkingConfig.thinkingLevel` |
+| `claude-cli` | — (prompt-instruction fallback) | `--effort <level>` |
+| `command` | — | — |
+
+Providers that support structured output natively enforce the schema and return valid JSON; the ones
+that don't (`claude-cli`, `command`) ignore it and fall back to the caller's prompt instructions plus
+tolerant parsing. `effort` is a pure passthrough — the layer never translates the value, so use whatever
+the configured provider expects. It is omitted entirely when unset, which the cheap default models
+require (Claude Haiku rejects an effort parameter).
+
 ## Secret storage (`src/secrets.ts`)
 
 BYO API keys are stored via a `SecretStore` with three platform backends, all reached only by the

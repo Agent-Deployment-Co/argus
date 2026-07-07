@@ -50,7 +50,8 @@ import { computeRecommendations, type Recommendation } from "./recommendations.t
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
+import { CONFIG_FILE } from "../paths.ts";
+import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
 import { openStore } from "../store/store.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
@@ -65,7 +66,7 @@ export interface ServeOptions {
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
   /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
-  taskExtraction: ResolvedTaskExtraction;
+  taskExtraction: ResolvedSessionInterpretation;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
   installSignalHandlers?: boolean;
@@ -613,13 +614,23 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   // shows it as stored and the file no longer holds it. Idempotent; a no-op once migrated. Never throws
   // (the migration guards its own keychain/file writes), so a locked keychain can't block startup.
   await migrateHubKeyToSecretStore({ log });
-  // Fold any legacy flat `llm.*` values under the provider they were written for, so switching the
-  // active provider in the settings UI no longer inherits the old provider's model/key-env (#154
-  // review). Idempotent; a no-op once migrated. Guarded so a write failure can't block startup.
+  // Run the two idempotent argus.json migrations off ONE disk read (each mutates this shared object and
+  // writes the cumulative state, so order can't clobber). Both are guarded so a write failure can't
+  // block startup. (1) Fold any legacy flat `llm.*` values under the provider they were written for (#154).
+  // (2) Rename any legacy `taskExtraction.*` block to `sessionInterpretation.*` (#234) — resolution still
+  // reads the legacy keys via each setting's legacy fallback, so this only makes the new key canonical.
+  const startupConfig = loadConfig() as ArgusConfig & Record<string, unknown>;
   try {
-    if (migrateLlmFlatToProviderConfigs()) log("Organized LLM settings by provider in argus.json.");
+    if (migrateLlmFlatToProviderConfigs(CONFIG_FILE, startupConfig))
+      log("Organized LLM settings by provider in argus.json.");
   } catch (err) {
     log(`Couldn't reorganize LLM settings by provider: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    if (migrateTaskExtractionToSessionInterpretation(CONFIG_FILE, startupConfig))
+      log("Renamed task-extraction settings to session interpretation in argus.json.");
+  } catch (err) {
+    log(`Couldn't update session-interpretation settings: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // Resolve the `claude` CLI path once, here at startup — never on a request. The resolver may spawn a
@@ -754,7 +765,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     // to the config opt-in), keeping the configured provider/model — but only when we're retaining
     // text: with retention off we neither store the conversation nor run the model over it. A provider
     // explicitly set to "off" stays off.
-    const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: retainText };
+    const reindexTaskExtraction: ResolvedSessionInterpretation = { ...opts.taskExtraction, enabled: retainText };
     const store = await openStore();
     try {
       return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction, retainText });
@@ -804,8 +815,12 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
-    return buildSessionDetail(sessionId, messages, meta, tasks);
+    const [meta, tasks, interpretation] = await Promise.all([
+      store.readSessionMeta(sessionId),
+      store.readSessionTasks(sessionId),
+      store.readSessionInterpretation(sessionId),
+    ]);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation);
   };
 
   const app = createApp(webRoot, {

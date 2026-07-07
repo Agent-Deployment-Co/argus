@@ -34,6 +34,18 @@ export function openaiCompatibleComplete(
         body: JSON.stringify({
           model: call.model,
           [opts.tokenParam]: call.maxTokens,
+          // Structured output via `response_format` (json_schema); reasoning effort via
+          // `reasoning_effort` (a string the reasoning models accept). Both omitted when unset so
+          // non-reasoning models and endpoints that don't support schemas are unaffected.
+          ...(call.schema
+            ? {
+                response_format: {
+                  type: "json_schema",
+                  json_schema: { name: "output", schema: call.schema, strict: true },
+                },
+              }
+            : {}),
+          ...(call.effort ? { reasoning_effort: call.effort } : {}),
           messages: [
             ...(call.system ? [{ role: "system", content: call.system }] : []),
             { role: "user", content: call.prompt },

@@ -9,7 +9,7 @@
 //   - the throttled background drain (`runInterpretationDrain`), for all automatic/bulk interpretation, and
 //   - the immediate inline path (`interpretSession`), for an explicit per-session refresh.
 import type { ParserDiagnostic, Store, TaskFact } from "../../store/store-contract.ts";
-import type { ResolvedTaskExtraction } from "../../config.ts";
+import type { ResolvedSessionInterpretation } from "../../config.ts";
 import type { RepeatCollapser } from "../../backoff.ts";
 import { resolveApiKey } from "../../secrets.ts";
 import { extractTasksWithOutcome } from "./task-extraction.ts";
@@ -20,7 +20,7 @@ import { logWarn, type ArgusLogLevel, type Log } from "../../logger.ts";
 // interpreter's behavior changes (prompts, passes, model defaults). It is DELIBERATELY not part of
 // eligibility — a bump alone never re-triggers the background drain; only a content change or an
 // explicit refresh re-interprets (which then records the current version).
-export const INTERPRETER_VERSION = "1";
+export const INTERPRETER_VERSION = "2";
 
 // How many sessions the drain interprets per index pass. Bounds any single invocation's burst (a bare
 // `argus index` interprets at most this many, then exits); the persisted hourly bucket bounds the rate
@@ -42,7 +42,7 @@ const RETRY_COOLDOWN_MS = 15 * 60_000;
 const retryAfterMs = new Map<string, number>();
 
 /** True when automatic task extraction should run for this call. */
-export function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | undefined): boolean {
+export function sessionInterpretationActive(taskExtraction: ResolvedSessionInterpretation | undefined): boolean {
   return !!taskExtraction?.enabled && taskExtraction.llm.provider !== "off";
 }
 
@@ -51,8 +51,8 @@ export function taskExtractionActive(taskExtraction: ResolvedTaskExtraction | un
  *  key is resolved here and handed down on `llm.apiKey`. A no-op once the key is already present, so
  *  the drain can resolve once and pass the result into every per-session interpret. */
 async function withResolvedApiKey(
-  taskExtraction: ResolvedTaskExtraction,
-): Promise<ResolvedTaskExtraction> {
+  taskExtraction: ResolvedSessionInterpretation,
+): Promise<ResolvedSessionInterpretation> {
   const { llm } = taskExtraction;
   if (!llm.apiKeyEnv || llm.apiKey) return taskExtraction;
   const apiKey = await resolveApiKey(llm.apiKeyEnv);
@@ -69,15 +69,23 @@ async function withResolvedApiKey(
 export async function interpretSession(
   store: Store,
   sessionId: string,
-  taskExtraction: ResolvedTaskExtraction,
+  taskExtraction: ResolvedSessionInterpretation,
 ): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[]; interpreted: boolean }> {
   const resolved = await withResolvedApiKey(taskExtraction);
   const interactions = await store.readSessionInteractions(sessionId);
-  const { tasks, diagnostics } = await extractTasksWithOutcome(sessionId, interactions, resolved);
+  // Invocations are only needed for the pass-2 tool-usage summary; pass a loader so a no-task session
+  // (common in the drain) skips the query entirely (see extractTasksWithOutcome's tasks-length guard).
+  const { title, summary, tasks, diagnostics } = await extractTasksWithOutcome(
+    sessionId,
+    interactions,
+    resolved,
+    () => store.readSessionInvocations(sessionId),
+  );
   if (diagnostics.some((d) => EXTRACTION_FAILURE_CODES.has(d.code))) {
     return { tasks, diagnostics, interpreted: false };
   }
-  await store.writeSessionTasks(sessionId, tasks, INTERPRETER_VERSION);
+  // Write the model title/summary (or null when empty) alongside the tasks + interpretation stamp.
+  await store.writeSessionTasks(sessionId, tasks, INTERPRETER_VERSION, title || null, summary || null);
   return { tasks, diagnostics, interpreted: true };
 }
 
@@ -91,11 +99,11 @@ export async function interpretSession(
  */
 export async function runInterpretationDrain(
   store: Store,
-  taskExtraction: ResolvedTaskExtraction,
+  taskExtraction: ResolvedSessionInterpretation,
   log?: Log,
   collapser?: RepeatCollapser,
 ): Promise<void> {
-  if (!taskExtractionActive(taskExtraction)) return;
+  if (!sessionInterpretationActive(taskExtraction)) return;
   const maxPerHour = taskExtraction.maxSessionsPerHour;
   if (maxPerHour <= 0) return;
   const note = (msg: string, level: ArgusLogLevel = "info") => {
@@ -116,7 +124,7 @@ export async function runInterpretationDrain(
 
   const granted = await store.takeInterpretCredits(candidates.length, maxPerHour);
   if (granted <= 0) {
-    note(`Reached the hourly task-extraction limit (${maxPerHour}/hr); resuming later.`);
+    note(`Reached the hourly session-interpretation limit (${maxPerHour}/hr); resuming later.`);
     return;
   }
 
@@ -126,38 +134,49 @@ export async function runInterpretationDrain(
   // pass must never look hung. These lines are distinct per session, so they go straight to the log
   // (not the collapser); the collapser is only for the repeated throttle-pause / failure-summary lines.
   log?.(
-    `Extracting tasks from ${batch.length} session${batch.length === 1 ? "" : "s"} this pass (up to ${maxPerHour}/hr) — running an AI model on each…`,
+    `Interpreting ${batch.length} session${batch.length === 1 ? "" : "s"} this pass (up to ${maxPerHour}/hr) — running an AI model on each…`,
   );
   let done = 0;
   let failures = 0;
   let n = 0;
   for (const sessionId of batch) {
-    log?.(`  [${++n}/${batch.length}] ${sessionId.replace(/^[^:]+:/, "").slice(0, 8)}…`);
+    // Full id (not truncated) so it can be copied straight into the web UI / `index refresh <id>`.
+    log?.(`  [${++n}/${batch.length}] ${sessionId}`);
     try {
-      const { interpreted } = await interpretSession(store, sessionId, resolved);
+      const { interpreted, diagnostics } = await interpretSession(store, sessionId, resolved);
       if (interpreted) {
         done++;
         retryAfterMs.delete(sessionId);
       } else {
         failures++;
         retryAfterMs.set(sessionId, now + RETRY_COOLDOWN_MS);
+        // Surface WHY it failed — the pass-1 failure diagnostics carry the provider error / bad-output
+        // reason. Without this the drain only says "couldn't interpret N", hiding the cause. These are
+        // distinct per session and the failed session is on cooldown, so they don't spam every tick.
+        const reasons = diagnostics
+          .filter((d) => EXTRACTION_FAILURE_CODES.has(d.code))
+          .map((d) => d.message);
+        for (const reason of reasons.length ? reasons : ["no tasks and no diagnostic (unexpected)"]) {
+          if (log) logWarn(log, `  ${sessionId}: ${reason}`);
+        }
       }
-    } catch {
+    } catch (err) {
       // Routine per-session failure (e.g. a transient provider error surfacing as a throw): leave the
       // session eligible (unstamped) but back it off for the cooldown so the next tick isn't blocked on
       // it, then keep draining. It recovers automatically once the cooldown elapses.
       failures++;
       retryAfterMs.set(sessionId, now + RETRY_COOLDOWN_MS);
+      if (log) logWarn(log, `  ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   if (done > 0) {
     const progress = await store.interpretationProgress();
     log?.(
-      `Extracted tasks from ${done} session${done === 1 ? "" : "s"} this pass — ${progress.interpreted} done, ${progress.pending} remaining.`,
+      `Interpreted ${done} session${done === 1 ? "" : "s"} this pass — ${progress.interpreted} done, ${progress.pending} remaining.`,
     );
   }
   if (failures > 0) {
-    note(`Couldn't extract tasks for ${failures} session${failures === 1 ? "" : "s"} this pass; will retry later.`, "warn");
+    note(`Couldn't interpret ${failures} session${failures === 1 ? "" : "s"} this pass; will retry later.`, "warn");
   }
 }

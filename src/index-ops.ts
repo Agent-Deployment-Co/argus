@@ -3,25 +3,25 @@
 import { createInterface } from "node:readline";
 import { sourcesFor } from "./reporting/dashboard-builder.ts";
 import { syncStatsSummary, reindexSession } from "./indexing/pipeline.ts";
-import { runInterpretationDrain, taskExtractionActive } from "./indexing/interpret/index.ts";
+import { runInterpretationDrain, sessionInterpretationActive } from "./indexing/interpret/index.ts";
 import type { RepeatCollapser } from "./backoff.ts";
 import { openSessionStore } from "./store/session-store.ts";
 import { openStore, rebuildStore } from "./store/store.ts";
-import { loadConfig, resolveRetainText, resolveTaskExtraction, type ArgusConfig, type ResolvedTaskExtraction } from "./config.ts";
+import { loadConfig, resolveRetainText, resolveSessionInterpretation, type ArgusConfig, type ResolvedSessionInterpretation } from "./config.ts";
 import type { DeleteOptions, RefreshOptions, SyncOptions } from "./cli-options.ts";
 import { logAt, logWarn, type Log } from "./logger.ts";
 
-/** Resolve task-extraction settings for an indexing run: the `--extract-tasks` override (when set)
- *  wins over argus.json, which wins over the built-in default (off) — the uniform #89 chain, with
- *  the flag occupying its flag layer. `provider`/`model`/etc. always come from argus.json. */
+/** Resolve session-interpretation settings for an indexing run: the `--interpret` override (when set)
+ *  wins over argus.json, which wins over the built-in default — the uniform #89 chain, with the flag
+ *  occupying its flag layer. `provider`/`model`/etc. always come from argus.json. */
 function resolveExtraction(
-  extractTasks: boolean | undefined,
+  interpret: boolean | undefined,
   file: ArgusConfig,
   log: Log,
-): ResolvedTaskExtraction {
-  // Task-extraction debug goes through the shared logger and is emitted when the level includes debug.
-  return resolveTaskExtraction(
-    extractTasks === undefined ? {} : { "extract-tasks": extractTasks },
+): ResolvedSessionInterpretation {
+  // Interpretation debug goes through the shared logger and is emitted when the level includes debug.
+  return resolveSessionInterpretation(
+    interpret === undefined ? {} : { interpret },
     file,
     log,
   );
@@ -68,7 +68,7 @@ export async function runIndex(
   // interpret a bounded, rate-limited batch of eligible sessions, reading retained text back from the
   // store. A fresh handle (the pipeline closed its own) and strictly after indexing, so there's never a
   // concurrent writer. No-op when task extraction is disabled — and we skip opening the store entirely.
-  if (taskExtractionActive(taskExtraction)) {
+  if (sessionInterpretationActive(taskExtraction)) {
     const store = await openStore();
     try {
       await runInterpretationDrain(store, taskExtraction, log, interpretCollapser);
@@ -161,14 +161,14 @@ async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
   if (opts.debug) log.setLevel?.("debug");
   const taskExtraction = resolveExtraction(opts.extractTasks, config, log);
   const retainText = resolveRetention(opts.retainText, config);
-  const extracting = taskExtraction.enabled && taskExtraction.llm.provider !== "off";
+  const interpreting = taskExtraction.enabled && taskExtraction.llm.provider !== "off";
   const store = await openStore(opts.storePath ? { path: opts.storePath } : undefined);
   let refreshed = 0;
   let failed = 0;
   try {
     for (const id of opts.ids) {
-      // Heartbeat before each — extraction (when on) runs an AI model and can take a moment.
-      log(extracting ? `Refreshing ${id} (extracting tasks)…` : `Refreshing ${id}…`);
+      // Heartbeat before each — interpretation (when on) runs an AI model and can take a moment.
+      log(interpreting ? `Refreshing ${id} (interpreting)…` : `Refreshing ${id}…`);
       const result = await reindexSession(id, { store, taskExtraction, retainText });
       if (!result.ok) {
         failed++;
@@ -177,15 +177,15 @@ async function refreshSessions(opts: RefreshOptions, log: Log): Promise<void> {
       }
       refreshed++;
       const n = result.tasks.length;
-      // Distinguish "extracted N tasks" / "extraction ran, found none" / "extraction off this run",
+      // Distinguish "found N tasks" / "interpretation ran, found none" / "interpretation off this run",
       // so an empty result isn't silently ambiguous.
-      const note = !extracting
+      const note = !interpreting
         ? ""
         : n
           ? ` (${n} task${n === 1 ? "" : "s"})`
           : " (no tasks found)";
       log(`Refreshed ${id}${note}.`);
-      // Surface any extraction warnings (e.g. the provider failed) rather than swallowing them.
+      // Surface any interpretation warnings (e.g. the provider failed) rather than swallowing them.
       for (const diag of result.diagnostics) {
         logAt(log, diag.severity === "warning" ? "warn" : diag.severity, diag.message);
       }

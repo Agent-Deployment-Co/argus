@@ -27,12 +27,12 @@ import { CliUsageError, syncOptions, toSource } from "./cli-options.ts";
 import {
   loadConfig,
   resolveLogLevel,
-  resolveTaskExtraction,
+  resolveSessionInterpretation,
   getPath,
   setPath,
   writeConfig,
   ALL_SETTINGS,
-  type ResolvedTaskExtraction,
+  type ResolvedSessionInterpretation,
 } from "./config.ts";
 import { defaultSecretStore, isSecretName, maskSecret, SECRET_NAMES } from "./secrets.ts";
 import { logger as log, logError, type Log } from "./logger.ts";
@@ -368,7 +368,7 @@ async function runStatus(): Promise<void> {
       ? `, ${interpretation.outdated} with new activity`
       : "";
     printResultLine(
-      `Extracted tasks from ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
+      `Interpreted ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
         `(${interpretation.pending} waiting${outdated}).`,
     );
   }
@@ -492,51 +492,73 @@ const sourceArg = {
   },
 } as const;
 
-// Task extraction options for web/session-screen extraction. Flags carry no env-var defaults: an
-// unset flag resolves to `undefined` so the config resolver can honor CLI flag > env > argus.json >
-// default in one place (see resolveTaskExtraction in config.ts).
-const taskArgs = {
-  "task-provider": {
+// Session-interpretation override flags (the deprecated per-consumer override layer over `llm.*`).
+// These are the canonical `--interpret-*` spellings the settings registry advertises, each paired with
+// its deprecated `--task-*` alias (both must be registered here or citty rejects the unknown flag; the
+// resolver reads flag > legacyFlag). Flags carry no env-var defaults: an unset flag resolves to
+// `undefined` so the config resolver can honor CLI flag > env > argus.json > default in one place (see
+// resolveSessionInterpretation in config.ts).
+const interpretOverrideArgs = {
+  "interpret-provider": {
     type: "string",
     description:
-      "Task extractor: claude, command, or off (env ARGUS_TASK_PROVIDER)",
+      "Interpretation provider: claude, command, or off (env ARGUS_INTERPRET_PROVIDER)",
     valueHint: "claude|command|off",
   },
-  "task-model": {
+  "interpret-model": {
     type: "string",
     description:
-      "Model for task extraction when the provider supports it (env ARGUS_TASK_MODEL)",
+      "Model for interpretation when the provider supports it (env ARGUS_INTERPRET_MODEL)",
     valueHint: "id",
   },
-  "task-prompt": {
+  "interpret-prompt": {
     type: "string",
-    description: "Custom task extraction prompt (env ARGUS_TASK_PROMPT)",
+    description: "Custom interpretation prompt (env ARGUS_INTERPRET_PROMPT)",
     valueHint: "text",
   },
-  "task-prompt-file": {
+  "interpret-prompt-file": {
     type: "string",
     description:
-      "Read the task extraction prompt from a file (env ARGUS_TASK_PROMPT_FILE)",
+      "Read the interpretation prompt from a file (env ARGUS_INTERPRET_PROMPT_FILE)",
     valueHint: "path",
   },
-  "task-command": {
+  "interpret-command": {
     type: "string",
     description:
-      "Command provider; reads prompt on stdin and writes task JSON to stdout (env ARGUS_TASK_COMMAND)",
+      "Command provider; reads prompt on stdin and writes JSON to stdout (env ARGUS_INTERPRET_COMMAND)",
     valueHint: "cmd",
   },
+  // Deprecated aliases (kept working for one release; prefer the --interpret-* spellings above).
+  "task-provider": { type: "string", description: "Deprecated alias for --interpret-provider.", valueHint: "claude|command|off" },
+  "task-model": { type: "string", description: "Deprecated alias for --interpret-model.", valueHint: "id" },
+  "task-prompt": { type: "string", description: "Deprecated alias for --interpret-prompt.", valueHint: "text" },
+  "task-prompt-file": { type: "string", description: "Deprecated alias for --interpret-prompt-file.", valueHint: "path" },
+  "task-command": { type: "string", description: "Deprecated alias for --interpret-command.", valueHint: "cmd" },
 } as const;
 
-/** The opt-in task-extraction override shared by the indexing commands (index, rebuild, refresh).
- *  Tri-state: unset defers to argus.json; true/false overrides it for the run (see #93). */
-const extractTasksArg = {
-  "extract-tasks": {
+/** The opt-in session-interpretation override shared by the indexing commands (index, rebuild,
+ *  refresh). Tri-state: unset defers to argus.json; true/false overrides it for the run (see #93).
+ *  `--extract-tasks` is the deprecated alias (#234), kept working for one release. */
+const interpretArg = {
+  interpret: {
     type: "string",
     description:
-      "Extract tasks this run: true|false (overrides argus.json). Omit to use the config setting.",
+      "Interpret sessions this run: true|false (overrides argus.json). Omit to use the config setting.",
+    valueHint: "true|false",
+  },
+  "extract-tasks": {
+    type: "string",
+    description: "Deprecated alias for --interpret.",
     valueHint: "true|false",
   },
 } as const;
+
+/** The effective interpret override for a run: `--interpret` wins, then the deprecated
+ *  `--extract-tasks` alias. */
+function interpretOverride(args: Record<string, unknown>): boolean | undefined {
+  const raw = (args["interpret"] ?? args["extract-tasks"]) as string | undefined;
+  return toBoolOverride(raw, "interpret");
+}
 
 /** The local text-retention override shared by the indexing commands (#120). Tri-state: unset defers
  *  to argus.json/env; true/false overrides it for the run. Stored text is local-only — never synced. */
@@ -583,8 +605,8 @@ const buildArgs = {
  *  > argus.json > default). The `enabled` toggle is unused here — these commands extract on demand. */
 function taskExtractionOptions(
   args: Record<string, unknown>,
-): ResolvedTaskExtraction {
-  return resolveTaskExtraction(args, loadConfig(), log);
+): ResolvedSessionInterpretation {
+  return resolveSessionInterpretation(args, loadConfig(), log);
 }
 
 const serve = defineCommand({
@@ -628,7 +650,7 @@ const indexRebuild = defineCommand({
   },
   args: {
     ...sourceArg,
-    ...extractTasksArg,
+    ...interpretArg,
     ...retainTextArg,
     ...debugArg,
     ...logArgs,
@@ -642,7 +664,7 @@ const indexRebuild = defineCommand({
     runIndexRebuild(
       { ...syncOptions(args), force: args.force },
       log,
-      toBoolOverride(args["extract-tasks"], "extract-tasks"),
+      interpretOverride(args),
       !!args.debug,
       toBoolOverride(args["retain-text"], "retain-text"),
     ),
@@ -663,7 +685,7 @@ const indexRefresh = defineCommand({
         "session id(s) to refresh (space-separated); omit to refresh all",
     },
     ...sourceArg,
-    ...extractTasksArg,
+    ...interpretArg,
     ...retainTextArg,
     ...debugArg,
     ...logArgs,
@@ -673,7 +695,7 @@ const indexRefresh = defineCommand({
       {
         ...syncOptions(args),
         ids: args._,
-        extractTasks: toBoolOverride(args["extract-tasks"], "extract-tasks"),
+        extractTasks: interpretOverride(args),
         retainText: toBoolOverride(args["retain-text"], "retain-text"),
         debug: !!args.debug,
       },
@@ -717,7 +739,7 @@ const index = defineCommand({
   },
   args: {
     ...sourceArg,
-    ...extractTasksArg,
+    ...interpretArg,
     ...retainTextArg,
     ...debugArg,
     ...logArgs,
@@ -745,10 +767,7 @@ const index = defineCommand({
     return guard(
       async () => {
         const args = ctx.args;
-        const extractTasks = toBoolOverride(
-          args["extract-tasks"],
-          "extract-tasks",
-        );
+        const extractTasks = interpretOverride(args);
         const retainText = toBoolOverride(args["retain-text"], "retain-text");
         if (args.watch) {
           const ac = abortOnSignals();
@@ -862,7 +881,7 @@ const runCmd = defineCommand({
   },
   args: {
     ...sourceArg,
-    ...taskArgs,
+    ...interpretOverrideArgs,
     ...logArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
     "index-interval": { type: "string", default: String(DEFAULT_INDEX_INTERVAL_MIN), description: "Minutes between transcript reads", valueHint: "N" },

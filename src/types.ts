@@ -34,8 +34,14 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   rawTurns: number | null;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
-  /** CLI-only: tasks generated for this session via session task extraction. */
+  /** CLI-only: tasks generated for this session via session interpretation. */
   tasks?: TaskFact[];
+  /** CLI-only (#234): the model-generated session title, when interpreted; null otherwise. Not on the
+   *  sync wire (`summary` already is; `title` stays local), stripped on push like `tasks`/`health`. */
+  title?: string | null;
+  /** CLI-only (#234): whether session interpretation has run for this session. Lets the UI show "No
+   *  tasks found." (ran, produced none) vs "Interpretation pending." (not yet run). */
+  interpreted?: boolean;
 };
 
 /**

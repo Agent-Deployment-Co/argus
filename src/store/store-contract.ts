@@ -296,6 +296,19 @@ export interface InvocationFact {
   position: SourcePosition;
 }
 
+/** A tool invocation projected for the interpret stage's pass-2 tool-usage summary (#234): just enough
+ *  to count and label calls, grouped by their owning interaction. Read straight from
+ *  resolved_invocations, so `interactionSeq` is the leaf soft-link (not the task, which isn't assigned
+ *  until interpretation writes it). */
+export interface SessionInvocation {
+  interactionSeq: number | null;
+  tool: string;
+  category: string;
+  mcpServer?: string;
+  mcpTool?: string;
+  filePath?: string;
+}
+
 export interface ToolResultFact {
   id: string;
   source: AgentSource;
@@ -511,18 +524,22 @@ export interface SessionSearchQuery extends ResolvedQuery {
   file?: string;
 }
 
-/** Which FTS table(s) a session's match came from — the web UI labels task matches ("in task
- *  summary") differently since that text is a distilled restatement, not raw dialogue. */
-export type SessionSearchMatchSource = "conversation" | "task" | "both";
+/** A text source a session's match can come from: raw `conversation` (transcript) vs the distilled
+ *  model restatements `task` (per-task text, #155) and `summary` (session title/summary, #234). The
+ *  web UI labels the distilled ones distinctly, since that text isn't verbatim dialogue. */
+export type SessionSearchTextSource = "conversation" | "task" | "summary";
 
 export interface SessionSearchMatch {
-  /** Combined match count across whichever FTS table(s) hit (summed when `source` is "both"). */
+  /** Combined match count across whichever FTS table(s) hit (summed across all matched `sources`). */
   count: number;
   /** A snippet with matched spans wrapped in char(1)/char(2) sentinels (not HTML — the web layer
-   *  splits and wraps in <mark> itself, so this is XSS-safe by construction). Prefers the task
-   *  snippet over the conversation snippet when both tables matched (more readable, distilled text). */
+   *  splits and wraps in <mark> itself, so this is XSS-safe by construction). Drawn from the most
+   *  distilled matched source (summary > task > conversation), i.e. the most readable restatement. */
   snippet: string;
-  source: SessionSearchMatchSource;
+  /** Every text source that matched, deduped and ordered most-distilled-first (summary, task,
+   *  conversation) — so `sources[0]` is the snippet's origin. Lets the UI name each precisely and show
+   *  combinations, instead of the old lossy conversation/task/both single value. */
+  sources: SessionSearchTextSource[];
 }
 
 /** Result of `searchSessions`: the matching session ids (already includes any metadata-only matches,
@@ -545,6 +562,10 @@ export interface SessionAggregate {
   firstTs: number | null;
   lastTs: number | null;
   messageCount: number;
+  /** Model-generated title/summary (#234), when the session has been interpreted; null otherwise. The
+   *  list surfaces them with a first-prompt fallback. */
+  title: string | null;
+  summary: string | null;
 }
 
 /** Usage sums + message count for one grouping key crossed with model (cost is priced per-model in JS
@@ -672,6 +693,12 @@ export interface ReadModelStore {
   ): Promise<string[]>;
   /** Metadata for a single resolved session, without loading messages or tasks. */
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
+  /** The model-generated title/summary for one session (#234), plus whether interpretation has run at
+   *  all (`interpreted`), or undefined if the session doesn't exist; title/summary are null until it's
+   *  interpreted. Backs the detail view's title/summary fallback and its pending-vs-ran distinction. */
+  readSessionInterpretation(
+    sessionId: string,
+  ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined>;
   /** Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
    *  order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. A reader
    *  groups by `interactionSeq` as needed. Empty when retention was off at index time. Local-only —
@@ -691,9 +718,20 @@ export interface ReadModelStore {
   readPendingInterpretationSessions(limit: number): Promise<string[]>;
   /** Sole writer of resolved_tasks + interpretation state (#153): replace a session's tasks (without
    *  re-materializing messages/interactions/text), re-derive task↔interaction membership, and stamp
-   *  interpreted_at_ms + interpretation_version. Always stamps — even for an empty task list — so a
-   *  session with no extractable tasks de-queues instead of re-running every drain tick. */
-  writeSessionTasks(sessionId: string, tasks: TaskFact[], version: string): Promise<void>;
+   *  interpreted_at_ms + interpretation_version plus the model title/summary (#234). Always stamps —
+   *  even for an empty task list — so a session with no extractable tasks de-queues instead of re-running
+   *  every drain tick. `title`/`summary` default to null; the interpret stage passes what it generated. */
+  writeSessionTasks(
+    sessionId: string,
+    tasks: TaskFact[],
+    version: string,
+    title?: string | null,
+    summary?: string | null,
+  ): Promise<void>;
+  /** All tool invocations for a session with their owning interaction seq (#234) — the deterministic
+   *  input for the pass-2 tool-usage summary. Read straight off resolved_invocations (no task_seq join,
+   *  which isn't written until interpretation completes), ordered by seq. */
+  readSessionInvocations(sessionId: string): Promise<SessionInvocation[]>;
   /** Take up to `want` credits from the persisted Interpret rate limiter (#153) — one credit = one
    *  session's worth of interpretation (unrelated to LLM tokens). Refilled continuously at
    *  `maxPerHour`/hour (capacity `maxPerHour`, fresh bucket full). Returns how many were granted,

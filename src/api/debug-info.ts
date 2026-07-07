@@ -2,7 +2,7 @@
 // paths, and store/index status that explain why Argus is behaving the way it is. Read-only and
 // best-effort — every section degrades gracefully so the page still renders when something is off.
 import { existsSync, statSync } from "node:fs";
-import { loadConfig, resolveTaskExtraction, type ArgusConfig } from "../config.ts";
+import { loadConfig, resolveSessionInterpretation, type ArgusConfig } from "../config.ts";
 import { scanStore, type SourceScan } from "../indexing/pipeline.ts";
 import {
   ARGUS_CONFIG_DIR,
@@ -108,7 +108,7 @@ function sizeOf(path: string): number | null {
 /** Gather the full debug payload. `serveReadOnly` is passed in by the caller (serve sets it true). */
 export async function collectDebugInfo(opts: { serveReadOnly: boolean }): Promise<DebugInfo> {
   const config = loadConfig();
-  const resolved = resolveTaskExtraction({}, config);
+  const resolved = resolveSessionInterpretation({}, config);
 
   const store: DebugInfo["store"] = {
     path: STORE_FILE,

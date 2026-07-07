@@ -199,17 +199,20 @@ function rawExec(db: Database, sql: string): void {
   db.run(sql);
 }
 
-/** Strip the v19 interpretation columns + partial index (#153) and the v20 search FTS tables +
- *  file_path index (#155) so a test that degrades a current-schema store to a pre-19/pre-20 version
- *  can re-run the migration chain without colliding with things the current CREATE_SCHEMA_SQL already
- *  created. Mirrors how these tests strip every other post-version add. */
+/** Strip the v19 interpretation columns + partial index (#153), the v20 search FTS tables + file_path
+ *  index (#155), and the v21 title/summary columns (#234) so a test that degrades a current-schema store
+ *  to a pre-19/20/21 version can re-run the migration chain without colliding with things the current
+ *  CREATE_SCHEMA_SQL already created. Mirrors how these tests strip every other post-version add. */
 function dropPostV18Schema(db: Database): void {
   rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_interpret_pending");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN content_indexed_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpreted_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpretation_version");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
   rawExec(db, "DROP TABLE IF EXISTS resolved_interaction_text_fts");
   rawExec(db, "DROP TABLE IF EXISTS resolved_tasks_fts");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
   rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
 }
 
@@ -1702,7 +1705,7 @@ describe("session search (#155)", () => {
       const result = await store.searchSessions({ text: "flibbertigibbet" });
       expect(result.ids).toEqual(new Set([sid]));
       const match = result.matches.get(sid);
-      expect(match?.source).toBe("conversation");
+      expect(match?.sources).toEqual(["conversation"]);
       expect(match?.count).toBeGreaterThan(0);
       expect(match?.snippet).toContain("flibbertigibbet");
     } finally {
@@ -1753,7 +1756,24 @@ describe("session search (#155)", () => {
 
       const result = await store.searchSessions({ text: "quuxwidget" });
       expect(result.ids).toEqual(new Set([sid]));
-      expect(result.matches.get(sid)?.source).toBe("task");
+      expect(result.matches.get(sid)?.sources).toEqual(["task"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("finds a session via the model title/summary, tagged source: summary (#234)", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      // No tasks — only the model title/summary, which the #234 FTS index must make searchable.
+      await store.writeSessionTasks(sid, [], "v2", "Zephyrmodule refactor", "Reworked the glorbfunction loader and its tests.");
+
+      const byTitle = await store.searchSessions({ text: "Zephyrmodule" });
+      expect(byTitle.ids).toEqual(new Set([sid]));
+      expect(byTitle.matches.get(sid)?.sources).toEqual(["summary"]); // distinct summary source (#234), not "task"
+      // A term appearing only in the summary matches too.
+      expect((await store.searchSessions({ text: "glorbfunction" })).ids).toEqual(new Set([sid]));
     } finally {
       await store.close();
     }
@@ -1781,7 +1801,7 @@ describe("session search (#155)", () => {
     }
   });
 
-  test("a session matching both FTS tables reports source: both and sums the counts", async () => {
+  test("a session matching conversation + task lists both sources and sums the counts", async () => {
     const store = await openStore({ path: storePath() });
     try {
       await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
@@ -1799,7 +1819,7 @@ describe("session search (#155)", () => {
       const result = await store.searchSessions({ text: "flibbertigibbet" });
       expect(result.ids).toEqual(new Set([sid]));
       const match = result.matches.get(sid);
-      expect(match?.source).toBe("both");
+      expect(match?.sources).toEqual(["task", "conversation"]); // ordered most-distilled-first
       expect(match?.count).toBe(3); // 2 conversation chunks (prompt+response) + 1 task
     } finally {
       await store.close();
@@ -1824,12 +1844,16 @@ describe("session search (#155)", () => {
     } finally {
       await store.close();
     }
-    // Degrade to v19: drop the v20 additions and set the version back, simulating an older store
-    // that already has interaction text + task data on disk but no search index yet.
+    // Degrade to v19: drop the additions of every migration that will re-run from here — v20's search
+    // FTS/file_path index AND v21's title/summary columns (#234) — and set the version back, simulating
+    // an older store that already has interaction text + task data on disk but no search index yet.
     await withRawDatabase(path, (db) => {
       rawExec(db, "DROP TABLE resolved_interaction_text_fts");
       rawExec(db, "DROP TABLE resolved_tasks_fts");
+      rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
       rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
       rawExec(db, "PRAGMA user_version = 19");
     });
 
@@ -1837,7 +1861,7 @@ describe("session search (#155)", () => {
     try {
       const result = await migrated.searchSessions({ text: "flibbertigibbet" });
       expect(result.ids).toEqual(new Set([sid]));
-      expect(result.matches.get(sid)?.source).toBe("both");
+      expect(result.matches.get(sid)?.sources).toEqual(["task", "conversation"]);
     } finally {
       await migrated.close();
     }

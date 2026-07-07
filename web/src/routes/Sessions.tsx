@@ -36,9 +36,12 @@ function extractFilterToken(raw: string, requireTerminator: boolean): { key: Fil
   return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
 }
 
-/** A human-facing title for a session: its opening prompt, else the heuristic summary (detail only),
- *  else a placeholder. Accepts both the list-lite item and the full row. */
-export function sessionTitle(s: { firstPrompt?: string | null; summary?: string }): string {
+/** A human-facing title for a session: the model-generated title when the session has been interpreted
+ *  (#234), else its opening prompt, else the summary, else a placeholder. Accepts both the list-lite
+ *  item and the full row. */
+export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null; summary?: string | null }): string {
+  const title = s.title?.trim();
+  if (title) return title;
   const prompt = s.firstPrompt?.trim();
   if (prompt) return prompt.length > 90 ? prompt.slice(0, 90) + "…" : prompt;
   const summary = s.summary?.trim().replace(/^"|"$/g, "");
@@ -51,9 +54,16 @@ export function sessionTitle(s: { firstPrompt?: string | null; summary?: string 
 const SNIPPET_MATCH_START = "";
 const SNIPPET_MATCH_END = "";
 
+/** Human label for a distilled (non-conversation) match source (#234): names where the snippet came
+ *  from so a title/summary hit reads "session summary", not "task summary". */
+const DISTILLED_SOURCE_LABEL: Record<"task" | "summary", string> = {
+  summary: "session summary",
+  task: "task summary",
+};
+
 /** Render a search-match snippet under a session row: the matched spans wrapped in <mark>, plus a
- *  match count and — when the match came from task-interpretation text — a label clarifying that's a
- *  distilled restatement rather than raw dialogue. */
+ *  match count and — when the match came from distilled interpretation text (task and/or session
+ *  summary) — a label clarifying that's a restatement rather than raw dialogue. */
 function SearchSnippet({ match }: { match: SessionListItem["match"] }) {
   if (!match) return null;
   const segments = match.snippet.split(SNIPPET_MATCH_START);
@@ -62,12 +72,17 @@ function SearchSnippet({ match }: { match: SessionListItem["match"] }) {
     const [hit, ...rest] = segments[i]!.split(SNIPPET_MATCH_END);
     nodes.push(<mark key={i}>{hit}</mark>, rest.join(SNIPPET_MATCH_END));
   }
+  // Name each distilled source that matched (raw `conversation` needs no label — it's the dialogue).
+  const distilledLabel = match.sources
+    .filter((s): s is "task" | "summary" => s !== "conversation")
+    .map((s) => DISTILLED_SOURCE_LABEL[s])
+    .join(" & ");
   return (
     <div className="session-item-snippet">
       <span className="session-item-snippet-text">{nodes}</span>
       <span className="session-item-snippet-meta">
         {match.count} match{match.count === 1 ? "" : "es"}
-        {(match.source === "task" || match.source === "both") && <> · in task summary</>}
+        {distilledLabel && <> · in {distilledLabel}</>}
       </span>
     </div>
   );

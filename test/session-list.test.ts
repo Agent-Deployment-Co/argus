@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildSessionDetail, buildSessionList } from "../src/api/session-list.ts";
-import type { SessionAggregate } from "../src/store/store-contract.ts";
+import type { SessionAggregate, SessionSearchMatch } from "../src/store/store-contract.ts";
 import type { MessageRecord, SessionMeta, Usage } from "../src/types.ts";
 
 function usage(input: number): Usage {
@@ -23,6 +23,8 @@ function agg(sessionId: string, over: Partial<SessionMeta> & { input: number; st
     firstTs: start,
     lastTs: start,
     messageCount: 1,
+    title: null,
+    summary: null,
   };
 }
 
@@ -76,7 +78,7 @@ describe("buildSessionList", () => {
       agg("a", { input: 1, start: 1, project: "web/app", firstPrompt: "totally unrelated" }),
       agg("b", { input: 1, start: 2, project: "cli/tool", firstPrompt: "totally unrelated too" }),
     ];
-    const matches = new Map([["b", { count: 2, snippet: "the pricing bug", source: "conversation" as const }]]);
+    const matches = new Map<string, SessionSearchMatch>([["b", { count: 2, snippet: "the pricing bug", sources: ["conversation"] }]]);
     const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
     expect(page.rows.find((r) => r.sessionId === "a")?.match).toBeUndefined();
     expect(page.rows.find((r) => r.sessionId === "b")?.match).toEqual(matches.get("b"));
@@ -87,7 +89,7 @@ describe("buildSessionList", () => {
     // don't contain the search term) must survive here — the caller passes q: undefined once a
     // store-side search already ran, so this plain metadata check must not re-exclude it.
     const mixed = [agg("a", { input: 1, start: 1, project: "p", firstPrompt: "no keyword here" })];
-    const matches = new Map([["a", { count: 1, snippet: "s", source: "task" as const }]]);
+    const matches = new Map<string, SessionSearchMatch>([["a", { count: 1, snippet: "s", sources: ["task"] }]]);
     const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
     expect(page.rows.map((r) => r.sessionId)).toEqual(["a"]);
   });

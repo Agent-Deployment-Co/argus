@@ -4,7 +4,6 @@
 import { sourcesFor } from "./reporting/dashboard-builder.ts";
 import { openStore } from "./store/store.ts";
 import { buildSessionList, type SessionListItem } from "./api/session-list.ts";
-import type { SessionSearchMatch } from "./store/store-contract.ts";
 import { CliUsageError, type Source } from "./cli-options.ts";
 import type { Log } from "./logger.ts";
 
@@ -43,9 +42,8 @@ function compareResults(a: SessionListItem, b: SessionListItem): number {
   if (!am && bm) return 1;
   if (am && bm) {
     if (am.count !== bm.count) return bm.count - am.count;
-    const rank = (s: SessionSearchMatch["source"]) => (s === "both" ? 0 : 1);
-    const r = rank(am.source) - rank(bm.source);
-    if (r !== 0) return r;
+    // More matched sources ranks higher (a hit across conversation + distilled beats a single-source hit).
+    if (am.sources.length !== bm.sources.length) return bm.sources.length - am.sources.length;
   }
   return b.start - a.start;
 }
@@ -55,7 +53,7 @@ function formatWhen(ts: number): string {
 }
 
 function printResult(item: SessionListItem, tty: boolean): void {
-  const kind = item.match ? ` · ${item.match.source} match (${item.match.count})` : "";
+  const kind = item.match ? ` · ${item.match.sources.join("+")} match (${item.match.count})` : "";
   process.stdout.write(
     `${item.sessionId}  ${item.source}  ${item.project}  ${formatWhen(item.start)}${kind}\n`,
   );

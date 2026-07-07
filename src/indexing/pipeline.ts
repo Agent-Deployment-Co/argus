@@ -33,8 +33,8 @@ import type { NativeProducer, ProducerContext } from "./producer.ts";
 import { NATIVE_PRODUCERS, nativeProducerForSource } from "./parse/producers/index.ts";
 import type { AgentSource, MessageRecord, ParseResult } from "../types.ts";
 import type { TaskFact } from "../store/store-contract.ts";
-import { interpretSession, taskExtractionActive } from "./interpret/index.ts";
-import type { ResolvedTaskExtraction } from "../config.ts";
+import { interpretSession, sessionInterpretationActive } from "./interpret/index.ts";
+import type { ResolvedSessionInterpretation } from "../config.ts";
 
 export interface SyncStats {
   hits: number;
@@ -64,7 +64,7 @@ export interface IncrementalParseOptions extends ParseOptions {
   query?: ResolvedQuery;
   /** Opt-in index-time task extraction (#91). When enabled, indexing a changed session also runs the
    *  two-pass extraction and materializes its tasks. Off/unset → indexing behaves exactly as today. */
-  taskExtraction?: ResolvedTaskExtraction;
+  taskExtraction?: ResolvedSessionInterpretation;
   /** Keep prompt/response text in the local store (#120). Default-on; unset → retained. Local-only —
    *  never uploaded by sync. */
   retainText?: boolean;
@@ -643,7 +643,7 @@ export async function reindexSession(
   opts: {
     store?: Store;
     storePath?: string;
-    taskExtraction?: ResolvedTaskExtraction;
+    taskExtraction?: ResolvedSessionInterpretation;
     /** Keep prompt/response text in the local store (#120). Default-on; unset → retained. */
     retainText?: boolean;
     /** Discovery locations for auxiliary inputs (history/project roots). Defaults to the real paths;
@@ -722,7 +722,7 @@ export async function reindexSession(
     // brings it current.
     await store.materializeSessions(producer.id, materialize, { retainText: opts.retainText });
     let tasks = await store.readSessionTasks(sessionId);
-    if (taskExtractionActive(opts.taskExtraction)) {
+    if (sessionInterpretationActive(opts.taskExtraction)) {
       const result = await interpretSession(store, sessionId, opts.taskExtraction!);
       diagnostics.push(...result.diagnostics);
       // On a pass-1 failure the prior tasks (just read) stand and the session stays eligible; on

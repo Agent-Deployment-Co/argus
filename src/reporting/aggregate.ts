@@ -126,6 +126,12 @@ export function buildSessionRow(
   meta: SessionMeta | undefined,
   summary: string,
   tasks: TaskFact[],
+  // Model-generated title (#234); null when the session isn't interpreted (the UI falls back to
+  // firstPrompt). CLI-only, stripped on the sync wire like `tasks`/`health`.
+  title: string | null = null,
+  // Whether interpretation has run for this session (#234) — lets the UI distinguish "No tasks found."
+  // (ran, none) from "Interpretation pending." (not yet run). CLI-only.
+  interpreted = false,
 ): SessionRow {
   const u = emptyUsage();
   let c = 0;
@@ -164,7 +170,9 @@ export function buildSessionRow(
     total: totalTokens(u),
     cost: c,
     firstPrompt: meta?.firstPrompt || "",
+    title,
     summary,
+    interpreted,
     health: {
       ...sessionHealth(msgs, meta?.friction),
       turns: meta?.rawTurns ?? meta?.friction?.turns ?? null,
