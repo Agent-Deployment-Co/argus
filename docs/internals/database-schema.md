@@ -13,7 +13,7 @@ The tables fall into three tiers plus a small operational set:
    per-message content; a touched session is re-materialized by re-parsing its files.
 2. **`resolved_*` — the read model.** The trusted, materialized content every reader hits: sessions,
    the interaction spine, per-turn usage, per-tool invocations, tasks, and (opt-in, local-only)
-   retained conversation text.
+   retained conversation text — plus two FTS5 search indexes over that text and over task summaries.
 3. **`source_coverage` / `session_ownership` — freshness & ownership.** Per-source freshness
    attestation and which producer owns each canonical session.
 4. **Operational / sync.** `store_metadata` (key/value bag), `client_fingerprint` (append-only
@@ -46,6 +46,9 @@ erDiagram
   resolved_interactions ||..o{ resolved_invocations : "interaction_seq (soft)"
   resolved_interactions ||..o{ resolved_interaction_text : "interaction_seq (soft)"
   resolved_tasks ||..o{ resolved_interactions : "task_seq (soft)"
+
+  resolved_interaction_text ||..o{ resolved_interaction_text_fts : "session_id (soft, no FK — see below)"
+  resolved_tasks ||..o{ resolved_tasks_fts : "session_id (soft, no FK — see below)"
 
   resolved_sessions ||..|| session_ownership : "session_id (soft)"
   resolved_sessions ||..o{ hub_session_cursors : "session_id (soft)"
@@ -136,6 +139,10 @@ erDiagram
     string type "prompt|response|narration"
     string text "local-only, never synced"
   }
+  resolved_interaction_text_fts {
+    string session_id "UNINDEXED, no PK/FK (FTS5 virtual table)"
+    string text "indexed, local-only, never synced"
+  }
   resolved_invocations {
     string session_id PK,FK
     int seq PK
@@ -145,7 +152,7 @@ erDiagram
     string mcp_server
     string mcp_tool
     string skill
-    string file_path
+    string file_path "indexed (partial, WHERE NOT NULL)"
     string date
     string args
     int approx_result_tokens
@@ -156,6 +163,10 @@ erDiagram
     string source
     int ts
     string task_json
+  }
+  resolved_tasks_fts {
+    string session_id "UNINDEXED, no PK/FK (FTS5 virtual table)"
+    string text "indexed, local-only, never synced"
   }
 
   source_coverage {
@@ -271,18 +282,42 @@ change). A reader rebuilds the dialogue with `ORDER BY seq`, grouped by `interac
 construction. PK `(session_id, seq)`, FK → `resolved_sessions`. See
 [configuration.md](./configuration.md#session-text-retention).
 
+### `resolved_interaction_text_fts` (#155)
+Full-text search over `resolved_interaction_text`, backing session search on `/sessions`. A **plain**
+FTS5 table — `fts5(session_id UNINDEXED, text)` — not the usual `content=`/`content_rowid`
+external-content pattern, and **not kept in sync by triggers**: the store runs with `PRAGMA
+trusted_schema = OFF` (hardening against a tampered `argus.db`), and SQLite categorically disallows a
+trigger from touching *any* virtual table while that pragma is off (verified against `bun:sqlite`).
+So `materialize` maintains this table with ordinary top-level `DELETE`/`INSERT` DML at the same points
+it already replaces `resolved_interaction_text` wholesale — a real write-path change, not "free"
+alongside the base table. `session_id` rides along as an `UNINDEXED` column (not tokenized) so a match
+groups by session without joining back to the base table. No PK/FK — it's a virtual table, and rows
+are 1:1 with `resolved_interaction_text` rows by construction, not by a declared key. Empty whenever
+retention was never on for a session (graceful degradation, not an error).
+
 ### `resolved_invocations`
 One row per tool invocation (call + its paired result), so `byTool` / `byToolCategory` /
 `byMcpServer` / `skillInvocations` / heaviest-results are `GROUP BY` queries. Carries `tool`,
-`category`, the MCP facets (`mcp_server`, `mcp_tool`), `skill`, `file_path`, the denormalized owning
-`date`/`cwd` (for windowed breakdowns), the `args` sample, and `approx_result_tokens` (the folded
-result size). `interaction_seq` soft-links the owning interaction. PK `(session_id, seq)`, FK →
-`resolved_sessions`.
+`category`, the MCP facets (`mcp_server`, `mcp_tool`), `skill`, `file_path` (a partial index,
+`WHERE file_path IS NOT NULL`, backs file-usage search — #155), the denormalized owning `date`/`cwd`
+(for windowed breakdowns), the `args` sample, and `approx_result_tokens` (the folded result size).
+`interaction_seq` soft-links the owning interaction. PK `(session_id, seq)`, FK → `resolved_sessions`.
 
 ### `resolved_tasks`
 One row per task ("chapter", an Interpret output). `task_json` is the full `TaskFact`; `ts` orders
 them. Interactions point at their task via `resolved_interactions.task_seq` (the soft parent
 relationship runs task → interactions). PK `(session_id, seq)`, FK → `resolved_sessions`.
+
+### `resolved_tasks_fts` (#155)
+Full-text search over task-interpretation text, same plain-FTS5-table approach as
+`resolved_interaction_text_fts` above (see its entry for why there are no triggers). `task_json` is
+opaque JSON with no queryable text column, so the indexed `text` is derived from
+`description` + `outcomeReason` + `signals[]` — **deliberately excluding `.evidence`**, which holds
+interaction-index bookkeeping (`"interactions: 1, 2"`), not prose. Maintained by `writeSessionTasks`
+at the same point it replaces `resolved_tasks` wholesale. Task interpretation is opt-in and often runs
+later than indexing (or never), so this table is frequently empty for a given session; `searchSessions`
+treats that the same as an empty `resolved_interaction_text_fts` — no error, just no contribution from
+that side.
 
 ## Tier 3 — freshness & ownership
 
@@ -313,7 +348,7 @@ unchanged sessions and pick up reindexed ones. PK `(hub_url, client_id, session_
 
 ## Schema version & migrations
 
-`PRAGMA user_version` holds the schema version (currently **18**) and `PRAGMA application_id`
+`PRAGMA user_version` holds the schema version (currently **20**) and `PRAGMA application_id`
 (`0x41524753`, "ARGS") tags the file as an Argus store. Upgrades run forward-only `MIGRATIONS` in
 `src/store/store.ts`, each a `{ to, sql }` step applied in a transaction that bumps `user_version`, so
 a partial upgrade never leaves a half-migrated store. Fresh stores are created from `CREATE_SCHEMA_SQL`
