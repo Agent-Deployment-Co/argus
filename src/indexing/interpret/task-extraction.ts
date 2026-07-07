@@ -191,22 +191,61 @@ function resolveInstructions(
   return options?.prompt?.trim() || DEFAULT_TASK_EXTRACTION_PROMPT;
 }
 
+// Pass-1 prompt bounds (#234). A long agentic session's full text runs to hundreds of KB / megabytes,
+// which blows haiku's context (fast failure) or just makes each call slow — defeating the "lightweight,
+// cheap" design (haiku is the fast tier; the point is to keep its input small so it stays fast). We
+// bound the WHOLE prompt to a fixed character budget and truncate every message as hard as needed to
+// fit — never dropping a message, because an interior interaction can be a task pivot / new chapter
+// that segmentation must see. The budget is shared equally across messages; within a message the user
+// prompt (which anchors segmentation) gets priority and the assistant response takes what's left. Each
+// field is truncated head+tail, so both the setup and the outcome of a long message survive.
+export const PROMPT_CHAR_LIMIT = 4000;
+export const RESPONSE_GROUNDING_CHAR_LIMIT = 1000;
+/** Total character budget for the assembled per-message text (~4 chars/token, so ~15k tokens). */
+export const PASS1_TOTAL_CHAR_BUDGET = 60_000;
+/** Floor so even a very long session keeps a readable snippet per message (a pivot still shows). */
+const MIN_MSG_CHARS = 200;
+
+/** Truncate to `maxChars` keeping the head and the tail (the setup and the conclusion), with an
+ *  elision marker naming how much was cut. `<= 0` yields "". */
+function truncateHeadTail(text: string, maxChars: number): string {
+  const t = text.trim();
+  if (maxChars <= 0) return "";
+  if (t.length <= maxChars) return t;
+  const usable = Math.max(0, maxChars - 24); // leave room for the marker
+  const headLen = Math.ceil(usable * 0.65);
+  const tailLen = Math.floor(usable * 0.35);
+  const head = t.slice(0, headLen).trimEnd();
+  const tail = tailLen > 0 ? t.slice(t.length - tailLen).trimStart() : "";
+  const elided = t.length - head.length - tail.length;
+  return tail ? `${head} …[${elided} chars elided]… ${tail}` : `${head} …[${elided} chars elided]`;
+}
+
 export function buildTaskExtractionPrompt(
   sessionId: string,
   candidates: InteractionFact[],
   instructions = DEFAULT_TASK_EXTRACTION_PROMPT,
   limits?: { titleMaxChars: number; summaryMaxChars: number },
 ): string {
-  // Each entry is a filtered user message (what messageIndexes anchors to) plus, as grounding only,
-  // the assistant's response to that interaction so title/summary reflect what actually happened (#234).
-  const messages = candidates.map((candidate, index) => ({
-    index,
-    ...(candidate.timestampMs != null
-      ? { timestamp: new Date(candidate.timestampMs).toISOString() }
-      : {}),
-    text: candidate.promptText ?? "",
-    ...(candidate.responseText ? { response: candidate.responseText } : {}),
-  }));
+  // Equal share of the budget per message; the prompt takes up to its own cap (and the share), the
+  // response takes whatever share is left (up to its cap). No message is dropped — every index slot
+  // keeps real, if aggressively truncated, text so messageIndexes stays meaningful.
+  const n = Math.max(1, candidates.length);
+  const perMsg = Math.floor(PASS1_TOTAL_CHAR_BUDGET / n);
+  const messages = candidates.map((candidate, index) => {
+    const promptCap = Math.min(PROMPT_CHAR_LIMIT, Math.max(MIN_MSG_CHARS, perMsg));
+    const text = truncateHeadTail(candidate.promptText ?? "", promptCap);
+    const responseCap = Math.min(RESPONSE_GROUNDING_CHAR_LIMIT, Math.max(0, perMsg - text.length));
+    const response = candidate.responseText ? truncateHeadTail(candidate.responseText, responseCap) : "";
+    return {
+      index,
+      ...(candidate.timestampMs != null
+        ? { timestamp: new Date(candidate.timestampMs).toISOString() }
+        : {}),
+      text,
+      ...(response ? { response } : {}),
+    };
+  });
   const constraints = limits
     ? `\n\nConstraints:\n- title: at most ${limits.titleMaxChars} characters.\n- summary: at most ${limits.summaryMaxChars} characters.`
     : "";

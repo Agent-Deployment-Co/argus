@@ -65,6 +65,29 @@ describe("task extraction", () => {
     expect(prompt).toContain("at most 400 characters");
   });
 
+  test("truncates a huge response head+tail so it can't blow the prompt (#234)", () => {
+    const huge = "A".repeat(25_000) + "B".repeat(25_000);
+    const prompt = buildTaskExtractionPrompt("codex:one", [candidate(0, "do it", undefined, huge)], "Return JSON.");
+    expect(prompt).toContain("chars elided"); // head+tail elision marker
+    expect(prompt).not.toContain("A".repeat(2000)); // the full 50KB response is not embedded
+    expect(prompt).toContain("B"); // the tail (conclusion) survives, not just the head
+    expect(prompt).toContain('"text": "do it"'); // the user prompt is intact
+  });
+
+  test("bounds the whole prompt for a many-message session without dropping any message (#234)", () => {
+    // 400 messages, each with a large prompt + response — no per-message cap alone would bound this.
+    const many = Array.from({ length: 400 }, (_, i) =>
+      candidate(i, `task ${i}: ` + "p".repeat(3000), undefined, "r".repeat(3000)),
+    );
+    const prompt = buildTaskExtractionPrompt("codex:one", many, "Return JSON.");
+    // The assembled text stays near the budget (marker overhead aside), not ~2.4MB of raw content.
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(120_000);
+    // Every message keeps its index slot with real text — an interior pivot is never dropped.
+    expect(prompt).toContain('"index": 0');
+    expect(prompt).toContain('"index": 399');
+    expect(prompt).toContain("task 399:");
+  });
+
   test("parses title/summary/tasks JSON and markdown-fenced JSON (#234)", () => {
     expect(
       parseTaskExtractionOutput(
