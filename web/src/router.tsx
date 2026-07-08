@@ -5,6 +5,7 @@ import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
+import { SessionsInbox } from "./routes/SessionsInbox";
 import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
@@ -87,6 +88,10 @@ const routeTree = rootRoute.addChildren([
   // Diagnostics live in the settings surface as the "Debug" tab (/settings/debug).
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
+  // Testbed for a new sessions UI. Outside the dashboard layout route: it has its own search-first
+  // toolbar instead of the shared date/source FilterBar, so it carries no since/until/source in its
+  // URL. Layout suppresses the FilterBar for this path (see isSessionsInbox there).
+  createRoute({ getParentRoute: () => rootRoute, path: "/sessions-inbox", component: SessionsInbox }),
 ]);
 
 export const router = createRouter({ routeTree });

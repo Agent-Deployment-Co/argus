@@ -1,0 +1,165 @@
+import { Calendar, Layers, Search, Tag } from "lucide-react";
+import { useState } from "react";
+import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
+import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
+import { daysAgo } from "../router";
+
+// Standing labels aren't implemented yet — this is a placeholder set so the dropdown has something
+// to filter by. Alphabetical (no inherent ranking yet).
+const DUMMY_LABELS = ["Blocked", "Escalated", "Follow-up", "Needs review", "Resolved"];
+
+const DEFAULT_SINCE = daysAgo(30);
+const DEFAULT_UNTIL = daysAgo(0);
+
+const DATE_PRESETS = [
+  { label: "Today", days: 0 },
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+];
+
+function formatDateShort(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function toggle<T>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+/** Testbed for a new sessions UI (#sessions-inbox): same rail as the rest of the app, but a
+ *  search-first toolbar instead of the shared date/source FilterBar. Filters here are local UI state
+ *  only (not wired to data yet) — see Layout's isSessionsInbox check for how the global FilterBar is
+ *  suppressed for this route. */
+export function SessionsInbox() {
+  const [query, setQuery] = useState("");
+  const [labelSearch, setLabelSearch] = useState("");
+  const [labels, setLabels] = useState<string[]>([]);
+  const [sources, setSources] = useState<string[]>([]);
+  const [since, setSince] = useState(DEFAULT_SINCE);
+  const [until, setUntil] = useState(DEFAULT_UNTIL);
+
+  const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
+  const dateSummary = dateIsDefault ? "Date" : `${formatDateShort(since)} → ${formatDateShort(until)}`;
+  const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
+  const sourcesSummary =
+    sources.length === 0 ? "Sources" : sources.length === 1 ? sourceLabel(sources[0]!) : `${sources.length} sources`;
+
+  const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
+
+  return (
+    <div className="inbox-page">
+      <div className="inbox-toolbar" role="group" aria-label="Inbox filters">
+        <span className="inbox-search">
+          <Search className="inbox-search-icon" size={16} strokeWidth={1.75} aria-hidden />
+          <input
+            type="search"
+            className="inbox-search-input"
+            placeholder="Search sessions…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search sessions"
+          />
+        </span>
+
+        <FilterDropdown
+          icon={<Tag size={14} strokeWidth={2} aria-hidden />}
+          label="Labels"
+          summary={labelsSummary}
+          active={labels.length > 0}
+          onClear={labels.length > 0 ? () => setLabels([]) : undefined}
+        >
+          <input
+            type="search"
+            className="filter-dropdown-search"
+            placeholder="Search labels"
+            value={labelSearch}
+            onChange={(e) => setLabelSearch(e.target.value)}
+            aria-label="Search labels"
+          />
+          <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
+            {filteredLabels.map((l) => (
+              <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
+            ))}
+            {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
+          </div>
+        </FilterDropdown>
+
+        <FilterDropdown
+          icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
+          label="Date"
+          summary={dateSummary}
+          active={!dateIsDefault}
+          onClear={
+            dateIsDefault
+              ? undefined
+              : () => {
+                  setSince(DEFAULT_SINCE);
+                  setUntil(DEFAULT_UNTIL);
+                }
+          }
+        >
+          <div className="filter-dropdown-presets">
+            {DATE_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="filter-dropdown-preset"
+                onClick={() => {
+                  setSince(daysAgo(p.days));
+                  setUntil(daysAgo(0));
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="filter-dropdown-dates">
+            <input
+              type="date"
+              className="filter-input"
+              aria-label="From date"
+              value={since}
+              max={until}
+              onChange={(e) => e.target.value && setSince(e.target.value)}
+            />
+            <span className="filter-dash" aria-hidden>
+              –
+            </span>
+            <input
+              type="date"
+              className="filter-input"
+              aria-label="To date"
+              value={until}
+              min={since}
+              max={DEFAULT_UNTIL}
+              onChange={(e) => e.target.value && setUntil(e.target.value)}
+            />
+          </div>
+        </FilterDropdown>
+
+        <FilterDropdown
+          icon={<Layers size={14} strokeWidth={2} aria-hidden />}
+          label="Sources"
+          summary={sourcesSummary}
+          active={sources.length > 0}
+          onClear={sources.length > 0 ? () => setSources([]) : undefined}
+        >
+          <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
+            {SORTED_SOURCES.map((s) => (
+              <FilterDropdownOption key={s} label={sourceLabel(s)} selected={sources.includes(s)} onToggle={() => setSources((prev) => toggle(prev, s))} />
+            ))}
+          </div>
+        </FilterDropdown>
+      </div>
+
+      <div className="inbox-body">
+        <p className="t-eyebrow">Sessions inbox (testbed)</p>
+        <p className="inbox-placeholder">
+          Work in progress: this is a layout testbed for a new sessions interface. The list below will show sessions
+          matching the search and filters above once it's wired up.
+        </p>
+      </div>
+    </div>
+  );
+}

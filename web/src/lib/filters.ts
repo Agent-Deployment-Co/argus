@@ -9,6 +9,22 @@ export interface SnapshotFilters {
 
 export const KNOWN_SOURCES = ["claude", "codex", "gemini", "cowork", "claude-chat"] as const;
 
+const SOURCE_LABELS: Record<string, string> = {
+  claude: "Claude Code",
+  "claude-chat": "Claude Chat",
+  cowork: "Claude Cowork",
+  codex: "Codex",
+  gemini: "Gemini",
+};
+
+/** Human label for a source id; falls back to the id itself for anything unmapped. */
+export function sourceLabel(s: string): string {
+  return SOURCE_LABELS[s] ?? s;
+}
+
+/** KNOWN_SOURCES ordered by display name, ascending alpha — the order every source picker should use. */
+export const SORTED_SOURCES = [...KNOWN_SOURCES].sort((a, b) => sourceLabel(a).localeCompare(sourceLabel(b)));
+
 /** Only forward a source the server recognizes; an unknown value (e.g. a stray `source:` token typed
  *  into the Sessions search) would otherwise 400 the request. "all"/unset means no filter. */
 export function sanitizedSource(source: string | undefined): string | null {

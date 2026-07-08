@@ -159,6 +159,46 @@ main { padding: 30px 32px 64px; }
 /* Sessions: a full-height two-pane (selector list + detail). Drop main's padding for this route
    only so the list sits flush against the rail instead of floating inside the page gutters. */
 main:has(.sessions-split) { padding: 0; }
+/* Sessions inbox (testbed): the toolbar owns full-bleed placement like .filter-bar; the body below
+   restores the usual page gutters. */
+main:has(.inbox-page) { padding: 0; }
+
+/* ── Sessions inbox testbed ───────────────────────────────────────────────
+   A search bar + a row of dropdown filter pills (labels/date/sources), replacing the shared
+   date/source FilterBar on this route only. Dropdown structure follows the reference screenshot:
+   pill button → panel below with a title/Clear head and a checkable option list. */
+.inbox-toolbar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; display: flex; align-items: center; gap: 10px; height: var(--filter-bar-h); padding: 0 32px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.inbox-body { padding: 30px 32px 64px; }
+.inbox-placeholder { max-width: 60ch; color: var(--muted); }
+
+.inbox-search { position: relative; display: inline-flex; align-items: center; flex: 0 1 320px; min-width: 160px; }
+.inbox-search-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
+.inbox-search-input { box-sizing: border-box; width: 100%; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 10px 0 32px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.inbox-search-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.filter-dropdown { position: relative; flex: 0 0 auto; }
+.filter-dropdown-btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.filter-dropdown-btn:hover { border-color: var(--accent); }
+.filter-dropdown-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filter-dropdown-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
+
+.filter-dropdown-panel { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 260px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px rgba(0, 0, 0, .28); }
+.filter-dropdown-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.filter-dropdown-title { color: var(--heading); font: 700 13px var(--font-ui); }
+.filter-dropdown-clear { border: 0; background: transparent; padding: 0; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; }
+.filter-dropdown-clear:hover { color: var(--link-hover); }
+.filter-dropdown-search { box-sizing: border-box; width: 100%; height: 30px; margin-bottom: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.filter-dropdown-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.filter-dropdown-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: 13px "Aleo", Georgia, serif; text-align: left; cursor: pointer; }
+.filter-dropdown-option:hover { background: var(--hover); }
+.filter-dropdown-option.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
+.filter-dropdown-option.selected svg { color: var(--accent); flex: 0 0 auto; }
+.filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
+.filter-dropdown-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
+.filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
+.filter-dropdown-dates { display: flex; align-items: center; gap: 8px; }
+.filter-dropdown-dates .filter-input { flex: 1 1 0; width: auto; }
 /* Second track is minmax(0, 1fr), NOT 1fr: a bare 1fr track has an implicit min-width:auto, so a long
    unbreakable task description would force the track (and the whole page) wider than the viewport and
    defeat the .task-item-desc ellipsis. minmax(0, 1fr) lets the detail pane shrink below its content's

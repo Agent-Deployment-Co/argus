@@ -59,6 +59,9 @@ export function Layout() {
   // The settings surface (incl. the Debug tab) takes over the whole view and reads its own data, so
   // it bypasses the snapshot gate (and we skip the snapshot fetch while it's open).
   const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
+  // The sessions-inbox testbed has its own search-first toolbar, not the shared date/source
+  // FilterBar — it still gets the rail + app shell, just no FilterBar in .content.
+  const isSessionsInbox = useRouterState({ select: (s) => s.location.pathname.startsWith("/sessions-inbox") });
   // Remember the last screen the user was actually on (not a settings sub-route) so "Back to app"
   // closes settings and returns there — including when they navigated between settings categories or
   // deep-linked straight into /settings. We keep the pathname + its validated search so "Back to app"
@@ -139,7 +142,7 @@ export function Layout() {
         </div>
       </aside>
       <div className="content">
-        <FilterBar refreshing={fetching} />
+        {!isSessionsInbox && <FilterBar refreshing={fetching} />}
         <main>
           <Outlet />
         </main>

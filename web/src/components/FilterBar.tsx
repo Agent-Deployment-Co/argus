@@ -1,21 +1,8 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { FilterX, Loader2 } from "lucide-react";
-import { KNOWN_SOURCES } from "../lib/filters";
+import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo, type RootSearch } from "../router";
 import { Select } from "./Select";
-
-const SOURCE_LABELS: Record<string, string> = {
-  claude: "Claude Code",
-  "claude-chat": "Claude Chat",
-  cowork: "Claude Cowork",
-  codex: "Codex",
-  gemini: "Gemini"
-};
-
-const sourceLabel = (s: string): string => SOURCE_LABELS[s] ?? s;
-
-// Source options ordered by display name, ascending alpha.
-const SORTED_SOURCES = [...KNOWN_SOURCES].sort((a, b) => sourceLabel(a).localeCompare(sourceLabel(b)));
 
 /** Global dashboard filters (date range + source) shown above every view. Edits the root search
  *  params; `retainSearchParams` keeps them in the URL as the user moves between tabs, and the
