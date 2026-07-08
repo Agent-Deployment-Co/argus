@@ -568,15 +568,20 @@ fn json_minutes_setting(value: Option<&serde_json::Value>) -> Option<u64> {
     }
 }
 
-/// Whether the desktop shell should start automatically when the user signs in. Defaults to true,
-/// matching the shared `desktop.startAtLogin` setting in `argus.json`.
+/// Whether the desktop shell should start automatically when the user signs in.
+///
+/// TEMPORARILY HARD-DISABLED for everyone. The app is signed with a personal Developer ID
+/// certificate, so the OS background-activity notification and the Login Items entry would show an
+/// individual's name instead of the org's. Until the app is signed with an org certificate,
+/// start-at-login is off unconditionally: this ignores both `ARGUS_DESKTOP_START_AT_LOGIN` and
+/// `desktop.startAtLogin` in argus.json and always returns false, so `sync_autostart_setting` only
+/// ever *unregisters* the login item (clearing the notification) and never registers one.
+///
+/// To re-enable once the org cert is in place: restore the env + argus.json lookup below (see git
+/// history for this function) and re-add the "Startup" toggle to the Settings layout in
+/// `src/api/settings.ts`.
 fn desktop_start_at_login_enabled() -> bool {
-    if let Some(value) = non_empty_env("ARGUS_DESKTOP_START_AT_LOGIN") {
-        return parse_bool_setting(&value).unwrap_or(true);
-    }
-    read_argus_config_json()
-        .and_then(|json| json_bool_setting(json.get("desktop").and_then(|v| v.get("startAtLogin"))))
-        .unwrap_or(true)
+    false
 }
 
 /// Keep the OS startup registration in sync with `desktop.startAtLogin`. The setting is saved by the
@@ -1328,8 +1333,9 @@ pub fn run() {
             // clicks "Open Argus".
             start(app.handle());
 
-            // Register the desktop shell to start at login by default and keep that OS setting in
-            // sync with the web Settings toggle.
+            // Keep the OS start-at-login registration in sync with the web Settings toggle. The
+            // default is temporarily off (see `desktop_start_at_login_enabled`), so an install that
+            // never touched the toggle unregisters its login item here on the next launch.
             start_autostart_sync_watcher(app.handle());
 
             // Check for a newer signed build in the background; the menu item lets the user ask for
