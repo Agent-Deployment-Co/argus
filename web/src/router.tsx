@@ -67,6 +67,7 @@ const sessionsRoute = createRoute({
     project?: string;
     sort?: (typeof SESSION_SORTS)[number];
     q?: string;
+    labels?: string;
   } => ({
     since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
     until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
@@ -76,6 +77,10 @@ const sessionsRoute = createRoute({
       ? (search.sort as (typeof SESSION_SORTS)[number])
       : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
+    // Labels are a placeholder feature — the dropdown stays hidden unless explicitly opted into
+    // via ?labels=1 (see Sessions.tsx).
+    labels:
+      search.labels === 1 || search.labels === "1" || search.labels === true ? "1" : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until"])] },
 });

@@ -224,9 +224,16 @@ export function Sessions() {
   const [labels, setLabels] = useState<string[]>([]);
 
   const navigate = useNavigate();
-  const { since, until, committedQ, source } = useSearch({
+  const { since, until, committedQ, source, showLabels } = useSearch({
     strict: false,
-    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL, committedQ: s.q ?? "", source: s.source }),
+    select: (s) => ({
+      since: s.since ?? DEFAULT_SINCE,
+      until: s.until ?? DEFAULT_UNTIL,
+      committedQ: s.q ?? "",
+      source: s.source,
+      // Labels are a placeholder (DUMMY_LABELS) — hide the dropdown unless explicitly opted into via ?labels=1.
+      showLabels: s.labels === "1",
+    }),
   });
   const setRange = (patch: Record<string, string | undefined>) =>
     navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
@@ -297,29 +304,31 @@ export function Sessions() {
         </span>
 
         <div className="inbox-toolbar-filters">
-          <FilterDropdown
-            icon={<Tag size={14} strokeWidth={2} aria-hidden />}
-            label="Labels"
-            summary={labelsSummary}
-            active={labels.length > 0}
-            onClear={labels.length > 0 ? () => setLabels([]) : undefined}
-            align="right"
-          >
-            <input
-              type="search"
-              className="filter-dropdown-search"
-              placeholder="Search labels"
-              value={labelSearch}
-              onChange={(e) => setLabelSearch(e.target.value)}
-              aria-label="Search labels"
-            />
-            <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
-              {filteredLabels.map((l) => (
-                <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
-              ))}
-              {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
-            </div>
-          </FilterDropdown>
+          {showLabels && (
+            <FilterDropdown
+              icon={<Tag size={14} strokeWidth={2} aria-hidden />}
+              label="Labels"
+              summary={labelsSummary}
+              active={labels.length > 0}
+              onClear={labels.length > 0 ? () => setLabels([]) : undefined}
+              align="right"
+            >
+              <input
+                type="search"
+                className="filter-dropdown-search"
+                placeholder="Search labels"
+                value={labelSearch}
+                onChange={(e) => setLabelSearch(e.target.value)}
+                aria-label="Search labels"
+              />
+              <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
+                {filteredLabels.map((l) => (
+                  <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
+                ))}
+                {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
+              </div>
+            </FilterDropdown>
+          )}
 
           <FilterDropdown
             icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
