@@ -76,7 +76,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 
 /* Global filter bar pinned above every view. Fixed height so the full-height Sessions split can
    subtract it (see .sessions-split) without overflowing the viewport. */
-.filter-bar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: var(--filter-bar-h); display: flex; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 32px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.filter-bar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: var(--filter-bar-h); display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 0 32px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .filter-dates { display: inline-flex; align-items: center; gap: 8px; }
 .filter-dash { color: var(--muted); }
 /* Fixed height (padding-free vertically) so date inputs and the source select are identical — date
@@ -409,7 +409,7 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .rail-footer { flex-direction: column; align-items: center; }
   .rail-footer .rail-toggle { margin-left: 0; }
   main { padding-left: 18px; padding-right: 18px; }
-  .filter-bar { padding-left: 18px; padding-right: 18px; gap: 12px; }
+  .filter-bar { padding-left: 18px; padding-right: 18px; }
 }
 
 /* ── Settings surface (#154) ───────────────────────────────────────────────────
