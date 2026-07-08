@@ -346,7 +346,11 @@ export function Sessions() {
                   onToggle={() => setLabelIds(toggle(labelIds, l.id))}
                 />
               ))}
-              {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
+              {filteredLabels.length === 0 && (
+                <p className="filter-dropdown-empty">
+                  {(labelCatalog.data ?? []).length === 0 ? "No labels yet." : "No labels match."}
+                </p>
+              )}
             </div>
             <div className="filter-dropdown-mode" role="radiogroup" aria-label="How to combine selected labels">
               <button
