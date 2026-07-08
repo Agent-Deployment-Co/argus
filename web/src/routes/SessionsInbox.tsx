@@ -1,3 +1,4 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Calendar, Layers, Search, Tag } from "lucide-react";
 import { useState } from "react";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
@@ -36,11 +37,23 @@ export function SessionsInbox() {
   const [labelSearch, setLabelSearch] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
-  const [since, setSince] = useState(DEFAULT_SINCE);
-  const [until, setUntil] = useState(DEFAULT_UNTIL);
+
+  // The date range is a URL search param (?since=&until=), same convention as the shared FilterBar,
+  // so a link into this page carries its range and the default (last 30 days) is always loaded up
+  // front — see the route's validateSearch in router.tsx.
+  const navigate = useNavigate();
+  const { since, until } = useSearch({
+    strict: false,
+    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL }),
+  });
+  const setRange = (patch: { since?: string; until?: string }) =>
+    navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
+  const today = daysAgo(0);
+  const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
+  const setUntil = (v: string) => setRange({ until: v > today ? today : v < since ? since : v });
 
   const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
-  const dateSummary = dateIsDefault ? "Date" : `${formatDateShort(since)} → ${formatDateShort(until)}`;
+  const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
   const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
   const sourcesSummary =
     sources.length === 0 ? "Sources" : sources.length === 1 ? sourceLabel(sources[0]!) : `${sources.length} sources`;
@@ -90,14 +103,7 @@ export function SessionsInbox() {
           label="Date"
           summary={dateSummary}
           active={!dateIsDefault}
-          onClear={
-            dateIsDefault
-              ? undefined
-              : () => {
-                  setSince(DEFAULT_SINCE);
-                  setUntil(DEFAULT_UNTIL);
-                }
-          }
+          onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
         >
           <div className="filter-dropdown-presets">
             {DATE_PRESETS.map((p) => (
@@ -105,10 +111,7 @@ export function SessionsInbox() {
                 key={p.label}
                 type="button"
                 className="filter-dropdown-preset"
-                onClick={() => {
-                  setSince(daysAgo(p.days));
-                  setUntil(daysAgo(0));
-                }}
+                onClick={() => setRange({ since: daysAgo(p.days), until: daysAgo(0) })}
               >
                 {p.label}
               </button>
@@ -132,7 +135,7 @@ export function SessionsInbox() {
               aria-label="To date"
               value={until}
               min={since}
-              max={DEFAULT_UNTIL}
+              max={today}
               onChange={(e) => e.target.value && setUntil(e.target.value)}
             />
           </div>

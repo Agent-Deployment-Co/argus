@@ -89,9 +89,20 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
   // Testbed for a new sessions UI. Outside the dashboard layout route: it has its own search-first
-  // toolbar instead of the shared date/source FilterBar, so it carries no since/until/source in its
-  // URL. Layout suppresses the FilterBar for this path (see isSessionsInbox there).
-  createRoute({ getParentRoute: () => rootRoute, path: "/sessions-inbox", component: SessionsInbox }),
+  // toolbar instead of the shared FilterBar (so no `source` param), but keeps the same since/until
+  // date-range convention (default last 30 days, retained across navigation within the route) so a
+  // shared link like ?since=2026-06-08&until=2026-07-08 behaves the same as elsewhere in the app.
+  // Layout suppresses the FilterBar for this path (see isSessionsInbox there).
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/sessions-inbox",
+    component: SessionsInbox,
+    validateSearch: (search: Record<string, unknown>): { since?: string; until?: string } => ({
+      since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
+      until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
+    }),
+    search: { middlewares: [retainSearchParams(["since", "until"])] },
+  }),
 ]);
 
 export const router = createRouter({ routeTree });
