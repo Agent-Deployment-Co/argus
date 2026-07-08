@@ -46,7 +46,7 @@ export function SessionsInbox() {
   // The date range, search text, and source are URL search params (?since=&until=&q=&source=), same
   // convention as the shared FilterBar/Sessions list, so a link into this page carries its state and
   // the default range (last 30 days) is always loaded up front — see the route's validateSearch in
-  // router.tsx. The session list itself (SessionList, rendered below with showHead={false}) reads
+  // router.tsx. The session list itself (SessionList, rendered below with headVariant="count") reads
   // these the same way regardless of who writes them, so wiring the toolbar here is all this needs.
   // `source` is single-valued (not multi-select) because /api/sessions — like the rest of the app —
   // only ever filters by one source at a time.
@@ -181,7 +181,7 @@ export function SessionsInbox() {
       </div>
 
       <div className="sessions-split">
-        <SessionList showHead={false} detailPath="/sessions-inbox/$sessionId" />
+        <SessionList headVariant="count" detailPath="/sessions-inbox/$sessionId" />
         <div className="session-detail">
           <Outlet />
         </div>

@@ -110,7 +110,7 @@ const routeTree = rootRoute.addChildren([
   // shared link like ?since=2026-06-08&until=2026-07-08 behaves the same as elsewhere in the app.
   // Layout suppresses the FilterBar for this path (see isSessionsInbox there). Mirrors sessionsRoute's
   // shape (index = landing pane, $sessionId = detail) but reuses the same SessionList/SessionDetail
-  // components with the list-head hidden (SessionsInbox renders <SessionList showHead={false} />).
+  // components with a plain count head instead (SessionsInbox renders <SessionList headVariant="count" />).
   sessionsInboxRoute.addChildren([
     createRoute({ getParentRoute: () => sessionsInboxRoute, path: "/", component: SessionsInboxEmpty }),
     createRoute({ getParentRoute: () => sessionsInboxRoute, path: "$sessionId", component: SessionDetail }),

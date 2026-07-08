@@ -105,13 +105,15 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
   };
 }
 
-/** `showHead=false` drops the search/sort/filter-pill row — used by /sessions-inbox, which has its
- *  own toolbar above the list instead. `detailPath` points each row's link at the caller's own
- *  $sessionId route, so the list stays inside whichever page rendered it. */
+/** `headVariant="full"` (default) shows the search/sort/filter-pill row. `"count"` drops that row
+ *  and instead shows a plain "Showing X-Y of N sessions" line — used by /sessions-inbox, which has
+ *  its own toolbar above the list and just needs a result count. `"none"` renders no head at all.
+ *  `detailPath` points each row's link at the caller's own $sessionId route, so the list stays
+ *  inside whichever page rendered it. */
 export function SessionList({
-  showHead = true,
+  headVariant = "full",
   detailPath = "/sessions/$sessionId",
-}: { showHead?: boolean; detailPath?: SessionDetailPath } = {}) {
+}: { headVariant?: "full" | "count" | "none"; detailPath?: SessionDetailPath } = {}) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
@@ -174,7 +176,7 @@ export function SessionList({
 
   return (
     <aside className="session-list" aria-label="Sessions">
-      {showHead && (
+      {headVariant === "full" && (
         <div className="session-list-head">
           <div className="session-search-row">
             <input
@@ -205,6 +207,11 @@ export function SessionList({
               </button>
             ))}
           </div>
+        </div>
+      )}
+      {headVariant === "count" && (
+        <div className="session-list-head session-list-head-count">
+          {total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}
         </div>
       )}
       <ul className="session-items">
