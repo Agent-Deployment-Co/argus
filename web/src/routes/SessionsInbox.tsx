@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useSearch } from "@tanstack/react-router";
 import { Calendar, Layers, Search, Tag } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
@@ -79,17 +79,35 @@ export function SessionsInbox() {
 
   const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
 
+  // Cmd/Ctrl+K jumps focus to the search box (and selects its text, so typing replaces rather than
+  // appends) from anywhere on the page, matching the common command-palette-style shortcut users
+  // expect for a search-first surface like this one.
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="inbox-page">
       <div className="inbox-toolbar" role="group" aria-label="Inbox filters">
         <span className="inbox-search">
           <Search className="inbox-search-icon" size={16} strokeWidth={1.75} aria-hidden />
           <input
+            ref={searchInputRef}
             type="search"
             className="inbox-search-input"
             placeholder="Search sessions…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
             aria-label="Search sessions"
           />
         </span>
