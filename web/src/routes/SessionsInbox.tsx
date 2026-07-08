@@ -156,40 +156,47 @@ export function SessionsInbox() {
             onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
             align="right"
           >
-            <div className="filter-dropdown-presets">
-              {DATE_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  type="button"
-                  className="filter-dropdown-preset"
-                  onClick={() => setRange({ since: daysAgo(p.days), until: daysAgo(0) })}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <div className="filter-dropdown-dates">
-              <input
-                type="date"
-                className="filter-input"
-                aria-label="From date"
-                value={since}
-                max={until}
-                onChange={(e) => e.target.value && setSince(e.target.value)}
-              />
-              <span className="filter-dash" aria-hidden>
-                –
-              </span>
-              <input
-                type="date"
-                className="filter-input"
-                aria-label="To date"
-                value={until}
-                min={since}
-                max={today}
-                onChange={(e) => e.target.value && setUntil(e.target.value)}
-              />
-            </div>
+            {(close) => (
+              <>
+                <div className="filter-dropdown-presets">
+                  {DATE_PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`filter-dropdown-preset${since === daysAgo(p.days) && until === daysAgo(0) ? " active" : ""}`}
+                      onClick={() => {
+                        setRange({ since: daysAgo(p.days), until: daysAgo(0) });
+                        close();
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="filter-dropdown-dates">
+                  <input
+                    type="date"
+                    className="filter-input"
+                    aria-label="From date"
+                    value={since}
+                    max={until}
+                    onChange={(e) => e.target.value && setSince(e.target.value)}
+                  />
+                  <span className="filter-dash" aria-hidden>
+                    –
+                  </span>
+                  <input
+                    type="date"
+                    className="filter-input"
+                    aria-label="To date"
+                    value={until}
+                    min={since}
+                    max={today}
+                    onChange={(e) => e.target.value && setUntil(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
           </FilterDropdown>
 
           <FilterDropdown

@@ -221,6 +221,7 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
 .filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
+.filter-dropdown-preset.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 .filter-dropdown-dates { display: flex; align-items: center; gap: 8px; }
 .filter-dropdown-dates .filter-input { flex: 1 1 0; width: auto; }
 /* Second track is minmax(0, 1fr), NOT 1fr: a bare 1fr track has an implicit min-width:auto, so a long

@@ -14,7 +14,9 @@ export interface FilterDropdownProps {
   /** Which edge of the button the panel hangs from. Use "right" for pills near the toolbar's
    *  right edge so the panel opens leftward instead of running off the viewport. */
   align?: "left" | "right";
-  children: ReactNode;
+  /** Either static content, or a render prop that receives `close` so an action inside the panel
+   *  (e.g. a date preset button) can dismiss the popup after applying itself. */
+  children: ReactNode | ((close: () => void) => ReactNode);
 }
 
 /** A pill button that opens a panel of filter options below it — the shared shape for the sessions
@@ -64,7 +66,7 @@ export function FilterDropdown({ icon, label, summary, active, onClear, align = 
               </button>
             )}
           </div>
-          {children}
+          {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}
     </div>
