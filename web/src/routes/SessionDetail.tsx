@@ -101,6 +101,7 @@ export function SessionDetail() {
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
           <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
+          <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
         <button
           type="button"
@@ -115,8 +116,6 @@ export function SessionDetail() {
       </header>
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
-
-      <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
 
       <StatCards stats={cards} />
 
