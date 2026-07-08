@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useSearch } from "@tanstack/react-router";
-import { Calendar, Layers, Search, Tag } from "lucide-react";
+import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
@@ -76,6 +76,14 @@ export function SessionsInbox() {
   const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
   const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
   const sourcesSummary = source ? sourceLabel(source) : "Sources";
+
+  // Reset mirrors the shared FilterBar's reset (source + date range), plus the inbox's own search
+  // box — enabled only when one of those three is off its default.
+  const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "";
+  const resetFilters = () => {
+    setQuery("");
+    setRange({ since: undefined, until: undefined, source: undefined, q: undefined });
+  };
 
   const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
 
@@ -203,6 +211,17 @@ export function SessionsInbox() {
               ))}
             </div>
           </FilterDropdown>
+
+          <button
+            type="button"
+            className="inbox-filter-reset"
+            disabled={!hasActiveFilters}
+            onClick={resetFilters}
+            title="Reset filters to the last 30 days, all sources"
+            aria-label="Reset filters"
+          >
+            <FilterX size={16} strokeWidth={1.75} aria-hidden />
+          </button>
         </div>
       </div>
 
