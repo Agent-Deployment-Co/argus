@@ -171,6 +171,20 @@ main:has(.inbox-page) { padding: 0; }
 .inbox-body { padding: 30px 32px 64px; }
 .inbox-placeholder { max-width: 60ch; color: var(--muted); }
 
+/* The three filter pills as one unit — they wrap onto their own row together (never splitting
+   from each other) when the search box and pills no longer fit on one line. */
+.inbox-toolbar-filters { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+/* Below this width the search box and the filter-pill group no longer fit on one line without
+   crowding — wrap the group onto its own row instead of squeezing it. --filter-bar-h drives both
+   the sticky toolbar's height and .sessions-split's height calc, so it's bumped here too;
+   otherwise the taller two-row toolbar would overlap the split pane below it. */
+@media (max-width: 760px) {
+  .content:has(.inbox-page) { --filter-bar-h: 96px; }
+  .inbox-toolbar { flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; height: auto; min-height: var(--filter-bar-h); padding: 10px; }
+  .inbox-search { flex: 1 1 100%; }
+}
+
 .inbox-search { position: relative; display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 160px; }
 .inbox-search-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .inbox-search-input { box-sizing: border-box; width: 100%; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 10px 0 32px; color: var(--text); font: 13px "Aleo", Georgia, serif; }

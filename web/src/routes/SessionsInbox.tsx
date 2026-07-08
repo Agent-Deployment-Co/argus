@@ -115,91 +115,95 @@ export function SessionsInbox() {
           />
         </span>
 
-        <FilterDropdown
-          icon={<Tag size={14} strokeWidth={2} aria-hidden />}
-          label="Labels"
-          summary={labelsSummary}
-          active={labels.length > 0}
-          onClear={labels.length > 0 ? () => setLabels([]) : undefined}
-        >
-          <input
-            type="search"
-            className="filter-dropdown-search"
-            placeholder="Search labels"
-            value={labelSearch}
-            onChange={(e) => setLabelSearch(e.target.value)}
-            aria-label="Search labels"
-          />
-          <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
-            {filteredLabels.map((l) => (
-              <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
-            ))}
-            {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
-          </div>
-        </FilterDropdown>
-
-        <FilterDropdown
-          icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
-          label="Date"
-          summary={dateSummary}
-          active={!dateIsDefault}
-          onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
-        >
-          <div className="filter-dropdown-presets">
-            {DATE_PRESETS.map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                className="filter-dropdown-preset"
-                onClick={() => setRange({ since: daysAgo(p.days), until: daysAgo(0) })}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div className="filter-dropdown-dates">
+        <div className="inbox-toolbar-filters">
+          <FilterDropdown
+            icon={<Tag size={14} strokeWidth={2} aria-hidden />}
+            label="Labels"
+            summary={labelsSummary}
+            active={labels.length > 0}
+            onClear={labels.length > 0 ? () => setLabels([]) : undefined}
+            align="right"
+          >
             <input
-              type="date"
-              className="filter-input"
-              aria-label="From date"
-              value={since}
-              max={until}
-              onChange={(e) => e.target.value && setSince(e.target.value)}
+              type="search"
+              className="filter-dropdown-search"
+              placeholder="Search labels"
+              value={labelSearch}
+              onChange={(e) => setLabelSearch(e.target.value)}
+              aria-label="Search labels"
             />
-            <span className="filter-dash" aria-hidden>
-              –
-            </span>
-            <input
-              type="date"
-              className="filter-input"
-              aria-label="To date"
-              value={until}
-              min={since}
-              max={today}
-              onChange={(e) => e.target.value && setUntil(e.target.value)}
-            />
-          </div>
-        </FilterDropdown>
+            <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
+              {filteredLabels.map((l) => (
+                <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
+              ))}
+              {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
+            </div>
+          </FilterDropdown>
 
-        <FilterDropdown
-          icon={<Layers size={14} strokeWidth={2} aria-hidden />}
-          label="Sources"
-          summary={sourcesSummary}
-          active={Boolean(source)}
-          onClear={source ? () => setRange({ source: undefined }) : undefined}
-          align="right"
-        >
-          <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
-            {SORTED_SOURCES.map((s) => (
-              <FilterDropdownOption
-                key={s}
-                label={sourceLabel(s)}
-                selected={source === s}
-                onToggle={() => setRange({ source: source === s ? undefined : s })}
+          <FilterDropdown
+            icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
+            label="Date"
+            summary={dateSummary}
+            active={!dateIsDefault}
+            onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
+            align="right"
+          >
+            <div className="filter-dropdown-presets">
+              {DATE_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  className="filter-dropdown-preset"
+                  onClick={() => setRange({ since: daysAgo(p.days), until: daysAgo(0) })}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="filter-dropdown-dates">
+              <input
+                type="date"
+                className="filter-input"
+                aria-label="From date"
+                value={since}
+                max={until}
+                onChange={(e) => e.target.value && setSince(e.target.value)}
               />
-            ))}
-          </div>
-        </FilterDropdown>
+              <span className="filter-dash" aria-hidden>
+                –
+              </span>
+              <input
+                type="date"
+                className="filter-input"
+                aria-label="To date"
+                value={until}
+                min={since}
+                max={today}
+                onChange={(e) => e.target.value && setUntil(e.target.value)}
+              />
+            </div>
+          </FilterDropdown>
+
+          <FilterDropdown
+            icon={<Layers size={14} strokeWidth={2} aria-hidden />}
+            label="Sources"
+            summary={sourcesSummary}
+            active={Boolean(source)}
+            onClear={source ? () => setRange({ source: undefined }) : undefined}
+            align="right"
+          >
+            <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
+              {SORTED_SOURCES.map((s) => (
+                <FilterDropdownOption
+                  key={s}
+                  label={sourceLabel(s)}
+                  selected={source === s}
+                  onToggle={() => setRange({ source: source === s ? undefined : s })}
+                />
+              ))}
+            </div>
+          </FilterDropdown>
+        </div>
       </div>
 
       <div className="sessions-split">
