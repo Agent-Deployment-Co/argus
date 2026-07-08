@@ -9,8 +9,10 @@ export interface FilterDropdownProps {
   summary?: string;
   /** Whether a filter is currently applied — drives the pill's filled/active look. */
   active: boolean;
-  /** Present only when a filter is applied; omit to hide the "Clear" action. */
+  /** Present only when a filter is applied; omit to hide the clear action. */
   onClear?: () => void;
+  /** Label for the clear action's button. Defaults to "Clear". */
+  clearLabel?: string;
   /** Which edge of the button the panel hangs from. Use "right" for pills near the toolbar's
    *  right edge so the panel opens leftward instead of running off the viewport. */
   align?: "left" | "right";
@@ -23,7 +25,7 @@ export interface FilterDropdownProps {
  *  inbox toolbar's labels/date/sources filters (screenshot-matched structure, not colors). Closes on
  *  outside click or Escape; the panel's contents (search box, option list, …) are supplied by the
  *  caller since each filter's controls differ. */
-export function FilterDropdown({ icon, label, summary, active, onClear, align = "left", children }: FilterDropdownProps) {
+export function FilterDropdown({ icon, label, summary, active, onClear, clearLabel = "Clear", align = "left", children }: FilterDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -62,7 +64,7 @@ export function FilterDropdown({ icon, label, summary, active, onClear, align = 
             <span className="filter-dropdown-title">{label}</span>
             {onClear && (
               <button type="button" className="filter-dropdown-clear" onClick={onClear}>
-                Clear
+                {clearLabel}
               </button>
             )}
           </div>

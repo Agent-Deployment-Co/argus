@@ -154,6 +154,7 @@ export function SessionsInbox() {
             summary={dateSummary}
             active={!dateIsDefault}
             onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
+            clearLabel="Reset"
             align="right"
           >
             {(close) => (
