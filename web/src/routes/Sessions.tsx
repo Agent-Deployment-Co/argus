@@ -91,6 +91,7 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
     q: typeof search.q === "string" && search.q ? search.q : undefined,
     file: typeof search.file === "string" && search.file ? search.file : undefined,
     label: labelIdsFromSearch(search),
+    labelMode: search.labelMode === "all" ? "all" : "any",
     sort: (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent",
   };
 }
@@ -232,7 +233,7 @@ export function Sessions() {
   const labelCatalog = useLabelsQuery();
 
   const navigate = useNavigate();
-  const { since, until, committedQ, source, labelIds } = useSearch({
+  const { since, until, committedQ, source, labelIds, labelMode } = useSearch({
     strict: false,
     select: (s) => ({
       since: s.since ?? DEFAULT_SINCE,
@@ -240,6 +241,7 @@ export function Sessions() {
       committedQ: s.q ?? "",
       source: s.source,
       labelIds: labelIdsFromSearch(s as Record<string, unknown>),
+      labelMode: s.labelMode === "all" ? "all" : "any",
     }),
   });
   const setRange = (patch: Record<string, string | undefined>) =>
@@ -248,6 +250,7 @@ export function Sessions() {
   const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
   const setUntil = (v: string) => setRange({ until: v > today ? today : v < since ? since : v });
   const setLabelIds = (ids: string[]) => setRange({ label: ids.length ? ids.join(",") : undefined });
+  const setLabelMode = (mode: "any" | "all") => setRange({ labelMode: mode === "all" ? "all" : undefined });
 
   // Local text mirrors the committed `q`; debounce edits into the URL so we don't refetch per keystroke.
   const [query, setQuery] = useState(committedQ);
@@ -276,7 +279,7 @@ export function Sessions() {
   const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0;
   const resetFilters = () => {
     setQuery("");
-    setRange({ since: undefined, until: undefined, source: undefined, q: undefined, label: undefined });
+    setRange({ since: undefined, until: undefined, source: undefined, q: undefined, label: undefined, labelMode: undefined });
   };
 
   const filteredLabels = (labelCatalog.data ?? []).filter((l) => l.name.toLowerCase().includes(labelSearch.toLowerCase()));
@@ -344,6 +347,26 @@ export function Sessions() {
                 />
               ))}
               {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
+            </div>
+            <div className="filter-dropdown-mode" role="radiogroup" aria-label="How to combine selected labels">
+              <button
+                type="button"
+                className={`filter-dropdown-mode-btn${labelMode === "any" ? " active" : ""}`}
+                role="radio"
+                aria-checked={labelMode === "any"}
+                onClick={() => setLabelMode("any")}
+              >
+                Match any
+              </button>
+              <button
+                type="button"
+                className={`filter-dropdown-mode-btn${labelMode === "all" ? " active" : ""}`}
+                role="radio"
+                aria-checked={labelMode === "all"}
+                onClick={() => setLabelMode("all")}
+              >
+                Match all
+              </button>
             </div>
           </FilterDropdown>
 

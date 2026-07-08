@@ -22,6 +22,7 @@ import type {
   TaskFact,
   AppliedLabel,
   LabelAppliedBy,
+  LabelFilterMode,
   LabelOrigin,
   LabelRecord,
   LabelTarget,
@@ -2749,20 +2750,35 @@ export class SqliteStore implements Store {
     });
   }
 
-  readSessionIdsForLabels(labelIds: string[]): Promise<Set<string>> {
+  readSessionIdsForLabels(labelIds: string[], mode: LabelFilterMode = "any"): Promise<Set<string>> {
     return this.schedule(async () => {
       const out = new Set<string>();
       const ids = [...new Set(labelIds)];
       if (!ids.length) return out;
-      for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
-        const placeholders = part.map(() => "?").join(", ");
-        const rows = await all<{ session_id: string }>(
-          this.db,
-          `SELECT DISTINCT session_id FROM label_assignments WHERE task_seq IS NULL AND label_id IN (${placeholders})`,
-          part,
-        );
-        for (const row of rows) out.add(row.session_id);
+      if (mode === "any") {
+        for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+          const placeholders = part.map(() => "?").join(", ");
+          const rows = await all<{ session_id: string }>(
+            this.db,
+            `SELECT DISTINCT session_id FROM label_assignments WHERE task_seq IS NULL AND label_id IN (${placeholders})`,
+            part,
+          );
+          for (const row of rows) out.add(row.session_id);
+        }
+        return out;
       }
+      // "all": a session must carry every requested label, so it's one GROUP BY/HAVING pass rather
+      // than chunked union — a caller narrowing by "all" of N labels never sends more than a handful.
+      const placeholders = ids.map(() => "?").join(", ");
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT session_id FROM label_assignments
+         WHERE task_seq IS NULL AND label_id IN (${placeholders})
+         GROUP BY session_id
+         HAVING COUNT(DISTINCT label_id) = ?`,
+        [...ids, ids.length],
+      );
+      for (const row of rows) out.add(row.session_id);
       return out;
     });
   }

@@ -67,8 +67,10 @@ const sessionsRoute = createRoute({
     project?: string;
     sort?: (typeof SESSION_SORTS)[number];
     q?: string;
-    /** Comma-separated label ids to filter by (union — see Sessions.tsx). */
+    /** Comma-separated label ids to filter by — see Sessions.tsx. */
     label?: string;
+    /** How multiple `label` ids combine: "any" (union, default) or "all" (intersection). */
+    labelMode?: "any" | "all";
   } => ({
     since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
     until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
@@ -79,6 +81,7 @@ const sessionsRoute = createRoute({
       : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
     label: typeof search.label === "string" && search.label ? search.label : undefined,
+    labelMode: search.labelMode === "all" ? "all" : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until"])] },
 });

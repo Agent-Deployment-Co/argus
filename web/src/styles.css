@@ -218,6 +218,10 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-option.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 .filter-dropdown-option.selected svg { color: var(--accent); flex: 0 0 auto; }
 .filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
+.filter-dropdown-mode { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.filter-dropdown-mode-btn { flex: 1 1 0; border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; text-align: center; }
+.filter-dropdown-mode-btn:hover { border-color: var(--accent); color: var(--heading); }
+.filter-dropdown-mode-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 .filter-dropdown-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
 .filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
