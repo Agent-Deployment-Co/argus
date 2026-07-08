@@ -187,6 +187,7 @@ export function SessionsInbox() {
           summary={sourcesSummary}
           active={Boolean(source)}
           onClear={source ? () => setRange({ source: undefined }) : undefined}
+          align="right"
         >
           <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
             {SORTED_SOURCES.map((s) => (

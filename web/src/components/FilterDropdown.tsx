@@ -11,6 +11,9 @@ export interface FilterDropdownProps {
   active: boolean;
   /** Present only when a filter is applied; omit to hide the "Clear" action. */
   onClear?: () => void;
+  /** Which edge of the button the panel hangs from. Use "right" for pills near the toolbar's
+   *  right edge so the panel opens leftward instead of running off the viewport. */
+  align?: "left" | "right";
   children: ReactNode;
 }
 
@@ -18,7 +21,7 @@ export interface FilterDropdownProps {
  *  inbox toolbar's labels/date/sources filters (screenshot-matched structure, not colors). Closes on
  *  outside click or Escape; the panel's contents (search box, option list, …) are supplied by the
  *  caller since each filter's controls differ. */
-export function FilterDropdown({ icon, label, summary, active, onClear, children }: FilterDropdownProps) {
+export function FilterDropdown({ icon, label, summary, active, onClear, align = "left", children }: FilterDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -52,7 +55,7 @@ export function FilterDropdown({ icon, label, summary, active, onClear, children
         <ChevronDown size={13} strokeWidth={2} aria-hidden />
       </button>
       {open && (
-        <div className="filter-dropdown-panel" role="dialog" aria-label={label}>
+        <div className={`filter-dropdown-panel${align === "right" ? " filter-dropdown-panel-right" : ""}`} role="dialog" aria-label={label}>
           <div className="filter-dropdown-panel-head">
             <span className="filter-dropdown-title">{label}</span>
             {onClear && (
