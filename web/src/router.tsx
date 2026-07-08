@@ -75,10 +75,13 @@ const sessionsInboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions-inbox",
   component: SessionsInbox,
-  validateSearch: (search: Record<string, unknown>): { since?: string; until?: string; q?: string } => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { since?: string; until?: string; q?: string; source?: string } => ({
     since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
     until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
     q: typeof search.q === "string" && search.q ? search.q : undefined,
+    source: typeof search.source === "string" && search.source ? search.source : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until"])] },
 });

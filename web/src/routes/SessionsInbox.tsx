@@ -42,17 +42,18 @@ function toggle<T>(list: T[], value: T): T[] {
 export function SessionsInbox() {
   const [labelSearch, setLabelSearch] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
-  const [sources, setSources] = useState<string[]>([]);
 
-  // The date range and search text are URL search params (?since=&until=&q=), same convention as the
-  // shared FilterBar/Sessions list, so a link into this page carries its state and the default range
-  // (last 30 days) is always loaded up front — see the route's validateSearch in router.tsx. The
-  // session list itself (SessionList, rendered below with showHead={false}) reads `q` the same way
-  // regardless of who writes it, so wiring the toolbar's search box here is all this needs.
+  // The date range, search text, and source are URL search params (?since=&until=&q=&source=), same
+  // convention as the shared FilterBar/Sessions list, so a link into this page carries its state and
+  // the default range (last 30 days) is always loaded up front — see the route's validateSearch in
+  // router.tsx. The session list itself (SessionList, rendered below with showHead={false}) reads
+  // these the same way regardless of who writes them, so wiring the toolbar here is all this needs.
+  // `source` is single-valued (not multi-select) because /api/sessions — like the rest of the app —
+  // only ever filters by one source at a time.
   const navigate = useNavigate();
-  const { since, until, committedQ } = useSearch({
+  const { since, until, committedQ, source } = useSearch({
     strict: false,
-    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL, committedQ: s.q ?? "" }),
+    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL, committedQ: s.q ?? "", source: s.source }),
   });
   const setRange = (patch: Record<string, string | undefined>) =>
     navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
@@ -74,8 +75,7 @@ export function SessionsInbox() {
   const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
   const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
   const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
-  const sourcesSummary =
-    sources.length === 0 ? "Sources" : sources.length === 1 ? sourceLabel(sources[0]!) : `${sources.length} sources`;
+  const sourcesSummary = source ? sourceLabel(source) : "Sources";
 
   const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
 
@@ -164,12 +164,17 @@ export function SessionsInbox() {
           icon={<Layers size={14} strokeWidth={2} aria-hidden />}
           label="Sources"
           summary={sourcesSummary}
-          active={sources.length > 0}
-          onClear={sources.length > 0 ? () => setSources([]) : undefined}
+          active={Boolean(source)}
+          onClear={source ? () => setRange({ source: undefined }) : undefined}
         >
           <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
             {SORTED_SOURCES.map((s) => (
-              <FilterDropdownOption key={s} label={sourceLabel(s)} selected={sources.includes(s)} onToggle={() => setSources((prev) => toggle(prev, s))} />
+              <FilterDropdownOption
+                key={s}
+                label={sourceLabel(s)}
+                selected={source === s}
+                onToggle={() => setRange({ source: source === s ? undefined : s })}
+              />
             ))}
           </div>
         </FilterDropdown>
