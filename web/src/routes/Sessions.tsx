@@ -174,6 +174,26 @@ export function SessionList({
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedId, rows]);
 
+  // j/k step the selection to the next/previous row, but only once a row is already selected —
+  // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "j" && e.key !== "k") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      if (!selectedId) return;
+      const idx = rows.findIndex((r) => r.sessionId === selectedId);
+      if (idx === -1) return;
+      const next = rows[e.key === "j" ? idx + 1 : idx - 1];
+      if (!next) return;
+      e.preventDefault();
+      navigate({ to: detailPath, params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows, selectedId, navigate, detailPath]);
+
   return (
     <aside className="session-list" aria-label="Sessions">
       {headVariant === "full" && (

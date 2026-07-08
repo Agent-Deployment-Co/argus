@@ -79,17 +79,20 @@ export function SessionsInbox() {
 
   const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
 
-  // Cmd/Ctrl+K jumps focus to the search box (and selects its text, so typing replaces rather than
-  // appends) from anywhere on the page, matching the common command-palette-style shortcut users
-  // expect for a search-first surface like this one.
+  // Cmd/Ctrl+K (or "/", the common search-focus shortcut) jumps focus to the search box and
+  // selects its text, so typing replaces rather than appends, from anywhere on the page. "/" is
+  // only honored outside text fields so it doesn't hijack normal typing (e.g. the labels search).
   const searchInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      }
+      const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+      const target = e.target as HTMLElement | null;
+      const inTextField = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      const isSlash = e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !inTextField;
+      if (!isCmdK && !isSlash) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
