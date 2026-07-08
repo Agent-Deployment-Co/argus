@@ -346,6 +346,40 @@ export interface TaskFact {
   position: SourcePosition;
 }
 
+/** Who created a label definition (user vs Argus). Combined with a label application's `appliedBy`,
+ *  this distinguishes the three product cases: user-generated, system-generated, and user-applied
+ *  system labels. Labels are local-only — never on the sync wire. */
+export type LabelOrigin = "user" | "system";
+/** Who applied a label to a given session/task. */
+export type LabelAppliedBy = "user" | "system";
+/** What a label application targets. */
+export type LabelTargetKind = "session" | "task";
+
+/** A label definition. `deletedAtMs` set means the label was soft-deleted (its name can be reused). */
+export interface LabelRecord {
+  id: string;
+  name: string;
+  origin: LabelOrigin;
+  createdAtMs: number;
+  deletedAtMs?: number;
+}
+/** A label as applied to a target, carrying the application's provenance. */
+export interface AppliedLabel extends LabelRecord {
+  appliedBy: LabelAppliedBy;
+  appliedAtMs: number;
+}
+/** Identifies what a label application points at: a session, or a task by its position within one. */
+export interface LabelTarget {
+  sessionId: string;
+  /** The task's position (resolved_tasks.seq). Omit for a session-level label. */
+  taskSeq?: number;
+}
+/** Active labels resolved for one session and each of its tasks (keyed by task position). */
+export interface SessionLabels {
+  session: AppliedLabel[];
+  tasks: Record<number, AppliedLabel[]>;
+}
+
 export interface SessionRelationshipFact {
   id: string;
   source: AgentSource;
@@ -785,6 +819,30 @@ export interface ReadModelStore {
   readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>>;
   /** Cross-session + per-project friction and the high-token-growth count. */
   readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups>;
+  // ---- Session/task labels (local-only; never synced) ----
+  /** All label definitions, ordered by name (case-insensitive). Excludes soft-deleted labels unless
+   *  `includeDeleted` is set. */
+  listLabels(opts?: { includeDeleted?: boolean }): Promise<LabelRecord[]>;
+  /** Create a label and return it. `origin` defaults to "user". Rejects (LabelNameConflictError) when
+   *  an active label already has the same name (case-insensitive). */
+  createLabel(input: { name: string; origin?: LabelOrigin }): Promise<LabelRecord>;
+  /** Rename a label, returning the updated record. Rejects when the new name collides with another
+   *  active label, or when the label doesn't exist / was deleted. */
+  renameLabel(id: string, name: string): Promise<LabelRecord>;
+  /** Soft-delete a label (its name becomes reusable). Existing applications are left in place but stop
+   *  surfacing, since label reads filter to active labels. No-op if already deleted/absent. */
+  deleteLabel(id: string): Promise<void>;
+  /** Apply a label to a session or task. Idempotent: re-applying the same (label, target) is a no-op
+   *  that leaves the original application untouched. `appliedBy` defaults to "user". */
+  assignLabel(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
+  /** Remove a label application from a session or task. No-op if it wasn't applied. */
+  unassignLabel(labelId: string, target: LabelTarget): Promise<void>;
+  /** Active labels for a session and each of its tasks (keyed by task position). */
+  readSessionLabels(sessionId: string): Promise<SessionLabels>;
+  /** Active session-level labels for many sessions at once, keyed by session id — backs the session
+   *  list's label chips. Task-level labels are excluded (the list shows session labels only). Sessions
+   *  with no labels are absent from the map. */
+  readSessionLabelsForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

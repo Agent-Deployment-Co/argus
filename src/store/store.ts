@@ -20,6 +20,13 @@ import type {
   HealthRollups,
   Store,
   TaskFact,
+  AppliedLabel,
+  LabelAppliedBy,
+  LabelOrigin,
+  LabelRecord,
+  LabelTarget,
+  LabelTargetKind,
+  SessionLabels,
   FileFingerprint,
   FileIdentity,
   FileRole,
@@ -53,10 +60,14 @@ import type {
   Usage,
 } from "../types.ts";
 import type { ToolCategory } from "../tool-categories.ts";
-import { emptyFrictionTotals, foldFriction, HIGH_TOKEN_GROWTH_RATIO } from "../health.ts";
+import {
+  emptyFrictionTotals,
+  foldFriction,
+  HIGH_TOKEN_GROWTH_RATIO,
+} from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 21;
+export const STORE_SCHEMA_VERSION = 22;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -79,12 +90,61 @@ export class StoreError extends Error {
   }
 }
 
+export type LabelErrorCode =
+  | "empty_name"
+  | "name_conflict"
+  | "not_found"
+  | "invalid_target";
+
+/** A label write couldn't be applied for a caller-fixable reason (bad name, duplicate, missing label).
+ *  Thrown by the label store methods so the API layer can map each code to an HTTP status (e.g.
+ *  name_conflict -> 409). Distinct from StoreError, which is reserved for store-integrity failures. */
+export class LabelError extends Error {
+  constructor(
+    readonly code: LabelErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LabelError";
+  }
+}
+
+/** Row shape for the labels table, shared by the label read methods. */
+interface LabelDbRow {
+  id: string;
+  name: string;
+  origin: string;
+  created_at_ms: number;
+  deleted_at_ms: number | null;
+}
+
+function labelRecordFromRow(row: LabelDbRow): LabelRecord {
+  const record: LabelRecord = {
+    id: row.id,
+    name: row.name,
+    origin: row.origin as LabelOrigin,
+    createdAtMs: row.created_at_ms,
+  };
+  if (row.deleted_at_ms != null) record.deletedAtMs = row.deleted_at_ms;
+  return record;
+}
+
+function normalizedLabelTarget(target: LabelTarget): {
+  targetKind: LabelTargetKind;
+  taskSeq: number | null;
+} {
+  if (target.taskSeq == null) return { targetKind: "session", taskSeq: null };
+  if (!Number.isSafeInteger(target.taskSeq) || target.taskSeq < 0) {
+    throw new LabelError("invalid_target", "Invalid task position.");
+  }
+  return { targetKind: "task", taskSeq: target.taskSeq };
+}
+
 export interface OpenStoreOptions {
   path?: string;
   busyTimeoutMs?: number;
   now?: () => number;
 }
-
 
 interface MetadataRow {
   id: string;
@@ -107,6 +167,10 @@ interface QuickCheckRow {
 }
 
 interface TableNameRow {
+  name: string;
+}
+
+interface TableColumnRow {
   name: string;
 }
 
@@ -277,6 +341,51 @@ function sessionFtsText(title: string | null, summary: string | null): string {
 // (verified via EXPLAIN QUERY PLAN). Accepted: file_path substring search is a full scan today.
 const RESOLVED_INVOCATIONS_FILE_PATH_INDEX = `
   CREATE INDEX resolved_invocations_file_path ON resolved_invocations(file_path) WHERE file_path IS NOT NULL;`;
+
+// User- and system-generated labels for sessions and tasks (session-and-task-labels feature).
+// Local-only: never SELECTed by push.ts, so labels stay off the sync wire by construction (the same
+// "never synced" guarantee resolved_interaction_text gets). Two tables:
+//   labels            — the label definitions. origin distinguishes user- vs system-created labels;
+//                       deleted_at_ms is a soft delete so a name can be retired and later reused.
+//   label_assignments — the many-to-many application of a label to a session OR one of its tasks.
+// label_assignments deliberately has NO foreign key to resolved_sessions: materialize wholesale
+// DELETEs + FK-CASCADEs a session's resolved_* rows on every re-index of a changed session, and
+// user-authored labels must survive that. session_id is a plain text column here; assignments are
+// removed only on genuine session deletion (retractSessions), mirroring session_ownership.
+// task_seq is the task's position in the session (resolved_tasks.seq / interactions.task_seq); it is
+// NULL for session-level labels. Tasks are re-derived on re-interpretation, so a task label is
+// anchored to a position and may drift if segmentation changes — an accepted v1 limitation.
+// Shared so CREATE_SCHEMA_SQL and the v20 -> v21 migration can't drift.
+const LABELS_DDL = `
+  CREATE TABLE IF NOT EXISTS labels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('user', 'system')),
+    created_at_ms INTEGER NOT NULL,
+    deleted_at_ms INTEGER
+  );
+  -- Global, case-insensitive uniqueness among ACTIVE (non-deleted) labels only.
+  CREATE UNIQUE INDEX IF NOT EXISTS labels_name_active
+    ON labels(name COLLATE NOCASE) WHERE deleted_at_ms IS NULL;
+
+  CREATE TABLE IF NOT EXISTS label_assignments (
+    label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('session', 'task')),
+    session_id TEXT NOT NULL,
+    task_seq INTEGER,
+    applied_by TEXT NOT NULL CHECK (applied_by IN ('user', 'system')),
+    applied_at_ms INTEGER NOT NULL,
+    CHECK (
+      (target_kind = 'session' AND task_seq IS NULL) OR
+      (target_kind = 'task' AND task_seq IS NOT NULL AND typeof(task_seq) = 'integer' AND task_seq >= 0)
+    )
+  );
+  -- Dedup an application. COALESCE(task_seq, -1) so session-level rows (NULL task_seq) dedup
+  -- correctly (SQLite treats NULLs as distinct in a plain unique index).
+  CREATE UNIQUE INDEX IF NOT EXISTS label_assignments_unique
+    ON label_assignments(label_id, session_id, COALESCE(task_seq, -1));
+  CREATE INDEX IF NOT EXISTS label_assignments_session ON label_assignments(session_id);
+  CREATE INDEX IF NOT EXISTS label_assignments_label ON label_assignments(label_id);`;
 
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE index_files (
@@ -521,10 +630,17 @@ const CREATE_SCHEMA_SQL = `
   );
   CREATE INDEX hub_session_cursors_hub_uploaded
     ON hub_session_cursors(hub_url, client_id, uploaded_at_ms);
+
+  -- Session/task labels (local-only; see LABELS_DDL).
+  ${LABELS_DDL}
 `;
 
 /** Fact tables in the order their rows are cleared when a fragment is re-materialized. */
-const INDEX_TABLES = ["index_sessions", "index_relationships", "index_auxiliary"] as const;
+const INDEX_TABLES = [
+  "index_sessions",
+  "index_relationships",
+  "index_auxiliary",
+] as const;
 
 const INSERT_FRAGMENT_SQL = `
   INSERT INTO index_files (
@@ -574,9 +690,15 @@ function exec(db: Database, sql: string): void {
   db.run(sql);
 }
 
-function get<T>(db: Database, sql: string, params: unknown[] = []): T | undefined {
+function get<T>(
+  db: Database,
+  sql: string,
+  params: unknown[] = [],
+): T | undefined {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (db.query<T, any[]>(sql).get(...(params as any[])) as T | null) ?? undefined;
+  return (
+    (db.query<T, any[]>(sql).get(...(params as any[])) as T | null) ?? undefined
+  );
 }
 
 function all<T>(db: Database, sql: string, params: unknown[] = []): T[] {
@@ -593,7 +715,8 @@ const MAX_BOUND_PARAMS = 900;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
   return out;
 }
 
@@ -602,7 +725,9 @@ function chunk<T>(items: T[], size: number): T[][] {
  *  in range, via EXISTS over resolved_usage — not a per-message window). Callers append their own
  *  additional conditions (sessionIds, file:, freeform text) to the returned conds/params. */
 function buildSessionFilterConds(
-  query: Pick<ResolvedQuery, "sources" | "projectSubstring" | "since" | "until"> | undefined,
+  query:
+    | Pick<ResolvedQuery, "sources" | "projectSubstring" | "since" | "until">
+    | undefined,
 ): { conds: string[]; params: unknown[] } {
   const conds: string[] = ["s.archived = 0"];
   const params: unknown[] = [];
@@ -625,7 +750,9 @@ function buildSessionFilterConds(
     dateParams.push(query.until);
   }
   if (dateConds.length) {
-    conds.push(`EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`);
+    conds.push(
+      `EXISTS (SELECT 1 FROM resolved_usage m WHERE m.session_id = s.session_id AND ${dateConds.join(" AND ")})`,
+    );
     params.push(...dateParams);
   }
   return { conds, params };
@@ -723,7 +850,9 @@ function materializedSessionMatchesSnapshot(
   return (
     snapshot.metaJson === JSON.stringify(session.meta) &&
     snapshot.messageJsons.length === session.messages.length &&
-    snapshot.messageJsons.every((json, index) => json === JSON.stringify(session.messages[index]))
+    snapshot.messageJsons.every(
+      (json, index) => json === JSON.stringify(session.messages[index]),
+    )
   );
 }
 
@@ -736,7 +865,10 @@ async function insertRows(
 ): Promise<void> {
   if (!rows.length) return;
   const perRowPlaceholder = `(${columns.map(() => "?").join(", ")})`;
-  const rowsPerStatement = Math.max(1, Math.floor(MAX_BOUND_PARAMS / columns.length));
+  const rowsPerStatement = Math.max(
+    1,
+    Math.floor(MAX_BOUND_PARAMS / columns.length),
+  );
   for (const part of chunk(rows, rowsPerStatement)) {
     const sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES ${part
       .map(() => perRowPlaceholder)
@@ -754,7 +886,9 @@ function lstatIfExists(path: string): ReturnType<typeof lstatSync> | undefined {
   }
 }
 
-function ensureNotSymlink(path: string): ReturnType<typeof lstatSync> | undefined {
+function ensureNotSymlink(
+  path: string,
+): ReturnType<typeof lstatSync> | undefined {
   const stat = lstatIfExists(path);
   if (!stat) return undefined;
   if (stat.isSymbolicLink()) {
@@ -773,7 +907,11 @@ function ensurePrivateDirectory(path: string): void {
   ensureNotSymlink(path);
   const stat = lstatSync(path);
   if (!stat.isDirectory()) {
-    throw new StoreError("unsafe_path", path, `The store folder isn't a directory: ${path}`);
+    throw new StoreError(
+      "unsafe_path",
+      path,
+      `The store folder isn't a directory: ${path}`,
+    );
   }
   if (process.platform !== "win32") chmodSync(path, 0o700);
 }
@@ -785,7 +923,11 @@ function prepareDatabaseFile(path: string): void {
 
   if (stat) {
     if (!stat.isFile()) {
-      throw new StoreError("unsafe_path", path, `The store path isn't a regular file: ${path}`);
+      throw new StoreError(
+        "unsafe_path",
+        path,
+        `The store path isn't a regular file: ${path}`,
+      );
     }
   } else {
     const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
@@ -823,8 +965,11 @@ function asStoreError(
   path: string,
   busyTimeoutMs: number,
   fallbackCode: StoreErrorCode = "io",
-): StoreError {
+): StoreError | LabelError {
   if (error instanceof StoreError) return error;
+  // Label writes throw LabelError for caller-fixable reasons (bad name, duplicate, missing label);
+  // it's not a store-integrity failure, so pass it through for the API layer to map to an HTTP status.
+  if (error instanceof LabelError) return error;
   if (error instanceof SQLiteError) {
     if (error.code === "SQLITE_BUSY" || error.code === "SQLITE_LOCKED") {
       return new StoreError(
@@ -844,24 +989,37 @@ function asStoreError(
     }
   }
   const message = (error as Error)?.message || String(error);
-  return new StoreError(fallbackCode, path, `Couldn't use the local store at ${path}: ${message}`, {
-    cause: error,
-  });
+  return new StoreError(
+    fallbackCode,
+    path,
+    `Couldn't use the local store at ${path}: ${message}`,
+    {
+      cause: error,
+    },
+  );
 }
 
-async function transaction<T>(db: Database, operation: () => Promise<T>): Promise<T> {
+async function transaction<T>(
+  db: Database,
+  operation: () => Promise<T>,
+): Promise<T> {
   exec(db, "BEGIN IMMEDIATE");
   try {
     const value = await operation();
     exec(db, "COMMIT");
     return value;
   } catch (error) {
-    try { exec(db, "ROLLBACK"); } catch {}
+    try {
+      exec(db, "ROLLBACK");
+    } catch {}
     throw error;
   }
 }
 
-async function pragmaNumber(db: Database, name: "application_id" | "user_version"): Promise<number> {
+async function pragmaNumber(
+  db: Database,
+  name: "application_id" | "user_version",
+): Promise<number> {
   const row = await get<PragmaNumberRow>(db, `PRAGMA ${name}`);
   return row?.[name] ?? 0;
 }
@@ -1345,10 +1503,21 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ${RESOLVED_SESSIONS_FTS_DDL}
     `,
   },
+  // 21 -> 22: session/task labels (session-and-task-labels feature). Two new local-only tables; no
+  // backfill (labels start empty). See LABELS_DDL for the model and why label_assignments has no FK
+  // to resolved_sessions.
+  21: {
+    to: 22,
+    sql: LABELS_DDL,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
-async function migrateSchema(db: Database, path: string, fromVersion: number): Promise<void> {
+async function migrateSchema(
+  db: Database,
+  path: string,
+  fromVersion: number,
+): Promise<void> {
   let version = fromVersion;
   while (version !== STORE_SCHEMA_VERSION) {
     const step = MIGRATIONS[version];
@@ -1368,6 +1537,85 @@ async function migrateSchema(db: Database, path: string, fromVersion: number): P
   }
 }
 
+function tableExists(db: Database, name: string): boolean {
+  return !!get<TableNameRow>(
+    db,
+    "SELECT name FROM sqlite_schema WHERE type IN ('table', 'virtual') AND name = ?",
+    [name],
+  );
+}
+
+function tableHasColumn(db: Database, table: string, column: string): boolean {
+  return all<TableColumnRow>(db, `PRAGMA table_info(${table})`).some(
+    (row) => row.name === column,
+  );
+}
+
+async function repairKnownStampedSchemaGaps(
+  db: Database,
+  path: string,
+): Promise<void> {
+  try {
+    const version = await pragmaNumber(db, "user_version");
+    if (version < 21) return;
+
+    const hasResolvedSessions = tableExists(db, "resolved_sessions");
+    const needsSessionTitleRepair =
+      hasResolvedSessions &&
+      (!tableHasColumn(db, "resolved_sessions", "title") ||
+        !tableHasColumn(db, "resolved_sessions", "summary") ||
+        !tableExists(db, "resolved_sessions_fts"));
+    const needsLabelsRepair =
+      version >= 22 &&
+      (!tableExists(db, "labels") || !tableExists(db, "label_assignments"));
+    if (!needsSessionTitleRepair && !needsLabelsRepair) return;
+
+    await transaction(db, async () => {
+      if (needsSessionTitleRepair && tableExists(db, "resolved_sessions")) {
+        if (!tableHasColumn(db, "resolved_sessions", "title")) {
+          exec(db, "ALTER TABLE resolved_sessions ADD COLUMN title TEXT");
+        }
+        if (!tableHasColumn(db, "resolved_sessions", "summary")) {
+          exec(db, "ALTER TABLE resolved_sessions ADD COLUMN summary TEXT");
+        }
+        if (!tableExists(db, "resolved_sessions_fts")) {
+          exec(db, RESOLVED_SESSIONS_FTS_DDL);
+          exec(
+            db,
+            `INSERT INTO resolved_sessions_fts(session_id, text)
+             SELECT session_id, trim(COALESCE(title, '') || ' ' || COALESCE(summary, ''))
+             FROM resolved_sessions
+             WHERE trim(COALESCE(title, '') || ' ' || COALESCE(summary, '')) != ''`,
+          );
+        }
+      }
+
+      if (
+        needsLabelsRepair &&
+        (!tableExists(db, "labels") || !tableExists(db, "label_assignments"))
+      ) {
+        exec(db, LABELS_DDL);
+      }
+    });
+  } catch (error) {
+    if (!(error instanceof SQLiteError)) throw error;
+    const c = error.code;
+    if (
+      c === "SQLITE_BUSY" ||
+      c === "SQLITE_LOCKED" ||
+      c === "SQLITE_CORRUPT" ||
+      c === "SQLITE_NOTADB"
+    )
+      throw error;
+    throw new StoreError(
+      "incompatible_schema",
+      path,
+      `The local store is missing data Argus expects. ${rebuildHint(path)}`,
+      { cause: error },
+    );
+  }
+}
+
 /**
  * Read the per-install client id, generating and persisting it the first time. The id is a stable
  * `client-<uuid>` string scoped to this argus.db; an INSERT OR IGNORE means a concurrent open won't
@@ -1380,7 +1628,11 @@ async function ensureClientIdRow(db: Database): Promise<string> {
   );
   if (existing) return existing.value;
   const id = `client-${crypto.randomUUID()}`;
-  await run(db, "INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('client_id', ?)", [id]);
+  await run(
+    db,
+    "INSERT OR IGNORE INTO store_metadata (key, value) VALUES ('client_id', ?)",
+    [id],
+  );
   const row = await get<{ value: string }>(
     db,
     "SELECT value FROM store_metadata WHERE key = 'client_id'",
@@ -1410,6 +1662,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
   } else if (currentVersion !== STORE_SCHEMA_VERSION) {
     await migrateSchema(db, path, currentVersion);
   }
+  await repairKnownStampedSchemaGaps(db, path);
 
   await exec(db, "PRAGMA journal_mode = WAL");
   await exec(db, "PRAGMA synchronous = NORMAL");
@@ -1418,27 +1671,71 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
 
   // Verify the expected schema rather than trusting user_version alone.
   try {
-    await get(db, "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1");
+    await get(
+      db,
+      "SELECT id, import_provenance_json, envelope_json FROM index_files LIMIT 1",
+    );
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
-    await get(db, "SELECT session_id, archived, title, summary FROM resolved_sessions LIMIT 1");
-    await get(db, "SELECT input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1");
+    await get(
+      db,
+      "SELECT session_id, archived, title, summary FROM resolved_sessions LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT input_tokens, model, attribution_skill, interaction_seq FROM resolved_usage LIMIT 1",
+    );
     await get(db, "SELECT session_id, task_json FROM resolved_tasks LIMIT 1");
-    await get(db, "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1");
-    await get(db, "SELECT session_id, seq, interaction_seq, type, text FROM resolved_interaction_text LIMIT 1");
-    await get(db, "SELECT session_id, text FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH 'x' LIMIT 1");
-    await get(db, "SELECT session_id, text FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH 'x' LIMIT 1");
-    await get(db, "SELECT session_id, text FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH 'x' LIMIT 1");
-    await get(db, "SELECT session_id, tool, category, file_path FROM resolved_invocations LIMIT 1");
+    await get(
+      db,
+      "SELECT session_id, initiator, disposition, task_seq, interaction_json FROM resolved_interactions LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT session_id, seq, interaction_seq, type, text FROM resolved_interaction_text LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT session_id, text FROM resolved_interaction_text_fts WHERE resolved_interaction_text_fts MATCH 'x' LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT session_id, text FROM resolved_tasks_fts WHERE resolved_tasks_fts MATCH 'x' LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT session_id, text FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH 'x' LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT session_id, tool, category, file_path FROM resolved_invocations LIMIT 1",
+    );
     await get(db, "SELECT source FROM source_coverage LIMIT 1");
     await get(db, "SELECT key, value FROM store_metadata LIMIT 1");
     await get(db, "SELECT key, value, ts_ms FROM client_fingerprint LIMIT 1");
-    await get(db, "SELECT hub_url, client_id, session_id, last_ts, content_digest, parser_version FROM hub_session_cursors LIMIT 1");
+    await get(
+      db,
+      "SELECT hub_url, client_id, session_id, last_ts, content_digest, parser_version FROM hub_session_cursors LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT id, name, origin, created_at_ms, deleted_at_ms FROM labels LIMIT 1",
+    );
+    await get(
+      db,
+      "SELECT label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms FROM label_assignments LIMIT 1",
+    );
   } catch (error) {
     if (!(error instanceof SQLiteError)) throw error;
     // Busy/corrupt errors propagate so asStoreError can classify them; anything else
     // (missing column, wrong table shape, etc.) is a schema mismatch.
     const c = error.code;
-    if (c === "SQLITE_BUSY" || c === "SQLITE_LOCKED" || c === "SQLITE_CORRUPT" || c === "SQLITE_NOTADB") throw error;
+    if (
+      c === "SQLITE_BUSY" ||
+      c === "SQLITE_LOCKED" ||
+      c === "SQLITE_CORRUPT" ||
+      c === "SQLITE_NOTADB"
+    )
+      throw error;
     throw new StoreError(
       "incompatible_schema",
       path,
@@ -1489,7 +1786,10 @@ function envelopeJson(fragment: StoredFragment): string | null {
  * fragment). Runs inside the same transaction as the fragment upsert. `seq` preserves array order
  * so reconstruction is byte-faithful (e.g. friction turn-duration ordering).
  */
-async function materializeFactRows(db: Database, fragment: StoredFragment): Promise<void> {
+async function materializeFactRows(
+  db: Database,
+  fragment: StoredFragment,
+): Promise<void> {
   for (const table of INDEX_TABLES) {
     await run(db, `DELETE FROM ${table} WHERE file_id = ?`, [fragment.id]);
   }
@@ -1508,7 +1808,9 @@ async function materializeFactRows(db: Database, fragment: StoredFragment): Prom
         origin,
         fact.kind,
         fact.source,
-        fact.kind === "session_first_prompt" ? fact.sourceSessionId : fact.selector,
+        fact.kind === "session_first_prompt"
+          ? fact.sourceSessionId
+          : fact.selector,
         JSON.stringify(fact),
       ]),
     );
@@ -1522,7 +1824,15 @@ async function materializeFactRows(db: Database, fragment: StoredFragment): Prom
   await insertRows(
     db,
     "index_sessions",
-    ["file_id", "seq", "origin", "source", "source_session_id", "kind", "transcript_path"],
+    [
+      "file_id",
+      "seq",
+      "origin",
+      "source",
+      "source_session_id",
+      "kind",
+      "transcript_path",
+    ],
     facts.sessions.map((s, seq) => [
       fragment.id,
       seq,
@@ -1536,7 +1846,14 @@ async function materializeFactRows(db: Database, fragment: StoredFragment): Prom
   await insertRows(
     db,
     "index_relationships",
-    ["file_id", "seq", "origin", "source", "child_source_session_id", "parent_source_session_id"],
+    [
+      "file_id",
+      "seq",
+      "origin",
+      "source",
+      "child_source_session_id",
+      "parent_source_session_id",
+    ],
     facts.relationships.map((rel, seq) => [
       fragment.id,
       seq,
@@ -1552,7 +1869,11 @@ interface FactJsonRow {
   fact_json: string;
 }
 
-async function loadFactArray<T>(db: Database, table: string, fragmentId: string): Promise<T[]> {
+async function loadFactArray<T>(
+  db: Database,
+  table: string,
+  fragmentId: string,
+): Promise<T[]> {
   const rows = await all<FactJsonRow>(
     db,
     `SELECT fact_json FROM ${table} WHERE file_id = ? ORDER BY seq`,
@@ -1561,7 +1882,9 @@ async function loadFactArray<T>(db: Database, table: string, fragmentId: string)
   return rows.map((row) => JSON.parse(row.fact_json) as T);
 }
 
-function invalidatedStatus(reason: InvalidationReason): FragmentMetadata["status"] {
+function invalidatedStatus(
+  reason: InvalidationReason,
+): FragmentMetadata["status"] {
   return reason === "file_changed" ? "unstable" : "failed";
 }
 
@@ -1600,7 +1923,9 @@ function buildResolvedFilters(
   const sourceConditions: string[] = [];
   const sourceParams: unknown[] = [];
   if (query?.sources?.length) {
-    sourceConditions.push(`${sourceColumn} IN (${query.sources.map(() => "?").join(", ")})`);
+    sourceConditions.push(
+      `${sourceColumn} IN (${query.sources.map(() => "?").join(", ")})`,
+    );
     sourceParams.push(...query.sources);
   }
   const contentConditions: string[] = [];
@@ -1621,7 +1946,9 @@ function buildResolvedFilters(
   return {
     messageWhere: all.length ? `WHERE ${all.join(" AND ")}` : "",
     messageParams: [...sourceParams, ...contentParams],
-    sourceWhere: sourceConditions.length ? `WHERE ${sourceConditions.join(" AND ")}` : "",
+    sourceWhere: sourceConditions.length
+      ? `WHERE ${sourceConditions.join(" AND ")}`
+      : "",
     sourceParams,
     active: contentConditions.length > 0,
   };
@@ -1634,7 +1961,8 @@ const USAGE_SUMS =
   "SUM(cache_write_5m) AS cw5, SUM(cache_write_1h) AS cw1, COUNT(*) AS messages";
 
 /** Total-tokens expression over a resolved_usage row (input + output + both cache buckets). */
-const USAGE_TOTAL = "(input_tokens + output_tokens + cache_read + cache_write_5m + cache_write_1h)";
+const USAGE_TOTAL =
+  "(input_tokens + output_tokens + cache_read + cache_write_5m + cache_write_1h)";
 
 interface UsageSumRow {
   input: number | null;
@@ -1667,7 +1995,8 @@ export class SqliteStore implements Store {
   ) {}
 
   private schedule<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.closePromise) return Promise.reject(new Error("Argus store is closed"));
+    if (this.closePromise)
+      return Promise.reject(new Error("Argus store is closed"));
     const result = this.queue.then(operation, operation).catch((error) => {
       throw asStoreError(error, this.path, this.busyTimeoutMs);
     });
@@ -1680,7 +2009,8 @@ export class SqliteStore implements Store {
 
   load(id: string): Promise<StoredFragment | undefined> {
     return this.schedule(async () => {
-      const { nativeFragments, auxiliaryFragments } = await this.reconstructCore([id]);
+      const { nativeFragments, auxiliaryFragments } =
+        await this.reconstructCore([id]);
       return nativeFragments[0] ?? auxiliaryFragments[0];
     });
   }
@@ -1763,9 +2093,13 @@ export class SqliteStore implements Store {
   removeMissing(discovery: CompleteDiscovery): Promise<void> {
     return this.schedule(async () => {
       if (discovery.status !== "complete") {
-        throw new Error("removeMissing requires a complete authoritative discovery result");
+        throw new Error(
+          "removeMissing requires a complete authoritative discovery result",
+        );
       }
-      const observedFileIds = new Set(discovery.files.map(({ file }) => file.id));
+      const observedFileIds = new Set(
+        discovery.files.map(({ file }) => file.id),
+      );
       await transaction(this.db, async () => {
         const rows = await all<{ id: string; file_identity: string }>(
           this.db,
@@ -1776,7 +2110,9 @@ export class SqliteStore implements Store {
         );
         for (const row of rows) {
           if (!observedFileIds.has(row.file_identity)) {
-            await run(this.db, "DELETE FROM index_files WHERE id = ?", [row.id]);
+            await run(this.db, "DELETE FROM index_files WHERE id = ?", [
+              row.id,
+            ]);
           }
         }
       });
@@ -1829,7 +2165,10 @@ export class SqliteStore implements Store {
          FROM index_files WHERE source = ? AND kind = 'transcript'`,
         [source],
       );
-      const sessionRows = await all<{ file_id: string; source_session_id: string }>(
+      const sessionRows = await all<{
+        file_id: string;
+        source_session_id: string;
+      }>(
         this.db,
         "SELECT file_id, source_session_id FROM index_sessions WHERE source = ?",
         [source],
@@ -1855,7 +2194,8 @@ export class SqliteStore implements Store {
         const physicalId: PhysicalFileIdentity | undefined =
           row.physical_id_scheme && row.physical_id_value
             ? {
-                scheme: row.physical_id_scheme as PhysicalFileIdentity["scheme"],
+                scheme:
+                  row.physical_id_scheme as PhysicalFileIdentity["scheme"],
                 value: row.physical_id_value,
               }
             : undefined;
@@ -1886,7 +2226,10 @@ export class SqliteStore implements Store {
 
       return {
         fragments,
-        relationships: relationshipRows.map((row) => ({ child: row.child, parent: row.parent })),
+        relationships: relationshipRows.map((row) => ({
+          child: row.child,
+          parent: row.parent,
+        })),
       };
     });
   }
@@ -1894,20 +2237,30 @@ export class SqliteStore implements Store {
   // Reconstruct auxiliary fragments from their envelope + index_auxiliary rows. Transcript/import
   // fragments store a null envelope (their content is re-parsed from disk), so they aren't
   // reconstructed here. Unscheduled so callers compose it under one queue slot.
-  private async reconstructCore(ids: string[]): Promise<ReconstructedFragments> {
+  private async reconstructCore(
+    ids: string[],
+  ): Promise<ReconstructedFragments> {
     const result: ReconstructedFragments = {
       nativeFragments: [],
       auxiliaryFragments: [],
     };
     for (const id of new Set(ids)) {
-      const row = await get<{ kind: StoredFragment["kind"]; envelope_json: string | null }>(
+      const row = await get<{
+        kind: StoredFragment["kind"];
+        envelope_json: string | null;
+      }>(
         this.db,
         "SELECT kind, envelope_json FROM index_files WHERE id = ? AND status = 'success'",
         [id],
       );
-      if (!row || row.envelope_json == null || row.kind !== "auxiliary") continue;
+      if (!row || row.envelope_json == null || row.kind !== "auxiliary")
+        continue;
       const fragment = JSON.parse(row.envelope_json) as ParsedAuxiliaryFragment;
-      fragment.facts = await loadFactArray<AuxiliaryFact>(this.db, "index_auxiliary", id);
+      fragment.facts = await loadFactArray<AuxiliaryFact>(
+        this.db,
+        "index_auxiliary",
+        id,
+      );
       result.auxiliaryFragments.push(fragment);
     }
     return result;
@@ -1935,15 +2288,26 @@ export class SqliteStore implements Store {
   // view's title/summary fallback and its "No tasks found." vs "Interpretation pending." distinction.
   readSessionInterpretation(
     sessionId: string,
-  ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined> {
+  ): Promise<
+    | { title: string | null; summary: string | null; interpreted: boolean }
+    | undefined
+  > {
     return this.schedule(async () => {
-      const row = await get<{ title: string | null; summary: string | null; interpreted_at_ms: number | null }>(
+      const row = await get<{
+        title: string | null;
+        summary: string | null;
+        interpreted_at_ms: number | null;
+      }>(
         this.db,
         "SELECT title, summary, interpreted_at_ms FROM resolved_sessions WHERE session_id = ?",
         [sessionId],
       );
       return row
-        ? { title: row.title, summary: row.summary, interpreted: row.interpreted_at_ms != null }
+        ? {
+            title: row.title,
+            summary: row.summary,
+            interpreted: row.interpreted_at_ms != null,
+          }
         : undefined;
     });
   }
@@ -1972,10 +2336,17 @@ export class SqliteStore implements Store {
         "SELECT interaction_json FROM resolved_interactions WHERE session_id = ? ORDER BY seq",
         [sessionId],
       );
-      const interactions = rows.map((row) => JSON.parse(row.interaction_json) as InteractionFact);
+      const interactions = rows.map(
+        (row) => JSON.parse(row.interaction_json) as InteractionFact,
+      );
       const byInteraction = new Map<number, InteractionFact>();
-      for (const interaction of interactions) byInteraction.set(interaction.seq, interaction);
-      const textRows = await all<{ interaction_seq: number | null; type: string; text: string }>(
+      for (const interaction of interactions)
+        byInteraction.set(interaction.seq, interaction);
+      const textRows = await all<{
+        interaction_seq: number | null;
+        type: string;
+        text: string;
+      }>(
         this.db,
         "SELECT interaction_seq, type, text FROM resolved_interaction_text WHERE session_id = ? ORDER BY seq",
         [sessionId],
@@ -1986,8 +2357,11 @@ export class SqliteStore implements Store {
         if (!interaction) continue;
         // Concatenate defensively: today there is at most one prompt + one response chunk per
         // interaction, but the tall table can carry more — overwriting would silently drop text.
-        if (row.type === "prompt") interaction.promptText = (interaction.promptText ?? "") + row.text;
-        else if (row.type === "response") interaction.responseText = (interaction.responseText ?? "") + row.text;
+        if (row.type === "prompt")
+          interaction.promptText = (interaction.promptText ?? "") + row.text;
+        else if (row.type === "response")
+          interaction.responseText =
+            (interaction.responseText ?? "") + row.text;
       }
       return interactions;
     });
@@ -2054,7 +2428,9 @@ export class SqliteStore implements Store {
   ): Promise<void> {
     return this.schedule(async () => {
       await transaction(this.db, async () => {
-        await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [sessionId]);
+        await run(this.db, "DELETE FROM resolved_tasks WHERE session_id = ?", [
+          sessionId,
+        ]);
         await insertRows(
           this.db,
           "resolved_tasks",
@@ -2070,14 +2446,22 @@ export class SqliteStore implements Store {
         // Keep the search index (#155) in sync with the same wholesale replace, via ordinary DML (not
         // a trigger — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment). Indexes description +
         // outcomeReason + signals[] only — deliberately excludes .evidence (bookkeeping, not prose).
-        await run(this.db, "DELETE FROM resolved_tasks_fts WHERE session_id = ?", [sessionId]);
+        await run(
+          this.db,
+          "DELETE FROM resolved_tasks_fts WHERE session_id = ?",
+          [sessionId],
+        );
         await insertRows(
           this.db,
           "resolved_tasks_fts",
           ["session_id", "text"],
           tasks.map((task) => [
             sessionId,
-            [task.description, task.outcomeReason ?? "", ...(task.signals ?? [])].join(" "),
+            [
+              task.description,
+              task.outcomeReason ?? "",
+              ...(task.signals ?? []),
+            ].join(" "),
           ]),
         );
         const interactionRows = await all<{ seq: number; ts: number | null }>(
@@ -2087,11 +2471,16 @@ export class SqliteStore implements Store {
         );
         // The narrow TaskSeqInteraction type lets us pass these rebuilt-from-columns rows directly —
         // no cast that would silently hide a future field the assigner starts depending on.
-        const interactions: TaskSeqInteraction[] = interactionRows.map((row) => ({
-          seq: row.seq,
-          timestampMs: row.ts ?? undefined,
-        }));
-        const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, interactions);
+        const interactions: TaskSeqInteraction[] = interactionRows.map(
+          (row) => ({
+            seq: row.seq,
+            timestampMs: row.ts ?? undefined,
+          }),
+        );
+        const taskSeqByInteraction = assignInteractionTaskSeqs(
+          tasks,
+          interactions,
+        );
         // Re-derive every interaction's task_seq in ONE statement: a CASE maps assigned interactions to
         // their task and the ELSE clears the rest — instead of N round-trips (a reset + one UPDATE per
         // interaction), which a long session would pay on every interpret.
@@ -2101,10 +2490,17 @@ export class SqliteStore implements Store {
           await run(
             this.db,
             `UPDATE resolved_interactions SET task_seq = CASE seq ${cases} ELSE NULL END WHERE session_id = ?`,
-            [...assigned.flatMap(([seq, taskSeq]) => [seq, taskSeq]), sessionId],
+            [
+              ...assigned.flatMap(([seq, taskSeq]) => [seq, taskSeq]),
+              sessionId,
+            ],
           );
         } else {
-          await run(this.db, "UPDATE resolved_interactions SET task_seq = NULL WHERE session_id = ?", [sessionId]);
+          await run(
+            this.db,
+            "UPDATE resolved_interactions SET task_seq = NULL WHERE session_id = ?",
+            [sessionId],
+          );
         }
         await run(
           this.db,
@@ -2113,13 +2509,243 @@ export class SqliteStore implements Store {
         );
         // Keep the title/summary search index (#234) in sync with the same wholesale replace, via
         // ordinary DML (not a trigger — see RESOLVED_INTERACTION_TEXT_FTS_DDL's comment).
-        await run(this.db, "DELETE FROM resolved_sessions_fts WHERE session_id = ?", [sessionId]);
+        await run(
+          this.db,
+          "DELETE FROM resolved_sessions_fts WHERE session_id = ?",
+          [sessionId],
+        );
         const ftsText = sessionFtsText(title, summary);
         if (ftsText) {
-          await run(this.db, "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)", [sessionId, ftsText]);
+          await run(
+            this.db,
+            "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)",
+            [sessionId, ftsText],
+          );
         }
       });
       secureSqliteFiles(this.path);
+    });
+  }
+
+  // ---- Session/task labels (session-and-task-labels feature) ----
+  // Local-only: none of these tables are read by push.ts, so labels never reach the sync wire.
+  // label_assignments has no FK to resolved_sessions on purpose — materialize CASCADE-wipes a
+  // session's resolved_* rows on every re-index of a changed session, and user-authored labels must
+  // survive that. Assignments are removed only on genuine session deletion (retractSessions).
+
+  listLabels(opts?: { includeDeleted?: boolean }): Promise<LabelRecord[]> {
+    return this.schedule(async () => {
+      const where = opts?.includeDeleted ? "" : "WHERE deleted_at_ms IS NULL";
+      const rows = await all<LabelDbRow>(
+        this.db,
+        `SELECT id, name, origin, created_at_ms, deleted_at_ms FROM labels ${where} ORDER BY name COLLATE NOCASE, id`,
+      );
+      return rows.map(labelRecordFromRow);
+    });
+  }
+
+  createLabel(input: {
+    name: string;
+    origin?: LabelOrigin;
+  }): Promise<LabelRecord> {
+    return this.schedule(async () => {
+      const name = input.name.trim();
+      if (!name) throw new LabelError("empty_name", "A label needs a name.");
+      const origin: LabelOrigin = input.origin ?? "user";
+      const id = `label:${crypto.randomUUID()}`;
+      const createdAtMs = Date.now();
+      let created: LabelRecord | undefined;
+      // Serialized writes make this pre-check + insert race-free without relying on catching the
+      // partial unique-index violation (which can't tell a name clash from other constraint errors).
+      await transaction(this.db, async () => {
+        const clash = await get<{ id: string }>(
+          this.db,
+          "SELECT id FROM labels WHERE name = ? COLLATE NOCASE AND deleted_at_ms IS NULL",
+          [name],
+        );
+        if (clash)
+          throw new LabelError(
+            "name_conflict",
+            `A label named "${name}" already exists.`,
+          );
+        await run(
+          this.db,
+          "INSERT INTO labels (id, name, origin, created_at_ms, deleted_at_ms) VALUES (?, ?, ?, ?, NULL)",
+          [id, name, origin, createdAtMs],
+        );
+        created = { id, name, origin, createdAtMs };
+      });
+      secureSqliteFiles(this.path);
+      return created!;
+    });
+  }
+
+  renameLabel(id: string, name: string): Promise<LabelRecord> {
+    return this.schedule(async () => {
+      const trimmed = name.trim();
+      if (!trimmed) throw new LabelError("empty_name", "A label needs a name.");
+      let updated: LabelRecord | undefined;
+      await transaction(this.db, async () => {
+        const existing = await get<LabelDbRow>(
+          this.db,
+          "SELECT id, name, origin, created_at_ms, deleted_at_ms FROM labels WHERE id = ?",
+          [id],
+        );
+        if (!existing || existing.deleted_at_ms != null) {
+          throw new LabelError("not_found", "That label no longer exists.");
+        }
+        const clash = await get<{ id: string }>(
+          this.db,
+          "SELECT id FROM labels WHERE name = ? COLLATE NOCASE AND deleted_at_ms IS NULL AND id != ?",
+          [trimmed, id],
+        );
+        if (clash)
+          throw new LabelError(
+            "name_conflict",
+            `A label named "${trimmed}" already exists.`,
+          );
+        await run(this.db, "UPDATE labels SET name = ? WHERE id = ?", [
+          trimmed,
+          id,
+        ]);
+        updated = labelRecordFromRow({ ...existing, name: trimmed });
+      });
+      secureSqliteFiles(this.path);
+      return updated!;
+    });
+  }
+
+  deleteLabel(id: string): Promise<void> {
+    return this.schedule(async () => {
+      // Soft delete: the name frees up for reuse, existing applications stay but stop surfacing (the
+      // label reads all filter to deleted_at_ms IS NULL).
+      await run(
+        this.db,
+        "UPDATE labels SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
+        [Date.now(), id],
+      );
+      secureSqliteFiles(this.path);
+    });
+  }
+
+  assignLabel(
+    labelId: string,
+    target: LabelTarget,
+    appliedBy: LabelAppliedBy = "user",
+  ): Promise<void> {
+    return this.schedule(async () => {
+      const { targetKind, taskSeq } = normalizedLabelTarget(target);
+      await transaction(this.db, async () => {
+        const activeLabel = await get<{ id: string }>(
+          this.db,
+          "SELECT id FROM labels WHERE id = ? AND deleted_at_ms IS NULL",
+          [labelId],
+        );
+        if (!activeLabel)
+          throw new LabelError("not_found", "That label no longer exists.");
+        // ON CONFLICT over label_assignments_unique makes re-applying the same (label, target) a no-op
+        // that preserves the original applied_by / applied_at_ms.
+        await run(
+          this.db,
+          `INSERT INTO label_assignments (label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (label_id, session_id, COALESCE(task_seq, -1)) DO NOTHING`,
+          [
+            labelId,
+            targetKind,
+            target.sessionId,
+            taskSeq,
+            appliedBy,
+            Date.now(),
+          ],
+        );
+      });
+      secureSqliteFiles(this.path);
+    });
+  }
+
+  unassignLabel(labelId: string, target: LabelTarget): Promise<void> {
+    return this.schedule(async () => {
+      const { taskSeq } = normalizedLabelTarget(target);
+      await run(
+        this.db,
+        "DELETE FROM label_assignments WHERE label_id = ? AND session_id = ? AND COALESCE(task_seq, -1) = COALESCE(?, -1)",
+        [labelId, target.sessionId, taskSeq],
+      );
+      secureSqliteFiles(this.path);
+    });
+  }
+
+  readSessionLabels(sessionId: string): Promise<SessionLabels> {
+    return this.schedule(async () => {
+      const rows = await all<
+        LabelDbRow & {
+          task_seq: number | null;
+          applied_by: string;
+          applied_at_ms: number;
+        }
+      >(
+        this.db,
+        `SELECT l.id, l.name, l.origin, l.created_at_ms, l.deleted_at_ms,
+                a.task_seq, a.applied_by, a.applied_at_ms
+         FROM label_assignments a
+         JOIN labels l ON l.id = a.label_id
+         WHERE a.session_id = ? AND l.deleted_at_ms IS NULL
+         ORDER BY l.name COLLATE NOCASE, l.id`,
+        [sessionId],
+      );
+      const session: AppliedLabel[] = [];
+      const tasks: Record<number, AppliedLabel[]> = {};
+      for (const row of rows) {
+        const applied: AppliedLabel = {
+          ...labelRecordFromRow(row),
+          appliedBy: row.applied_by as LabelAppliedBy,
+          appliedAtMs: row.applied_at_ms,
+        };
+        if (row.task_seq == null) session.push(applied);
+        else (tasks[row.task_seq] ??= []).push(applied);
+      }
+      return { session, tasks };
+    });
+  }
+
+  readSessionLabelsForSessions(
+    sessionIds: string[],
+  ): Promise<Map<string, AppliedLabel[]>> {
+    return this.schedule(async () => {
+      const out = new Map<string, AppliedLabel[]>();
+      const ids = [...new Set(sessionIds)];
+      if (!ids.length) return out;
+      for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+        const placeholders = part.map(() => "?").join(", ");
+        const rows = await all<
+          LabelDbRow & {
+            session_id: string;
+            applied_by: string;
+            applied_at_ms: number;
+          }
+        >(
+          this.db,
+          `SELECT a.session_id, l.id, l.name, l.origin, l.created_at_ms, l.deleted_at_ms,
+                  a.applied_by, a.applied_at_ms
+           FROM label_assignments a
+           JOIN labels l ON l.id = a.label_id
+           WHERE a.task_seq IS NULL AND l.deleted_at_ms IS NULL AND a.session_id IN (${placeholders})
+           ORDER BY l.name COLLATE NOCASE, l.id`,
+          part,
+        );
+        for (const row of rows) {
+          const applied: AppliedLabel = {
+            ...labelRecordFromRow(row),
+            appliedBy: row.applied_by as LabelAppliedBy,
+            appliedAtMs: row.applied_at_ms,
+          };
+          const list = out.get(row.session_id);
+          if (list) list.push(applied);
+          else out.set(row.session_id, [applied]);
+        }
+      }
+      return out;
     });
   }
 
@@ -2142,11 +2768,19 @@ export class SqliteStore implements Store {
       let credits = maxPerHour;
       if (row) {
         try {
-          const state = JSON.parse(row.value) as { credits?: number; lastRefillMs?: number };
-          const lastRefillMs = typeof state.lastRefillMs === "number" ? state.lastRefillMs : nowMs;
-          const prior = typeof state.credits === "number" ? state.credits : maxPerHour;
+          const state = JSON.parse(row.value) as {
+            credits?: number;
+            lastRefillMs?: number;
+          };
+          const lastRefillMs =
+            typeof state.lastRefillMs === "number" ? state.lastRefillMs : nowMs;
+          const prior =
+            typeof state.credits === "number" ? state.credits : maxPerHour;
           const elapsedMs = Math.max(0, nowMs - lastRefillMs);
-          credits = Math.min(maxPerHour, prior + (elapsedMs / 3_600_000) * maxPerHour);
+          credits = Math.min(
+            maxPerHour,
+            prior + (elapsedMs / 3_600_000) * maxPerHour,
+          );
         } catch {
           credits = maxPerHour;
         }
@@ -2167,7 +2801,11 @@ export class SqliteStore implements Store {
   // already interpreted once (content has changed since — the "new data, refresh?" signal). Gating
   // outdated on eligibility (incl. the retained-text check) means it's a subset of pending, so it always
   // decreases as the drain works — a text-less session can't show as a permanently-stuck "outdated".
-  interpretationProgress(): Promise<{ interpreted: number; pending: number; outdated: number }> {
+  interpretationProgress(): Promise<{
+    interpreted: number;
+    pending: number;
+    outdated: number;
+  }> {
     return this.schedule(async () => {
       const eligible = await get<{ pending: number; outdated: number }>(
         this.db,
@@ -2187,7 +2825,9 @@ export class SqliteStore implements Store {
     });
   }
 
-  readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>> {
+  readSessionTaskMessages(
+    sessionId: string,
+  ): Promise<Map<string, MessageRecord[]>> {
     return this.schedule(async () => {
       // One pass for the whole session: map each task's seq -> id, then bucket the attributed
       // messages by task id. Task membership lives on resolved_interactions.task_seq (#122), so a usage
@@ -2199,7 +2839,8 @@ export class SqliteStore implements Store {
         [sessionId],
       );
       const idBySeq = new Map<number, string>();
-      for (const row of taskRows) idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+      for (const row of taskRows)
+        idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
 
       const rows = await all<{ record_json: string; task_seq: number | null }>(
         this.db,
@@ -2240,7 +2881,12 @@ export class SqliteStore implements Store {
   // Interpret backfill, #153) read the dialogue from the store instead of re-parsing disk; local-only.
   readInteractionText(sessionId: string): Promise<InteractionTextChunk[]> {
     return this.schedule(async () => {
-      const rows = await all<{ seq: number; interaction_seq: number | null; type: string; text: string }>(
+      const rows = await all<{
+        seq: number;
+        interaction_seq: number | null;
+        type: string;
+        text: string;
+      }>(
         this.db,
         "SELECT seq, interaction_seq, type, text FROM resolved_interaction_text WHERE session_id = ? ORDER BY seq",
         [sessionId],
@@ -2262,9 +2908,12 @@ export class SqliteStore implements Store {
       // Two cheap grouped queries (no per-message JS walk): the matching sessions, and per-(session,
       // model) token sums from the promoted columns. A date filter only selects sessions (included if
       // they have a message in range, via EXISTS); the token sums below are whole-session, not windowed.
-      const { conds: sessionConds, params: sessionParams } = buildSessionFilterConds(query);
+      const { conds: sessionConds, params: sessionParams } =
+        buildSessionFilterConds(query);
       if (query?.sessionIds) {
-        sessionConds.push(`s.session_id IN (${query.sessionIds.map(() => "?").join(", ")})`);
+        sessionConds.push(
+          `s.session_id IN (${query.sessionIds.map(() => "?").join(", ")})`,
+        );
         sessionParams.push(...query.sessionIds);
       }
       const sessionRows = await all<{
@@ -2287,7 +2936,9 @@ export class SqliteStore implements Store {
       // totals reflect the full session — so the row is internally consistent with its whole-session
       // first_ts / last_ts / message_count / meta counts, and the recent/tokens/cost sorts agree.
       // (A session is single-source, so the source filter never splits a session's sum.)
-      const msgFilters = buildResolvedFilters(query?.sources?.length ? { sources: query.sources } : undefined);
+      const msgFilters = buildResolvedFilters(
+        query?.sources?.length ? { sources: query.sources } : undefined,
+      );
       const usageRows = await all<{
         session_id: string;
         model: string | null;
@@ -2305,9 +2956,14 @@ export class SqliteStore implements Store {
          GROUP BY session_id, model`,
         msgFilters.messageParams,
       );
-      const byModelBySession = new Map<string, { model: string; usage: Usage }[]>();
+      const byModelBySession = new Map<
+        string,
+        { model: string; usage: Usage }[]
+      >();
       for (const row of usageRows) {
-        const list = byModelBySession.get(row.session_id) ?? byModelBySession.set(row.session_id, []).get(row.session_id)!;
+        const list =
+          byModelBySession.get(row.session_id) ??
+          byModelBySession.set(row.session_id, []).get(row.session_id)!;
         list.push({
           model: row.model ?? "",
           usage: {
@@ -2337,7 +2993,8 @@ export class SqliteStore implements Store {
   // narrowing readSessionAggregates builds, so search honors the global filters.
   searchSessions(query: SessionSearchQuery): Promise<SessionSearchResult> {
     return this.schedule(async () => {
-      const { conds: sessionConds, params: sessionParams } = buildSessionFilterConds(query);
+      const { conds: sessionConds, params: sessionParams } =
+        buildSessionFilterConds(query);
 
       // file: term — substring match on file_path (not FTS: the tokenizer would split paths on '/' and '.').
       if (query.file) {
@@ -2362,7 +3019,14 @@ export class SqliteStore implements Store {
             OR s.session_id IN (SELECT session_id FROM resolved_sessions_fts WHERE resolved_sessions_fts MATCH ?))`,
         );
         const lowered = trimmed.toLowerCase();
-        sessionParams.push(lowered, lowered, lowered, matchQuery, matchQuery, matchQuery);
+        sessionParams.push(
+          lowered,
+          lowered,
+          lowered,
+          matchQuery,
+          matchQuery,
+          matchQuery,
+        );
       }
 
       const rows = await all<{ session_id: string }>(
@@ -2399,11 +3063,21 @@ export class SqliteStore implements Store {
           ),
         ]);
         // Accumulate per session: total match count + the first snippet seen from each source kind.
-        const perSession = new Map<string, { count: number; snip: Partial<Record<SessionSearchTextSource, string>> }>();
-        const fold = (rows: { session_id: string; snip: string }[], source: SessionSearchTextSource) => {
+        const perSession = new Map<
+          string,
+          {
+            count: number;
+            snip: Partial<Record<SessionSearchTextSource, string>>;
+          }
+        >();
+        const fold = (
+          rows: { session_id: string; snip: string }[],
+          source: SessionSearchTextSource,
+        ) => {
           for (const row of rows) {
             let acc = perSession.get(row.session_id);
-            if (!acc) perSession.set(row.session_id, (acc = { count: 0, snip: {} }));
+            if (!acc)
+              perSession.set(row.session_id, (acc = { count: 0, snip: {} }));
             acc.count += 1;
             acc.snip[source] ??= row.snip; // first row's snippet wins per source
           }
@@ -2413,10 +3087,18 @@ export class SqliteStore implements Store {
         fold(sessionRows, "summary");
         // Order the matched sources most-distilled-first (summary > task > conversation) so `sources[0]`
         // is the snippet's origin and the UI can name each precisely. count sums across all of them.
-        const PREFERENCE: SessionSearchTextSource[] = ["summary", "task", "conversation"];
+        const PREFERENCE: SessionSearchTextSource[] = [
+          "summary",
+          "task",
+          "conversation",
+        ];
         for (const [sessionId, acc] of perSession) {
           const sources = PREFERENCE.filter((s) => acc.snip[s] !== undefined);
-          matches.set(sessionId, { count: acc.count, snippet: acc.snip[sources[0]!]!, sources });
+          matches.set(sessionId, {
+            count: acc.count,
+            snippet: acc.snip[sources[0]!]!,
+            sources,
+          });
         }
       }
 
@@ -2431,7 +3113,9 @@ export class SqliteStore implements Store {
   // priced per (dimension, model) in JS by the serve-side builders (pricing is linear, so
   // SUM-then-price equals price-then-SUM).
 
-  readUsageByDateModel(query?: ResolvedQuery): Promise<Array<{ date: string } & UsageGroupRow>> {
+  readUsageByDateModel(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string } & UsageGroupRow>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       return (
@@ -2440,11 +3124,18 @@ export class SqliteStore implements Store {
           `SELECT date, model, ${USAGE_SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY date, model`,
           usage.messageParams,
         )
-      ).map((r) => ({ date: r.date, model: r.model ?? "", usage: sumRowToUsage(r), messages: r.messages }));
+      ).map((r) => ({
+        date: r.date,
+        model: r.model ?? "",
+        usage: sumRowToUsage(r),
+        messages: r.messages,
+      }));
     });
   }
 
-  readUsageBySourceModel(query?: ResolvedQuery): Promise<Array<{ source: string } & UsageGroupRow>> {
+  readUsageBySourceModel(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ source: string } & UsageGroupRow>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       return (
@@ -2453,11 +3144,18 @@ export class SqliteStore implements Store {
           `SELECT source, model, ${USAGE_SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY source, model`,
           usage.messageParams,
         )
-      ).map((r) => ({ source: r.source, model: r.model ?? "", usage: sumRowToUsage(r), messages: r.messages }));
+      ).map((r) => ({
+        source: r.source,
+        model: r.model ?? "",
+        usage: sumRowToUsage(r),
+        messages: r.messages,
+      }));
     });
   }
 
-  readUsageByProjectModel(query?: ResolvedQuery): Promise<Array<{ project: string } & UsageGroupRow>> {
+  readUsageByProjectModel(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ project: string } & UsageGroupRow>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       return (
@@ -2466,24 +3164,43 @@ export class SqliteStore implements Store {
           `SELECT project, model, ${USAGE_SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY project, model`,
           usage.messageParams,
         )
-      ).map((r) => ({ project: r.project, model: r.model ?? "", usage: sumRowToUsage(r), messages: r.messages }));
+      ).map((r) => ({
+        project: r.project,
+        model: r.model ?? "",
+        usage: sumRowToUsage(r),
+        messages: r.messages,
+      }));
     });
   }
 
-  readUsageBySkillModel(query?: ResolvedQuery): Promise<Array<{ skill: string } & UsageGroupRow>> {
+  readUsageBySkillModel(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ skill: string } & UsageGroupRow>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       return (
-        await all<UsageSumRow & { attribution_skill: string | null; model: string | null }>(
+        await all<
+          UsageSumRow & {
+            attribution_skill: string | null;
+            model: string | null;
+          }
+        >(
           this.db,
           `SELECT attribution_skill, model, ${USAGE_SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY attribution_skill, model`,
           usage.messageParams,
         )
-      ).map((r) => ({ skill: r.attribution_skill ?? "", model: r.model ?? "", usage: sumRowToUsage(r), messages: r.messages }));
+      ).map((r) => ({
+        skill: r.attribution_skill ?? "",
+        model: r.model ?? "",
+        usage: sumRowToUsage(r),
+        messages: r.messages,
+      }));
     });
   }
 
-  readSkillTokensByDate(query?: ResolvedQuery): Promise<Array<{ date: string; skill: string; total: number }>> {
+  readSkillTokensByDate(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; skill: string; total: number }>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       const where = usage.messageWhere
@@ -2513,7 +3230,9 @@ export class SqliteStore implements Store {
     });
   }
 
-  readSessionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; sessions: number }>> {
+  readSessionsBySource(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ source: string; sessions: number }>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       return all<{ source: string; sessions: number }>(
@@ -2524,7 +3243,9 @@ export class SqliteStore implements Store {
     });
   }
 
-  readSessionsByProject(query?: ResolvedQuery): Promise<Array<{ project: string; sessions: number }>> {
+  readSessionsByProject(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ project: string; sessions: number }>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
       return all<{ project: string; sessions: number }>(
@@ -2540,7 +3261,9 @@ export class SqliteStore implements Store {
   // result-size totals are scoped by SOURCE ONLY, mirroring the legacy ParseResult.toolResults map
   // (no date/project window).
 
-  readToolResultStats(query?: ResolvedQuery): Promise<Array<{ tool: string; count: number; approxTokens: number }>> {
+  readToolResultStats(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ tool: string; count: number; approxTokens: number }>> {
     return this.schedule(async () => {
       const invSource = buildResolvedFilters(query, { sourceColumn: "source" });
       return (
@@ -2552,43 +3275,101 @@ export class SqliteStore implements Store {
            GROUP BY tool`,
           invSource.sourceParams,
         )
-      ).map((r) => ({ tool: r.tool, count: r.count, approxTokens: r.approx ?? 0 }));
+      ).map((r) => ({
+        tool: r.tool,
+        count: r.count,
+        approxTokens: r.approx ?? 0,
+      }));
     });
   }
 
-  readToolStats(query?: ResolvedQuery): Promise<Array<{ tool: string; category: ToolCategory; calls: number; sessions: number }>> {
+  readToolStats(
+    query?: ResolvedQuery,
+  ): Promise<
+    Array<{
+      tool: string;
+      category: ToolCategory;
+      calls: number;
+      sessions: number;
+    }>
+  > {
     return this.schedule(async () => {
-      const inv = buildResolvedFilters(query, { sourceColumn: "i.source", dateColumn: "i.date", cwdColumn: "i.cwd" });
+      const inv = buildResolvedFilters(query, {
+        sourceColumn: "i.source",
+        dateColumn: "i.date",
+        cwdColumn: "i.cwd",
+      });
       return (
-        await all<{ tool: string; category: string; calls: number; sessions: number }>(
+        await all<{
+          tool: string;
+          category: string;
+          calls: number;
+          sessions: number;
+        }>(
           this.db,
           // Group by tool NAME only (category is deterministic per name; MIN picks the single value).
           `SELECT tool, MIN(category) AS category, COUNT(*) AS calls, COUNT(DISTINCT session_id) AS sessions
            FROM resolved_invocations i ${inv.messageWhere} GROUP BY tool`,
           inv.messageParams,
         )
-      ).map((r) => ({ tool: r.tool, category: r.category as ToolCategory, calls: r.calls, sessions: r.sessions }));
+      ).map((r) => ({
+        tool: r.tool,
+        category: r.category as ToolCategory,
+        calls: r.calls,
+        sessions: r.sessions,
+      }));
     });
   }
 
-  readToolCategoryStats(query?: ResolvedQuery): Promise<Array<{ category: ToolCategory; calls: number; tools: number; sessions: number }>> {
+  readToolCategoryStats(
+    query?: ResolvedQuery,
+  ): Promise<
+    Array<{
+      category: ToolCategory;
+      calls: number;
+      tools: number;
+      sessions: number;
+    }>
+  > {
     return this.schedule(async () => {
-      const inv = buildResolvedFilters(query, { sourceColumn: "i.source", dateColumn: "i.date", cwdColumn: "i.cwd" });
+      const inv = buildResolvedFilters(query, {
+        sourceColumn: "i.source",
+        dateColumn: "i.date",
+        cwdColumn: "i.cwd",
+      });
       return (
-        await all<{ category: string; calls: number; tools: number; sessions: number }>(
+        await all<{
+          category: string;
+          calls: number;
+          tools: number;
+          sessions: number;
+        }>(
           this.db,
           `SELECT category, COUNT(*) AS calls, COUNT(DISTINCT tool) AS tools, COUNT(DISTINCT session_id) AS sessions
            FROM resolved_invocations i ${inv.messageWhere} GROUP BY category`,
           inv.messageParams,
         )
-      ).map((r) => ({ category: r.category as ToolCategory, calls: r.calls, tools: r.tools, sessions: r.sessions }));
+      ).map((r) => ({
+        category: r.category as ToolCategory,
+        calls: r.calls,
+        tools: r.tools,
+        sessions: r.sessions,
+      }));
     });
   }
 
-  readMcpServers(query?: ResolvedQuery): Promise<Array<{ server: string; calls: number }>> {
+  readMcpServers(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ server: string; calls: number }>> {
     return this.schedule(async () => {
-      const inv = buildResolvedFilters(query, { sourceColumn: "i.source", dateColumn: "i.date", cwdColumn: "i.cwd" });
-      const where = inv.messageWhere ? `${inv.messageWhere} AND i.mcp_server IS NOT NULL` : "WHERE i.mcp_server IS NOT NULL";
+      const inv = buildResolvedFilters(query, {
+        sourceColumn: "i.source",
+        dateColumn: "i.date",
+        cwdColumn: "i.cwd",
+      });
+      const where = inv.messageWhere
+        ? `${inv.messageWhere} AND i.mcp_server IS NOT NULL`
+        : "WHERE i.mcp_server IS NOT NULL";
       return all<{ server: string; calls: number }>(
         this.db,
         `SELECT mcp_server AS server, COUNT(*) AS calls FROM resolved_invocations i ${where} GROUP BY mcp_server`,
@@ -2597,10 +3378,18 @@ export class SqliteStore implements Store {
     });
   }
 
-  readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>> {
+  readMcpServerTools(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ server: string; tool: string; count: number }>> {
     return this.schedule(async () => {
-      const inv = buildResolvedFilters(query, { sourceColumn: "i.source", dateColumn: "i.date", cwdColumn: "i.cwd" });
-      const where = inv.messageWhere ? `${inv.messageWhere} AND i.mcp_server IS NOT NULL` : "WHERE i.mcp_server IS NOT NULL";
+      const inv = buildResolvedFilters(query, {
+        sourceColumn: "i.source",
+        dateColumn: "i.date",
+        cwdColumn: "i.cwd",
+      });
+      const where = inv.messageWhere
+        ? `${inv.messageWhere} AND i.mcp_server IS NOT NULL`
+        : "WHERE i.mcp_server IS NOT NULL";
       return all<{ server: string; tool: string; count: number }>(
         this.db,
         `SELECT mcp_server AS server, tool, COUNT(*) AS count FROM resolved_invocations i ${where} GROUP BY mcp_server, tool`,
@@ -2615,7 +3404,9 @@ export class SqliteStore implements Store {
    *  (The session-level outcome proxy was removed in #122 — outcome is per task.) Backs GET /api/health
    *  and the recommendations endpoint. */
   readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups> {
-    return this.schedule(() => this.readHealthRollupsCore(query, buildResolvedFilters(query)));
+    return this.schedule(() =>
+      this.readHealthRollupsCore(query, buildResolvedFilters(query)),
+    );
   }
 
   private async readHealthRollupsCore(
@@ -2624,7 +3415,11 @@ export class SqliteStore implements Store {
   ): Promise<HealthRollups> {
     // In-scope sessions (those with a message in the window) joined to their promoted friction columns.
     // Reuses the shared filter against the usage row's columns.
-    const joinFilter = buildResolvedFilters(query, { sourceColumn: "m.source", dateColumn: "m.date", cwdColumn: "m.cwd" });
+    const joinFilter = buildResolvedFilters(query, {
+      sourceColumn: "m.source",
+      dateColumn: "m.date",
+      cwdColumn: "m.cwd",
+    });
     const sessions = await all<{
       session_id: string;
       project: string;
@@ -2645,7 +3440,10 @@ export class SqliteStore implements Store {
 
     // Token-growth ratio per session: mean total tokens of the last decile over the first decile, with
     // k = floor(n/10) and n >= 10 — the same slice the JS tokenGrowth uses.
-    const growthRows = await all<{ first_mean: number | null; last_mean: number | null }>(
+    const growthRows = await all<{
+      first_mean: number | null;
+      last_mean: number | null;
+    }>(
       this.db,
       `SELECT AVG(CASE WHEN rn <= n / 10 THEN total END) AS first_mean,
               AVG(CASE WHEN rn > n - n / 10 THEN total END) AS last_mean
@@ -2664,7 +3462,8 @@ export class SqliteStore implements Store {
     for (const r of growthRows) {
       const first = r.first_mean ?? 0;
       const last = r.last_mean ?? 0;
-      if (first > 0 && last / first >= HIGH_TOKEN_GROWTH_RATIO) highTokenGrowthSessions += 1;
+      if (first > 0 && last / first >= HIGH_TOKEN_GROWTH_RATIO)
+        highTokenGrowthSessions += 1;
     }
 
     const totals = emptyFrictionTotals();
@@ -2674,11 +3473,18 @@ export class SqliteStore implements Store {
       if (row.fi != null) {
         const pf = byProjectMap.get(row.project) ?? emptyFrictionTotals();
         if (!byProjectMap.has(row.project)) byProjectMap.set(row.project, pf);
-        const contribution = { interruptions: row.fi, rejections: row.fr ?? 0, compactions: row.fc ?? 0, turns: row.ft ?? 0 };
+        const contribution = {
+          interruptions: row.fi,
+          rejections: row.fr ?? 0,
+          compactions: row.fc ?? 0,
+          turns: row.ft ?? 0,
+        };
         for (const bucket of [totals, pf]) foldFriction(bucket, contribution);
       }
     }
-    const projectFriction = [...byProjectMap.entries()].map(([project, friction]) => ({ project, friction }));
+    const projectFriction = [...byProjectMap.entries()].map(
+      ([project, friction]) => ({ project, friction }),
+    );
     return { frictionTotals: totals, projectFriction, highTokenGrowthSessions };
   }
 
@@ -2690,7 +3496,9 @@ export class SqliteStore implements Store {
        ORDER BY ts, source, session_id, seq`,
       filters.messageParams,
     );
-    const messages = messageRows.map((row) => JSON.parse(row.record_json) as MessageRecord);
+    const messages = messageRows.map(
+      (row) => JSON.parse(row.record_json) as MessageRecord,
+    );
 
     const sessions = new Map<string, SessionMeta>();
     const sessionRows = await all<{ session_id: string; meta_json: string }>(
@@ -2702,13 +3510,20 @@ export class SqliteStore implements Store {
       // Content filters drop sessions with no surviving message (matches the old in-memory filter).
       const keep = new Set(messageRows.map((row) => row.session_id));
       for (const row of sessionRows) {
-        if (keep.has(row.session_id)) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
+        if (keep.has(row.session_id))
+          sessions.set(
+            row.session_id,
+            JSON.parse(row.meta_json) as SessionMeta,
+          );
       }
     } else {
-      for (const row of sessionRows) sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
+      for (const row of sessionRows)
+        sessions.set(row.session_id, JSON.parse(row.meta_json) as SessionMeta);
     }
 
-    const sourceJoin = buildResolvedFilters(query, { sourceColumn: "s.source" });
+    const sourceJoin = buildResolvedFilters(query, {
+      sourceColumn: "s.source",
+    });
     const taskRows = await all<{ session_id: string; task_json: string }>(
       this.db,
       `SELECT t.session_id, t.task_json
@@ -2734,7 +3549,11 @@ export class SqliteStore implements Store {
     // redefined from the retired "#results per tool" to "#calls per tool" — calls and results aren't
     // 1:1 (a result-less call, or an orphan result dropped per #130) — and the wire shape is unchanged.
     // heaviestToolResults is ranked by approxTokens, so the count drift doesn't reorder the view.
-    const toolRows = await all<{ name: string; count: number; approx_tokens: number }>(
+    const toolRows = await all<{
+      name: string;
+      count: number;
+      approx_tokens: number;
+    }>(
       this.db,
       `SELECT i.tool AS name, COUNT(*) AS count, SUM(i.approx_result_tokens) AS approx_tokens
        FROM resolved_invocations i
@@ -2744,7 +3563,11 @@ export class SqliteStore implements Store {
       sourceJoin.sourceParams,
     );
     const toolResults = new Map<string, ToolResultStat>();
-    for (const row of toolRows) toolResults.set(row.name, { count: row.count, approxTokens: row.approx_tokens ?? 0 });
+    for (const row of toolRows)
+      toolResults.set(row.name, {
+        count: row.count,
+        approxTokens: row.approx_tokens ?? 0,
+      });
 
     return { messages, sessions, toolResults, tasksBySession };
   }
@@ -2782,8 +3605,16 @@ export class SqliteStore implements Store {
             // opt-out must still take effect: clear any previously retained text for this session so
             // "turn retention off and re-index removes stored text" holds even on this short-parse path (#120).
             if (!retainText) {
-              await run(this.db, "DELETE FROM resolved_interaction_text WHERE session_id = ?", [sid]);
-              await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
+              await run(
+                this.db,
+                "DELETE FROM resolved_interaction_text WHERE session_id = ?",
+                [sid],
+              );
+              await run(
+                this.db,
+                "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?",
+                [sid],
+              );
             }
             continue;
           }
@@ -2793,31 +3624,52 @@ export class SqliteStore implements Store {
           // snapshot to preserve it, and only seed `incomingTasks` for a brand-new session (tests /
           // programmatic callers). Even when the content changed, the prior tasks stay (shown as
           // "outdated" via the timestamp comparison) until the drain re-interprets.
-          const existingSnapshot = await readResolvedSessionSnapshot(this.db, sid);
+          const existingSnapshot = await readResolvedSessionSnapshot(
+            this.db,
+            sid,
+          );
           const contentChanged =
-            !existingSnapshot || !materializedSessionMatchesSnapshot(session, existingSnapshot);
-          const tasks = existingSnapshot ? existingSnapshot.tasks : incomingTasks;
+            !existingSnapshot ||
+            !materializedSessionMatchesSnapshot(session, existingSnapshot);
+          const tasks = existingSnapshot
+            ? existingSnapshot.tasks
+            : incomingTasks;
           // content_indexed_at_ms is a processing-time stamp bumped ONLY on a real content change (or a
           // brand-new session). An unchanged re-materialize (e.g. a bare `index refresh`) carries the old
           // value forward, so it does not falsely mark every session outdated. interpreted_at_ms /
           // interpretation_version are always carried forward; only writeSessionTasks updates them.
           const nowMs = Date.now();
-          const contentIndexedAtMs = contentChanged ? nowMs : (existingSnapshot!.contentIndexedAtMs ?? nowMs);
+          const contentIndexedAtMs = contentChanged
+            ? nowMs
+            : (existingSnapshot!.contentIndexedAtMs ?? nowMs);
           const interpretedAtMs = existingSnapshot?.interpretedAtMs ?? null;
-          const interpretationVersion = existingSnapshot?.interpretationVersion ?? null;
+          const interpretationVersion =
+            existingSnapshot?.interpretationVersion ?? null;
           // Title/summary are interpretation-owned (#234): carried forward so a re-index never wipes
           // them. Only writeSessionTasks sets them; a brand-new session has none.
           const title = existingSnapshot?.title ?? null;
           const summary = existingSnapshot?.summary ?? null;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
-          await run(this.db, "DELETE FROM resolved_sessions WHERE session_id = ?", [sid]);
+          await run(
+            this.db,
+            "DELETE FROM resolved_sessions WHERE session_id = ?",
+            [sid],
+          );
           // The search FTS indexes (#155, #234) are NOT linked by foreign key, so the CASCADE above does
           // not reach them — clear them explicitly here. The conversation index is rebuilt below (if
           // retainText) alongside resolved_interaction_text; the title/summary index is rebuilt from the
           // carried-forward title/summary right after the session row is re-inserted.
-          await run(this.db, "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?", [sid]);
-          await run(this.db, "DELETE FROM resolved_sessions_fts WHERE session_id = ?", [sid]);
+          await run(
+            this.db,
+            "DELETE FROM resolved_interaction_text_fts WHERE session_id = ?",
+            [sid],
+          );
+          await run(
+            this.db,
+            "DELETE FROM resolved_sessions_fts WHERE session_id = ?",
+            [sid],
+          );
           const timestamps = session.messages.map((message) => message.ts);
           const firstTs = timestamps.length ? Math.min(...timestamps) : null;
           const lastTs = timestamps.length ? Math.max(...timestamps) : null;
@@ -2857,13 +3709,20 @@ export class SqliteStore implements Store {
           // Re-index the carried-forward title/summary (#234) — same wholesale replace as the row above.
           const sessionFts = sessionFtsText(title, summary);
           if (sessionFts) {
-            await run(this.db, "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)", [sid, sessionFts]);
+            await run(
+              this.db,
+              "INSERT INTO resolved_sessions_fts(session_id, text) VALUES (?, ?)",
+              [sid, sessionFts],
+            );
           }
           // Assign each interaction to its owning task (#122), bookmark semantics over the tasks we're
           // about to write (incoming or the preserved snapshot), so attribution stays consistent with
           // resolved_tasks.seq and survives a re-materialization that reuses the stored tasks. The leaf
           // tables carry no task pointer — task grain joins usage/invocation -> interaction -> task.
-          const taskSeqByInteraction = assignInteractionTaskSeqs(tasks, session.interactions ?? []);
+          const taskSeqByInteraction = assignInteractionTaskSeqs(
+            tasks,
+            session.interactions ?? [],
+          );
           await insertRows(
             this.db,
             "resolved_usage",
@@ -2927,12 +3786,26 @@ export class SqliteStore implements Store {
           await insertRows(
             this.db,
             "resolved_interactions",
-            ["session_id", "seq", "source", "ts", "initiator", "disposition", "compaction_count", "task_seq", "interaction_json"],
+            [
+              "session_id",
+              "seq",
+              "source",
+              "ts",
+              "initiator",
+              "disposition",
+              "compaction_count",
+              "task_seq",
+              "interaction_json",
+            ],
             (session.interactions ?? []).map((interaction) => {
               // interaction_json is ALWAYS text-free: promptText/responseText are split off into
               // resolved_interaction_text (below, when retention is on), never embedded here. This keeps
               // the push path — which reads only interaction_json — text-free by construction (#120).
-              const { promptText: _p, responseText: _r, ...stored } = interaction;
+              const {
+                promptText: _p,
+                responseText: _r,
+                ...stored
+              } = interaction;
               return [
                 sid,
                 interaction.seq,
@@ -2958,10 +3831,22 @@ export class SqliteStore implements Store {
             const textRows: unknown[][] = [];
             for (const interaction of session.interactions ?? []) {
               if (interaction.promptText != null) {
-                textRows.push([sid, textRows.length, interaction.seq, "prompt", interaction.promptText]);
+                textRows.push([
+                  sid,
+                  textRows.length,
+                  interaction.seq,
+                  "prompt",
+                  interaction.promptText,
+                ]);
               }
               if (interaction.responseText != null) {
-                textRows.push([sid, textRows.length, interaction.seq, "response", interaction.responseText]);
+                textRows.push([
+                  sid,
+                  textRows.length,
+                  interaction.seq,
+                  "response",
+                  interaction.responseText,
+                ]);
               }
             }
             await insertRows(
@@ -2986,9 +3871,26 @@ export class SqliteStore implements Store {
           await insertRows(
             this.db,
             "resolved_invocations",
-            ["session_id", "seq", "source", "interaction_seq", "tool", "category", "mcp_server", "mcp_tool", "skill", "file_path", "date", "cwd", "args", "approx_result_tokens"],
+            [
+              "session_id",
+              "seq",
+              "source",
+              "interaction_seq",
+              "tool",
+              "category",
+              "mcp_server",
+              "mcp_tool",
+              "skill",
+              "file_path",
+              "date",
+              "cwd",
+              "args",
+              "approx_result_tokens",
+            ],
             session.messages
-              .flatMap((message) => message.toolUses.map((toolUse) => ({ message, toolUse })))
+              .flatMap((message) =>
+                message.toolUses.map((toolUse) => ({ message, toolUse })),
+              )
               .map(({ message, toolUse }, seq) => [
                 sid,
                 seq,
@@ -3025,8 +3927,23 @@ export class SqliteStore implements Store {
       await transaction(this.db, async () => {
         for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
           const placeholders = part.map(() => "?").join(", ");
-          await run(this.db, `DELETE FROM resolved_sessions WHERE session_id IN (${placeholders})`, part);
-          await run(this.db, `DELETE FROM session_ownership WHERE session_id IN (${placeholders})`, part);
+          await run(
+            this.db,
+            `DELETE FROM resolved_sessions WHERE session_id IN (${placeholders})`,
+            part,
+          );
+          await run(
+            this.db,
+            `DELETE FROM session_ownership WHERE session_id IN (${placeholders})`,
+            part,
+          );
+          // Labels aren't FK-linked to resolved_sessions (so they survive re-index), so remove a
+          // deleted session's applications here — the one place a session truly goes away.
+          await run(
+            this.db,
+            `DELETE FROM label_assignments WHERE session_id IN (${placeholders})`,
+            part,
+          );
         }
       });
     });
@@ -3075,16 +3992,26 @@ export class SqliteStore implements Store {
     });
   }
 
-  resolvedSessionCounts(): Promise<Array<{ owner: string; present: number; archived: number }>> {
+  resolvedSessionCounts(): Promise<
+    Array<{ owner: string; present: number; archived: number }>
+  > {
     return this.schedule(async () => {
-      const rows = await all<{ owner: string; present: number; archived: number }>(
+      const rows = await all<{
+        owner: string;
+        present: number;
+        archived: number;
+      }>(
         this.db,
         `SELECT owner,
                 SUM(CASE WHEN archived = 0 THEN 1 ELSE 0 END) AS present,
                 SUM(archived) AS archived
          FROM resolved_sessions GROUP BY owner ORDER BY owner`,
       );
-      return rows.map((row) => ({ owner: row.owner, present: row.present, archived: row.archived }));
+      return rows.map((row) => ({
+        owner: row.owner,
+        present: row.present,
+        archived: row.archived,
+      }));
     });
   }
 
@@ -3092,7 +4019,11 @@ export class SqliteStore implements Store {
     return this.schedule(() => ensureClientIdRow(this.db));
   }
 
-  recordClientFingerprint(key: string, value: string, tsMs: number): Promise<void> {
+  recordClientFingerprint(
+    key: string,
+    value: string,
+    tsMs: number,
+  ): Promise<void> {
     return this.schedule(async () => {
       // Suppress repeat-of-same-value: read the latest value for this key, and only insert when it
       // actually changed. Keeps the log a record of CHANGES rather than a tick per call.
@@ -3118,13 +4049,18 @@ export class SqliteStore implements Store {
         this.db,
         "SELECT key, value, ts_ms FROM client_fingerprint ORDER BY ts_ms, key",
       );
-      return rows.map((row) => ({ key: row.key, value: row.value, tsMs: row.ts_ms }));
+      return rows.map((row) => ({
+        key: row.key,
+        value: row.value,
+        tsMs: row.ts_ms,
+      }));
     });
   }
 
   storeStats(): Promise<StoreStats> {
     return this.schedule(async () => {
-      const count = async (sql: string) => (await get<{ n: number }>(this.db, sql))?.n ?? 0;
+      const count = async (sql: string) =>
+        (await get<{ n: number }>(this.db, sql))?.n ?? 0;
       return {
         schemaVersion: await pragmaNumber(this.db, "user_version"),
         sessions: await count("SELECT COUNT(*) AS n FROM resolved_sessions"),
@@ -3196,7 +4132,11 @@ export class SqliteStore implements Store {
     });
   }
 
-  setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void> {
+  setCoverage(
+    source: string,
+    filesDigest: string | null,
+    sessionCount: number,
+  ): Promise<void> {
     return this.schedule(async () => {
       await run(
         this.db,
@@ -3232,8 +4172,14 @@ export async function openStore(
   const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_STORE_BUSY_TIMEOUT_MS;
   const now = options.now ?? Date.now;
 
-  if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 60_000) {
-    throw new RangeError("busyTimeoutMs must be an integer between 0 and 60000");
+  if (
+    !Number.isInteger(busyTimeoutMs) ||
+    busyTimeoutMs < 0 ||
+    busyTimeoutMs > 60_000
+  ) {
+    throw new RangeError(
+      "busyTimeoutMs must be an integer between 0 and 60000",
+    );
   }
 
   try {
@@ -3248,7 +4194,10 @@ export async function openStore(
     await initializeDatabase(db, path);
     return new SqliteStore(db, path, busyTimeoutMs, now);
   } catch (error) {
-    if (db) try { closeDatabase(db); } catch {}
+    if (db)
+      try {
+        closeDatabase(db);
+      } catch {}
     // The store is a durable archive: open never silently rebuilds. Older owned schemas are migrated
     // in place (initializeDatabase); anything unmigratable/newer/corrupt propagates so retained data
     // is never destroyed without the user opting into `reindex --force`.
@@ -3260,7 +4209,11 @@ function removeRegularStoreFile(path: string): void {
   const stat = ensureNotSymlink(path);
   if (!stat) return;
   if (!stat.isFile()) {
-    throw new StoreError("unsafe_path", path, `Won't remove the store path because it isn't a regular file: ${path}`);
+    throw new StoreError(
+      "unsafe_path",
+      path,
+      `Won't remove the store path because it isn't a regular file: ${path}`,
+    );
   }
   unlinkSync(path);
 }
