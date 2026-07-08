@@ -76,7 +76,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 
 /* Global filter bar pinned above every view. Fixed height so the full-height Sessions split can
    subtract it (see .sessions-split) without overflowing the viewport. */
-.filter-bar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: var(--filter-bar-h); display: flex; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 32px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.filter-bar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; height: var(--filter-bar-h); display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0 32px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .filter-dates { display: inline-flex; align-items: center; gap: 8px; }
 .filter-dash { color: var(--muted); }
 /* Fixed height (padding-free vertically) so date inputs and the source select are identical — date
@@ -112,6 +112,13 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 "Al
 .filter-reset:disabled { opacity: .4; cursor: default; }
 .filter-spinner { color: var(--muted); animation: filter-spin 1s linear infinite; }
 @keyframes filter-spin { to { transform: rotate(360deg); } }
+
+/* Borderless variant: same reset action, but for the all-pill inbox toolbar where a bordered
+   square would clash with the rounded pills around it. */
+.inbox-filter-reset { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.inbox-filter-reset:hover:not(:disabled) { color: var(--heading); background: var(--hover); }
+.inbox-filter-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inbox-filter-reset:disabled { opacity: .4; cursor: default; }
 
 .rail { position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
 .rail-brand { display: flex; align-items: center; gap: 6px; padding: 4px 8px 14px; }
@@ -159,6 +166,64 @@ main { padding: 30px 32px 64px; }
 /* Sessions: a full-height two-pane (selector list + detail). Drop main's padding for this route
    only so the list sits flush against the rail instead of floating inside the page gutters. */
 main:has(.sessions-split) { padding: 0; }
+/* Sessions toolbar: it owns full-bleed placement like .filter-bar; the body below restores the
+   usual page gutters. */
+main:has(.inbox-page) { padding: 0; }
+
+/* ── Sessions toolbar ──────────────────────────────────────────────────────
+   A search bar + a row of dropdown filter pills (labels/date/sources), replacing the shared
+   date/source FilterBar on this route only. Dropdown structure follows the reference screenshot:
+   pill button → panel below with a title/Clear head and a checkable option list. */
+.inbox-toolbar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 10px; height: var(--filter-bar-h); padding: 0 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.inbox-body { padding: 30px 32px 64px; }
+.inbox-placeholder { max-width: 60ch; color: var(--muted); }
+
+/* The three filter pills as one unit, grouped with the fixed-width search box and centered in
+   the toolbar together (.inbox-toolbar's justify-content: center centers the pair as a block). */
+.inbox-toolbar-filters { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+/* Below this width the search box and the filter-pill group no longer fit on one line without
+   crowding — split into two centered rows of equal width, search first. --filter-bar-h drives
+   both the sticky toolbar's height and .sessions-split's height calc, so it's bumped here too;
+   otherwise the taller two-row toolbar would overlap the split pane below it. */
+@media (max-width: 960px) {
+  .content:has(.inbox-page) { --filter-bar-h: 96px; }
+  .inbox-toolbar { flex-direction: column; justify-content: center; height: auto; min-height: var(--filter-bar-h); padding: 10px; }
+  .inbox-search,
+  .inbox-toolbar-filters { width: min(360px, 100%); }
+  .inbox-toolbar-filters { flex-wrap: nowrap; justify-content: center; }
+}
+
+.inbox-search { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; width: 280px; }
+.inbox-search-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
+.inbox-search-input { box-sizing: border-box; width: 100%; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 12px 0 32px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.inbox-search-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.filter-dropdown { position: relative; flex: 0 0 auto; }
+.filter-dropdown-btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.filter-dropdown-btn:hover { border-color: var(--accent); }
+.filter-dropdown-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filter-dropdown-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
+
+.filter-dropdown-panel { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 260px; max-width: calc(100vw - 24px); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px rgba(0, 0, 0, .28); }
+.filter-dropdown-panel-right { left: auto; right: 0; }
+.filter-dropdown-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.filter-dropdown-title { color: var(--heading); font: 700 13px var(--font-ui); }
+.filter-dropdown-clear { border: 0; background: transparent; padding: 0; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; }
+.filter-dropdown-clear:hover { color: var(--link-hover); }
+.filter-dropdown-search { box-sizing: border-box; width: 100%; height: 30px; margin-bottom: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
+.filter-dropdown-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.filter-dropdown-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: 13px "Aleo", Georgia, serif; text-align: left; cursor: pointer; }
+.filter-dropdown-option:hover { background: var(--hover); }
+.filter-dropdown-option.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
+.filter-dropdown-option.selected svg { color: var(--accent); flex: 0 0 auto; }
+.filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
+.filter-dropdown-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
+.filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
+.filter-dropdown-preset.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
+.filter-dropdown-dates { display: flex; align-items: center; gap: 8px; }
+.filter-dropdown-dates .filter-input { flex: 1 1 0; width: auto; }
 /* Second track is minmax(0, 1fr), NOT 1fr: a bare 1fr track has an implicit min-width:auto, so a long
    unbreakable task description would force the track (and the whole page) wider than the viewport and
    defeat the .task-item-desc ellipsis. minmax(0, 1fr) lets the detail pane shrink below its content's
@@ -166,18 +231,10 @@ main:has(.sessions-split) { padding: 0; }
 .sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) minmax(0, 1fr); height: calc(100vh - var(--filter-bar-h)); }
 .session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.session-search-row { display: flex; align-items: center; gap: 8px; }
-.session-search { flex: 1 1 auto; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
-.session-filters { display: flex; flex-wrap: wrap; gap: 6px; }
-.filter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid var(--pill-cool-line); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool) 14%, transparent); color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
-.filter-pill:hover { border-color: var(--accent); }
-.filter-pill-x { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: var(--hover); font-size: 13px; line-height: 1; }
-.filter-pill:hover .filter-pill-x { background: var(--accent); color: var(--coffee-bean); }
+.session-list-head-count { padding: 10px 14px; color: var(--muted); font: 600 11px var(--font-ui); }
 .session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
 .session-load-more:hover { border-color: var(--accent); color: var(--heading); }
 .session-load-more:disabled { opacity: .6; cursor: default; }
-.session-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.session-count { flex: 0 0 auto; color: var(--muted); font: 600 11px var(--font-ui); white-space: nowrap; }
 .session-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
 .session-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
 .session-item:hover { background: var(--hover); color: var(--text); }
@@ -352,7 +409,7 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
   .rail-footer { flex-direction: column; align-items: center; }
   .rail-footer .rail-toggle { margin-left: 0; }
   main { padding-left: 18px; padding-right: 18px; }
-  .filter-bar { padding-left: 18px; padding-right: 18px; gap: 12px; }
+  .filter-bar { padding-left: 18px; padding-right: 18px; }
 }
 
 /* ── Settings surface (#154) ───────────────────────────────────────────────────

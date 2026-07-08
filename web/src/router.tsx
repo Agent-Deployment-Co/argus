@@ -52,31 +52,43 @@ const dashboardRoute = createRoute({
 
 const SESSION_SORTS = ["recent", "tokens", "cost"] as const;
 
+// /sessions has its own search-first toolbar (not the shared dashboard FilterBar), so it owns its
+// own since/until/source params outside the dashboard layout route — see the routeTree comment below.
 const sessionsRoute = createRoute({
-  getParentRoute: () => dashboardRoute,
+  getParentRoute: () => rootRoute,
   path: "/sessions",
   component: Sessions,
-  // `source` and the date range are global (the dashboard layout route); these are the
-  // Sessions-local refinements.
   validateSearch: (
     search: Record<string, unknown>,
-  ): { project?: string; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
+  ): {
+    since?: string;
+    until?: string;
+    source?: string;
+    project?: string;
+    sort?: (typeof SESSION_SORTS)[number];
+    q?: string;
+    labels?: string;
+  } => ({
+    since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
+    until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
+    source: typeof search.source === "string" && search.source ? search.source : undefined,
     project: typeof search.project === "string" && search.project ? search.project : undefined,
     sort: SESSION_SORTS.includes(search.sort as (typeof SESSION_SORTS)[number])
       ? (search.sort as (typeof SESSION_SORTS)[number])
       : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
+    // Labels are a placeholder feature — the dropdown stays hidden unless explicitly opted into
+    // via ?labels=1 (see Sessions.tsx).
+    labels:
+      search.labels === 1 || search.labels === "1" || search.labels === true ? "1" : undefined,
   }),
+  search: { middlewares: [retainSearchParams(["since", "until"])] },
 });
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute.addChildren([
     createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: Activity }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/projects", component: Projects }),
-    sessionsRoute.addChildren([
-      createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
-      createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
-    ]),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/tools", component: Tools }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/health", component: Health }),
   ]),
@@ -87,6 +99,13 @@ const routeTree = rootRoute.addChildren([
   // Diagnostics live in the settings surface as the "Debug" tab (/settings/debug).
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
+  // /sessions: outside the dashboard layout route, since it has its own search-first toolbar instead
+  // of the shared FilterBar (see Layout's isSessions check). Same shape as the other dashboard views
+  // (index = landing pane, $sessionId = detail) via sessionsRoute.addChildren above.
+  sessionsRoute.addChildren([
+    createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
+    createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
+  ]),
 ]);
 
 export const router = createRouter({ routeTree });
