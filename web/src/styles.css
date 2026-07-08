@@ -301,6 +301,7 @@ main:has(.inbox-page) { padding: 0; }
    cleanly. Each row is a clickable button that opens the detail drawer; full text is in the drawer
    (and on hover via title). */
 .tasks { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tasks li { background: var(--surface); }
 .tasks li + li .task-item { border-top: 1px solid var(--line); }
 .task-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 8px 12px; border: 0; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
 .task-item:hover { background: var(--hover); }
@@ -535,9 +536,9 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .welcome-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Session/task labels (session-and-task-labels). Chips + an "add label" popover. */
-.labelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.labelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: fit-content; max-width: 100%; }
 .labelbar--md { margin: 10px 0 14px; }
-.labelbar--sm { margin: 8px 0 6px; }
+.labelbar--sm { margin: 8px 0 6px; padding: 0 12px; }
 .label-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid var(--pill-cool-line, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool, var(--accent)) 12%, transparent); color: var(--text); font: 600 11.5px var(--font-ui); }
 .labelbar--sm .label-chip { font-size: 10.5px; padding: 1px 3px 1px 8px; }
 .label-chip--system { border-style: dashed; }
