@@ -536,8 +536,8 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 
 /* Session/task labels (session-and-task-labels). Chips + an "add label" popover. */
 .labelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.labelbar--md { margin: 2px 0 4px; }
-.labelbar--sm { margin: 6px 0 2px; }
+.labelbar--md { margin: 10px 0 14px; }
+.labelbar--sm { margin: 8px 0 6px; }
 .label-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid var(--pill-cool-line, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool, var(--accent)) 12%, transparent); color: var(--text); font: 600 11.5px var(--font-ui); }
 .labelbar--sm .label-chip { font-size: 10.5px; padding: 1px 3px 1px 8px; }
 .label-chip--system { border-style: dashed; }
