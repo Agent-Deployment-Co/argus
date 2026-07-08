@@ -167,25 +167,27 @@ main:has(.inbox-page) { padding: 0; }
    A search bar + a row of dropdown filter pills (labels/date/sources), replacing the shared
    date/source FilterBar on this route only. Dropdown structure follows the reference screenshot:
    pill button → panel below with a title/Clear head and a checkable option list. */
-.inbox-toolbar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; display: flex; align-items: center; gap: 10px; height: var(--filter-bar-h); padding: 0 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.inbox-toolbar { position: sticky; top: 0; z-index: 5; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 10px; height: var(--filter-bar-h); padding: 0 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .inbox-body { padding: 30px 32px 64px; }
 .inbox-placeholder { max-width: 60ch; color: var(--muted); }
 
-/* The three filter pills as one unit — they wrap onto their own row together (never splitting
-   from each other) when the search box and pills no longer fit on one line. */
+/* The three filter pills as one unit, grouped with the fixed-width search box and centered in
+   the toolbar together (.inbox-toolbar's justify-content: center centers the pair as a block). */
 .inbox-toolbar-filters { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 
 /* Below this width the search box and the filter-pill group no longer fit on one line without
-   crowding — wrap the group onto its own row instead of squeezing it. --filter-bar-h drives both
-   the sticky toolbar's height and .sessions-split's height calc, so it's bumped here too;
+   crowding — split into two centered rows of equal width, search first. --filter-bar-h drives
+   both the sticky toolbar's height and .sessions-split's height calc, so it's bumped here too;
    otherwise the taller two-row toolbar would overlap the split pane below it. */
 @media (max-width: 760px) {
   .content:has(.inbox-page) { --filter-bar-h: 96px; }
-  .inbox-toolbar { flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; height: auto; min-height: var(--filter-bar-h); padding: 10px; }
-  .inbox-search { flex: 1 1 100%; }
+  .inbox-toolbar { flex-direction: column; justify-content: center; height: auto; min-height: var(--filter-bar-h); padding: 10px; }
+  .inbox-search,
+  .inbox-toolbar-filters { width: min(360px, 100%); }
+  .inbox-toolbar-filters { flex-wrap: nowrap; justify-content: center; }
 }
 
-.inbox-search { position: relative; display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 160px; }
+.inbox-search { position: relative; display: inline-flex; align-items: center; flex: 0 0 auto; width: 280px; }
 .inbox-search-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .inbox-search-input { box-sizing: border-box; width: 100%; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 10px 0 32px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
 .inbox-search-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
