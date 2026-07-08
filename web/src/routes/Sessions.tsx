@@ -1,43 +1,23 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
-import { Select } from "../components/Select";
+import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
+import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
+import { daysAgo } from "../router";
 import type { SessionListItem, SessionSort } from "../types";
 
-type FilterKey = "project" | "source" | "file";
-
-/** Both /sessions and /sessions-inbox mount the same list/empty-state shape (list + $sessionId
- *  child); this is the set of valid detail-link targets so each can point at its own tree. */
-type SessionDetailPath = "/sessions/$sessionId" | "/sessions-inbox/$sessionId";
-
-/** Sessions-local search params (the global date range + source live on the root route). */
+/** Sessions-local search params (the date range lives on this route too — see sessionsRoute in
+ *  router.tsx — since /sessions owns its own search-first toolbar rather than the shared FilterBar). */
 export interface SessionsSearch {
-  project?: string;
+  since?: string;
+  until?: string;
   source?: string;
+  project?: string;
   file?: string;
   sort?: SessionSort;
   q?: string;
-}
-
-const SORT_LABELS: Record<SessionSort, string> = {
-  recent: "Most recent",
-  tokens: "Most tokens",
-  cost: "Highest cost",
-};
-
-/**
- * Pull a `project:value` / `source:value` / `file:value` token out of the raw search text. While
- * typing we only commit a token terminated by whitespace (so "project:a" mid-type stays as text); on
- * Enter we commit it bare.
- */
-function extractFilterToken(raw: string, requireTerminator: boolean): { key: FilterKey; value: string; rest: string } | null {
-  const m = raw.match(
-    requireTerminator ? /(^|\s)(project|source|file):(\S+)\s/i : /(^|\s)(project|source|file):(\S+)/i,
-  );
-  if (!m) return null;
-  const rest = (raw.slice(0, m.index) + raw.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim();
-  return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
 }
 
 /** A human-facing title for a session: the model-generated title when the session has been interpreted
@@ -55,8 +35,8 @@ export function sessionTitle(s: { title?: string | null; firstPrompt?: string | 
 
 // The store wraps matched spans in these sentinel delimiters (char(1)/char(2)), not HTML, so we
 // split-and-wrap here instead of dangerouslySetInnerHTML (#155).
-const SNIPPET_MATCH_START = "";
-const SNIPPET_MATCH_END = "";
+const SNIPPET_MATCH_START = "";
+const SNIPPET_MATCH_END = "";
 
 /** Human label for a distilled (non-conversation) match source (#234): names where the snippet came
  *  from so a title/summary hit reads "session summary", not "task summary". */
@@ -92,7 +72,7 @@ function SearchSnippet({ match }: { match: SessionListItem["match"] }) {
   );
 }
 
-/** Build the server-side query from the merged (global + Sessions-local) search params. */
+/** Build the server-side query from the route's search params. */
 function filtersFromSearch(search: Record<string, unknown>): SessionListFilters {
   return {
     since: typeof search.since === "string" ? search.since : undefined,
@@ -105,70 +85,18 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
   };
 }
 
-/** `headVariant="full"` (default) shows the search/sort/filter-pill row. `"count"` drops that row
- *  and instead shows a plain "Showing X-Y of N sessions" line — used by /sessions-inbox, which has
- *  its own toolbar above the list and just needs a result count. `"none"` renders no head at all.
- *  `detailPath` points each row's link at the caller's own $sessionId route, so the list stays
- *  inside whichever page rendered it. */
-export function SessionList({
-  headVariant = "full",
-  detailPath = "/sessions/$sessionId",
-}: { headVariant?: "full" | "count" | "none"; detailPath?: SessionDetailPath } = {}) {
+/** The session list pane: a plain "Showing X-Y of N sessions" head (the search/filter controls live
+ *  in the toolbar above, rendered by `Sessions`) plus the scrollable row list. */
+export function SessionList() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
   const activeRef = useRef<HTMLAnchorElement | null>(null);
 
-  const project = typeof search.project === "string" ? search.project : undefined;
-  const source = typeof search.source === "string" ? search.source : undefined;
-  const file = typeof search.file === "string" ? search.file : undefined;
-  const sort: SessionSort = (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent";
-  const committedQ = typeof search.q === "string" ? search.q : "";
-
-  // Local text mirrors the committed `q`; we debounce edits into the URL so we don't refetch per keystroke.
-  const [text, setText] = useState(committedQ);
-  useEffect(() => setText(committedQ), [committedQ]);
-
-  const setSearch = (patch: Partial<SessionsSearch>) =>
-    navigate({ to: ".", search: (prev: SessionsSearch) => ({ ...prev, ...patch }) });
-  const setFilter = (key: FilterKey, value: string | undefined) => setSearch({ [key]: value || undefined });
-
-  // Debounce free text → `q`.
-  useEffect(() => {
-    const trimmed = text.trim();
-    if (trimmed === committedQ) return;
-    const t = setTimeout(() => setSearch({ q: trimmed || undefined }), 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text]);
-
-  const onQueryChange = (raw: string) => {
-    const token = extractFilterToken(raw, true);
-    if (token) {
-      setFilter(token.key, token.value);
-      setText(token.rest);
-    } else {
-      setText(raw);
-    }
-  };
-  const onQueryKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== "Enter") return;
-    const token = extractFilterToken(text, false);
-    if (token) {
-      e.preventDefault();
-      setFilter(token.key, token.value);
-      setText(token.rest);
-    }
-  };
-
   const filters = useMemo(() => filtersFromSearch(search), [search]);
   const query = useSessionsQuery(filters);
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
-
-  const activeFilters = (
-    [["project", project], ["source", source], ["file", file]] as const
-  ).filter(([, v]) => Boolean(v));
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -188,58 +116,23 @@ export function SessionList({
       const next = rows[e.key === "j" ? idx + 1 : idx - 1];
       if (!next) return;
       e.preventDefault();
-      navigate({ to: detailPath, params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
+      navigate({ to: "/sessions/$sessionId", params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rows, selectedId, navigate, detailPath]);
+  }, [rows, selectedId, navigate]);
 
   return (
     <aside className="session-list" aria-label="Sessions">
-      {headVariant === "full" && (
-        <div className="session-list-head">
-          <div className="session-search-row">
-            <input
-              className="session-search"
-              type="search"
-              placeholder="Search text, file:path, source:…"
-              value={text}
-              onChange={(e) => onQueryChange(e.target.value)}
-              onKeyDown={onQueryKeyDown}
-            />
-            <span className="session-count">{rows.length === total ? total : `${rows.length} / ${total}`}</span>
-          </div>
-          <div className="session-filters">
-            <Select
-              variant="pill"
-              value={sort}
-              onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
-              aria-label="Sort sessions"
-            >
-              {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
-                <option key={s} value={s}>{SORT_LABELS[s]}</option>
-              ))}
-            </Select>
-            {activeFilters.map(([key, value]) => (
-              <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
-                {key}: {value}
-                <span className="filter-pill-x" aria-hidden>×</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      {headVariant === "count" && (
-        <div className="session-list-head session-list-head-count">
-          {total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}
-        </div>
-      )}
+      <div className="session-list-head session-list-head-count">
+        {total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}
+      </div>
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
         {rows.map((s) => (
           <li key={`${s.source}:${s.sessionId}`}>
             <Link
-              to={detailPath}
+              to="/sessions/$sessionId"
               params={{ sessionId: s.sessionId }}
               search={(prev: SessionsSearch) => prev}
               className="session-item"
@@ -281,29 +174,244 @@ export function SessionList({
   );
 }
 
-export function Sessions() {
-  return (
-    <div className="sessions-split">
-      <SessionList />
-      <div className="session-detail">
-        <Outlet />
-      </div>
-    </div>
-  );
-}
-
-/** Landing pane at /sessions (no session selected): jump to the first match, else show a hint.
- *  `detailPath` mirrors SessionList's — see there. */
-export function SessionsEmpty({ detailPath = "/sessions/$sessionId" }: { detailPath?: SessionDetailPath } = {}) {
+/** Landing pane at /sessions (no session selected): jump to the first match, else show a hint. */
+export function SessionsEmpty() {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const filters = useMemo(() => filtersFromSearch(search), [search]);
   const query = useSessionsQuery(filters);
   const first: SessionListItem | undefined = query.data?.pages[0]?.rows[0];
   if (first) {
-    return <Navigate to={detailPath} params={{ sessionId: first.sessionId }} search={search} replace />;
+    return <Navigate to="/sessions/$sessionId" params={{ sessionId: first.sessionId }} search={search} replace />;
   }
   if (query.isPending) return <div className="session-empty">Loading sessions…</div>;
   if (query.isError) return <div className="session-empty">{(query.error as Error).message}</div>;
   const filtered = Boolean(filters.project || filters.q || filters.file || filters.source || filters.since || filters.until);
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
+}
+
+// Standing labels aren't implemented yet — this is a placeholder set so the dropdown has something
+// to filter by. Alphabetical (no inherent ranking yet).
+const DUMMY_LABELS = ["Blocked", "Escalated", "Follow-up", "Needs review", "Resolved"];
+
+const DEFAULT_SINCE = daysAgo(30);
+const DEFAULT_UNTIL = daysAgo(0);
+
+const DATE_PRESETS = [
+  { label: "Today", days: 0 },
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+];
+
+function formatDateShort(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function toggle<T>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+/** /sessions: the rail + app shell, with a search-first toolbar (search box + labels/date/sources
+ *  dropdowns) instead of the shared date/source FilterBar — see Layout's isSessions check for how
+ *  the global FilterBar is suppressed for this route. The date range, search text, and source are URL
+ *  search params (?since=&until=&q=&source=) so a shared link carries its state and the default range
+ *  (last 30 days) is always loaded up front — see sessionsRoute's validateSearch in router.tsx.
+ *  `source` is single-valued (not multi-select) because /api/sessions only ever filters by one source
+ *  at a time. */
+export function Sessions() {
+  const [labelSearch, setLabelSearch] = useState("");
+  const [labels, setLabels] = useState<string[]>([]);
+
+  const navigate = useNavigate();
+  const { since, until, committedQ, source } = useSearch({
+    strict: false,
+    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL, committedQ: s.q ?? "", source: s.source }),
+  });
+  const setRange = (patch: Record<string, string | undefined>) =>
+    navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
+  const today = daysAgo(0);
+  const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
+  const setUntil = (v: string) => setRange({ until: v > today ? today : v < since ? since : v });
+
+  // Local text mirrors the committed `q`; debounce edits into the URL so we don't refetch per keystroke.
+  const [query, setQuery] = useState(committedQ);
+  useEffect(() => setQuery(committedQ), [committedQ]);
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed === committedQ) return;
+    const t = setTimeout(() => setRange({ q: trimmed || undefined }), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
+  const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
+  const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
+  const sourcesSummary = source ? sourceLabel(source) : "Sources";
+
+  // Reset mirrors the shared FilterBar's reset (source + date range), plus the toolbar's own search
+  // box — enabled only when one of those three is off its default.
+  const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "";
+  const resetFilters = () => {
+    setQuery("");
+    setRange({ since: undefined, until: undefined, source: undefined, q: undefined });
+  };
+
+  const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
+
+  // Cmd/Ctrl+K (or "/", the common search-focus shortcut) jumps focus to the search box and
+  // selects its text, so typing replaces rather than appends, from anywhere on the page. "/" is
+  // only honored outside text fields so it doesn't hijack normal typing (e.g. the labels search).
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+      const target = e.target as HTMLElement | null;
+      const inTextField = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      const isSlash = e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !inTextField;
+      if (!isCmdK && !isSlash) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  return (
+    <div className="inbox-page">
+      <div className="inbox-toolbar" role="group" aria-label="Session filters">
+        <span className="inbox-search">
+          <Search className="inbox-search-icon" size={16} strokeWidth={1.75} aria-hidden />
+          <input
+            ref={searchInputRef}
+            type="search"
+            className="inbox-search-input"
+            placeholder="Search sessions…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            aria-label="Search sessions"
+          />
+        </span>
+
+        <div className="inbox-toolbar-filters">
+          <FilterDropdown
+            icon={<Tag size={14} strokeWidth={2} aria-hidden />}
+            label="Labels"
+            summary={labelsSummary}
+            active={labels.length > 0}
+            onClear={labels.length > 0 ? () => setLabels([]) : undefined}
+            align="right"
+          >
+            <input
+              type="search"
+              className="filter-dropdown-search"
+              placeholder="Search labels"
+              value={labelSearch}
+              onChange={(e) => setLabelSearch(e.target.value)}
+              aria-label="Search labels"
+            />
+            <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
+              {filteredLabels.map((l) => (
+                <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
+              ))}
+              {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
+            </div>
+          </FilterDropdown>
+
+          <FilterDropdown
+            icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
+            label="Date"
+            summary={dateSummary}
+            active={!dateIsDefault}
+            onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
+            clearLabel="Reset"
+            align="right"
+          >
+            {(close) => (
+              <>
+                <div className="filter-dropdown-presets">
+                  {DATE_PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`filter-dropdown-preset${since === daysAgo(p.days) && until === daysAgo(0) ? " active" : ""}`}
+                      onClick={() => {
+                        setRange({ since: daysAgo(p.days), until: daysAgo(0) });
+                        close();
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="filter-dropdown-dates">
+                  <input
+                    type="date"
+                    className="filter-input"
+                    aria-label="From date"
+                    value={since}
+                    max={until}
+                    onChange={(e) => e.target.value && setSince(e.target.value)}
+                  />
+                  <span className="filter-dash" aria-hidden>
+                    –
+                  </span>
+                  <input
+                    type="date"
+                    className="filter-input"
+                    aria-label="To date"
+                    value={until}
+                    min={since}
+                    max={today}
+                    onChange={(e) => e.target.value && setUntil(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+          </FilterDropdown>
+
+          <FilterDropdown
+            icon={<Layers size={14} strokeWidth={2} aria-hidden />}
+            label="Sources"
+            summary={sourcesSummary}
+            active={Boolean(source)}
+            onClear={source ? () => setRange({ source: undefined }) : undefined}
+            align="right"
+          >
+            <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
+              {SORTED_SOURCES.map((s) => (
+                <FilterDropdownOption
+                  key={s}
+                  label={sourceLabel(s)}
+                  selected={source === s}
+                  onToggle={() => setRange({ source: source === s ? undefined : s })}
+                />
+              ))}
+            </div>
+          </FilterDropdown>
+
+          <button
+            type="button"
+            className="inbox-filter-reset"
+            disabled={!hasActiveFilters}
+            onClick={resetFilters}
+            title="Reset filters to the last 30 days, all sources"
+            aria-label="Reset filters"
+          >
+            <FilterX size={16} strokeWidth={1.75} aria-hidden />
+          </button>
+        </div>
+      </div>
+
+      <div className="sessions-split">
+        <SessionList />
+        <div className="session-detail">
+          <Outlet />
+        </div>
+      </div>
+    </div>
+  );
 }

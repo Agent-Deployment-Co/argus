@@ -5,7 +5,6 @@ import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
-import { SessionsInbox, SessionsInboxEmpty } from "./routes/SessionsInbox";
 import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
@@ -53,35 +52,30 @@ const dashboardRoute = createRoute({
 
 const SESSION_SORTS = ["recent", "tokens", "cost"] as const;
 
+// /sessions has its own search-first toolbar (not the shared dashboard FilterBar), so it owns its
+// own since/until/source params outside the dashboard layout route — see the routeTree comment below.
 const sessionsRoute = createRoute({
-  getParentRoute: () => dashboardRoute,
+  getParentRoute: () => rootRoute,
   path: "/sessions",
   component: Sessions,
-  // `source` and the date range are global (the dashboard layout route); these are the
-  // Sessions-local refinements.
   validateSearch: (
     search: Record<string, unknown>,
-  ): { project?: string; sort?: (typeof SESSION_SORTS)[number]; q?: string } => ({
+  ): {
+    since?: string;
+    until?: string;
+    source?: string;
+    project?: string;
+    sort?: (typeof SESSION_SORTS)[number];
+    q?: string;
+  } => ({
+    since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
+    until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
+    source: typeof search.source === "string" && search.source ? search.source : undefined,
     project: typeof search.project === "string" && search.project ? search.project : undefined,
     sort: SESSION_SORTS.includes(search.sort as (typeof SESSION_SORTS)[number])
       ? (search.sort as (typeof SESSION_SORTS)[number])
       : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
-  }),
-});
-
-// Testbed for a new sessions UI (see the routeTree comment below for the rest of the story).
-const sessionsInboxRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions-inbox",
-  component: SessionsInbox,
-  validateSearch: (
-    search: Record<string, unknown>,
-  ): { since?: string; until?: string; q?: string; source?: string } => ({
-    since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
-    until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
-    q: typeof search.q === "string" && search.q ? search.q : undefined,
-    source: typeof search.source === "string" && search.source ? search.source : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until"])] },
 });
@@ -90,10 +84,6 @@ const routeTree = rootRoute.addChildren([
   dashboardRoute.addChildren([
     createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: Activity }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/projects", component: Projects }),
-    sessionsRoute.addChildren([
-      createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
-      createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
-    ]),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/tools", component: Tools }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/health", component: Health }),
   ]),
@@ -104,16 +94,12 @@ const routeTree = rootRoute.addChildren([
   // Diagnostics live in the settings surface as the "Debug" tab (/settings/debug).
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsSurface }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/$category", component: SettingsSurface }),
-  // Testbed for a new sessions UI. Outside the dashboard layout route: it has its own search-first
-  // toolbar instead of the shared FilterBar (so no `source` param), but keeps the same since/until
-  // date-range convention (default last 30 days, retained across navigation within the route) so a
-  // shared link like ?since=2026-06-08&until=2026-07-08 behaves the same as elsewhere in the app.
-  // Layout suppresses the FilterBar for this path (see isSessionsInbox there). Mirrors sessionsRoute's
-  // shape (index = landing pane, $sessionId = detail) but reuses the same SessionList/SessionDetail
-  // components with a plain count head instead (SessionsInbox renders <SessionList headVariant="count" />).
-  sessionsInboxRoute.addChildren([
-    createRoute({ getParentRoute: () => sessionsInboxRoute, path: "/", component: SessionsInboxEmpty }),
-    createRoute({ getParentRoute: () => sessionsInboxRoute, path: "$sessionId", component: SessionDetail }),
+  // /sessions: outside the dashboard layout route, since it has its own search-first toolbar instead
+  // of the shared FilterBar (see Layout's isSessions check). Same shape as the other dashboard views
+  // (index = landing pane, $sessionId = detail) via sessionsRoute.addChildren above.
+  sessionsRoute.addChildren([
+    createRoute({ getParentRoute: () => sessionsRoute, path: "/", component: SessionsEmpty }),
+    createRoute({ getParentRoute: () => sessionsRoute, path: "$sessionId", component: SessionDetail }),
   ]),
 ]);
 
