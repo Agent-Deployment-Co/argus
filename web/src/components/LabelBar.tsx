@@ -1,4 +1,4 @@
-import { Check, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, TagPlus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLabelCatalogMutations, useLabelsQuery, useSessionLabelMutations } from "../lib/labels";
 import type { AppliedLabel, LabelRecord } from "../types";
@@ -79,14 +79,8 @@ export function LabelBar({
           onClick={() => setOpen((v) => !v)}
           title="Add a label"
         >
-          {applied.length === 0 ? (
-            <>
-              <Tag size={12} strokeWidth={1.75} aria-hidden />
-              <span>Label</span>
-            </>
-          ) : (
-            <Plus size={13} strokeWidth={2} aria-hidden />
-          )}
+          <TagPlus size={13} strokeWidth={2} aria-hidden />
+          <span>Add Label</span>
         </button>
 
         {open && (
