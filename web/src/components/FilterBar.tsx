@@ -4,7 +4,7 @@ import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../l
 import { daysAgo, type RootSearch } from "../router";
 import { FilterDropdown, FilterDropdownOption } from "./FilterDropdown";
 
-/** Global dashboard filters (date range + source) shown above every view, right-aligned. Edits the
+/** Global dashboard filters (date range + source) shown above every view, centered. Edits the
  *  root search params; `retainSearchParams` keeps them in the URL as the user moves between tabs, and
  *  the snapshot query refetches the narrowed slice. `project` is deliberately not here — it stays a
  *  client-side refine in the Sessions list (the UI label isn't the path the server filters on).
