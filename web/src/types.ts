@@ -17,7 +17,22 @@ import type { Recommendation } from "../../src/api/recommendations";
 import type { TaskMetrics } from "../../src/api/task-metrics";
 import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
-import type { RecommendationsResponse, SessionDetailResponse } from "../../src/api/serve";
+import type {
+  LabelResponse,
+  LabelsResponse,
+  RecommendationsResponse,
+  SessionDetailResponse,
+  SessionLabelsResponse,
+} from "../../src/api/serve";
+// Label domain types (session-and-task-labels), local-only — imported type-only so the store's
+// label records and the UI can't drift.
+import type {
+  AppliedLabel,
+  LabelAppliedBy,
+  LabelOrigin,
+  LabelRecord,
+  SessionLabels,
+} from "../../src/store/store-contract";
 // Per-view endpoint payloads (#217) — the single source of truth for each view's shape, imported
 // type-only so the server responses and the UI can't drift.
 import type {
@@ -88,4 +103,13 @@ export type {
   PluginsResponse,
   HealthResponse,
   RecommendationsResponse,
+  // Labels (session-and-task-labels).
+  AppliedLabel,
+  LabelAppliedBy,
+  LabelOrigin,
+  LabelRecord,
+  LabelResponse,
+  LabelsResponse,
+  SessionLabels,
+  SessionLabelsResponse,
 };

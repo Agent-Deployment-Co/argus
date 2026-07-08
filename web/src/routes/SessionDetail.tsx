@@ -3,9 +3,11 @@ import { Link, useParams } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Dash, Skills } from "../components/pills";
+import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
+import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, useSessionTaskMetrics } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
@@ -40,6 +42,9 @@ export function SessionDetail() {
   // Per-task metrics (tokens/cost/tools) fetched on demand for the whole session — shared with the
   // detail drawer via React Query's cache.
   const taskMetrics = useSessionTaskMetrics(sessionId ?? "").data;
+  // A session's labels + its per-task labels (keyed by task position). Refreshes on every label edit
+  // via React Query invalidation in the label mutation hooks.
+  const sessionLabels = useSessionLabelsQuery(sessionId).data;
 
   const refresh = useMutation({
     mutationFn: reindexSession,
@@ -111,13 +116,15 @@ export function SessionDetail() {
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
 
+      <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
+
       <StatCards stats={cards} />
 
       <section>
         <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
         {tasks.length > 0 ? (
           <ol className="tasks">
-            {tasks.map((task) => (
+            {tasks.map((task, taskIndex) => (
               <li key={task.id}>
                 <button
                   type="button"
@@ -132,6 +139,8 @@ export function SessionDetail() {
                     {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
                   </span>
                 </button>
+                {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
+                <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
                 {TASK_VIEW === "card" && task.id === selectedTaskId && (
                   <div className="task-card">
                     <TaskDetails sessionId={s.sessionId} task={task} />

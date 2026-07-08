@@ -5,7 +5,7 @@
 // demand from one session's messages. These response shapes are local-only (not on the sync wire).
 import { buildSessionRow } from "../reporting/aggregate.ts";
 import { cost } from "../pricing.ts";
-import type { SessionAggregate, SessionSearchMatch, TaskFact } from "../store/store-contract.ts";
+import type { AppliedLabel, SessionAggregate, SessionSearchMatch, TaskFact } from "../store/store-contract.ts";
 import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
@@ -33,6 +33,9 @@ export interface SessionListItem {
    *  conversation/task-text snippet + count the UI highlights. Absent for a metadata-only match
    *  (title/project/source substring, or a bare `file:` search). Local-only, not on the sync wire. */
   match?: SessionSearchMatch;
+  /** Active session-level labels (session-and-task-labels), attached to the page rows by the serve
+   *  reader. Task labels are not included here. Local-only, not on the sync wire. */
+  labels?: AppliedLabel[];
 }
 
 export interface SessionListResponse {

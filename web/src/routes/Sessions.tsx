@@ -151,6 +151,18 @@ export function SessionList() {
                 <span>{fmt(s.total)} tok</span>
                 <span>{usd(s.cost)}</span>
               </div>
+              {s.labels && s.labels.length > 0 && (
+                <div className="session-item-labels">
+                  {s.labels.map((l) => (
+                    <span
+                      key={l.id}
+                      className={`label-chip label-chip--readonly${l.origin === "system" ? " label-chip--system" : ""}`}
+                    >
+                      {l.name}
+                    </span>
+                  ))}
+                </div>
+              )}
               <SearchSnippet match={s.match} />
             </Link>
           </li>
