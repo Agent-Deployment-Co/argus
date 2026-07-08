@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
-import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
+import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
 import type { SessionListItem, SessionSort } from "../types";
 
@@ -196,18 +196,6 @@ const DUMMY_LABELS = ["Blocked", "Escalated", "Follow-up", "Needs review", "Reso
 const DEFAULT_SINCE = daysAgo(30);
 const DEFAULT_UNTIL = daysAgo(0);
 
-const DATE_PRESETS = [
-  { label: "Today", days: 0 },
-  { label: "Last 7 days", days: 7 },
-  { label: "Last 30 days", days: 30 },
-  { label: "Last 90 days", days: 90 },
-];
-
-function formatDateShort(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 function toggle<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }
@@ -255,7 +243,7 @@ export function Sessions() {
   const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
   const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
   const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
-  const sourcesSummary = source ? sourceLabel(source) : "Sources";
+  const sourcesSummary = source ? sourceLabel(source) : "All sources";
 
   // Reset mirrors the shared FilterBar's reset (source + date range), plus the toolbar's own search
   // box — enabled only when one of those three is off its default.

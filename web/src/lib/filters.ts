@@ -38,3 +38,17 @@ export function appendViewParams(params: URLSearchParams, filters: SnapshotFilte
   const source = sanitizedSource(filters.source);
   if (source) params.set("source", source);
 }
+
+/** Shared date-range presets for the FilterDropdown "Date" panel (global FilterBar + /sessions toolbar). */
+export const DATE_PRESETS = [
+  { label: "Today", days: 0 },
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+] as const;
+
+/** Short "Mon D" rendering of a YYYY-MM-DD date, for a FilterDropdown's pill summary. */
+export function formatDateShort(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
