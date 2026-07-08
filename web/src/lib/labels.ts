@@ -76,6 +76,7 @@ export function useLabelCatalogMutations() {
   const invalidateAll = () => {
     void qc.invalidateQueries({ queryKey: LABELS_KEY });
     void qc.invalidateQueries({ queryKey: ["session-labels"] });
+    void qc.invalidateQueries({ queryKey: ["sessions"] });
   };
   return {
     create: useMutation({ mutationFn: (name: string) => createLabel(name), onSuccess: invalidateAll }),
@@ -88,12 +89,13 @@ export function useLabelCatalogMutations() {
 }
 
 /** Applying/removing labels on a specific session (and its tasks). Invalidates that session's labels;
- *  applying a brand-new label also refreshes the catalog. */
+ *  applying a brand-new label also refreshes the catalog and the sessions list (its rows embed labels). */
 export function useSessionLabelMutations(sessionId: string) {
   const qc = useQueryClient();
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: sessionLabelsKey(sessionId) });
     void qc.invalidateQueries({ queryKey: LABELS_KEY });
+    void qc.invalidateQueries({ queryKey: ["sessions"] });
   };
   return {
     assign: useMutation({
