@@ -843,6 +843,10 @@ export interface ReadModelStore {
    *  list's label chips. Task-level labels are excluded (the list shows session labels only). Sessions
    *  with no labels are absent from the map. */
   readSessionLabelsForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
+  /** Session ids carrying any of the given labels (session-level only, matching
+   *  `readSessionLabelsForSessions`'s scope) — backs the session list's label filter. Union across
+   *  multiple label ids: a session matches if it has at least one of them. */
+  readSessionIdsForLabels(labelIds: string[]): Promise<Set<string>>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

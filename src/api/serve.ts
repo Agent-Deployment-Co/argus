@@ -114,6 +114,8 @@ export interface SessionListQuery {
   project?: string;
   q?: string;
   file?: string;
+  /** Restrict to sessions carrying at least one of these label ids (union). */
+  label?: string[];
   includeGenerated: boolean;
   sort: SessionSort;
   limit: number;
@@ -396,6 +398,7 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
   const source = c.req.query("source");
   if (source && !SNAPSHOT_SOURCES.has(source)) return `Unknown source "${source}".`;
   const includeGenerated = c.req.query("includeGenerated") === "true" || c.req.query("includeGenerated") === "1";
+  const label = c.req.query("label");
   return {
     since: c.req.query("since") || undefined,
     until: c.req.query("until") || undefined,
@@ -403,6 +406,7 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
     project: c.req.query("project") || undefined,
     q: c.req.query("q") || undefined,
     file: c.req.query("file") || undefined,
+    label: label ? label.split(",").filter(Boolean) : undefined,
     includeGenerated,
     sort: sort as SessionSort,
     limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
@@ -990,6 +994,12 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       const search = await store.searchSessions({ sources, since, until, text: query.q, file: query.file });
       sessionIds = [...search.ids];
       matches = search.matches;
+    }
+    // A `label` filter (session-and-task-labels) intersects with any search-derived candidate set —
+    // both narrow the same `sessionIds` restriction `readSessionAggregates` already honors.
+    if (query.label?.length) {
+      const labeled = await store.readSessionIdsForLabels(query.label);
+      sessionIds = sessionIds ? sessionIds.filter((id) => labeled.has(id)) : [...labeled];
     }
     const aggregates = await store.readSessionAggregates({ sources, since, until, sessionIds });
     const list = buildSessionList(aggregates, {

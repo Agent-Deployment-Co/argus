@@ -10,6 +10,8 @@ export interface SessionListFilters extends SnapshotFilters {
   project?: string;
   q?: string;
   file?: string;
+  /** Restrict to sessions carrying at least one of these label ids (union). */
+  label?: string[];
   sort: SessionSort;
 }
 
@@ -29,6 +31,7 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
   if (filters.project) params.set("project", filters.project);
   if (filters.q) params.set("q", filters.q);
   if (filters.file) params.set("file", filters.file);
+  if (filters.label?.length) params.set("label", filters.label.join(","));
   return `/api/sessions?${params}`;
 }
 

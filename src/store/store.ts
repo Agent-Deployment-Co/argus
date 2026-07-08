@@ -2749,6 +2749,24 @@ export class SqliteStore implements Store {
     });
   }
 
+  readSessionIdsForLabels(labelIds: string[]): Promise<Set<string>> {
+    return this.schedule(async () => {
+      const out = new Set<string>();
+      const ids = [...new Set(labelIds)];
+      if (!ids.length) return out;
+      for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+        const placeholders = part.map(() => "?").join(", ");
+        const rows = await all<{ session_id: string }>(
+          this.db,
+          `SELECT DISTINCT session_id FROM label_assignments WHERE task_seq IS NULL AND label_id IN (${placeholders})`,
+          part,
+        );
+        for (const row of rows) out.add(row.session_id);
+      }
+      return out;
+    });
+  }
+
   // Persisted rate limiter for the throttled Interpret drain (#153). A leaky-bucket of "credits" where
   // one credit = permission to interpret one session (deliberately NOT called "tokens" — these are
   // unrelated to LLM tokens). Continuous refill at `maxPerHour` per hour, capacity `maxPerHour`; a fresh
