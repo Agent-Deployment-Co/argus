@@ -7,6 +7,10 @@ import type { SessionListItem, SessionSort } from "../types";
 
 type FilterKey = "project" | "source" | "file";
 
+/** Both /sessions and /sessions-inbox mount the same list/empty-state shape (list + $sessionId
+ *  child); this is the set of valid detail-link targets so each can point at its own tree. */
+type SessionDetailPath = "/sessions/$sessionId" | "/sessions-inbox/$sessionId";
+
 /** Sessions-local search params (the global date range + source live on the root route). */
 export interface SessionsSearch {
   project?: string;
@@ -101,7 +105,13 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
   };
 }
 
-function SessionList() {
+/** `showHead=false` drops the search/sort/filter-pill row — used by /sessions-inbox, which has its
+ *  own toolbar above the list instead. `detailPath` points each row's link at the caller's own
+ *  $sessionId route, so the list stays inside whichever page rendered it. */
+export function SessionList({
+  showHead = true,
+  detailPath = "/sessions/$sessionId",
+}: { showHead?: boolean; detailPath?: SessionDetailPath } = {}) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
@@ -164,43 +174,45 @@ function SessionList() {
 
   return (
     <aside className="session-list" aria-label="Sessions">
-      <div className="session-list-head">
-        <div className="session-search-row">
-          <input
-            className="session-search"
-            type="search"
-            placeholder="Search text, file:path, source:…"
-            value={text}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onKeyDown={onQueryKeyDown}
-          />
-          <span className="session-count">{rows.length === total ? total : `${rows.length} / ${total}`}</span>
-        </div>
-        <div className="session-filters">
-          <Select
-            variant="pill"
-            value={sort}
-            onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
-            aria-label="Sort sessions"
-          >
-            {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
-              <option key={s} value={s}>{SORT_LABELS[s]}</option>
+      {showHead && (
+        <div className="session-list-head">
+          <div className="session-search-row">
+            <input
+              className="session-search"
+              type="search"
+              placeholder="Search text, file:path, source:…"
+              value={text}
+              onChange={(e) => onQueryChange(e.target.value)}
+              onKeyDown={onQueryKeyDown}
+            />
+            <span className="session-count">{rows.length === total ? total : `${rows.length} / ${total}`}</span>
+          </div>
+          <div className="session-filters">
+            <Select
+              variant="pill"
+              value={sort}
+              onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
+              aria-label="Sort sessions"
+            >
+              {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
+                <option key={s} value={s}>{SORT_LABELS[s]}</option>
+              ))}
+            </Select>
+            {activeFilters.map(([key, value]) => (
+              <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
+                {key}: {value}
+                <span className="filter-pill-x" aria-hidden>×</span>
+              </button>
             ))}
-          </Select>
-          {activeFilters.map(([key, value]) => (
-            <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
-              {key}: {value}
-              <span className="filter-pill-x" aria-hidden>×</span>
-            </button>
-          ))}
+          </div>
         </div>
-      </div>
+      )}
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
         {rows.map((s) => (
           <li key={`${s.source}:${s.sessionId}`}>
             <Link
-              to="/sessions/$sessionId"
+              to={detailPath}
               params={{ sessionId: s.sessionId }}
               search={(prev: SessionsSearch) => prev}
               className="session-item"
@@ -253,14 +265,15 @@ export function Sessions() {
   );
 }
 
-/** Landing pane at /sessions (no session selected): jump to the first match, else show a hint. */
-export function SessionsEmpty() {
+/** Landing pane at /sessions (no session selected): jump to the first match, else show a hint.
+ *  `detailPath` mirrors SessionList's — see there. */
+export function SessionsEmpty({ detailPath = "/sessions/$sessionId" }: { detailPath?: SessionDetailPath } = {}) {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const filters = useMemo(() => filtersFromSearch(search), [search]);
   const query = useSessionsQuery(filters);
   const first: SessionListItem | undefined = query.data?.pages[0]?.rows[0];
   if (first) {
-    return <Navigate to="/sessions/$sessionId" params={{ sessionId: first.sessionId }} search={search} replace />;
+    return <Navigate to={detailPath} params={{ sessionId: first.sessionId }} search={search} replace />;
   }
   if (query.isPending) return <div className="session-empty">Loading sessions…</div>;
   if (query.isError) return <div className="session-empty">{(query.error as Error).message}</div>;

@@ -1,9 +1,16 @@
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Outlet, useNavigate, useSearch } from "@tanstack/react-router";
 import { Calendar, Layers, Search, Tag } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
+import { SessionList, SessionsEmpty } from "./Sessions";
+
+/** The /sessions-inbox index child (no session selected) — same landing behavior as /sessions's,
+ *  just pointed at this route's own $sessionId path so it doesn't redirect out to /sessions. */
+export function SessionsInboxEmpty() {
+  return <SessionsEmpty detailPath="/sessions-inbox/$sessionId" />;
+}
 
 // Standing labels aren't implemented yet — this is a placeholder set so the dropdown has something
 // to filter by. Alphabetical (no inherent ranking yet).
@@ -33,24 +40,36 @@ function toggle<T>(list: T[], value: T): T[] {
  *  only (not wired to data yet) — see Layout's isSessionsInbox check for how the global FilterBar is
  *  suppressed for this route. */
 export function SessionsInbox() {
-  const [query, setQuery] = useState("");
   const [labelSearch, setLabelSearch] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
 
-  // The date range is a URL search param (?since=&until=), same convention as the shared FilterBar,
-  // so a link into this page carries its range and the default (last 30 days) is always loaded up
-  // front — see the route's validateSearch in router.tsx.
+  // The date range and search text are URL search params (?since=&until=&q=), same convention as the
+  // shared FilterBar/Sessions list, so a link into this page carries its state and the default range
+  // (last 30 days) is always loaded up front — see the route's validateSearch in router.tsx. The
+  // session list itself (SessionList, rendered below with showHead={false}) reads `q` the same way
+  // regardless of who writes it, so wiring the toolbar's search box here is all this needs.
   const navigate = useNavigate();
-  const { since, until } = useSearch({
+  const { since, until, committedQ } = useSearch({
     strict: false,
-    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL }),
+    select: (s) => ({ since: s.since ?? DEFAULT_SINCE, until: s.until ?? DEFAULT_UNTIL, committedQ: s.q ?? "" }),
   });
-  const setRange = (patch: { since?: string; until?: string }) =>
+  const setRange = (patch: Record<string, string | undefined>) =>
     navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
   const today = daysAgo(0);
   const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
   const setUntil = (v: string) => setRange({ until: v > today ? today : v < since ? since : v });
+
+  // Local text mirrors the committed `q`; debounce edits into the URL so we don't refetch per keystroke.
+  const [query, setQuery] = useState(committedQ);
+  useEffect(() => setQuery(committedQ), [committedQ]);
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed === committedQ) return;
+    const t = setTimeout(() => setRange({ q: trimmed || undefined }), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
   const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
@@ -156,12 +175,11 @@ export function SessionsInbox() {
         </FilterDropdown>
       </div>
 
-      <div className="inbox-body">
-        <p className="t-eyebrow">Sessions inbox (testbed)</p>
-        <p className="inbox-placeholder">
-          Work in progress: this is a layout testbed for a new sessions interface. The list below will show sessions
-          matching the search and filters above once it's wired up.
-        </p>
+      <div className="sessions-split">
+        <SessionList showHead={false} detailPath="/sessions-inbox/$sessionId" />
+        <div className="session-detail">
+          <Outlet />
+        </div>
       </div>
     </div>
   );

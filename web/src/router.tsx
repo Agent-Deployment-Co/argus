@@ -5,7 +5,7 @@ import { Health } from "./routes/Health";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
-import { SessionsInbox } from "./routes/SessionsInbox";
+import { SessionsInbox, SessionsInboxEmpty } from "./routes/SessionsInbox";
 import { SettingsSurface } from "./routes/Settings";
 import { Tools } from "./routes/Tools";
 
@@ -70,6 +70,19 @@ const sessionsRoute = createRoute({
   }),
 });
 
+// Testbed for a new sessions UI (see the routeTree comment below for the rest of the story).
+const sessionsInboxRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions-inbox",
+  component: SessionsInbox,
+  validateSearch: (search: Record<string, unknown>): { since?: string; until?: string; q?: string } => ({
+    since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
+    until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
+    q: typeof search.q === "string" && search.q ? search.q : undefined,
+  }),
+  search: { middlewares: [retainSearchParams(["since", "until"])] },
+});
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute.addChildren([
     createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: Activity }),
@@ -92,17 +105,13 @@ const routeTree = rootRoute.addChildren([
   // toolbar instead of the shared FilterBar (so no `source` param), but keeps the same since/until
   // date-range convention (default last 30 days, retained across navigation within the route) so a
   // shared link like ?since=2026-06-08&until=2026-07-08 behaves the same as elsewhere in the app.
-  // Layout suppresses the FilterBar for this path (see isSessionsInbox there).
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/sessions-inbox",
-    component: SessionsInbox,
-    validateSearch: (search: Record<string, unknown>): { since?: string; until?: string } => ({
-      since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
-      until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
-    }),
-    search: { middlewares: [retainSearchParams(["since", "until"])] },
-  }),
+  // Layout suppresses the FilterBar for this path (see isSessionsInbox there). Mirrors sessionsRoute's
+  // shape (index = landing pane, $sessionId = detail) but reuses the same SessionList/SessionDetail
+  // components with the list-head hidden (SessionsInbox renders <SessionList showHead={false} />).
+  sessionsInboxRoute.addChildren([
+    createRoute({ getParentRoute: () => sessionsInboxRoute, path: "/", component: SessionsInboxEmpty }),
+    createRoute({ getParentRoute: () => sessionsInboxRoute, path: "$sessionId", component: SessionDetail }),
+  ]),
 ]);
 
 export const router = createRouter({ routeTree });
