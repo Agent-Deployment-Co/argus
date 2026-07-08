@@ -541,7 +541,7 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .labelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: fit-content; max-width: 100%; }
 .labelbar--md { margin: 10px 0 14px; }
 .labelbar--sm { margin: 8px 0 6px; padding: 0 12px; }
-.label-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--text); font: 400 11.5px var(--font-ui); }
+.label-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid color-mix(in srgb, var(--muted) 16%, transparent); border-radius: 999px; background: transparent; color: var(--muted); font: 400 11.5px var(--font-ui); cursor: default; }
 .labelbar--sm .label-chip { font-size: 10.5px; padding: 1px 3px 1px 8px; }
 .label-chip--system { font-style: italic; opacity: .78; }
 .label-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
