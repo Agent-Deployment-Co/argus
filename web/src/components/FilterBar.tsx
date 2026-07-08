@@ -97,16 +97,21 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
         onClear={source ? () => set({ source: undefined }) : undefined}
         align="right"
       >
-        <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
-          {SORTED_SOURCES.map((s) => (
-            <FilterDropdownOption
-              key={s}
-              label={sourceLabel(s)}
-              selected={source === s}
-              onToggle={() => set({ source: source === s ? undefined : s })}
-            />
-          ))}
-        </div>
+        {(close) => (
+          <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
+            {SORTED_SOURCES.map((s) => (
+              <FilterDropdownOption
+                key={s}
+                label={sourceLabel(s)}
+                selected={source === s}
+                onToggle={() => {
+                  set({ source: source === s ? undefined : s });
+                  close();
+                }}
+              />
+            ))}
+          </div>
+        )}
       </FilterDropdown>
 
       <button
