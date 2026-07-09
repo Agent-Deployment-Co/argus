@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Dash, Skills } from "../components/pills";
 import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
@@ -23,6 +23,85 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
+/** The session summary. When it exceeds two lines, we truncate it to the exact prefix that fits two
+ *  lines with room for a trailing "… More…" link — so the link sits inline at the end of line 2, not
+ *  bumped onto a third line — and clicking it expands to the full text (no collapse). The prefix is
+ *  measured against an off-DOM clone that mirrors the paragraph's width/font, re-run on text change
+ *  and viewport resize. Null prefix = the text fits two lines (or has been expanded), shown whole. */
+function SessionSummary({ text }: { text: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [prefix, setPrefix] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    const host = ref.current;
+    if (!host || expanded) return;
+    const measure = () => {
+      const cs = getComputedStyle(host);
+      const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.55;
+      const maxHeight = lineHeight * 2 + 1;
+      const clone = document.createElement("p");
+      Object.assign(clone.style, {
+        position: "absolute",
+        left: "-9999px",
+        visibility: "hidden",
+        margin: "0",
+        padding: "0",
+        border: "0",
+        whiteSpace: "normal",
+        width: `${host.clientWidth}px`,
+        fontStyle: cs.fontStyle,
+        fontWeight: cs.fontWeight,
+        fontSize: cs.fontSize,
+        fontFamily: cs.fontFamily,
+        lineHeight: cs.lineHeight,
+        letterSpacing: cs.letterSpacing,
+      });
+      document.body.appendChild(clone);
+      clone.textContent = text;
+      if (clone.scrollHeight <= maxHeight) {
+        setPrefix(null);
+        clone.remove();
+        return;
+      }
+      // Binary-search the longest prefix that still fits two lines once the link is appended. The
+      // trailing nbsp pads a little slack so the rendered link never spills onto a third line.
+      const suffix = "… More… ";
+      let lo = 0;
+      let hi = text.length;
+      let best = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        clone.textContent = text.slice(0, mid).replace(/\s+$/, "") + suffix;
+        if (clone.scrollHeight <= maxHeight) {
+          best = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      clone.remove();
+      setPrefix(text.slice(0, best).replace(/\s+$/, ""));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [text, expanded]);
+
+  if (prefix !== null && !expanded) {
+    return (
+      <p ref={ref} className="session-summary">
+        {prefix}
+        {"… "}
+        <button type="button" className="summary-toggle" onClick={() => setExpanded(true)}>
+          More…
+        </button>
+      </p>
+    );
+  }
+  return <p ref={ref} className="session-summary">{text}</p>;
+}
+
 // How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
 // side panel next to the content. Flip this to compare; the drawer (TaskPanel) is kept, just
 // suppressed in "card".
@@ -35,6 +114,7 @@ export function SessionDetail() {
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
+  const [tab, setTab] = useState<"content" | "metrics">("content");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
   const onTaskClick = (id: string) =>
@@ -118,6 +198,7 @@ export function SessionDetail() {
             {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
+          {s.summary?.trim() && <SessionSummary text={s.summary} />}
           <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
         <div className="session-detail-actions">
@@ -147,107 +228,125 @@ export function SessionDetail() {
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
       {hideError && <div className="task-error" role="alert">{hideError}</div>}
 
-      <StatCards stats={cards} />
+      <div className="detail-tabs" role="tablist" aria-label="Session detail views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "content"}
+          className={`detail-tab${tab === "content" ? " active" : ""}`}
+          onClick={() => setTab("content")}
+        >
+          Content
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "metrics"}
+          className={`detail-tab${tab === "metrics" ? " active" : ""}`}
+          onClick={() => setTab("metrics")}
+        >
+          Metrics
+        </button>
+      </div>
 
-      {/* The session summary (resolved_sessions.summary), shown only when interpretation has produced
-          one — omitted entirely otherwise (the Tasks section signals interpretation state below). */}
-      {s.summary?.trim() && (
-        <section>
-          <h3 className="t-subhead">Summary</h3>
-          <p className="session-summary">{s.summary}</p>
-        </section>
-      )}
-
-      <section>
-        <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
-        {tasks.length > 0 ? (
-          <ol className="tasks">
-            {tasks.map((task, taskIndex) => (
-              <li key={task.id}>
-                <button
-                  type="button"
-                  className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
-                  onClick={() => onTaskClick(task.id)}
-                  aria-pressed={task.id === selectedTaskId}
-                  aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
-                >
-                  <span className="task-item-desc" title={task.description}>{task.description}</span>
-                  {task.outcome && <OutcomeBadge outcome={task.outcome} />}
-                  <span className="task-item-tokens">
-                    {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
-                  </span>
-                </button>
-                {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
-                {SHOW_TASK_LABELS && (
-                  <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
-                )}
-                {TASK_VIEW === "card" && task.id === selectedTaskId && (
-                  <div className="task-card">
-                    <TaskDetails sessionId={s.sessionId} task={task} />
-                  </div>
-                )}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
-        )}
-      </section>
-
-      <section>
-        <h3 className="t-subhead">Friction</h3>
-        <div className="kv">
-          <Row k="Interruptions" v={numOrDash(h.interruptions)} />
-          <Row k="Rejections" v={numOrDash(h.rejections)} />
-          <Row k="Compactions" v={numOrDash(h.compactions)} />
-          <Row k="Median turn" v={h.medianTurnMs != null ? dur(h.medianTurnMs) : <Dash />} />
-          <Row k="Max turn" v={h.maxTurnMs != null ? dur(h.maxTurnMs) : <Dash />} />
-          <Row k="Token growth" v={h.tokenGrowth != null ? h.tokenGrowth.toFixed(1) + "×" : <Dash />} />
+      {tab === "content" ? (
+        <div className="detail-tab-panel">
+          <section>
+            <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
+            {tasks.length > 0 ? (
+              <ol className="tasks">
+                {tasks.map((task, taskIndex) => (
+                  <li key={task.id}>
+                    <button
+                      type="button"
+                      className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
+                      onClick={() => onTaskClick(task.id)}
+                      aria-pressed={task.id === selectedTaskId}
+                      aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
+                    >
+                      <span className="task-item-desc" title={task.description}>{task.description}</span>
+                      {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                      <span className="task-item-tokens">
+                        {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
+                      </span>
+                    </button>
+                    {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
+                    {SHOW_TASK_LABELS && (
+                      <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
+                    )}
+                    {TASK_VIEW === "card" && task.id === selectedTaskId && (
+                      <div className="task-card">
+                        <TaskDetails sessionId={s.sessionId} task={task} />
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
+            )}
+          </section>
         </div>
-      </section>
+      ) : (
+        <div className="detail-tab-panel">
+          <StatCards stats={cards} />
 
-      <section>
-        <h3 className="t-subhead">Models</h3>
-        {s.models.length ? (
-          <div className="chips">
-            {s.models.map((m) => (
-              <span className="chip" key={m}>
-                <span className="chip-dot" style={{ background: modelFamilyColor(m) }} />
-                {m}
-              </span>
-            ))}
-          </div>
-        ) : <Dash />}
-      </section>
+          <section>
+            <h3 className="t-subhead">Friction</h3>
+            <div className="kv">
+              <Row k="Interruptions" v={numOrDash(h.interruptions)} />
+              <Row k="Rejections" v={numOrDash(h.rejections)} />
+              <Row k="Compactions" v={numOrDash(h.compactions)} />
+              <Row k="Median turn" v={h.medianTurnMs != null ? dur(h.medianTurnMs) : <Dash />} />
+              <Row k="Max turn" v={h.maxTurnMs != null ? dur(h.maxTurnMs) : <Dash />} />
+              <Row k="Token growth" v={h.tokenGrowth != null ? h.tokenGrowth.toFixed(1) + "×" : <Dash />} />
+            </div>
+          </section>
 
-      <section>
-        <h3 className="t-subhead">Skills</h3>
-        <div className="chips"><Skills skills={s.topSkills} /></div>
-      </section>
+          <section>
+            <h3 className="t-subhead">Models</h3>
+            {s.models.length ? (
+              <div className="chips">
+                {s.models.map((m) => (
+                  <span className="chip" key={m}>
+                    <span className="chip-dot" style={{ background: modelFamilyColor(m) }} />
+                    {m}
+                  </span>
+                ))}
+              </div>
+            ) : <Dash />}
+          </section>
 
-      {tools.length > 0 && (
-        <section>
-          <h3 className="t-subhead">Tools used</h3>
-          <div className="kv">
-            {tools.slice(0, 12).map(([tool, count]) => <Row key={tool} k={tool} v={count} />)}
-          </div>
-        </section>
-      )}
+          <section>
+            <h3 className="t-subhead">Skills</h3>
+            <div className="chips"><Skills skills={s.topSkills} /></div>
+          </section>
 
-      {s.filesTouched.length > 0 && (
-        <section>
-          <h3 className="t-subhead">Files touched <span className="muted">({s.filesTouched.length})</span></h3>
-          <ul className="file-list">
-            {s.filesTouched.slice(0, 30).map((f) => <li key={f} title={f}>{f}</li>)}
-          </ul>
-        </section>
-      )}
+          {tools.length > 0 && (
+            <section>
+              <h3 className="t-subhead">Tools used</h3>
+              <div className="kv">
+                {tools.slice(0, 12).map(([tool, count]) => <Row key={tool} k={tool} v={count} />)}
+              </div>
+            </section>
+          )}
 
-      {s.firstPrompt && (
-        <section>
-          <h3 className="t-subhead">Opening prompt</h3>
-          <blockquote className="first-prompt">{s.firstPrompt}</blockquote>
-        </section>
+          {s.filesTouched.length > 0 && (
+            <section>
+              <h3 className="t-subhead">Files touched <span className="muted">({s.filesTouched.length})</span></h3>
+              <ul className="file-list">
+                {s.filesTouched.slice(0, 30).map((f) => <li key={f} title={f}>{f}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {s.firstPrompt && (
+            <section>
+              <h3 className="t-subhead">Opening prompt</h3>
+              <blockquote className="first-prompt">{s.firstPrompt}</blockquote>
+            </section>
+          )}
+        </div>
       )}
     </div>
     {TASK_VIEW === "drawer" && selectedTask && (

@@ -268,6 +268,12 @@ main:has(.inbox-page) { padding: 0; }
 .table-link { color: var(--link); }
 .table-link:hover { color: var(--link-hover); text-decoration: underline; }
 .session-detail-inner section { margin: 22px 0 0; }
+.detail-tabs { display: flex; gap: 2px; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+.detail-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.detail-tab:hover { color: var(--text); }
+.detail-tab.active { color: var(--heading); border-bottom-color: var(--accent); }
+.detail-tab-panel { margin-top: 22px; }
+.detail-tab-panel > section:first-child { margin-top: 0; }
 .session-detail-headline .labelbar--md { margin: 14px 0 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
@@ -288,6 +294,9 @@ main:has(.inbox-page) { padding: 0; }
 .first-prompt { margin: 0; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 8px 8px 0; color: var(--text); font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
 .task-empty { margin: 0; color: var(--muted); font-size: 13px; }
 .session-summary { margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.55; }
+.session-detail-headline .session-summary { margin-top: 8px; }
+.summary-toggle { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
+.summary-toggle:hover { color: var(--link-hover); text-decoration: underline; }
 
 /* Hidden /debug page. */
 .debug { max-width: 980px; }
