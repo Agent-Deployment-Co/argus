@@ -1,11 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ClampText } from "../components/ClampText";
 import { Dash, Skills } from "../components/pills";
 import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
+import { SessionTimeline } from "../components/SessionTimeline";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden, useSessionTaskMetrics } from "../lib/sessions";
@@ -23,90 +25,6 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
-/** The session summary. When it exceeds two lines, we truncate it at a word boundary and append an
- *  ellipsis plus a "Read more" link that expands to the full text (no collapse). The cut point is
- *  found by measuring against an off-DOM clone that mirrors the paragraph's width/font and reserves
- *  room for the "… Read more" suffix, re-run on text change and viewport resize. Null prefix = the
- *  text fits two lines (or has been expanded), shown whole. */
-function SessionSummary({ text }: { text: string }) {
-  const ref = useRef<HTMLParagraphElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [prefix, setPrefix] = useState<string | null>(null);
-
-  useLayoutEffect(() => {
-    const host = ref.current;
-    if (!host || expanded) return;
-    const measure = () => {
-      const cs = getComputedStyle(host);
-      const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.55;
-      const maxHeight = lineHeight * 2 + 1;
-      const clone = document.createElement("p");
-      Object.assign(clone.style, {
-        position: "absolute",
-        left: "-9999px",
-        visibility: "hidden",
-        margin: "0",
-        padding: "0",
-        border: "0",
-        whiteSpace: "normal",
-        width: `${host.clientWidth}px`,
-        fontStyle: cs.fontStyle,
-        fontWeight: cs.fontWeight,
-        fontSize: cs.fontSize,
-        fontFamily: cs.fontFamily,
-        lineHeight: cs.lineHeight,
-        letterSpacing: cs.letterSpacing,
-      });
-      document.body.appendChild(clone);
-      // The suffix the truncated text carries: an ellipsis + the "Read more" link. Non-breaking spaces
-      // keep it on one line, matching the rendered (nowrap) link, so the reservation is accurate.
-      const suffix = "… Read more";
-      clone.textContent = text;
-      if (clone.scrollHeight <= maxHeight) {
-        setPrefix(null);
-        clone.remove();
-        return;
-      }
-      // Binary-search the longest character prefix that still fits two lines with the suffix appended.
-      let lo = 0;
-      let hi = text.length;
-      let best = 0;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        clone.textContent = text.slice(0, mid) + suffix;
-        if (clone.scrollHeight <= maxHeight) {
-          best = mid;
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
-      }
-      clone.remove();
-      // Snap back to a word boundary so we never cut mid-word (fall back to the raw slice for a single
-      // unbroken word), and drop any trailing whitespace before the ellipsis.
-      const raw = text.slice(0, best);
-      const atWord = raw.replace(/\s+\S*$/, "");
-      setPrefix((atWord || raw).trimEnd());
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [text, expanded]);
-
-  if (prefix !== null && !expanded) {
-    return (
-      <p ref={ref} className="session-summary">
-        {prefix}
-        {"… "}
-        <button type="button" className="read-more" onClick={() => setExpanded(true)}>
-          Read more
-        </button>
-      </p>
-    );
-  }
-  return <p ref={ref} className="session-summary">{text}</p>;
-}
-
 // How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
 // side panel next to the content. Flip this to compare; the drawer (TaskPanel) is kept, just
 // suppressed in "card".
@@ -119,7 +37,7 @@ export function SessionDetail() {
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
-  const [tab, setTab] = useState<"content" | "metrics">("content");
+  const [tab, setTab] = useState<"content" | "timeline" | "metrics">("content");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
   const onTaskClick = (id: string) =>
@@ -203,7 +121,7 @@ export function SessionDetail() {
             {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
-          {s.summary?.trim() && <SessionSummary text={s.summary} />}
+          {s.summary?.trim() && <ClampText text={s.summary} maxLines={2} className="session-summary" />}
           <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
         <div className="session-detail-actions">
@@ -246,6 +164,15 @@ export function SessionDetail() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "timeline"}
+          className={`detail-tab${tab === "timeline" ? " active" : ""}`}
+          onClick={() => setTab("timeline")}
+        >
+          Timeline
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "metrics"}
           className={`detail-tab${tab === "metrics" ? " active" : ""}`}
           onClick={() => setTab("metrics")}
@@ -254,7 +181,7 @@ export function SessionDetail() {
         </button>
       </div>
 
-      {tab === "content" ? (
+      {tab === "content" && (
         <div className="detail-tab-panel">
           <section>
             <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
@@ -292,7 +219,15 @@ export function SessionDetail() {
             )}
           </section>
         </div>
-      ) : (
+      )}
+
+      {tab === "timeline" && (
+        <div className="detail-tab-panel">
+          <SessionTimeline sessionId={s.sessionId} />
+        </div>
+      )}
+
+      {tab === "metrics" && (
         <div className="detail-tab-panel">
           <StatCards stats={cards} />
 

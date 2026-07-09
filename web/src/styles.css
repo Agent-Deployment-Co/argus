@@ -263,7 +263,7 @@ main:has(.inbox-page) { padding: 0; }
 /* Cap the headline (which now carries the potentially long summary) at a comfortable reading width;
    space-between keeps the Hide/Refresh actions pinned to the right. */
 .session-detail-headline { min-width: 0; max-width: 800px; line-height: 1.2; }
-.session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
+.session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
 .eyebrow-link { color: var(--link); }
 .eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
@@ -276,7 +276,7 @@ main:has(.inbox-page) { padding: 0; }
 .detail-tab.active { color: var(--heading); border-bottom-color: var(--accent); }
 .detail-tab-panel { margin-top: 22px; }
 .detail-tab-panel > section:first-child { margin-top: 0; }
-.session-detail-headline .labelbar--md { margin: 14px 0 0; }
+.session-detail-headline .labelbar--md { margin: 12px 0 0 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .section-title-row h3 { margin: 0; }
@@ -299,6 +299,34 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail-headline .session-summary { margin-top: 8px; }
 .read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
 .read-more:hover { color: var(--link-hover); text-decoration: underline; }
+
+/* Session timeline (Timeline tab): each interaction is a card — user prompt (top) and agent response
+   (bottom) in the main column, with a details rail (tokens / tools / models) off to the right. */
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.tl-note { margin: 0 0 16px; }
+.tl-item { display: grid; grid-template-columns: minmax(0, 1fr) 190px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.tl-main { min-width: 0; padding: 14px 16px; }
+.tl-turn { min-width: 0; }
+.tl-turn--user { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.tl-role { display: block; margin-bottom: 5px; font: 600 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.tl-turn--user .tl-role { color: var(--accent); }
+.tl-turn--agent .tl-role { color: var(--heading); }
+.tl-role-model { text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--muted); }
+.tl-text { margin: 0; line-height: 1.55; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tl-side { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, var(--bg)); font-size: 12px; }
+.tl-side-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tl-side-stats { display: flex; gap: 18px; }
+.tl-side-stat { display: flex; flex-direction: column; gap: 1px; }
+.tl-side-n { color: var(--heading); font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.tl-side-label { color: var(--muted); font-size: 11px; }
+.tl-side-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.tl-side-tool { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.tl-side-tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.tl-side-tool-n { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .tl-item { grid-template-columns: 1fr; }
+  .tl-side { border-left: 0; border-top: 1px solid var(--line); }
+}
 
 /* Hidden /debug page. */
 .debug { max-width: 980px; }

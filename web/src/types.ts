@@ -18,6 +18,11 @@ import type { TaskMetrics } from "../../src/api/task-metrics";
 import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
 import type {
+  SessionInteractionsResponse,
+  TimelineInteraction,
+  TimelineTool,
+} from "../../src/api/session-interactions";
+import type {
   LabelResponse,
   LabelsResponse,
   RecommendationsResponse,
@@ -75,6 +80,9 @@ export type {
   SessionListItem,
   SessionListResponse,
   SessionDetailResponse,
+  SessionInteractionsResponse,
+  TimelineInteraction,
+  TimelineTool,
   SessionSort,
   ConnectionTestDescriptor,
   ConnectionTestResult,

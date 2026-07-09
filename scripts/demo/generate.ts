@@ -293,6 +293,20 @@ function targetTaskCount(messageCount: number): number {
   return messageCount >= 9 ? 3 : messageCount >= 6 ? 2 : 1;
 }
 
+const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+const lowerFirst = (s: string) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+
+/** Follow-up prompts for a task's later interactions (its first interaction opens with the task
+ *  itself). Picked deterministically by interaction seq so the demo dialogue reads like a real
+ *  back-and-forth without any authored-per-session text. */
+const FOLLOWUP_PROMPTS = [
+  "Can you tighten that up a bit?",
+  "Good start — now add the supporting detail.",
+  "Double-check that against the source.",
+  "Make it a little shorter.",
+  "Walk me through how you got there.",
+];
+
 /**
  * Give the session an interaction spine and tie tasks to it. This is what makes per-task metrics
  * work: usage attributes to a task through its owning interaction (usage.interaction_seq ->
@@ -356,6 +370,8 @@ function buildInteractionsAndTasks(
   let seq = 0;
   for (let k = 0; k < parts; k++) {
     const taskFirstMsg = mi;
+    const t = templates[k]!;
+    const lastInInteraction = perTask[k]! - 1;
     for (let n = 0; n < perTask[k]!; n++) {
       const start = mi;
       for (let j = 0; j < sizes[seq]!; j++) messages[mi++]!.interactionSeq = seq;
@@ -363,6 +379,12 @@ function buildInteractionsAndTasks(
       // compaction — so the spine reconciles with the session-level friction totals.
       const isLast = seq === lastInteractionSeq;
       const interrupted = plan.template.friction === "heavy" && isLast;
+      // Synthetic dialogue (#124 timeline): the task's first interaction opens with the task itself,
+      // later interactions are follow-ups; the response is an interim note until the task's last
+      // interaction, which lands its result (the task evidence). Interrupted turns get no response.
+      const promptText = n === 0 ? `${capitalize(t.description)}.` : FOLLOWUP_PROMPTS[seq % FOLLOWUP_PROMPTS.length]!;
+      const responseText =
+        n === lastInInteraction ? t.evidence : `On it — I'll ${lowerFirst(t.description)}.`;
       interactions.push({
         id: `${plan.sessionId}#int-${seq}`,
         source: plan.source,
@@ -373,13 +395,13 @@ function buildInteractionsAndTasks(
         compactionCount: hasCompaction && isLast ? 1 : 0,
         timestampMs: messages[start]!.ts,
         promptPosition: pos(start, 0),
-        ...(interrupted ? {} : { responsePosition: pos(mi - 1, 1) }),
+        promptText,
+        ...(interrupted ? {} : { responsePosition: pos(mi - 1, 1), responseText }),
         position: pos(start, 0),
       });
       seq++;
     }
 
-    const t = templates[k]!;
     tasks.push({
       id: `${plan.sessionId}#task-${k}`,
       source: plan.source,

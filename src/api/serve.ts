@@ -49,6 +49,7 @@ import type { PluginRow, SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
+import { buildSessionInteractions, type SessionInteractionsResponse } from "./session-interactions.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { CONFIG_FILE } from "../paths.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
@@ -180,6 +181,9 @@ export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<str
 export type SessionListReader = (query: SessionListQuery) => Promise<SessionListResponse>;
 /** Full detail for one session (built on demand), or null if it has no messages / doesn't exist. */
 export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | null>;
+/** The interaction timeline for one session (prompt -> loop summary -> response), or null if the
+ *  session has no interactions. */
+export type SessionInteractionsReader = (sessionId: string) => Promise<SessionInteractionsResponse | null>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
@@ -207,6 +211,7 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
+  sessionInteractions?: SessionInteractionsReader;
   /** Flag/unflag a session as hidden. Omitted in processes without a store (503). */
   setSessionHidden?: SessionHiddenSetter;
   /** Session/task label read + write operations. Omitted in processes without a store (503). */
@@ -521,6 +526,17 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     const session = await opts.sessionDetail(sessionId);
     if (!session) return c.json({ error: "Session not found." }, 404);
     return c.json({ session } satisfies SessionDetailResponse);
+  });
+
+  // The interaction timeline for one session (prompt -> loop summary -> response), built on demand and
+  // fetched only when the detail view's Timeline tab is opened.
+  app.get("/api/session/:id/interactions", async (c) => {
+    if (!opts.sessionInteractions) return c.json({ error: "Session interactions are unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const timeline = await opts.sessionInteractions(sessionId);
+    if (!timeline) return c.json({ error: "Session not found." }, 404);
+    return c.json(timeline satisfies SessionInteractionsResponse);
   });
 
   // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
@@ -1081,6 +1097,17 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden, interactions);
   };
 
+  const sessionInteractions: SessionInteractionsReader = async (sessionId) => {
+    const store = await readStore();
+    const [interactions, invocations, messages] = await Promise.all([
+      store.readSessionInteractions(sessionId),
+      store.readSessionInvocations(sessionId),
+      store.readSessionMessages(sessionId),
+    ]);
+    if (!interactions.length) return null;
+    return buildSessionInteractions(interactions, invocations, messages);
+  };
+
   const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>
     withWriteStore((store) => store.setSessionsHidden([sessionId], hidden));
 
@@ -1100,6 +1127,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionTaskMetrics,
     sessionList,
     sessionDetail,
+    sessionInteractions,
     setSessionHidden,
     labels,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),

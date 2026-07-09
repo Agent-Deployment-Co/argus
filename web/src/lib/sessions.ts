@@ -1,7 +1,13 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { APP_HEADER, fetchOrOffline, jsonOrThrow } from "./http";
 import { KNOWN_SOURCES, type SnapshotFilters } from "./filters";
-import type { SessionListResponse, SessionRow, SessionSort, TaskMetrics } from "../types";
+import type {
+  SessionInteractionsResponse,
+  SessionListResponse,
+  SessionRow,
+  SessionSort,
+  TaskMetrics,
+} from "../types";
 
 /** Everything that narrows the paginated session list: the global snapshot filters (date/source)
  *  plus the Sessions-local refinements (project label, free text, file path) and the sort. `q`/`file`
@@ -116,5 +122,20 @@ export function useSessionTaskMetrics(sessionId: string) {
   return useQuery({
     queryKey: ["session-task-metrics", sessionId],
     queryFn: () => fetchSessionTaskMetrics(sessionId),
+  });
+}
+
+/** A session's interaction timeline (prompt -> loop summary -> response), fetched on demand. */
+export async function fetchSessionInteractions(sessionId: string): Promise<SessionInteractionsResponse> {
+  const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}/interactions`);
+  return jsonOrThrow<SessionInteractionsResponse>(res, "Failed to load the session timeline");
+}
+
+/** The interaction timeline, fetched only when `enabled` (i.e. the Timeline tab is open). */
+export function useSessionInteractionsQuery(sessionId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["session-interactions", sessionId],
+    queryFn: () => fetchSessionInteractions(sessionId!),
+    enabled: enabled && Boolean(sessionId),
   });
 }
