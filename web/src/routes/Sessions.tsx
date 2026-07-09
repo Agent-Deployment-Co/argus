@@ -486,7 +486,7 @@ function BulkLabelButton({
         onClick={() => setOpen((v) => !v)}
       >
         <Tag size={14} strokeWidth={1.75} aria-hidden />
-        <span>Labels</span>
+        <span>Edit Labels</span>
       </button>
 
       {open && (
