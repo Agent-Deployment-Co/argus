@@ -38,6 +38,9 @@ export interface DemoData {
   sessionsByOwner: Map<AgentSource, MaterializeSession[]>;
   /** Per-session tasks, keyed by canonical session id, for `store.writeSessionTasks`. */
   tasksBySession: Map<string, TaskFact[]>;
+  /** Per-session interpreted title + summary, keyed by canonical session id — the extra
+   *  `store.writeSessionTasks` args a live interpreter would fill (#234). */
+  interpretationBySession: Map<string, { title: string; summary: string }>;
   /** Contents for the sandbox `~/.claude/settings.json`. */
   settingsJson: { enabledPlugins: Record<string, boolean> };
   /** Contents for the sandbox `~/.claude/plugins/installed_plugins.json`. */
@@ -295,20 +298,43 @@ function targetTaskCount(messageCount: number): number {
  * work: usage attributes to a task through its owning interaction (usage.interaction_seq ->
  * interaction.task_seq), so without interactions every task shows 0 tokens and no tools.
  *
- * One interaction per task, over a contiguous slice of the session's messages. Each message is
- * stamped with its interaction's seq, and each task takes the timestamp of its interaction's first
- * message so the store's bookmark assignment (assignInteractionTaskSeqs) maps interaction k -> task k.
+ * A task spans one *or more* interactions (a real task is often several follow-up prompts). We pick
+ * 1-3 tasks by session size, give each task a random 1-3 interactions (bounded so no later task is
+ * starved of messages), then slice the session's messages evenly across the resulting interactions.
+ * Each message is stamped with its interaction's seq, and each task takes the timestamp of its
+ * *first* interaction's first message, so the store's bookmark assignment (assignInteractionTaskSeqs)
+ * groups that task's whole run of interactions under it.
+ *
+ * `rng` is a dedicated PRNG for the interaction split, kept separate from the message/friction stream
+ * so adding this randomness doesn't shift token or task-count distributions elsewhere in the corpus.
  */
 function buildInteractionsAndTasks(
   plan: ExpandedSession,
   messages: MessageRecord[],
+  rng: () => number,
 ): { interactions: InteractionFact[]; tasks: TaskFact[] } {
   // Take 1-3 tasks from the pool, scaled by session size, never more than the messages can slice.
   // An empty pool yields parts = 0 (no interactions/tasks) rather than crashing.
   const pool = plan.template.tasks;
   const parts = Math.min(pool.length, targetTaskCount(messages.length), messages.length);
+  if (parts === 0) return { interactions: [], tasks: [] };
   const templates = pool.slice(0, parts);
-  const sizes = evenSlices(messages.length, parts);
+
+  // How many interactions each task gets (1-3), bounded so every remaining task keeps at least one
+  // message (each task needs >= 1 interaction and each interaction >= 1 message).
+  const perTask: number[] = [];
+  let freeMessages = messages.length;
+  for (let k = 0; k < parts; k++) {
+    const tasksLeft = parts - k;
+    const maxHere = freeMessages - (tasksLeft - 1); // reserve one message for each still-unplaced task
+    const want = 1 + Math.floor(rng() * 3); // 1, 2, or 3
+    const count = Math.max(1, Math.min(want, maxHere));
+    perTask.push(count);
+    freeMessages -= count;
+  }
+  const totalInteractions = perTask.reduce((n, c) => n + c, 0);
+  const sizes = evenSlices(messages.length, totalInteractions); // messages per interaction
+
   const pos = (record: number, item: number) => ({
     originKey: `demo:${plan.sessionId}`,
     recordIndex: record,
@@ -316,42 +342,49 @@ function buildInteractionsAndTasks(
   });
 
   // Sessions whose friction carries a compaction (heavy/growth on a friction-bearing source) get
-  // exactly one, attributed to a single interaction, so the interaction spine sums to the session's
+  // exactly one, attributed to the final interaction, so the interaction spine sums to the session's
   // compaction count (frictionFor sets compactions: 1). Anything else stays at 0. Attributing it to
   // every interaction would overcount vs the session-level total.
   const hasCompaction =
     FRICTION_SOURCES.has(plan.source) &&
     (plan.template.friction === "heavy" || plan.template.friction === "growth");
+  const lastInteractionSeq = totalInteractions - 1;
 
   const interactions: InteractionFact[] = [];
   const tasks: TaskFact[] = [];
   let mi = 0;
+  let seq = 0;
   for (let k = 0; k < parts; k++) {
-    const start = mi;
-    for (let j = 0; j < sizes[k]!; j++) messages[mi++]!.interactionSeq = k;
-    const startTs = messages[start]!.ts;
-    const interrupted = plan.template.friction === "heavy" && k === parts - 1;
-
-    interactions.push({
-      id: `${plan.sessionId}#int-${k}`,
-      source: plan.source,
-      sourceSessionId: plan.sessionId,
-      seq: k,
-      initiator: "human",
-      disposition: interrupted ? "interrupted" : "completed",
-      compactionCount: hasCompaction && k === parts - 1 ? 1 : 0,
-      timestampMs: startTs,
-      promptPosition: pos(start, 0),
-      ...(interrupted ? {} : { responsePosition: pos(mi - 1, 1) }),
-      position: pos(start, 0),
-    });
+    const taskFirstMsg = mi;
+    for (let n = 0; n < perTask[k]!; n++) {
+      const start = mi;
+      for (let j = 0; j < sizes[seq]!; j++) messages[mi++]!.interactionSeq = seq;
+      // Only the session's very last interaction can be interrupted (heavy friction) or carry the
+      // compaction — so the spine reconciles with the session-level friction totals.
+      const isLast = seq === lastInteractionSeq;
+      const interrupted = plan.template.friction === "heavy" && isLast;
+      interactions.push({
+        id: `${plan.sessionId}#int-${seq}`,
+        source: plan.source,
+        sourceSessionId: plan.sessionId,
+        seq,
+        initiator: "human",
+        disposition: interrupted ? "interrupted" : "completed",
+        compactionCount: hasCompaction && isLast ? 1 : 0,
+        timestampMs: messages[start]!.ts,
+        promptPosition: pos(start, 0),
+        ...(interrupted ? {} : { responsePosition: pos(mi - 1, 1) }),
+        position: pos(start, 0),
+      });
+      seq++;
+    }
 
     const t = templates[k]!;
     tasks.push({
       id: `${plan.sessionId}#task-${k}`,
       source: plan.source,
       sourceSessionId: plan.sessionId,
-      timestampMs: startTs,
+      timestampMs: messages[taskFirstMsg]!.ts,
       description: t.description,
       evidence: t.evidence,
       evidenceKind: "llm_inference",
@@ -359,7 +392,7 @@ function buildInteractionsAndTasks(
       frustration: t.frustration,
       signals: t.signals,
       outcomeReason: t.outcomeReason,
-      position: pos(start, 2),
+      position: pos(taskFirstMsg, 2),
     });
   }
   return { interactions, tasks };
@@ -393,17 +426,21 @@ function buildPlugins(asOfMs: number): {
 /** Expand the authored scenarios into a full, deterministic demo dataset. */
 export function generateDemoData(opts: GenerateOptions): DemoData {
   const rng = makeRng(opts.seed);
+  // A second, independent stream for the task/interaction split so its draws don't perturb the
+  // message and friction randomness (which the corpus's token/task-count invariants depend on).
+  const groupRng = makeRng(opts.seed ^ 0x9e3779b9);
   const plans = planSessions(rng);
 
   const sessionsByOwner = new Map<AgentSource, MaterializeSession[]>();
   const tasksBySession = new Map<string, TaskFact[]>();
+  const interpretationBySession = new Map<string, { title: string; summary: string }>();
   const bySource: Record<string, number> = {};
   let messageCount = 0;
   let taskCount = 0;
 
   for (const plan of plans) {
     const messages = buildMessages(plan, opts.asOfMs, rng);
-    const { interactions, tasks } = buildInteractionsAndTasks(plan, messages);
+    const { interactions, tasks } = buildInteractionsAndTasks(plan, messages, groupRng);
     const lastTs = messages[messages.length - 1]!.ts;
 
     const friction = FRICTION_SOURCES.has(plan.source)
@@ -439,6 +476,10 @@ export function generateDemoData(opts: GenerateOptions): DemoData {
     sessionsByOwner.set(plan.source, list);
 
     tasksBySession.set(plan.sessionId, tasks);
+    interpretationBySession.set(plan.sessionId, {
+      title: plan.template.title,
+      summary: plan.template.summary,
+    });
 
     messageCount += messages.length;
     taskCount += tasks.length;
@@ -450,6 +491,7 @@ export function generateDemoData(opts: GenerateOptions): DemoData {
   return {
     sessionsByOwner,
     tasksBySession,
+    interpretationBySession,
     settingsJson,
     installedPluginsJson,
     pluginsMap,

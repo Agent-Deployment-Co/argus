@@ -38,8 +38,12 @@ export interface TaskTemplate {
 }
 
 export interface SessionTemplate {
-  /** Rachel's opening prompt; becomes the session title. */
+  /** Rachel's opening prompt; stored as the session's first prompt and reused as the interpreted
+   *  session title (the demo has no live interpreter to generate one). */
   title: string;
+  /** A one-to-two sentence session summary — the interpreted summary (#234) the demo would otherwise
+   *  get from the model. Spans the session's tasks, in Rachel's world/voice. */
+  summary: string;
   /** Documents the agent read or wrote, under Rachel's home. */
   files?: string[];
   /** Raw tool names used, e.g. "Read", "WebSearch", "mcp__hubspot__search_contacts". */
@@ -90,6 +94,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Draft the Wallace Corp expansion account brief",
+        summary:
+          "Pulled Wallace Corp's org chart and recent calls into a one-page account brief, recapped the last three Gong calls, and drafted a mutual action plan for the expansion.",
         files: [doc("gtm/wallace-corp/account-brief.md"), doc("gtm/wallace-corp/org-chart.md")],
         tools: ["Read", "Write", HUBSPOT, GONG, "WebSearch"],
         skills: ["gtm-research:account-brief"],
@@ -124,6 +130,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Build the outreach sequence for the Wallace Corp expansion",
+        summary:
+          "Wrote a four-touch email sequence for the CFO and adapted it for the VP of Operations, saving both as Gmail drafts for review.",
         files: [doc("gtm/wallace-corp/outreach-sequence.md")],
         tools: ["Read", "Write", GMAIL, HUBSPOT],
         skills: ["gtm-research:account-brief"],
@@ -149,6 +157,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Prep me for the Wallace Corp renewal call",
+        summary:
+          "Gathered the open support tickets that could threaten the renewal and started assembling talking points, but the call prep was left unfinished after repeated redirects.",
         files: [doc("gtm/wallace-corp/call-prep.md")],
         tools: ["Read", GONG, SALESFORCE, "WebFetch"],
         turns: 6,
@@ -182,6 +192,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "What discount can I offer Rosen Associates at 200 seats?",
+        summary:
+          "Worked out the approved volume-discount tier and the sign-off needed to quote a 200-seat Rosen Associates deal.",
         turns: 4,
         tasks: [
           {
@@ -195,6 +207,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Rewrite this proposal intro to sound less templated",
+        summary:
+          "Reworked the proposal opening over two passes so it reads as written specifically for Rosen Associates and names their expansion goal.",
         turns: 3,
         instances: 4,
         tasks: [
@@ -221,6 +235,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Draft the Q3 launch campaign brief",
+        summary:
+          "Turned the positioning doc into a full Q3 campaign brief, proposed three headline options, and mapped the messaging to the three target segments.",
         files: [doc("marketing/q3-launch/campaign-brief.md"), doc("marketing/q3-launch/messaging.md")],
         tools: ["Read", "Write", NOTION, "WebSearch", GDRIVE],
         skills: ["content-studio:blog-draft"],
@@ -253,6 +269,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Write the launch blog post from the campaign brief",
+        summary:
+          "Drafted a 900-word launch blog post in Tyrell's voice from the campaign brief, plus its title tag and meta description.",
         files: [doc("marketing/q3-launch/blog-post.md")],
         tools: ["Read", "Write", GDRIVE, "WebFetch"],
         skills: ["content-studio:blog-draft"],
@@ -278,6 +296,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Turn the blog post into a week of social copy",
+        summary:
+          "Produced five social posts with a posting schedule and two LinkedIn thought-leadership variants, then shared the plan to Slack.",
         files: [doc("marketing/q3-launch/social-calendar.md")],
         tools: ["Read", "Write", SLACK],
         skills: ["content-studio:social-copy"],
@@ -311,6 +331,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "How does Meridian Software position against us?",
+        summary:
+          "Compared Meridian Software's positioning and pricing tiers to Tyrell's and called out two gaps to exploit.",
         turns: 5,
         instances: 5,
         tasks: [
@@ -325,6 +347,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Give me talking points against Sebastian Design's new feature",
+        summary:
+          "Drafted three objection-handling points for Sebastian Design's launch and flagged one feature claim it couldn't verify as current.",
         turns: 4,
         tasks: [
           {
@@ -339,6 +363,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "What's Meridian Software's enterprise pricing?",
+        summary:
+          "Searched Meridian Software's site and public sources for enterprise pricing but found it gated and unpublished, so no figure could be given.",
         turns: 4,
         instances: 2,
         tasks: [
@@ -362,6 +388,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Draft the narrative for this quarter's board deck",
+        summary:
+          "Verified the three headline metrics against the source sheet and drafted the board-deck narrative, though the speaker notes were left unfinished.",
         files: [doc("exec/board-deck/narrative.md"), doc("exec/board-deck/metrics.csv")],
         tools: ["Read", "Write", GDRIVE, NOTION],
         skills: ["deep-research"],
@@ -395,6 +423,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Write this week's GTM update for the leadership channel",
+        summary:
+          "Summarized the week's pipeline movement into a short six-line update and posted it to the leadership channel.",
         files: [doc("exec/weekly-update.md")],
         tools: ["Read", "Write", SLACK, HUBSPOT_DEALS],
         skills: ["weekly-update"],
@@ -423,6 +453,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Find and merge duplicate accounts in the pipeline",
+        summary:
+          "Flagged 14 duplicate accounts and drafted a merge plan, marking the risky pairs for manual review before any auto-merge.",
         files: [doc("revops/pipeline/duplicate-accounts.csv")],
         tools: ["Read", "Write", SALESFORCE, HUBSPOT],
         skills: ["revops-toolkit:pipeline-audit"],
@@ -450,6 +482,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Audit which deals are missing a close date",
+        summary:
+          "Produced a 22-row cleanup list of open deals missing a close date or next step.",
         files: [doc("revops/pipeline/stage-audit.csv")],
         tools: ["Read", SALESFORCE, HUBSPOT_DEALS],
         skills: ["revops-toolkit:pipeline-audit"],
@@ -467,6 +501,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Merge duplicate contacts across HubSpot and Salesforce",
+        summary:
+          "Pulled 30 duplicate-contact candidates from HubSpot and Salesforce, but without a shared key the two systems couldn't be safely reconciled.",
         files: [doc("revops/pipeline/contact-merge.csv")],
         tools: ["Read", "Write", SALESFORCE, HUBSPOT],
         skills: ["revops-toolkit:pipeline-audit"],
@@ -502,6 +538,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Build the Q3 forecast model from the pipeline export",
+        summary:
+          "Reconciled the pipeline export against the CRM totals and built a weighted Q3 forecast with its assumptions documented alongside.",
         files: [doc("revops/forecast/q3-forecast.csv"), doc("revops/forecast/assumptions.md")],
         tools: ["read_file", "write_file", "run_shell_command"],
         skills: ["revops-toolkit:forecast"],
@@ -534,6 +572,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Rebalance territories so reps are within 15% of quota",
+        summary:
+          "Summarized the current per-rep quota load but couldn't find a territory split that satisfied both the geography and quota constraints.",
         files: [doc("revops/forecast/territory-plan.csv")],
         tools: ["read_file", "write_file"],
         turns: 7,
@@ -565,6 +605,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Generate the weekly revenue dashboard export",
+        summary:
+          "Generated the weekly revenue and pipeline dashboard CSV in the standard column format.",
         files: [doc("revops/reporting/weekly-dashboard.csv")],
         tools: ["read_file", "write_file", "run_shell_command"],
         turns: 5,
@@ -581,6 +623,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Reconcile the revenue export with the billing system",
+        summary:
+          "Lined up the revenue export against the billing totals period by period, but a persistent variance was never traced to a source.",
         files: [doc("revops/reporting/reconciliation.csv")],
         tools: ["read_file", "write_file", "run_shell_command"],
         turns: 7,
@@ -614,6 +658,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Set up the HubSpot MCP server for the outreach agent",
+        summary:
+          "Connected the outreach agent to HubSpot, confirmed a test contact lookup after approving the read scope, and wrote setup notes a teammate can follow.",
         files: [doc("agent-ops/outreach-agent/config.md"), doc("agent-ops/outreach-agent/prompt.md")],
         tools: ["Read", "Write", "Edit", "Bash", HUBSPOT, "WebFetch"],
         turns: 8,
@@ -638,6 +684,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Tune the outreach agent's tone so it stops sounding pushy",
+        summary:
+          "Added a worked example and softened the outreach agent's system prompt over many iterations; the tone improved but wasn't signed off as final.",
         files: [doc("agent-ops/outreach-agent/prompt.md")],
         tools: ["Read", "Edit", "Bash"],
         turns: 12,
@@ -671,6 +719,8 @@ export const PROJECTS: ProjectScenario[] = [
       },
       {
         title: "Stop the outreach agent from inventing account details",
+        summary:
+          "Added guardrails against fabricated account facts, which cut the invented details down but didn't stop the agent making up figures in testing.",
         files: [doc("agent-ops/outreach-agent/prompt.md")],
         tools: ["Read", "Edit", "Bash"],
         turns: 8,
@@ -705,6 +755,8 @@ export const PROJECTS: ProjectScenario[] = [
     sessions: [
       {
         title: "Run the outreach agent against the eval set and score it",
+        summary:
+          "Scored the outreach agent's replies against the eval rubric and flagged the six failing cases for follow-up.",
         files: [doc("agent-ops/evals/eval-set.md"), doc("agent-ops/evals/results.csv")],
         tools: ["Read", "Write", "Bash"],
         skills: ["deep-research"],
