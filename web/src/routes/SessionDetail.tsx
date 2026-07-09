@@ -124,26 +124,28 @@ export function SessionDetail() {
           <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
           <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
-        <button
-          type="button"
-          className="task-action"
-          onClick={() => hide.mutate({ sessionId: s.sessionId, hidden: !s.isHidden })}
-          disabled={hidePending}
-          title={s.isHidden ? "Unhide this session" : "Hide this session from the list and search"}
-        >
-          {s.isHidden ? <Eye size={14} strokeWidth={1.75} aria-hidden /> : <EyeOff size={14} strokeWidth={1.75} aria-hidden />}
-          <span>{s.isHidden ? "Unhide" : "Hide"}</span>
-        </button>
-        <button
-          type="button"
-          className="task-action"
-          onClick={() => refresh.mutate(s.sessionId)}
-          disabled={refreshingThisSession}
-          title="Re-read this session's transcript from disk and update it"
-        >
-          <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
-          <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
-        </button>
+        <div className="session-detail-actions">
+          <button
+            type="button"
+            className="task-action"
+            onClick={() => hide.mutate({ sessionId: s.sessionId, hidden: !s.isHidden })}
+            disabled={hidePending}
+            title={s.isHidden ? "Unhide this session" : "Hide this session from the list and search"}
+          >
+            {s.isHidden ? <Eye size={14} strokeWidth={1.75} aria-hidden /> : <EyeOff size={14} strokeWidth={1.75} aria-hidden />}
+            <span>{s.isHidden ? "Unhide" : "Hide"}</span>
+          </button>
+          <button
+            type="button"
+            className="task-action"
+            onClick={() => refresh.mutate(s.sessionId)}
+            disabled={refreshingThisSession}
+            title="Re-read this session's transcript from disk and update it"
+          >
+            <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
+            <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
+          </button>
+        </div>
       </header>
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
