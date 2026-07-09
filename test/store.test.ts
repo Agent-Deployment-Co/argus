@@ -1173,6 +1173,45 @@ describe("SQLite store", () => {
     }
   });
 
+  test("setSessionsHidden survives a re-materialize (reindex must not silently unhide)", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const msg = (sid: string) => ({
+        source: "codex" as const,
+        sessionId: sid,
+        project: "p",
+        cwd: "/tmp/proj-a",
+        gitBranch: "",
+        ts: Date.parse("2026-06-01T00:00:00Z"),
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 10, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      const session = (extraMessage: boolean) => ({
+        meta: { source: "codex" as const, sessionId: "codex:hideme", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/a.jsonl" },
+        messages: extraMessage ? [msg("codex:hideme"), msg("codex:hideme")] : [msg("codex:hideme")],
+      });
+
+      await store.materializeSessions("codex", [session(false)]);
+      await store.setSessionsHidden(["codex:hideme"], true);
+      expect(await store.readSessionHidden("codex:hideme")).toBe(true);
+
+      // An unchanged re-materialize (e.g. a bare `index refresh` or `index --watch` no-op pass) must
+      // not reset is_hidden back to its default.
+      await store.materializeSessions("codex", [session(false)]);
+      expect(await store.readSessionHidden("codex:hideme")).toBe(true);
+
+      // Neither must a re-materialize that changes real content (a genuine reindex).
+      await store.materializeSessions("codex", [session(true)]);
+      expect(await store.readSessionHidden("codex:hideme")).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("v22 -> v23 migration adds is_hidden and preserves existing data", async () => {
     const path = storePath();
     const store = await openStore({ path });

@@ -807,6 +807,9 @@ interface ResolvedSessionSnapshot {
   // Model title/summary (#234) — interpretation-owned like interpretedAtMs, so carried forward here.
   title: string | null;
   summary: string | null;
+  // Hidden sessions (local-only UI state) — a user preference, not a disk-presence fact like
+  // `archived`, so it must be carried forward across a re-materialize rather than reset.
+  isHidden: boolean;
 }
 
 async function readResolvedSessionSnapshot(
@@ -820,9 +823,10 @@ async function readResolvedSessionSnapshot(
     interpretation_version: string | null;
     title: string | null;
     summary: string | null;
+    is_hidden: number;
   }>(
     db,
-    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary FROM resolved_sessions WHERE session_id = ?",
+    "SELECT meta_json, content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, is_hidden FROM resolved_sessions WHERE session_id = ?",
     [sessionId],
   );
   if (!row) return undefined;
@@ -845,6 +849,7 @@ async function readResolvedSessionSnapshot(
     interpretationVersion: row.interpretation_version,
     title: row.title,
     summary: row.summary,
+    isHidden: row.is_hidden === 1,
   };
 }
 
@@ -3713,6 +3718,9 @@ export class SqliteStore implements Store {
           // them. Only writeSessionTasks sets them; a brand-new session has none.
           const title = existingSnapshot?.title ?? null;
           const summary = existingSnapshot?.summary ?? null;
+          // Hidden is a user preference, not a disk-presence fact — unlike `archived`, a re-materialize
+          // must carry it forward rather than reset it. A brand-new session defaults to visible.
+          const isHidden = existingSnapshot?.isHidden ?? false;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(
@@ -3745,8 +3753,8 @@ export class SqliteStore implements Store {
             `INSERT INTO resolved_sessions(
                session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived,
                friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms,
-               content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, is_hidden, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               sid,
               owner,
@@ -3767,6 +3775,7 @@ export class SqliteStore implements Store {
               interpretationVersion,
               title,
               summary,
+              isHidden ? 1 : 0,
               JSON.stringify(session.meta),
             ],
           );
