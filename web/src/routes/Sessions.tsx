@@ -178,10 +178,28 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
     selection.setLastClickedId(sessionId);
   };
 
+  // "Select all" first scopes to what's loaded/in view (not every session matching the filter —
+  // that's a follow-up, staged behind `query.hasNextPage`). Toggles back to deselect once every
+  // loaded row is already selected.
+  const allLoadedSelected = rows.length > 0 && rows.every((r) => selection.ids.has(r.sessionId));
+  const handleSelectAllLoaded = () => {
+    if (allLoadedSelected) {
+      selection.setIds(new Set());
+      return;
+    }
+    selection.setIds(new Set(rows.map((r) => r.sessionId)));
+    selection.setLastClickedId(rows[rows.length - 1]?.sessionId ?? null);
+  };
+
   return (
     <aside className="session-list" aria-label="Sessions">
       <div className="session-list-head session-list-head-count">
-        {total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}
+        <span>{total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}</span>
+        {rows.length > 0 && (
+          <button type="button" className="session-select-all" onClick={handleSelectAllLoaded}>
+            {allLoadedSelected ? "Deselect all" : "Select all"}
+          </button>
+        )}
       </div>
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
