@@ -206,6 +206,9 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 
 .filter-dropdown-panel { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 260px; max-width: calc(100vw - 24px); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px rgba(0, 0, 0, .28); }
+/* Date panel needs more room than the default 260px: two fixed-width 132px date inputs (see
+   .filter-dropdown-dates below) plus the dash and gaps between them. */
+.filter-dropdown-panel:has(.filter-dropdown-dates) { width: 320px; }
 .filter-dropdown-panel-right { left: auto; right: 0; }
 .filter-dropdown-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .filter-dropdown-title { color: var(--heading); font: 700 13px var(--font-ui); }
@@ -226,8 +229,13 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
 .filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
 .filter-dropdown-preset.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
-.filter-dropdown-dates { display: flex; align-items: center; gap: 8px; }
-.filter-dropdown-dates .filter-input { flex: 1 1 0; width: auto; }
+/* justify-content: center, not flex-start, so any leftover row width (native date-input rendering
+   varies slightly by browser/OS) splits evenly on both sides instead of piling up after the second
+   input, which read as lopsided right padding. */
+.filter-dropdown-dates { display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* Fixed (not flex-stretched) width: Chrome pads the value/icon to fill whatever box it's given, so
+   letting these grow to split the wider panel evenly leaves an ugly gap before the calendar icon. */
+.filter-dropdown-dates .filter-input { flex: 0 0 auto; width: 132px; }
 /* Second track is minmax(0, 1fr), NOT 1fr: a bare 1fr track has an implicit min-width:auto, so a long
    unbreakable task description would force the track (and the whole page) wider than the viewport and
    defeat the .task-item-desc ellipsis. minmax(0, 1fr) lets the detail pane shrink below its content's
