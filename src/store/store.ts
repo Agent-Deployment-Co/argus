@@ -2729,15 +2729,18 @@ export class SqliteStore implements Store {
           throw new LabelError("not_found", "That label no longer exists.");
         if (applied) {
           const now = Date.now();
-          for (const sessionId of ids) {
+          // Three bound params per row (labelId, sessionId, now); 'session' and NULL are inlined.
+          for (const part of chunk(ids, Math.floor(MAX_BOUND_PARAMS / 3))) {
+            const valuesSql = part.map(() => "(?, 'session', ?, NULL, 'user', ?)").join(", ");
+            const params = part.flatMap((sessionId) => [labelId, sessionId, now]);
             // ON CONFLICT over label_assignments_unique makes re-applying a no-op that preserves the
             // original applied_by / applied_at_ms, matching assignLabel's single-target behavior.
             await run(
               this.db,
               `INSERT INTO label_assignments (label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms)
-               VALUES (?, 'session', ?, NULL, 'user', ?)
+               VALUES ${valuesSql}
                ON CONFLICT (label_id, session_id, COALESCE(task_seq, -1)) DO NOTHING`,
-              [labelId, sessionId, now],
+              params,
             );
           }
         } else {

@@ -128,6 +128,12 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
   const [selectingAllMatching, setSelectingAllMatching] = useState(false);
+  // Tracks the current `filters` identity so an in-flight "select all matching" fetch can tell,
+  // once it resolves, whether the filter it was scoped to is still the one in effect.
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -214,8 +220,12 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   const handleSelectAllMatching = async () => {
     selection.setNoneSelectedActive(false);
     setSelectingAllMatching(true);
+    const requestedFilters = filters;
     try {
-      const ids = await fetchAllSessionIds(filters);
+      const ids = await fetchAllSessionIds(requestedFilters);
+      // Discard the result if the filters changed while the (possibly multi-page) fetch was in
+      // flight — the ids we just resolved no longer describe what's on screen.
+      if (filtersRef.current !== requestedFilters) return;
       selection.setIds(new Set(ids));
     } finally {
       setSelectingAllMatching(false);

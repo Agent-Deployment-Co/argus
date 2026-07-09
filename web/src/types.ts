@@ -18,6 +18,7 @@ import type { TaskMetrics } from "../../src/api/task-metrics";
 import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
 import type {
+  BulkSessionLabelsResponse,
   LabelResponse,
   LabelsResponse,
   RecommendationsResponse,
@@ -105,6 +106,7 @@ export type {
   RecommendationsResponse,
   // Labels (session-and-task-labels).
   AppliedLabel,
+  BulkSessionLabelsResponse,
   LabelAppliedBy,
   LabelOrigin,
   LabelRecord,

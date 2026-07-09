@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { APP_HEADER, fetchOrOffline, jsonOrThrow } from "./http";
-import type { LabelRecord, LabelsResponse, SessionLabels, SessionLabelsResponse } from "../types";
+import type {
+  AppliedLabel,
+  BulkSessionLabelsResponse,
+  LabelRecord,
+  LabelsResponse,
+  SessionLabels,
+  SessionLabelsResponse,
+} from "../types";
 
 // The web data layer for session/task labels (session-and-task-labels). Reads go through the shared
 // fetch helpers; every write sends the same-origin APP_HEADER the server's CSRF guard requires. All
@@ -35,19 +42,23 @@ export function useSessionLabelsQuery(sessionId: string | undefined) {
   });
 }
 
-/** Active session-level labels for many sessions at once — backs the bulk-mode label picker's
- *  tri-state chips. No dedicated bulk-read endpoint exists, so this fans out to the same per-session
- *  read the detail pane uses; fine at bulk-selection scale (dozens, not thousands). */
+export async function fetchSessionsLabels(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>> {
+  const res = await fetchOrOffline("/api/sessions/bulk/labels-lookup", {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ sessionIds }),
+  });
+  const body = await jsonOrThrow<BulkSessionLabelsResponse>(res, "Failed to load session labels");
+  return new Map(Object.entries(body.labels));
+}
+
+/** Active session-level labels for many sessions at once, in one request — backs the bulk-mode
+ *  label picker's tri-state chips. */
 export function useSessionsLabelsQuery(sessionIds: string[]) {
   const sortedIds = [...sessionIds].sort();
   return useQuery({
     queryKey: ["sessions-labels", sortedIds],
-    queryFn: async () => {
-      const entries = await Promise.all(
-        sortedIds.map(async (id) => [id, (await fetchSessionLabels(id)).session] as const),
-      );
-      return new Map(entries);
-    },
+    queryFn: () => fetchSessionsLabels(sortedIds),
     enabled: sortedIds.length >= 2,
   });
 }

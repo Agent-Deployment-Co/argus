@@ -737,6 +737,7 @@ describe("label endpoints (session-and-task-labels)", () => {
         calls.push(`remove:${id}`);
       },
       readForSession: async () => ({ session: [], tasks: {} }),
+      readForSessions: async () => new Map(),
       assign: async (labelId, target: LabelTarget, appliedBy) => {
         calls.push(`assign:${labelId}:${target.sessionId}:${target.taskSeq ?? "-"}:${appliedBy}`);
       },
@@ -817,6 +818,48 @@ describe("label endpoints (session-and-task-labels)", () => {
       "assign:label:bug:s1:2:user",
       "unassign:label:bug:s1:2",
     ]);
+  });
+
+  test("POST /api/sessions/bulk/labels-lookup returns session-level labels keyed by session id", async () => {
+    const { labels } = makeLabels({
+      readForSessions: async (sessionIds) =>
+        new Map(
+          sessionIds
+            .filter((id) => id === "s1")
+            .map((id) => [id, [{ ...label("bug"), appliedBy: "user" as const, appliedAtMs: 5 }]]),
+        ),
+    });
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels-lookup", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1", "s2"] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      labels: { s1: [{ ...label("bug"), appliedBy: "user", appliedAtMs: 5 }] },
+    });
+  });
+
+  test("POST /api/sessions/bulk/labels-lookup is 400 without a non-empty 'sessionIds' array", async () => {
+    const { labels } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels-lookup", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("POST /api/sessions/bulk/labels-lookup is 503 when labels aren't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/bulk/labels-lookup", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1"] }),
+    });
+    expect(res.status).toBe(503);
   });
 
   test("POST /api/sessions/bulk/labels applies/removes a label across many sessions", async () => {

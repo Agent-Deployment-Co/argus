@@ -54,6 +54,7 @@ import { CONFIG_FILE } from "../paths.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
 import { LabelError, openStore } from "../store/store.ts";
 import type {
+  AppliedLabel,
   LabelAppliedBy,
   LabelFilterMode,
   LabelRecord,
@@ -141,6 +142,11 @@ export interface LabelResponse {
 export interface SessionLabelsResponse {
   labels: SessionLabels;
 }
+/** POST /api/sessions/bulk/labels-lookup — active session-level labels for many sessions at once,
+ *  keyed by session id (sessions with no labels are omitted). */
+export interface BulkSessionLabelsResponse {
+  labels: Record<string, AppliedLabel[]>;
+}
 
 /** Server-side filters parsed from a dashboard view's query string. Each narrows the store read
  *  (since/until/project/source); omitted fields fall back to the serve process's base options. Every
@@ -195,6 +201,8 @@ export interface LabelOps {
   rename(id: string, name: string): Promise<LabelRecord>;
   remove(id: string): Promise<void>;
   readForSession(sessionId: string): Promise<SessionLabels>;
+  /** Active session-level labels for many sessions at once (bulk mode's label picker). */
+  readForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
   assign(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
   unassign(labelId: string, target: LabelTarget): Promise<void>;
   /** Apply/remove a session-level label across many sessions at once (bulk mode). */
@@ -677,6 +685,17 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ labels: await labels.readForSession(sessionId) } satisfies SessionLabelsResponse);
   });
 
+  // Active session-level labels for many sessions at once (bulk mode's tri-state label picker) — a
+  // POST rather than GET since the id list can be large. Read path, so no CSRF guard. Registered
+  // before the single-id route below so the literal "bulk" segment isn't swallowed by ":id".
+  app.post("/api/sessions/bulk/labels-lookup", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const bySession = await labels.readForSessions(sessionIds);
+    return c.json({ labels: Object.fromEntries(bySession) } satisfies BulkSessionLabelsResponse);
+  });
+
   // Apply / remove a session-level label across many sessions at once (bulk mode). Registered before
   // the single-id route below so the literal "bulk" segment isn't swallowed by that route's ":id" param.
   app.post("/api/sessions/bulk/labels", async (c) => {
@@ -1150,6 +1169,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   const labels: LabelOps = {
     list: async () => (await readStore()).listLabels(),
     readForSession: async (sessionId) => (await readStore()).readSessionLabels(sessionId),
+    readForSessions: async (sessionIds) => (await readStore()).readSessionLabelsForSessions(sessionIds),
     create: (name) => withWriteStore((store) => store.createLabel({ name })),
     rename: (id, name) => withWriteStore((store) => store.renameLabel(id, name)),
     remove: (id) => withWriteStore((store) => store.deleteLabel(id)),
