@@ -150,6 +150,15 @@ export function SessionDetail() {
 
       <StatCards stats={cards} />
 
+      {/* The session summary (resolved_sessions.summary), shown only when interpretation has produced
+          one — omitted entirely otherwise (the Tasks section signals interpretation state below). */}
+      {s.summary?.trim() && (
+        <section>
+          <h3 className="t-subhead">Summary</h3>
+          <p className="session-summary">{s.summary}</p>
+        </section>
+      )}
+
       <section>
         <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
         {tasks.length > 0 ? (

@@ -6,7 +6,6 @@
 import { buildSessionRow } from "../reporting/aggregate.ts";
 import { cost } from "../pricing.ts";
 import type { AppliedLabel, SessionAggregate, SessionSearchMatch, TaskFact } from "../store/store-contract.ts";
-import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
 export type SessionSort = "recent" | "tokens" | "cost";
@@ -139,9 +138,9 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
 
 /** Build the full detail row for one session from its messages (oldest first) — the same SessionRow
  *  the dashboard would produce, computed on demand so heavy per-session content never rides the bulk
- *  payload. Prefers the model-generated title/summary when the session has been interpreted (#234),
- *  falling back to the first prompt / heuristic summary so an un-interpreted session doesn't regress.
- *  The heuristic summary uses the shared `summaryFactsFromMessages` so it matches the dashboard. */
+ *  payload. `title`/`summary` are the model-generated interpretation fields verbatim (title null,
+ *  summary "" until interpretation runs); the UI falls back to the opening prompt for a display title
+ *  and shows the summary only when it's non-empty. */
 export function buildSessionDetail(
   sessionId: string,
   messages: MessageRecord[],
@@ -151,9 +150,9 @@ export function buildSessionDetail(
   isHidden = false,
   interactions = 0,
 ): SessionRow {
-  const summary =
-    interpretation?.summary ||
-    heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
+  // The session summary is the stored resolved_sessions.summary verbatim — no heuristic fallback. It's
+  // empty until interpretation produces one; the UI shows the Summary section only when it's non-empty.
+  const summary = interpretation?.summary ?? "";
   const title = interpretation?.title || null;
   return buildSessionRow(
     sessionId,

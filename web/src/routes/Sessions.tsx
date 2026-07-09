@@ -30,15 +30,13 @@ function labelIdsFromSearch(search: Record<string, unknown>): string[] {
 }
 
 /** A human-facing title for a session: the model-generated title when the session has been interpreted
- *  (#234), else its opening prompt, else the summary, else a placeholder. Accepts both the list-lite
- *  item and the full row. */
-export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null; summary?: string | null }): string {
+ *  (#234), else its opening prompt, else a placeholder. The summary is never used as a title fallback.
+ *  Accepts both the list-lite item and the full row. */
+export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null }): string {
   const title = s.title?.trim();
   if (title) return title;
   const prompt = s.firstPrompt?.trim();
   if (prompt) return prompt.length > 90 ? prompt.slice(0, 90) + "…" : prompt;
-  const summary = s.summary?.trim().replace(/^"|"$/g, "");
-  if (summary) return summary;
   return "(untitled session)";
 }
 
