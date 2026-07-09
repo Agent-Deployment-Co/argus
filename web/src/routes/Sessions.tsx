@@ -136,6 +136,20 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
     filtersRef.current = filters;
   }, [filters]);
 
+  // Clear a stale selection when the filters change so the bulk overlay / row highlighting can't
+  // keep pointing at ids from a since-changed view. Skipped on mount so navigating straight to a
+  // filtered URL doesn't wipe a selection that was never made.
+  const isFirstFiltersRender = useRef(true);
+  useEffect(() => {
+    if (isFirstFiltersRender.current) {
+      isFirstFiltersRender.current = false;
+      return;
+    }
+    selection.setIds(new Set());
+    selection.setLastClickedId(null);
+    selection.setNoneSelectedActive(false);
+  }, [filters]);
+
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedId, rows]);
