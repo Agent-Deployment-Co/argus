@@ -215,6 +215,8 @@ function dropPostV18Schema(db: Database): void {
   rawExec(db, "DROP TABLE IF EXISTS resolved_tasks_fts");
   rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
   rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
+  rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
 }
 
 function rawGet<T>(db: Database, sql: string): T | undefined {
@@ -567,6 +569,8 @@ describe("SQLite store", () => {
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP TABLE IF EXISTS label_assignments");
       await rawExec(db, "DROP TABLE IF EXISTS labels");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
       await rawExec(db, "PRAGMA user_version = 22");
     });
 
@@ -1947,8 +1951,10 @@ describe("session search (#155)", () => {
       await store.close();
     }
     // Degrade to v19: drop the additions of every migration that will re-run from here — v20's search
-    // FTS/file_path index AND v21's title/summary columns (#234) — and set the version back, simulating
-    // an older store that already has interaction text + task data on disk but no search index yet.
+    // FTS/file_path index, v21's title/summary columns (#234), and v23's is_hidden column (v22's label
+    // tables are created with IF NOT EXISTS, so they don't need dropping) — and set the version back,
+    // simulating an older store that already has interaction text + task data on disk but no search
+    // index yet.
     await withRawDatabase(path, (db) => {
       rawExec(db, "DROP TABLE resolved_interaction_text_fts");
       rawExec(db, "DROP TABLE resolved_tasks_fts");
@@ -1956,6 +1962,8 @@ describe("session search (#155)", () => {
       rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
       rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
       rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
+      rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
       rawExec(db, "PRAGMA user_version = 19");
     });
 

@@ -68,7 +68,7 @@ import {
 } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 22;
+export const STORE_SCHEMA_VERSION = 23;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -480,6 +480,10 @@ const CREATE_SCHEMA_SQL = `
     message_count INTEGER NOT NULL,
     first_prompt TEXT,
     archived INTEGER NOT NULL DEFAULT 0,
+    -- Hidden sessions (local-only UI state, never pushed by sync): excluded from the sessions list
+    -- and search via buildSessionFilterConds, but their usage still counts in aggregate rollups since
+    -- those read directly from resolved_usage/resolved_invocations and never join this column.
+    is_hidden INTEGER NOT NULL DEFAULT 0,
     -- Friction signals (#38) promoted out of meta_json so the snapshot's friction/outcome rollups are
     -- SQL SUM/GROUP BY instead of parsing every session's metadata per request (#121). NULL means
     -- friction is not observable for the source (codex/gemini) — the rollups only count non-NULL rows.
@@ -510,6 +514,7 @@ const CREATE_SCHEMA_SQL = `
   CREATE INDEX resolved_sessions_last_ts ON resolved_sessions(last_ts);
   CREATE INDEX resolved_sessions_source ON resolved_sessions(source);
   CREATE INDEX resolved_sessions_archived ON resolved_sessions(archived);
+  CREATE INDEX resolved_sessions_is_hidden ON resolved_sessions(is_hidden);
   -- Steady-state eligibility scan (#153): when nothing is pending this index is empty, so the
   -- newest-first drain query stays cheap regardless of how many sessions are interpreted.
   CREATE INDEX resolved_sessions_interpret_pending
@@ -727,10 +732,14 @@ function chunk<T>(items: T[], size: number): T[][] {
  *  additional conditions (sessionIds, file:, freeform text) to the returned conds/params. */
 function buildSessionFilterConds(
   query:
-    | Pick<ResolvedQuery, "sources" | "projectSubstring" | "since" | "until">
+    | Pick<
+        ResolvedQuery,
+        "sources" | "projectSubstring" | "since" | "until" | "includeHidden"
+      >
     | undefined,
 ): { conds: string[]; params: unknown[] } {
   const conds: string[] = ["s.archived = 0"];
+  if (!query?.includeHidden) conds.push("s.is_hidden = 0");
   const params: unknown[] = [];
   if (query?.sources?.length) {
     conds.push(`s.source IN (${query.sources.map(() => "?").join(", ")})`);
@@ -1510,6 +1519,15 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   21: {
     to: 22,
     sql: LABELS_DDL,
+  },
+  // 22 -> 23: hidden sessions (local-only UI state). Add the `is_hidden` flag so a session can be
+  // hidden from the list/search while its usage still counts in aggregate rollups.
+  22: {
+    to: 23,
+    sql: `
+      ALTER TABLE resolved_sessions ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS resolved_sessions_is_hidden ON resolved_sessions(is_hidden);
+    `,
   },
 };
 
@@ -2957,10 +2975,11 @@ export class SqliteStore implements Store {
         message_count: number;
         title: string | null;
         summary: string | null;
+        is_hidden: number;
         meta_json: string;
       }>(
         this.db,
-        `SELECT session_id, first_ts, last_ts, message_count, title, summary, meta_json
+        `SELECT session_id, first_ts, last_ts, message_count, title, summary, is_hidden, meta_json
          FROM resolved_sessions s WHERE ${sessionConds.join(" AND ")}`,
         sessionParams,
       );
@@ -3995,6 +4014,25 @@ export class SqliteStore implements Store {
           await run(
             this.db,
             `UPDATE resolved_sessions SET archived = ? WHERE session_id IN (${placeholders})`,
+            [value, ...part],
+          );
+        }
+      });
+    });
+  }
+
+  setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<void> {
+    return this.schedule(async () => {
+      const ids = [...new Set(sessionIds)];
+      if (!ids.length) return;
+      const value = hidden ? 1 : 0;
+      await transaction(this.db, async () => {
+        // One bound slot is taken by `value`, so leave room for it in each chunk of ids.
+        for (const part of chunk(ids, MAX_BOUND_PARAMS - 1)) {
+          const placeholders = part.map(() => "?").join(", ");
+          await run(
+            this.db,
+            `UPDATE resolved_sessions SET is_hidden = ? WHERE session_id IN (${placeholders})`,
             [value, ...part],
           );
         }

@@ -552,6 +552,9 @@ export interface ResolvedQuery {
    *  omitting the field (no restriction) — a caller that ran a search and got zero hits must not fall
    *  back to an unfiltered read. */
   sessionIds?: string[];
+  /** Include hidden sessions (local-only UI state) that `buildSessionFilterConds` otherwise excludes
+   *  by default. No caller opts in yet — there is no "show hidden" UI surface. */
+  includeHidden?: boolean;
 }
 
 /** Search input for `searchSessions` (#155): the same source/date/project narrowing as `ResolvedQuery`,
@@ -855,6 +858,9 @@ export interface ReadModelStore {
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */
   setSessionsArchived(sessionIds: string[], archived: boolean): Promise<void>;
+  /** Flag/unflag sessions as hidden (local-only UI state): excluded from the sessions list and search
+   *  by default, but their usage still counts in aggregate rollups. */
+  setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<void>;
   /** Canonical ids of archived (off-disk, retained) sessions, optionally restricted by source. */
   listArchived(source?: AgentSource): Promise<string[]>;
   /** Count of archived (off-disk, retained) sessions currently owned by `owner`. */
