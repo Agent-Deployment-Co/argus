@@ -125,7 +125,9 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   }, [selectedId, rows]);
 
   // j/k step the selection to the next/previous row, but only once a row is already selected —
-  // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move.
+  // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move. They
+  // also always clear any multi-selection first: keyboard stepping and bulk-select never coexist
+  // mid-navigation.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "j" && e.key !== "k") return;
@@ -138,11 +140,13 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
       const next = rows[e.key === "j" ? idx + 1 : idx - 1];
       if (!next) return;
       e.preventDefault();
+      if (selection.ids.size > 0) selection.setIds(new Set());
+      selection.setLastClickedId(null);
       navigate({ to: "/sessions/$sessionId", params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rows, selectedId, navigate]);
+  }, [rows, selectedId, navigate, selection]);
 
   // Cmd/Ctrl-click toggles a row into/out of the selection; shift-click selects the contiguous range
   // from the last-clicked row to this one; a plain click clears any selection and navigates normally
