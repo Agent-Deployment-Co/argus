@@ -82,7 +82,6 @@ export function SessionDetail() {
     { label: "Est. cost", value: usd(s.cost) },
     { label: "User messages", value: s.userMessages != null ? String(s.userMessages) : "—" },
     { label: "Agent messages", value: s.agentMessages != null ? String(s.agentMessages) : "—" },
-    { label: "Duration", value: dur(s.durationMs) },
     { label: "Turns", value: h.turns != null ? String(h.turns) : "—" },
   ];
 
@@ -121,7 +120,7 @@ export function SessionDetail() {
             <code className="session-id">{s.sessionId}</code>
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
-          <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
+          <div className="session-detail-range">{dtAmPm(s.start)} for {dur(s.durationMs)}</div>
           <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
         <div className="session-detail-actions">
