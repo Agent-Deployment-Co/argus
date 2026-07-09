@@ -300,11 +300,25 @@ main:has(.inbox-page) { padding: 0; }
 .read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
 .read-more:hover { color: var(--link-hover); text-decoration: underline; }
 
-/* Session timeline (Timeline tab): each interaction is a card — user prompt (top) and agent response
-   (bottom) in the main column, with a details rail (tokens / tools / models) off to the right. */
-.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+/* Session timeline (Timeline tab): interactions grouped into task chapters. Each interaction is a
+   card — user prompt (top) and agent response (bottom) in the main column, with a details rail
+   (tokens / tools) off to the right. */
+.timeline { display: grid; gap: 26px; }
 .tl-note { margin: 0 0 16px; }
-.tl-item { display: grid; grid-template-columns: minmax(0, 1fr) 190px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.tl-chapter { display: grid; gap: 12px; min-width: 0; }
+.tl-chapter-head { position: relative; display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.tl-chapter-caret { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
+.tl-chapter-title { flex: 1 1 auto; min-width: 0; color: var(--heading); font-size: 15px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.tl-chapter-count { flex: 0 0 auto; margin-top: 3px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tl-chapter-head .pill { flex: 0 0 auto; margin-top: 1px; }
+.tl-chapter-icon { flex: 0 0 auto; margin-top: 3px; color: var(--accent); }
+.tl-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; container-type: inline-size; }
+/* Task chapters: when a task is expanded, a connector line descends from under the caret alongside the
+   indented cards. The line lives on .tl-cards, which only renders while the chapter is open, so it
+   disappears when collapsed. */
+.tl-cards--task { position: relative; padding-left: 24px; }
+.tl-cards--task::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+.tl-item { display: grid; grid-template-columns: minmax(0, 1fr) 180px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
 .tl-main { min-width: 0; padding: 14px 16px; }
 .tl-turn { min-width: 0; }
 .tl-turn--user { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
@@ -323,7 +337,9 @@ main:has(.inbox-page) { padding: 0; }
 .tl-side-tool { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
 .tl-side-tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .tl-side-tool-n { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
-@media (max-width: 720px) {
+/* Stack the details rail under the main column when the card itself gets narrow (container query on
+   .tl-cards), so a narrow detail pane never forces a horizontal scroll. */
+@container (max-width: 440px) {
   .tl-item { grid-template-columns: 1fr; }
   .tl-side { border-left: 0; border-top: 1px solid var(--line); }
 }

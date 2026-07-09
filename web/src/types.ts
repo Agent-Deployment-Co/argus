@@ -20,6 +20,7 @@ import type { SessionListItem, SessionListResponse, SessionSort } from "../../sr
 import type {
   SessionInteractionsResponse,
   TimelineInteraction,
+  TimelineTask,
   TimelineTool,
 } from "../../src/api/session-interactions";
 import type {
@@ -82,6 +83,7 @@ export type {
   SessionDetailResponse,
   SessionInteractionsResponse,
   TimelineInteraction,
+  TimelineTask,
   TimelineTool,
   SessionSort,
   ConnectionTestDescriptor,

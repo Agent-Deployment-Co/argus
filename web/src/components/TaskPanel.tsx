@@ -21,7 +21,7 @@ export function OutcomeBadge({ outcome }: { outcome?: string }) {
   return <span className={`pill task-${outcome}`}>{outcome}</span>;
 }
 
-function FrustrationBadge({ frustration }: { frustration?: string }) {
+export function FrustrationBadge({ frustration }: { frustration?: string }) {
   if (!frustration) return <span className="muted">—</span>;
   return <span className={`pill frust-${frustration}`}>{frustration}</span>;
 }

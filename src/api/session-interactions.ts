@@ -3,11 +3,15 @@
 // invocations + token usage inside the loop, and the agent response. Prompt/response text is present
 // only when conversation-text retention was on at index time (#120); otherwise the timeline still
 // shows structure + activity. Local-only — nothing here rides the sync wire.
+import { assignInteractionTaskSeqs } from "../store/store-contract.ts";
 import type {
   InteractionDisposition,
   InteractionFact,
   InteractionInitiator,
   SessionInvocation,
+  TaskFact,
+  TaskFrustration,
+  TaskOutcome,
 } from "../store/store-contract.ts";
 import { totalTokens, type MessageRecord } from "../types.ts";
 
@@ -17,9 +21,21 @@ export interface TimelineTool {
   count: number;
 }
 
+/** A task chapter the timeline groups interactions under. `seq` is the task's index in the session
+ *  (its resolved_tasks position), matching each interaction's `taskSeq`. */
+export interface TimelineTask {
+  seq: number;
+  description: string;
+  outcome?: TaskOutcome;
+  frustration?: TaskFrustration;
+}
+
 /** One interaction rendered for the timeline: prompt -> loop summary -> response. */
 export interface TimelineInteraction {
   seq: number;
+  /** The owning task's index (its `TimelineTask.seq`), or null when the interaction predates the first
+   *  task / isn't attributed to one. */
+  taskSeq: number | null;
   initiator: InteractionInitiator;
   disposition: InteractionDisposition;
   timestampMs?: number;
@@ -39,6 +55,9 @@ export interface TimelineInteraction {
 
 export interface SessionInteractionsResponse {
   interactions: TimelineInteraction[];
+  /** The session's tasks, in order — the chapters the timeline groups interactions under. Empty when
+   *  the session hasn't been interpreted. */
+  tasks: TimelineTask[];
   /** Whether any prompt/response text is present (text retention was on at index time). When false,
    *  the timeline renders structure + activity only. */
   retainedText: boolean;
@@ -57,7 +76,11 @@ export function buildSessionInteractions(
   interactions: InteractionFact[],
   invocations: SessionInvocation[],
   messages: MessageRecord[],
+  tasks: TaskFact[],
 ): SessionInteractionsResponse {
+  // Which task each interaction belongs to (bookmark assignment: the latest task started at/before
+  // it). The same pure helper the store uses, so grouping here matches resolved_interactions.task_seq.
+  const taskByInteraction = assignInteractionTaskSeqs(tasks, interactions);
   const tokensBySeq = new Map<number, number>();
   const modelsBySeq = new Map<number, Set<string>>();
   for (const m of messages) {
@@ -90,6 +113,7 @@ export function buildSessionInteractions(
     if (it.promptText?.trim() || it.responseText?.trim()) retainedText = true;
     return {
       seq: it.seq,
+      taskSeq: taskByInteraction.get(it.seq) ?? null,
       initiator: it.initiator,
       disposition: it.disposition,
       ...(it.timestampMs != null ? { timestampMs: it.timestampMs } : {}),
@@ -102,5 +126,12 @@ export function buildSessionInteractions(
     } satisfies TimelineInteraction;
   });
 
-  return { interactions: out, retainedText };
+  const timelineTasks: TimelineTask[] = tasks.map((t, i) => ({
+    seq: i,
+    description: t.description,
+    ...(t.outcome ? { outcome: t.outcome } : {}),
+    ...(t.frustration ? { frustration: t.frustration } : {}),
+  }));
+
+  return { interactions: out, tasks: timelineTasks, retainedText };
 }
