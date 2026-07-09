@@ -186,6 +186,11 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
     if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
       const next = new Set(selection.ids);
+      // The currently-viewed session (from the route) isn't in `selection.ids` until now — a plain
+      // click just navigates without touching the selection. Seed it in first so cmd-clicking a
+      // second session, right after normally opening a first, starts a two-session bulk selection
+      // instead of a one-session one that can't trigger the overlay (which needs >= 2).
+      if (selection.ids.size === 0 && selectedId && selectedId !== sessionId) next.add(selectedId);
       if (next.has(sessionId)) next.delete(sessionId);
       else next.add(sessionId);
       selection.setIds(next);
