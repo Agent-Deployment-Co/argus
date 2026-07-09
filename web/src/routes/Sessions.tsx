@@ -105,6 +105,12 @@ export interface SessionSelection {
    *  range extends from. */
   lastClickedId: string | null;
   setLastClickedId: (id: string | null) => void;
+  /** True right after cmd/ctrl-clicking the sole selected session off the selection when it was also
+   *  the one open in the detail pane — tells the detail pane to swap in "No sessions selected"
+   *  instead of continuing to show that session's detail. Cleared by any other selection change or
+   *  by normal single-session navigation. */
+  noneSelectedActive: boolean;
+  setNoneSelectedActive: (v: boolean) => void;
 }
 
 /** The session list pane: a plain "Showing X-Y of N sessions" head (the search/filter controls live
@@ -143,6 +149,7 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
       e.preventDefault();
       if (selection.ids.size > 0) selection.setIds(new Set());
       selection.setLastClickedId(null);
+      selection.setNoneSelectedActive(false);
       navigate({ to: "/sessions/$sessionId", params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
     };
     window.addEventListener("keydown", onKey);
@@ -161,6 +168,10 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
       else next.add(sessionId);
       selection.setIds(next);
       selection.setLastClickedId(sessionId);
+      // Deselecting the sole selected session, when it's also the one open in the detail pane,
+      // swaps the detail pane to "No sessions selected" rather than leaving that session's detail
+      // on screen with nothing actually selected underneath it.
+      selection.setNoneSelectedActive(next.size === 0 && sessionId === selectedId);
       return;
     }
     if (e.shiftKey) {
@@ -169,14 +180,17 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
       if (anchorIdx === -1) {
         selection.setIds(new Set([sessionId]));
         selection.setLastClickedId(sessionId);
+        selection.setNoneSelectedActive(false);
         return;
       }
       const [start, end] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx];
       selection.setIds(new Set(rows.slice(start, end + 1).map((r) => r.sessionId)));
+      selection.setNoneSelectedActive(false);
       return;
     }
     if (selection.ids.size > 0) selection.setIds(new Set());
     selection.setLastClickedId(sessionId);
+    selection.setNoneSelectedActive(false);
   };
 
   // "Select all" first scopes to what's loaded/in view; toggles back to deselect once every loaded
@@ -187,6 +201,7 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   const allLoadedSelected = rows.length > 0 && rows.every((r) => selection.ids.has(r.sessionId));
   const allMatchingSelected = allLoadedSelected && selection.ids.size === total;
   const handleSelectAllLoaded = () => {
+    selection.setNoneSelectedActive(false);
     if (allLoadedSelected) {
       selection.setIds(new Set());
       return;
@@ -195,6 +210,7 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
     selection.setLastClickedId(rows[rows.length - 1]?.sessionId ?? null);
   };
   const handleSelectAllMatching = async () => {
+    selection.setNoneSelectedActive(false);
     setSelectingAllMatching(true);
     try {
       const ids = await fetchAllSessionIds(filters);
@@ -298,6 +314,14 @@ export function SessionsEmpty() {
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
 }
 
+/** Swapped in for the detail pane's `<Outlet />` (in `Sessions`) after cmd/ctrl-clicking the sole
+ *  selected — and currently open — session off the selection (`noneSelectedActive`). Mirrors
+ *  `SessionsEmpty`'s pane-swap pattern, but doesn't auto-navigate to another session: the point is
+ *  to stop showing the deselected session's detail, not to pick a new one for the user. */
+function NoSessionsSelected() {
+  return <div className="session-empty">No sessions selected.</div>;
+}
+
 const DEFAULT_SINCE = daysAgo(30);
 const DEFAULT_UNTIL = daysAgo(0);
 
@@ -320,9 +344,17 @@ export function Sessions() {
   // it can also drive the detail-pane overlay once 2+ sessions are selected.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [lastClickedId, setLastClickedId] = useState<string | null>(null);
+  const [noneSelectedActive, setNoneSelectedActive] = useState(false);
   const selection: SessionSelection = useMemo(
-    () => ({ ids: selectedIds, setIds: setSelectedIds, lastClickedId, setLastClickedId }),
-    [selectedIds, lastClickedId],
+    () => ({
+      ids: selectedIds,
+      setIds: setSelectedIds,
+      lastClickedId,
+      setLastClickedId,
+      noneSelectedActive,
+      setNoneSelectedActive,
+    }),
+    [selectedIds, lastClickedId, noneSelectedActive],
   );
 
   const navigate = useNavigate();
@@ -555,7 +587,7 @@ export function Sessions() {
       <div className="sessions-split">
         <SessionList selection={selection} />
         <div className="session-detail">
-          <Outlet />
+          {selection.ids.size === 0 && selection.noneSelectedActive ? <NoSessionsSelected /> : <Outlet />}
         </div>
       </div>
     </div>
