@@ -272,6 +272,9 @@ main:has(.inbox-page) { padding: 0; }
 .bulk-overlay-count { font: 700 18px "Aleo", Georgia, serif; color: var(--heading); }
 .bulk-overlay-clear { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
 .bulk-overlay-clear:hover { border-color: var(--accent); color: var(--heading); }
+.bulk-action-neutral { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.bulk-action-neutral:hover:not(:disabled) { border-color: var(--accent); color: var(--heading); }
+.bulk-action-neutral:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bulk-overlay-section { margin-bottom: 28px; }
 .bulk-overlay-heading { margin: 0 0 10px; color: var(--muted); font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
 .label-popover-check.is-mixed { height: 14px; border-radius: 3px; background: var(--muted); color: var(--surface); }
@@ -297,6 +300,8 @@ main:has(.inbox-page) { padding: 0; }
 .task-action:hover:not(:disabled) { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
 .task-action:disabled { opacity: .65; cursor: wait; }
 .task-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bulk-actions-row { display: flex; align-items: center; gap: 8px; }
+.bulk-label-anchor { position: relative; display: inline-flex; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 22px; }
 .kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .kv-k { color: var(--muted); font-size: 13px; }

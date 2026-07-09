@@ -11,7 +11,6 @@ import {
   Plus,
   Search,
   Tag,
-  TagPlus,
   Trash2,
   X,
 } from "lucide-react";
@@ -398,34 +397,31 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
       </div>
 
       <div className="bulk-overlay-section">
-        <h3 className="bulk-overlay-heading">Labels</h3>
-        <BulkLabelBar
-          labels={catalog.data ?? []}
-          loading={catalog.isPending}
-          stateFor={stateFor}
-          busy={setForSessions.isPending || create.isPending}
-          error={
-            [create.error, setForSessions.error, rename.error, remove.error].find(
-              (e): e is Error => e instanceof Error,
-            )?.message ?? null
-          }
-          onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
-          onRemove={(label) => setLabel(label.id, false)}
-          onCreate={async (name) => {
-            const res = await create.mutateAsync(name);
-            setLabel(res.label.id, true);
-          }}
-          onRename={(id, name) => rename.mutate({ id, name })}
-          onDelete={(id) => remove.mutate(id)}
-        />
-      </div>
-
-      <div className="bulk-overlay-section">
         <h3 className="bulk-overlay-heading">Actions</h3>
-        <button type="button" className="task-action" onClick={() => hide.mutate()} disabled={hide.isPending}>
-          <EyeOff size={14} strokeWidth={1.75} aria-hidden />
-          <span>Hide {ids.length} sessions</span>
-        </button>
+        <div className="bulk-actions-row">
+          <BulkLabelButton
+            labels={catalog.data ?? []}
+            loading={catalog.isPending}
+            stateFor={stateFor}
+            busy={setForSessions.isPending || create.isPending}
+            error={
+              [create.error, setForSessions.error, rename.error, remove.error].find(
+                (e): e is Error => e instanceof Error,
+              )?.message ?? null
+            }
+            onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
+            onCreate={async (name) => {
+              const res = await create.mutateAsync(name);
+              setLabel(res.label.id, true);
+            }}
+            onRename={(id, name) => rename.mutate({ id, name })}
+            onDelete={(id) => remove.mutate(id)}
+          />
+          <button type="button" className="task-action" onClick={() => hide.mutate()} disabled={hide.isPending}>
+            <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+            <span>Hide {ids.length} sessions</span>
+          </button>
+        </div>
         {hide.isError && (
           <p className="label-popover-error" role="alert">
             {hide.error instanceof Error ? hide.error.message : "Failed to hide sessions."}
@@ -436,18 +432,17 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
   );
 }
 
-/** The bulk-mode counterpart to `LabelBar` (session-and-task-labels): applied-label chips plus an
- *  "Add Label" popover, styled to match. Not the same component because bulk mode has a third,
- *  "mixed" state (a label applied to some but not all of the selection) that plain session/task
- *  label editing never sees — the chip row and the popover's pick list both need to render it. */
-function BulkLabelBar({
+/** The bulk-mode label entry point: a `Tag`-icon button (before the "Hide N sessions" action) that
+ *  pops up the same picker/create/rename/delete UI as `BulkLabelPopover`. Bulk mode has no inline
+ *  applied-label chip row (that's the per-session `LabelBar`'s job) — the popover's pick list itself
+ *  shows applied/mixed state via `stateFor`, so this button is the only bulk-labels UI surface. */
+function BulkLabelButton({
   labels,
   loading,
   stateFor,
   busy,
   error,
   onToggle,
-  onRemove,
   onCreate,
   onRename,
   onDelete,
@@ -458,7 +453,6 @@ function BulkLabelBar({
   busy: boolean;
   error: string | null;
   onToggle: (label: LabelRecord) => void;
-  onRemove: (label: LabelRecord) => void;
   onCreate: (name: string) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
@@ -482,72 +476,32 @@ function BulkLabelBar({
     };
   }, [open]);
 
-  const appliedLabels = labels.filter((l) => stateFor(l) !== "unchecked");
-
   return (
-    <div className="labelbar labelbar--md" ref={rootRef}>
-      {!loading &&
-        appliedLabels.map((label) => {
-          const state = stateFor(label);
-          return (
-            <span
-              key={label.id}
-              className={`label-chip${label.origin === "system" ? " label-chip--system" : ""}${
-                state === "mixed" ? " label-chip--mixed" : ""
-              }`}
-              title={
-                state === "mixed"
-                  ? "Applied to some of the selected sessions"
-                  : label.origin === "system"
-                    ? "System label"
-                    : "Label"
-              }
-            >
-              {state === "mixed" && (
-                <span className="label-chip-mixed-badge" aria-hidden>
-                  <Minus size={9} strokeWidth={3} />
-                </span>
-              )}
-              {label.name}
-              <button
-                type="button"
-                className="label-chip-x"
-                aria-label={`Remove label ${label.name}`}
-                onClick={() => onRemove(label)}
-              >
-                <X size={12} strokeWidth={2} aria-hidden />
-              </button>
-            </span>
-          );
-        })}
+    <div className="bulk-label-anchor" ref={rootRef}>
+      <button
+        type="button"
+        className="bulk-action-neutral"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Tag size={14} strokeWidth={1.75} aria-hidden />
+        <span>Labels</span>
+      </button>
 
-      <div className="labelbar-add">
-        <button
-          type="button"
-          className="label-add-btn"
-          aria-haspopup="true"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          title="Add a label"
-        >
-          <TagPlus size={13} strokeWidth={2} aria-hidden />
-          <span>Add Label</span>
-        </button>
-
-        {open && (
-          <BulkLabelPopover
-            labels={labels}
-            loading={loading}
-            stateFor={stateFor}
-            busy={busy}
-            error={error}
-            onToggle={onToggle}
-            onCreate={onCreate}
-            onRename={onRename}
-            onDelete={onDelete}
-          />
-        )}
-      </div>
+      {open && (
+        <BulkLabelPopover
+          labels={labels}
+          loading={loading}
+          stateFor={stateFor}
+          busy={busy}
+          error={error}
+          onToggle={onToggle}
+          onCreate={onCreate}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      )}
     </div>
   );
 }
