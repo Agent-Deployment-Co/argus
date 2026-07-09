@@ -1071,13 +1071,14 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks, interpretation, isHidden] = await Promise.all([
+    const [meta, tasks, interpretation, isHidden, interactions] = await Promise.all([
       store.readSessionMeta(sessionId),
       store.readSessionTasks(sessionId),
       store.readSessionInterpretation(sessionId),
       store.readSessionHidden(sessionId),
+      store.readSessionInteractionCount(sessionId),
     ]);
-    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden, interactions);
   };
 
   const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>

@@ -2402,6 +2402,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Count of a session's interactions (#124): a cheap COUNT over resolved_interactions, for the
+  // detail page's interaction tally without rehydrating prompt/response text.
+  readSessionInteractionCount(sessionId: string): Promise<number> {
+    return this.schedule(async () => {
+      const row = await get<{ n: number }>(
+        this.db,
+        "SELECT COUNT(*) AS n FROM resolved_interactions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row?.n ?? 0;
+    });
+  }
+
   // All tool invocations for a session with their owning interaction seq (#234). Read straight off
   // resolved_invocations — deliberately NOT joined to task_seq, which writeSessionTasks assigns only
   // after pass 2 runs, so a task-grain read would come back empty mid-interpretation.

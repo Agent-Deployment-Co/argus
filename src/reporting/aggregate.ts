@@ -135,6 +135,8 @@ export function buildSessionRow(
   // Local-only UI state: whether the session is currently hidden from the list/search. CLI-only, never
   // pushed by sync.
   isHidden = false,
+  // Number of interactions in the session (#124), counted from the interaction spine. CLI-only.
+  interactions = 0,
 ): SessionRow {
   const u = emptyUsage();
   let c = 0;
@@ -182,5 +184,6 @@ export function buildSessionRow(
     },
     tasks,
     isHidden,
+    interactions,
   };
 }

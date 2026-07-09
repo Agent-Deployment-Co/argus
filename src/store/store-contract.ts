@@ -755,6 +755,9 @@ export interface ReadModelStore {
    *  interaction_json is text-free (#120); promptText/responseText are merged back from
    *  resolved_interaction_text by interaction_seq. Interactions without retained text have neither. */
   readSessionInteractions(sessionId: string): Promise<InteractionFact[]>;
+  /** Number of interactions (prompt→loop→response units) in a session — a cheap COUNT over
+   *  resolved_interactions, for the session-detail interaction tally (#124) without rehydrating text. */
+  readSessionInteractionCount(sessionId: string): Promise<number>;
   /** Canonical ids of sessions eligible for (re)interpretation, newest-first, capped at `limit` (#153).
    *  Eligible = content_indexed_at_ms > COALESCE(interpreted_at_ms, 0) AND a retained human opening
    *  prompt exists. interpretation_version is intentionally NOT a factor (a version bump must not

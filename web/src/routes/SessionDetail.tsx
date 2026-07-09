@@ -80,9 +80,7 @@ export function SessionDetail() {
   const cards: Stat[] = [
     { label: "Tokens", value: fmt(s.total) },
     { label: "Est. cost", value: usd(s.cost) },
-    { label: "User messages", value: s.userMessages != null ? String(s.userMessages) : "—" },
-    { label: "Agent messages", value: s.agentMessages != null ? String(s.agentMessages) : "—" },
-    { label: "Turns", value: h.turns != null ? String(h.turns) : "—" },
+    { label: "Interactions", value: String(s.interactions ?? 0) },
   ];
 
   const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);

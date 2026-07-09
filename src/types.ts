@@ -32,6 +32,8 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   agentMessages: number | null;
   /** CLI-only: raw turn count when the source exposes it. */
   rawTurns: number | null;
+  /** CLI-only (#124): number of interactions (prompt→loop→response units) in the session. */
+  interactions?: number;
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
   /** CLI-only: tasks generated for this session via session interpretation. */

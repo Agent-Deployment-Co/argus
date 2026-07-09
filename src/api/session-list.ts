@@ -149,6 +149,7 @@ export function buildSessionDetail(
   tasks: TaskFact[],
   interpretation?: { title: string | null; summary: string | null; interpreted: boolean },
   isHidden = false,
+  interactions = 0,
 ): SessionRow {
   const summary =
     interpretation?.summary ||
@@ -163,5 +164,6 @@ export function buildSessionDetail(
     title,
     interpretation?.interpreted ?? false,
     isHidden,
+    interactions,
   );
 }
