@@ -1124,6 +1124,92 @@ describe("SQLite store", () => {
     }
   });
 
+  test("setSessionsHidden excludes hidden sessions from the list/search, not their usage", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const msg = (sid: string) => ({
+        source: "codex" as const,
+        sessionId: sid,
+        project: "p",
+        cwd: "/tmp/proj-a",
+        gitBranch: "",
+        ts: Date.parse("2026-06-01T00:00:00Z"),
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 10, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: "codex:visible", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/a.jsonl" },
+          messages: [msg("codex:visible")],
+        },
+        {
+          meta: { source: "codex", sessionId: "codex:hideme", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/b.jsonl" },
+          messages: [msg("codex:hideme")],
+        },
+      ]);
+
+      await store.setSessionsHidden(["codex:hideme"], true);
+
+      // Excluded from the default (list) read...
+      const visible = await store.readSessionAggregates();
+      expect(visible.map((s) => s.meta.sessionId).sort()).toEqual(["codex:visible"]);
+      // ...but included when a caller explicitly opts in...
+      const withHidden = await store.readSessionAggregates({ includeHidden: true });
+      expect(withHidden.map((s) => s.meta.sessionId).sort()).toEqual(["codex:hideme", "codex:visible"]);
+      // ...and excluded from search too.
+      const search = await store.searchSessions({ text: "" });
+      expect(search.ids).toEqual(new Set(["codex:visible"]));
+
+      // Unhiding restores default visibility.
+      await store.setSessionsHidden(["codex:hideme"], false);
+      const restored = await store.readSessionAggregates();
+      expect(restored.map((s) => s.meta.sessionId).sort()).toEqual(["codex:hideme", "codex:visible"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("v22 -> v23 migration adds is_hidden and preserves existing data", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: "codex:v22-hidden", project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+          messages: [],
+        },
+      ]);
+    } finally {
+      await store.close();
+    }
+    // Degrade to v22: drop the is_hidden column/index and set the version back, simulating a store
+    // that predates this migration.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      await rawExec(db, "PRAGMA user_version = 22");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:v22-hidden")).toBe(true);
+      // The backfilled column defaults to visible (not hidden), and setSessionsHidden works post-migration.
+      expect((await migrated.readSessionAggregates()).map((s) => s.meta.sessionId)).toEqual(["codex:v22-hidden"]);
+      await migrated.setSessionsHidden(["codex:v22-hidden"], true);
+      expect(await migrated.readSessionAggregates()).toEqual([]);
+    } finally {
+      await migrated.close();
+    }
+    const version = await withRawDatabase(path, (db) =>
+      rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
   test("migrates a v8 store to v9, backfilling usage columns from record_json", async () => {
     const path = storePath();
     const sid = "codex:backfill";
