@@ -57,6 +57,9 @@ export interface ArgusConfig {
   desktop?: {
     /** Start the desktop app automatically when the user signs in. On by default. */
     startAtLogin?: boolean;
+    /** Run the desktop app invisibly: no tray icon, no notifications, no first-run browser
+     *  auto-open. Off by default. */
+    silent?: boolean;
   };
   /** Desktop app updates. Enabled by default so signed releases install automatically. */
   autoUpdate?: {
@@ -321,6 +324,17 @@ export const DESKTOP_SETTINGS = {
       description: "Open the desktop app automatically when you sign in to this computer.",
       control: "toggle",
     },
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+  // Run the desktop app invisibly: no tray icon, no notifications, no first-run browser auto-open.
+  // Config-file-only (no `ui`): an operator-level switch, deliberately kept out of the Settings
+  // screen — set it with `argus config set desktop.silent true`. The desktop shell reads it
+  // directly and applies changes while running (see `silent_mode_enabled` in
+  // desktop/src-tauri/src/lib.rs).
+  silent: {
+    path: "desktop.silent",
+    env: "ARGUS_DESKTOP_SILENT",
+    default: false,
     parse: parseBool,
   } satisfies Setting<boolean>,
 };

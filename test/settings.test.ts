@@ -66,6 +66,8 @@ describe("describeSettings", () => {
     // The desktop start-at-login toggle is temporarily removed from the UI: start-at-login is
     // hard-disabled in the desktop shell until the app is signed with an org Developer ID cert.
     expect(paths).not.toContain("desktop.startAtLogin");
+    // Silent mode (#255) is config-only by design — never in the UI, even when set.
+    expect(paths).not.toContain("desktop.silent");
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
     expect(paths).not.toContain("hub.key");
     const hubKey = general.sections.flatMap((s) => s.secretFields ?? []).find((f) => f.key === "hub.key")!;

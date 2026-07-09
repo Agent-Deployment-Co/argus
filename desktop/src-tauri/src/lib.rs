@@ -81,8 +81,14 @@ const PREFERRED_FRONT_PORT: u16 = 4242;
 const PROXY_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Show a native notification. Best-effort: a failure to notify is itself only logged.
+/// Show a native notification. Best-effort: a failure to notify is itself only logged. Silent mode
+/// (`desktop.silent`) suppresses every notification; the setting is read here, at fire time, so a
+/// config change takes effect immediately without any reconcile step.
 pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
+    if silent_mode_enabled() {
+        log::info!("silent mode: suppressed notification {title:?}");
+        return;
+    }
     if let Err(err) = app.notification().builder().title(title).body(body).show() {
         log::warn!("could not show notification: {err}");
     }
@@ -90,8 +96,8 @@ pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
 
 /// Ask the OS for an unused localhost port by binding to :0 and reading back the assignment.
 fn pick_free_port() -> Result<u16, String> {
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("binding a free port: {e}"))?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("binding a free port: {e}"))?;
     listener
         .local_addr()
         .map(|addr| addr.port())
@@ -177,7 +183,9 @@ fn mirror_sidecar_log(_bytes: &[u8]) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{append_sidecar_log_with_limit, parse_git_config_user_email, rotated_sidecar_log_file};
+    use super::{
+        append_sidecar_log_with_limit, parse_git_config_user_email, rotated_sidecar_log_file,
+    };
     use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -185,7 +193,9 @@ mod tests {
     #[test]
     fn parses_user_email_from_a_user_section() {
         assert_eq!(
-            parse_git_config_user_email("[user]\n\tname = Ada Lovelace\n\temail = ada@example.com\n"),
+            parse_git_config_user_email(
+                "[user]\n\tname = Ada Lovelace\n\temail = ada@example.com\n"
+            ),
             Some("ada@example.com".to_string())
         );
     }
@@ -212,7 +222,10 @@ mod tests {
 
     #[test]
     fn returns_none_for_missing_or_blank_email() {
-        assert_eq!(parse_git_config_user_email("[user]\nname = only@example.com\n"), None);
+        assert_eq!(
+            parse_git_config_user_email("[user]\nname = only@example.com\n"),
+            None
+        );
         assert_eq!(parse_git_config_user_email("[user]\nemail =   \n"), None);
         assert_eq!(parse_git_config_user_email(""), None);
     }
@@ -460,7 +473,9 @@ fn onboarding_completed() -> bool {
         return true;
     }
     read_argus_config_json()
-        .and_then(|json| json_bool_setting(json.get("state").and_then(|v| v.get("onboardingCompleted"))))
+        .and_then(|json| {
+            json_bool_setting(json.get("state").and_then(|v| v.get("onboardingCompleted")))
+        })
         .unwrap_or(false)
 }
 
@@ -584,6 +599,39 @@ fn desktop_start_at_login_enabled() -> bool {
     false
 }
 
+/// Whether the desktop shell should run invisibly: no tray icon, no notifications, and no
+/// first-run dashboard auto-open (`desktop.silent` in argus.json, or `ARGUS_DESKTOP_SILENT` in the
+/// env). Config-only by design — the setting is deliberately absent from the web Settings UI (it's
+/// an operator-level switch; see `DESKTOP_SETTINGS.silent` in src/config.ts). Defaults off.
+///
+/// Read at the point of use everywhere (notifications, first-run open), so those pick up a config
+/// change on their own; only the tray icon holds visible state and needs `sync_silent_mode` to
+/// reconcile it when argus.json changes.
+fn silent_mode_enabled() -> bool {
+    if let Some(value) = non_empty_env("ARGUS_DESKTOP_SILENT") {
+        return parse_bool_setting(&value).unwrap_or(false);
+    }
+    read_argus_config_json()
+        .and_then(|json| json_bool_setting(json.get("desktop").and_then(|v| v.get("silent"))))
+        .unwrap_or(false)
+}
+
+/// Reflect `desktop.silent` in the running app: hide or show the tray icon. Called once at launch
+/// and again on every argus.json change (`start_config_sync_watcher`), so flipping the setting
+/// takes effect immediately without a restart.
+fn sync_silent_mode(app: &AppHandle) {
+    let visible = !silent_mode_enabled();
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    if let Err(err) = tray.set_visible(visible) {
+        log::warn!(
+            "{} the tray icon: {err}",
+            if visible { "showing" } else { "hiding" }
+        );
+    }
+}
+
 /// Keep the OS startup registration in sync with `desktop.startAtLogin`. The setting is saved by the
 /// sidecar's web API, so the native shell reconciles it independently instead of requiring a restart.
 ///
@@ -623,26 +671,30 @@ fn sync_autostart_setting(app: &AppHandle) {
     }
 }
 
-/// Reconcile the OS startup registration once at launch, then again whenever `argus.json` changes.
-/// The web Settings toggle is written by the sidecar (a separate process), so instead of polling we
-/// watch the config directory and react to writes. Watching the *directory* (not the file) survives
-/// the atomic write-temp-then-rename that config writers use — which swaps the file's inode — and
-/// also catches the file being created for the first time.
-fn start_autostart_sync_watcher(app: &AppHandle) {
-    // `sync_autostart_setting` already no-ops in debug builds; skip the watcher entirely so a dev
-    // build never touches the login item.
-    if cfg!(debug_assertions) {
-        log::info!("start-at-login sync is disabled in debug builds");
-        return;
-    }
+/// Reconcile settings the shell mirrors into live state — the OS startup registration
+/// (`desktop.startAtLogin`) and silent mode's tray visibility (`desktop.silent`) — once at launch,
+/// then again whenever `argus.json` changes. The settings are written by the sidecar or the CLI
+/// (separate processes), so instead of polling we watch the config directory and react to writes.
+/// Watching the *directory* (not the file) survives the atomic write-temp-then-rename that config
+/// writers use — which swaps the file's inode — and also catches the file being created for the
+/// first time.
+///
+/// Runs in debug builds too (silent mode should work in dev); `sync_autostart_setting` carries its
+/// own debug guard so a dev build still never touches the login item.
+fn start_config_sync_watcher(app: &AppHandle) {
     let handle = app.clone();
     // Pick up first-run default-on and any change made while the app wasn't running.
     sync_autostart_setting(&handle);
+    sync_silent_mode(&handle);
 
     let Some(config_dir) = argus_config_dir() else {
-        log::warn!("start-at-login sync: no config directory to watch");
+        log::warn!("config sync: no config directory to watch");
         return;
     };
+    if let Err(err) = std::fs::create_dir_all(&config_dir) {
+        log::warn!("config sync: cannot create config directory: {err}");
+        return;
+    }
     // notify's watcher delivers events on its own thread and stops the moment it's dropped, so keep
     // it alive by owning it for the life of this blocking receive loop.
     std::thread::spawn(move || {
@@ -651,12 +703,12 @@ fn start_autostart_sync_watcher(app: &AppHandle) {
         let mut watcher = match notify::recommended_watcher(tx) {
             Ok(watcher) => watcher,
             Err(err) => {
-                log::warn!("start-at-login sync: cannot create watcher: {err}");
+                log::warn!("config sync: cannot create watcher: {err}");
                 return;
             }
         };
         if let Err(err) = watcher.watch(&config_dir, notify::RecursiveMode::NonRecursive) {
-            log::warn!("start-at-login sync: cannot watch config directory: {err}");
+            log::warn!("config sync: cannot watch config directory: {err}");
             return;
         }
         while let Ok(first) = rx.recv() {
@@ -673,13 +725,14 @@ fn start_autostart_sync_watcher(app: &AppHandle) {
                             touched_config = true;
                         }
                     }
-                    Some(Err(err)) => log::warn!("start-at-login sync: watch error: {err}"),
+                    Some(Err(err)) => log::warn!("config sync: watch error: {err}"),
                     None => break,
                 }
                 event = rx.try_recv().ok();
             }
             if touched_config {
                 sync_autostart_setting(&handle);
+                sync_silent_mode(&handle);
             }
         }
     });
@@ -1135,11 +1188,18 @@ fn check_for_updates_from_menu(app: &AppHandle) {
 /// still opens.
 ///
 /// Returns `true` once the first-run decision has settled (onboarding already complete, or the
-/// dashboard was just opened) — `false` only when the sidecar's initial spawn hasn't succeeded yet,
-/// so the caller keeps retrying on later ticks instead of giving up on this launch permanently.
+/// dashboard was just opened) — `false` when the sidecar's initial spawn hasn't succeeded yet or
+/// silent mode is suppressing the open, so the caller keeps retrying on later ticks instead of
+/// giving up on this launch permanently.
 fn maybe_open_on_first_run(app: &AppHandle) -> bool {
     if onboarding_completed() {
         return true;
+    }
+    if silent_mode_enabled() {
+        // Silent mode never auto-opens a browser. Stay pending rather than settled, so if silent
+        // mode is turned off while onboarding is still incomplete, a later tick picks the open
+        // back up instead of the install skipping onboarding forever.
+        return false;
     }
     if app.state::<AppState>().child.lock().unwrap().is_none() {
         // The sidecar isn't running yet (or its initial spawn failed) — nothing to open yet; try
@@ -1333,10 +1393,12 @@ pub fn run() {
             // clicks "Open Argus".
             start(app.handle());
 
-            // Keep the OS start-at-login registration in sync with the web Settings toggle. The
-            // default is temporarily off (see `desktop_start_at_login_enabled`), so an install that
-            // never touched the toggle unregisters its login item here on the next launch.
-            start_autostart_sync_watcher(app.handle());
+            // Keep live state in sync with argus.json: the OS start-at-login registration (default
+            // temporarily off, see `desktop_start_at_login_enabled` — an install that never touched
+            // the toggle unregisters its login item here on the next launch) and silent mode's tray
+            // visibility. The initial reconcile inside also hides the tray right away when
+            // `desktop.silent` was already set at launch.
+            start_config_sync_watcher(app.handle());
 
             // Check for a newer signed build in the background; the menu item lets the user ask for
             // the same check immediately.
