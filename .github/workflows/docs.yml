@@ -42,6 +42,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bun run docs:changelog
       - run: bun run docs:build
+        env:
+          # PostHog analytics token. PUBLIC_*, so Vite inlines it into the
+          # static build here on the runner (not read at serve time), which is
+          # why it must be present in this step. It's a repo *variable*, not a
+          # secret: the project token is public by design and ships to every
+          # browser. Absent -> analytics stays a silent no-op. Same var name as
+          # the adc.co site, so one org value can feed both.
+          PUBLIC_POSTHOG_PROJECT_TOKEN: ${{ vars.PUBLIC_POSTHOG_PROJECT_TOKEN }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist

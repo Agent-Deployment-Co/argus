@@ -10,7 +10,7 @@ Argus indexes [sessions](/terminology#session) from your AI [agents](/terminolog
 
 </div>
 
-<DownloadButtons center label="Download:" />
+<DownloadButtons center label="Download:" location="quick_start" />
 
 ## Local, private and free
 
