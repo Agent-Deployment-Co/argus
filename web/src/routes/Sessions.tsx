@@ -417,7 +417,7 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
             onRename={(id, name) => rename.mutate({ id, name })}
             onDelete={(id) => remove.mutate(id)}
           />
-          <button type="button" className="task-action" onClick={() => hide.mutate()} disabled={hide.isPending}>
+          <button type="button" className="bulk-action-neutral" onClick={() => hide.mutate()} disabled={hide.isPending}>
             <EyeOff size={14} strokeWidth={1.75} aria-hidden />
             <span>Hide {ids.length} sessions</span>
           </button>
