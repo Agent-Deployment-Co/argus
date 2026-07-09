@@ -1,9 +1,11 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
+import { Calendar, Check, EyeOff, FilterX, Layers, Minus, Search, Tag, X } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
-import { fetchAllSessionIds, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
-import { useLabelsQuery } from "../lib/labels";
+import { fetchAllSessionIds, setSessionsHidden, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
+import { useBulkLabelMutations, useLabelsQuery, useSessionsLabelsQuery } from "../lib/labels";
+import type { LabelRecord } from "../types";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
@@ -322,6 +324,110 @@ function NoSessionsSelected() {
   return <div className="session-empty">No sessions selected.</div>;
 }
 
+type TriState = "checked" | "unchecked" | "mixed";
+
+/** Swapped in for the detail pane's `<Outlet />` once 2+ sessions are selected: a count, a way to
+ *  clear the selection, and the bulk actions themselves (labels, hide) — mirrors `SessionsEmpty`'s
+ *  pane-swap pattern as a third detail-pane state. */
+function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
+  const ids = useMemo(() => [...selection.ids], [selection.ids]);
+  const catalog = useLabelsQuery();
+  const sessionsLabels = useSessionsLabelsQuery(ids);
+  const { setForSessions } = useBulkLabelMutations();
+
+  const clear = () => {
+    selection.setIds(new Set());
+    selection.setLastClickedId(null);
+    selection.setNoneSelectedActive(false);
+  };
+
+  const stateFor = (label: LabelRecord): TriState => {
+    const labelsBySession = sessionsLabels.data;
+    if (!labelsBySession) return "unchecked";
+    const appliedCount = ids.filter((id) => (labelsBySession.get(id) ?? []).some((l) => l.id === label.id)).length;
+    if (appliedCount === 0) return "unchecked";
+    if (appliedCount === ids.length) return "checked";
+    return "mixed";
+  };
+
+  const toggleLabel = (label: LabelRecord) => {
+    const applied = stateFor(label) !== "checked";
+    setForSessions.mutate({ labelId: label.id, sessionIds: ids, applied });
+  };
+
+  const qc = useQueryClient();
+  const hide = useMutation({
+    mutationFn: () => setSessionsHidden(ids, true),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+      clear();
+    },
+  });
+
+  const labels = catalog.data ?? [];
+
+  return (
+    <div className="bulk-overlay">
+      <div className="bulk-overlay-head">
+        <span className="bulk-overlay-count">{ids.length} sessions selected</span>
+        <button type="button" className="bulk-overlay-clear" onClick={clear}>
+          <X size={13} strokeWidth={2} aria-hidden />
+          <span>Clear selection</span>
+        </button>
+      </div>
+
+      <div className="bulk-overlay-section">
+        <h3 className="bulk-overlay-heading">Labels</h3>
+        {catalog.isPending ? (
+          <p className="label-popover-empty">Loading…</p>
+        ) : labels.length === 0 ? (
+          <p className="label-popover-empty">No labels yet — create one from a session's detail pane.</p>
+        ) : (
+          <div className="label-popover-list bulk-label-list">
+            {labels.map((label) => {
+              const state = stateFor(label);
+              return (
+                <button
+                  key={label.id}
+                  type="button"
+                  className={`label-popover-pick${state === "checked" ? " is-applied" : ""}`}
+                  onClick={() => toggleLabel(label)}
+                  disabled={setForSessions.isPending}
+                >
+                  <span className={`label-popover-check${state === "mixed" ? " is-mixed" : ""}`}>
+                    {state === "checked" && <Check size={13} strokeWidth={2.25} aria-hidden />}
+                    {state === "mixed" && <Minus size={13} strokeWidth={2.25} aria-hidden />}
+                  </span>
+                  <span className="label-popover-name">{label.name}</span>
+                  {label.origin === "system" && <span className="label-popover-tag">system</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {setForSessions.isError && (
+          <p className="label-popover-error" role="alert">
+            {setForSessions.error instanceof Error ? setForSessions.error.message : "Label update failed."}
+          </p>
+        )}
+      </div>
+
+      <div className="bulk-overlay-section">
+        <h3 className="bulk-overlay-heading">Actions</h3>
+        <button type="button" className="task-action" onClick={() => hide.mutate()} disabled={hide.isPending}>
+          <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+          <span>Hide {ids.length} sessions</span>
+        </button>
+        {hide.isError && (
+          <p className="label-popover-error" role="alert">
+            {hide.error instanceof Error ? hide.error.message : "Failed to hide sessions."}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const DEFAULT_SINCE = daysAgo(30);
 const DEFAULT_UNTIL = daysAgo(0);
 
@@ -587,7 +693,13 @@ export function Sessions() {
       <div className="sessions-split">
         <SessionList selection={selection} />
         <div className="session-detail">
-          {selection.ids.size === 0 && selection.noneSelectedActive ? <NoSessionsSelected /> : <Outlet />}
+          {selection.ids.size >= 2 ? (
+            <BulkSelectionOverlay selection={selection} />
+          ) : selection.ids.size === 0 && selection.noneSelectedActive ? (
+            <NoSessionsSelected />
+          ) : (
+            <Outlet />
+          )}
         </div>
       </div>
     </div>

@@ -117,6 +117,16 @@ export async function setSessionHidden(sessionId: string, hidden: boolean): Prom
   return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide session" : "Failed to unhide session");
 }
 
+/** Flag/unflag many sessions as hidden at once (bulk mode). */
+export async function setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<{ hidden: boolean }> {
+  const res = await fetchOrOffline("/api/sessions/bulk/hidden", {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ sessionIds, hidden }),
+  });
+  return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide sessions" : "Failed to unhide sessions");
+}
+
 /** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
  *  server-side from the messages attributed to each task. Backs both the task list (tokens per row)
  *  and the detail drawer. */

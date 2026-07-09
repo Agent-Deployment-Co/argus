@@ -264,6 +264,18 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail { display: flex; min-height: 0; min-width: 0; }
 .session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
+
+/* Bulk mode: the "N sessions selected" panel that swaps in for the detail pane's <Outlet /> once 2+
+   sessions are selected (label picker + Hide, wired to the /api/sessions/bulk/* routes). */
+.bulk-overlay { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
+.bulk-overlay-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.bulk-overlay-count { font: 700 18px "Aleo", Georgia, serif; color: var(--heading); }
+.bulk-overlay-clear { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
+.bulk-overlay-clear:hover { border-color: var(--accent); color: var(--heading); }
+.bulk-overlay-section { margin-bottom: 28px; }
+.bulk-overlay-heading { margin: 0 0 10px; color: var(--muted); font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
+.bulk-label-list { max-width: 320px; max-height: none; }
+.label-popover-check.is-mixed { color: var(--muted); }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
 .session-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
 .session-detail-headline { min-width: 0; line-height: 1.2; }

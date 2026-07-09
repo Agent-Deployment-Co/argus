@@ -35,6 +35,23 @@ export function useSessionLabelsQuery(sessionId: string | undefined) {
   });
 }
 
+/** Active session-level labels for many sessions at once — backs the bulk-mode label picker's
+ *  tri-state chips. No dedicated bulk-read endpoint exists, so this fans out to the same per-session
+ *  read the detail pane uses; fine at bulk-selection scale (dozens, not thousands). */
+export function useSessionsLabelsQuery(sessionIds: string[]) {
+  const sortedIds = [...sessionIds].sort();
+  return useQuery({
+    queryKey: ["sessions-labels", sortedIds],
+    queryFn: async () => {
+      const entries = await Promise.all(
+        sortedIds.map(async (id) => [id, (await fetchSessionLabels(id)).session] as const),
+      );
+      return new Map(entries);
+    },
+    enabled: sortedIds.length >= 2,
+  });
+}
+
 // ---- Write helpers ----
 
 /** POST/PATCH/DELETE JSON with the same-origin marker; returns the parsed body (or void). */
@@ -66,6 +83,9 @@ export const assignLabel = (labelId: string, target: LabelTargetInput) =>
   mutateJson<{ ok: true }>(targetUrl(target), "POST", { labelId });
 export const unassignLabel = (labelId: string, target: LabelTargetInput) =>
   mutateJson<{ ok: true }>(`${targetUrl(target)}/${encodeURIComponent(labelId)}`, "DELETE");
+/** Apply/remove one label across many sessions at once (bulk mode). */
+export const setLabelForSessions = (labelId: string, sessionIds: string[], applied: boolean) =>
+  mutateJson<{ ok: true }>("/api/sessions/bulk/labels", "POST", { sessionIds, labelId, applied });
 
 // ---- Mutation hooks ----
 
@@ -85,6 +105,26 @@ export function useLabelCatalogMutations() {
       onSuccess: invalidateAll,
     }),
     remove: useMutation({ mutationFn: (id: string) => deleteLabel(id), onSuccess: invalidateAll }),
+  };
+}
+
+/** Applying/removing one label across many sessions at once (bulk mode). Invalidates every affected
+ *  session's labels plus the catalog and list — same shape as the single-session mutation, just
+ *  broader invalidation since we don't know which of the many sessions were touched. */
+export function useBulkLabelMutations() {
+  const qc = useQueryClient();
+  const invalidateAll = () => {
+    void qc.invalidateQueries({ queryKey: LABELS_KEY });
+    void qc.invalidateQueries({ queryKey: ["session-labels"] });
+    void qc.invalidateQueries({ queryKey: ["sessions-labels"] });
+    void qc.invalidateQueries({ queryKey: ["sessions"] });
+  };
+  return {
+    setForSessions: useMutation({
+      mutationFn: ({ labelId, sessionIds, applied }: { labelId: string; sessionIds: string[]; applied: boolean }) =>
+        setLabelForSessions(labelId, sessionIds, applied),
+      onSuccess: invalidateAll,
+    }),
   };
 }
 
