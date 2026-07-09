@@ -1,6 +1,6 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { useLabelsQuery } from "../lib/labels";
@@ -96,9 +96,20 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
   };
 }
 
+/** Multi-select state for bulk mode, lifted above `SessionList` (into `Sessions`) so the detail pane
+ *  can react to it too — not persisted across reload, and deliberately not part of the URL. */
+export interface SessionSelection {
+  ids: Set<string>;
+  setIds: (ids: Set<string>) => void;
+  /** The row last clicked without a modifier, or toggled via cmd/ctrl-click — the anchor a shift-click
+   *  range extends from. */
+  lastClickedId: string | null;
+  setLastClickedId: (id: string | null) => void;
+}
+
 /** The session list pane: a plain "Showing X-Y of N sessions" head (the search/filter controls live
  *  in the toolbar above, rendered by `Sessions`) plus the scrollable row list. */
-export function SessionList() {
+export function SessionList({ selection }: { selection: SessionSelection }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
@@ -133,6 +144,36 @@ export function SessionList() {
     return () => window.removeEventListener("keydown", onKey);
   }, [rows, selectedId, navigate]);
 
+  // Cmd/Ctrl-click toggles a row into/out of the selection; shift-click selects the contiguous range
+  // from the last-clicked row to this one; a plain click clears any selection and navigates normally
+  // (the default `Link` behavior, left untouched below). Both modifiers preventDefault so they override
+  // the browser's native cmd/ctrl-click-opens-a-new-tab and shift-click-selects-text behavior.
+  const handleRowClick = (e: MouseEvent, sessionId: string, index: number) => {
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      const next = new Set(selection.ids);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      selection.setIds(next);
+      selection.setLastClickedId(sessionId);
+      return;
+    }
+    if (e.shiftKey) {
+      e.preventDefault();
+      const anchorIdx = selection.lastClickedId ? rows.findIndex((r) => r.sessionId === selection.lastClickedId) : -1;
+      if (anchorIdx === -1) {
+        selection.setIds(new Set([sessionId]));
+        selection.setLastClickedId(sessionId);
+        return;
+      }
+      const [start, end] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx];
+      selection.setIds(new Set(rows.slice(start, end + 1).map((r) => r.sessionId)));
+      return;
+    }
+    if (selection.ids.size > 0) selection.setIds(new Set());
+    selection.setLastClickedId(sessionId);
+  };
+
   return (
     <aside className="session-list" aria-label="Sessions">
       <div className="session-list-head session-list-head-count">
@@ -140,15 +181,16 @@ export function SessionList() {
       </div>
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
-        {rows.map((s) => (
+        {rows.map((s, index) => (
           <li key={`${s.source}:${s.sessionId}`}>
             <Link
               to="/sessions/$sessionId"
               params={{ sessionId: s.sessionId }}
               search={(prev: SessionsSearch) => prev}
-              className="session-item"
+              className={`session-item${selection.ids.has(s.sessionId) ? " selected" : ""}`}
               activeProps={{ className: "active" }}
               ref={s.sessionId === selectedId ? activeRef : undefined}
+              onClick={(e) => handleRowClick(e, s.sessionId, index)}
             >
               <div className="session-item-title">{sessionTitle(s)}</div>
               <div className="session-item-meta">
@@ -231,6 +273,15 @@ function toggle<T>(list: T[], value: T): T[] {
 export function Sessions() {
   const [labelSearch, setLabelSearch] = useState("");
   const labelCatalog = useLabelsQuery();
+
+  // Bulk-select state (cmd/ctrl-click toggle, shift-click range) lives here, above `SessionList`, so
+  // it can also drive the detail-pane overlay once 2+ sessions are selected.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
+  const selection: SessionSelection = useMemo(
+    () => ({ ids: selectedIds, setIds: setSelectedIds, lastClickedId, setLastClickedId }),
+    [selectedIds, lastClickedId],
+  );
 
   const navigate = useNavigate();
   const { since, until, committedQ, source, labelIds, labelMode } = useSearch({
@@ -460,7 +511,7 @@ export function Sessions() {
       </div>
 
       <div className="sessions-split">
-        <SessionList />
+        <SessionList selection={selection} />
         <div className="session-detail">
           <Outlet />
         </div>

@@ -243,6 +243,8 @@ main:has(.inbox-page) { padding: 0; }
 .session-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
 .session-item:hover { background: var(--hover); color: var(--text); }
 .session-item.active { background: color-mix(in srgb, var(--accent) 13%, transparent); border-left-color: var(--accent); }
+.session-item.selected { background: color-mix(in srgb, var(--accent) 8%, transparent); border-left-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.session-item.selected.active { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .session-item-title { color: var(--heading); font-weight: 700; font-size: 13.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .session-item-meta { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; font-size: 11.5px; }
 .session-item-meta .truncate { max-width: 60%; }
