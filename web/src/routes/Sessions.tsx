@@ -1,25 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import {
-  Calendar,
-  Check,
-  EyeOff,
-  FilterX,
-  Layers,
-  Minus,
-  Pencil,
-  Plus,
-  Search,
-  Tag,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Calendar, EyeOff, FilterX, Layers, Search, Tag, X } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { fetchAllSessionIds, setSessionsHidden, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSessionsLabelsQuery } from "../lib/labels";
 import type { LabelRecord } from "../types";
-import { DeleteLabelDialog } from "../components/LabelBar";
+import { LabelPopover, type TriState } from "../components/LabelBar";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
@@ -353,8 +340,6 @@ function NoSessionsSelected() {
   return <div className="session-empty">No sessions selected.</div>;
 }
 
-type TriState = "checked" | "unchecked" | "mixed";
-
 /** Swapped in for the detail pane's `<Outlet />` once 2+ sessions are selected: a count, a way to
  *  clear the selection, and the bulk actions themselves (labels, hide) — mirrors `SessionsEmpty`'s
  *  pane-swap pattern as a third detail-pane state. */
@@ -438,9 +423,10 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
 }
 
 /** The bulk-mode label entry point: a `Tag`-icon button (before the "Hide N sessions" action) that
- *  pops up the same picker/create/rename/delete UI as `BulkLabelPopover`. Bulk mode has no inline
- *  applied-label chip row (that's the per-session `LabelBar`'s job) — the popover's pick list itself
- *  shows applied/mixed state via `stateFor`, so this button is the only bulk-labels UI surface. */
+ *  pops up the same shared `LabelPopover` ({@link LabelPopover} in `components/LabelBar.tsx`) used
+ *  by the per-session/task label bar. Bulk mode has no inline applied-label chip row (that's the
+ *  per-session `LabelBar`'s job) — the popover's pick list itself shows applied/mixed state via
+ *  `stateFor`, so this button is the only bulk-labels UI surface. */
 function BulkLabelButton({
   labels,
   loading,
@@ -495,7 +481,7 @@ function BulkLabelButton({
       </button>
 
       {open && (
-        <BulkLabelPopover
+        <LabelPopover
           labels={labels}
           loading={loading}
           stateFor={stateFor}
@@ -505,155 +491,6 @@ function BulkLabelButton({
           onCreate={onCreate}
           onRename={onRename}
           onDelete={onDelete}
-        />
-      )}
-    </div>
-  );
-}
-
-function BulkLabelPopover({
-  labels,
-  loading,
-  stateFor,
-  busy,
-  error,
-  onToggle,
-  onCreate,
-  onRename,
-  onDelete,
-}: {
-  labels: LabelRecord[];
-  loading: boolean;
-  stateFor: (label: LabelRecord) => TriState;
-  busy: boolean;
-  error: string | null;
-  onToggle: (label: LabelRecord) => void;
-  onCreate: (name: string) => void;
-  onRename: (id: string, name: string) => void;
-  onDelete: (id: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState("");
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const trimmed = query.trim();
-  const stateRank: Record<TriState, number> = { checked: 0, mixed: 1, unchecked: 2 };
-  const filtered = (trimmed ? labels.filter((l) => l.name.toLowerCase().includes(trimmed.toLowerCase())) : labels)
-    .slice()
-    .sort((a, b) => stateRank[stateFor(a)] - stateRank[stateFor(b)] || a.name.localeCompare(b.name));
-  const exactMatch = labels.some((l) => l.name.toLowerCase() === trimmed.toLowerCase());
-  const canCreate = trimmed.length > 0 && !exactMatch;
-  const confirmingDelete = labels.find((l) => l.id === confirmingDeleteId) ?? null;
-
-  const submitCreate = () => {
-    if (!canCreate) return;
-    onCreate(trimmed);
-    setQuery("");
-  };
-
-  const startRename = (label: LabelRecord) => {
-    setEditingId(label.id);
-    setEditingName(label.name);
-  };
-  const commitRename = () => {
-    if (editingId && editingName.trim()) onRename(editingId, editingName.trim());
-    setEditingId(null);
-  };
-
-  return (
-    <div className="label-popover" role="dialog" aria-label="Manage labels">
-      <input
-        ref={inputRef}
-        className="label-popover-input"
-        placeholder="Find or create a label…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") submitCreate();
-        }}
-      />
-
-      {error && <div className="label-popover-error" role="alert">{error}</div>}
-
-      <div className="label-popover-list">
-        {loading ? (
-          <div className="label-popover-empty">Loading…</div>
-        ) : filtered.length === 0 && !canCreate ? (
-          <div className="label-popover-empty">{trimmed ? "No matching labels." : "No labels yet."}</div>
-        ) : (
-          filtered.map((label) =>
-            editingId === label.id ? (
-              <div key={label.id} className="label-popover-row label-popover-row--editing">
-                <input
-                  className="label-popover-input label-popover-rename"
-                  value={editingName}
-                  onChange={(e) => setEditingName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename();
-                    if (e.key === "Escape") setEditingId(null);
-                  }}
-                  autoFocus
-                />
-                <button type="button" className="label-icon-btn" aria-label="Save name" onClick={commitRename}>
-                  <Check size={14} strokeWidth={2} aria-hidden />
-                </button>
-                <button type="button" className="label-icon-btn" aria-label="Cancel" onClick={() => setEditingId(null)}>
-                  <X size={14} strokeWidth={2} aria-hidden />
-                </button>
-              </div>
-            ) : (
-              <div key={label.id} className="label-popover-row">
-                <button
-                  type="button"
-                  className={`label-popover-pick${stateFor(label) !== "unchecked" ? " is-applied" : ""}`}
-                  onClick={() => onToggle(label)}
-                  disabled={busy}
-                >
-                  <span className={`label-popover-check${stateFor(label) === "mixed" ? " is-mixed" : ""}`}>
-                    {stateFor(label) === "checked" && <Check size={13} strokeWidth={2.25} aria-hidden />}
-                    {stateFor(label) === "mixed" && <Minus size={9} strokeWidth={3} aria-hidden />}
-                  </span>
-                  <span className="label-popover-name">{label.name}</span>
-                  {label.origin === "system" && <span className="label-popover-tag">system</span>}
-                </button>
-                <button type="button" className="label-icon-btn" aria-label={`Rename ${label.name}`} onClick={() => startRename(label)}>
-                  <Pencil size={13} strokeWidth={1.75} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  className="label-icon-btn label-icon-btn--danger"
-                  aria-label={`Delete ${label.name}`}
-                  onClick={() => setConfirmingDeleteId(label.id)}
-                >
-                  <Trash2 size={13} strokeWidth={1.75} aria-hidden />
-                </button>
-              </div>
-            ),
-          )
-        )}
-
-        {canCreate && (
-          <button type="button" className="label-popover-create" onClick={submitCreate} disabled={busy}>
-            <Plus size={13} strokeWidth={2} aria-hidden />
-            <span>Create &amp; apply “{trimmed}”</span>
-          </button>
-        )}
-      </div>
-
-      {confirmingDelete && (
-        <DeleteLabelDialog
-          label={confirmingDelete}
-          onCancel={() => setConfirmingDeleteId(null)}
-          onConfirm={() => {
-            onDelete(confirmingDelete.id);
-            setConfirmingDeleteId(null);
-          }}
         />
       )}
     </div>

@@ -1,8 +1,12 @@
-import { Check, Pencil, Plus, TagPlus, Trash2, X } from "lucide-react";
+import { Check, Minus, Pencil, Plus, TagPlus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLabelCatalogMutations, useLabelsQuery, useSessionLabelMutations } from "../lib/labels";
 import type { AppliedLabel, LabelRecord } from "../types";
+
+/** Tri-state a label can be in relative to a set of sessions: fully applied, fully absent, or
+ *  (bulk-mode only) applied to some but not all of the selected sessions. */
+export type TriState = "checked" | "unchecked" | "mixed";
 
 // The add/remove/edit control for a session's or a task's labels (session-and-task-labels). Renders
 // the applied labels as removable chips plus a popover to apply an existing label, create a new one,
@@ -44,9 +48,10 @@ export function LabelBar({
   }, [open]);
 
   const appliedIds = new Set(applied.map((l) => l.id));
-  const toggle = (labelId: string) => {
-    const vars = { labelId, taskSeq };
-    if (appliedIds.has(labelId)) unassign.mutate(vars);
+  const stateFor = (label: LabelRecord): TriState => (appliedIds.has(label.id) ? "checked" : "unchecked");
+  const toggle = (label: LabelRecord) => {
+    const vars = { labelId: label.id, taskSeq };
+    if (appliedIds.has(label.id)) unassign.mutate(vars);
     else assign.mutate(vars);
   };
   const removeChip = (labelId: string) => unassign.mutate({ labelId, taskSeq });
@@ -88,7 +93,7 @@ export function LabelBar({
           <LabelPopover
             labels={catalog.data ?? []}
             loading={catalog.isPending}
-            appliedIds={appliedIds}
+            stateFor={stateFor}
             busy={assign.isPending || unassign.isPending || create.isPending}
             error={
               [create.error, assign.error, unassign.error, rename.error, remove.error].find(
@@ -109,10 +114,17 @@ export function LabelBar({
   );
 }
 
-function LabelPopover({
+const STATE_RANK: Record<TriState, number> = { checked: 0, mixed: 1, unchecked: 2 };
+
+/** The add/pick/create/rename/delete popover shared by the per-session/task {@link LabelBar} and
+ *  the bulk-selection label editor (`BulkLabelButton` in `Sessions.tsx`) — bulk mode is a superset
+ *  (it can show a "mixed" tri-state across the selection), so both drive the same UI off a
+ *  `stateFor` predicate rather than a plain `appliedIds` set. Rows are always sorted
+ *  [checked, mixed, unchecked] first, then alphabetically. */
+export function LabelPopover({
   labels,
   loading,
-  appliedIds,
+  stateFor,
   busy,
   error,
   onToggle,
@@ -122,10 +134,10 @@ function LabelPopover({
 }: {
   labels: LabelRecord[];
   loading: boolean;
-  appliedIds: Set<string>;
+  stateFor: (label: LabelRecord) => TriState;
   busy: boolean;
   error: string | null;
-  onToggle: (labelId: string) => void;
+  onToggle: (label: LabelRecord) => void;
   onCreate: (name: string) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
@@ -141,9 +153,9 @@ function LabelPopover({
   }, []);
 
   const trimmed = query.trim();
-  const filtered = trimmed
-    ? labels.filter((l) => l.name.toLowerCase().includes(trimmed.toLowerCase()))
-    : labels;
+  const filtered = (trimmed ? labels.filter((l) => l.name.toLowerCase().includes(trimmed.toLowerCase())) : labels)
+    .slice()
+    .sort((a, b) => STATE_RANK[stateFor(a)] - STATE_RANK[stateFor(b)] || a.name.localeCompare(b.name));
   const exactMatch = labels.some((l) => l.name.toLowerCase() === trimmed.toLowerCase());
   const canCreate = trimmed.length > 0 && !exactMatch;
   const confirmingDelete = labels.find((l) => l.id === confirmingDeleteId) ?? null;
@@ -208,12 +220,13 @@ function LabelPopover({
               <div key={label.id} className="label-popover-row">
                 <button
                   type="button"
-                  className={`label-popover-pick${appliedIds.has(label.id) ? " is-applied" : ""}`}
-                  onClick={() => onToggle(label.id)}
+                  className={`label-popover-pick${stateFor(label) !== "unchecked" ? " is-applied" : ""}`}
+                  onClick={() => onToggle(label)}
                   disabled={busy}
                 >
-                  <span className="label-popover-check">
-                    {appliedIds.has(label.id) && <Check size={13} strokeWidth={2.25} aria-hidden />}
+                  <span className={`label-popover-check${stateFor(label) === "mixed" ? " is-mixed" : ""}`}>
+                    {stateFor(label) === "checked" && <Check size={13} strokeWidth={2.25} aria-hidden />}
+                    {stateFor(label) === "mixed" && <Minus size={9} strokeWidth={3} aria-hidden />}
                   </span>
                   <span className="label-popover-name">{label.name}</span>
                   {label.origin === "system" && <span className="label-popover-tag">system</span>}
@@ -256,9 +269,8 @@ function LabelPopover({
   );
 }
 
-/** The label-catalog delete confirmation modal — shared with the bulk-mode label editor
- *  ({@link BulkLabelBar} in `Sessions.tsx`), since deleting a label from the catalog has no
- *  mixed-state nuance even in bulk mode. */
+/** The label-catalog delete confirmation modal, rendered from the shared {@link LabelPopover}
+ *  above — deleting a label from the catalog has no mixed-state nuance even in bulk mode. */
 export function DeleteLabelDialog({
   label,
   onCancel,
