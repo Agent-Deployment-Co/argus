@@ -45,6 +45,21 @@ export async function fetchSessions(filters: SessionListFilters, offset: number)
   return jsonOrThrow<SessionListResponse>(res, "Failed to load sessions");
 }
 
+/** Page through every session matching `filters` (beyond what's loaded in the list), returning just
+ *  the ids — backs "Select all N matching sessions" in bulk mode. Reuses the same filter/pagination
+ *  contract as the list itself rather than a dedicated "resolve filter to ids" endpoint. */
+export async function fetchAllSessionIds(filters: SessionListFilters): Promise<string[]> {
+  const ids: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchSessions(filters, offset);
+    ids.push(...page.rows.map((r) => r.sessionId));
+    offset += page.rows.length;
+    if (offset >= page.total || page.rows.length === 0) break;
+  }
+  return ids;
+}
+
 /** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery so "Load more"
  *  appends; changing any filter starts a fresh first page. */
 export function useSessionsQuery(filters: SessionListFilters) {

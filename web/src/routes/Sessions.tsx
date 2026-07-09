@@ -2,7 +2,7 @@ import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tans
 import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
-import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
+import { fetchAllSessionIds, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { useLabelsQuery } from "../lib/labels";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
@@ -119,6 +119,7 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   const query = useSessionsQuery(filters);
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
+  const [selectingAllMatching, setSelectingAllMatching] = useState(false);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -178,10 +179,13 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
     selection.setLastClickedId(sessionId);
   };
 
-  // "Select all" first scopes to what's loaded/in view (not every session matching the filter —
-  // that's a follow-up, staged behind `query.hasNextPage`). Toggles back to deselect once every
-  // loaded row is already selected.
+  // "Select all" first scopes to what's loaded/in view; toggles back to deselect once every loaded
+  // row is already selected. Once all loaded rows are selected and more match the filter but aren't
+  // loaded yet (`query.hasNextPage`), a follow-up link extends the selection to every matching
+  // session by paging through `/api/sessions` itself (`fetchAllSessionIds`) rather than a dedicated
+  // server-side "resolve filter to ids" endpoint.
   const allLoadedSelected = rows.length > 0 && rows.every((r) => selection.ids.has(r.sessionId));
+  const allMatchingSelected = allLoadedSelected && selection.ids.size === total;
   const handleSelectAllLoaded = () => {
     if (allLoadedSelected) {
       selection.setIds(new Set());
@@ -189,6 +193,15 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
     }
     selection.setIds(new Set(rows.map((r) => r.sessionId)));
     selection.setLastClickedId(rows[rows.length - 1]?.sessionId ?? null);
+  };
+  const handleSelectAllMatching = async () => {
+    setSelectingAllMatching(true);
+    try {
+      const ids = await fetchAllSessionIds(filters);
+      selection.setIds(new Set(ids));
+    } finally {
+      setSelectingAllMatching(false);
+    }
   };
 
   return (
@@ -201,6 +214,13 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
           </button>
         )}
       </div>
+      {allLoadedSelected && query.hasNextPage && !allMatchingSelected && (
+        <div className="session-list-select-matching">
+          <button type="button" className="session-select-all" onClick={handleSelectAllMatching} disabled={selectingAllMatching}>
+            {selectingAllMatching ? "Selecting…" : `Select all ${total} matching sessions?`}
+          </button>
+        </div>
+      )}
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
         {rows.map((s, index) => (

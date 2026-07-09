@@ -238,6 +238,8 @@ main:has(.inbox-page) { padding: 0; }
 .session-list-head-count { flex-direction: row; align-items: center; justify-content: space-between; padding: 10px 14px; color: var(--muted); font: 600 11px var(--font-ui); }
 .session-select-all { flex: 0 0 auto; padding: 0; border: none; background: none; color: var(--accent); font: 600 11px var(--font-ui); cursor: pointer; }
 .session-select-all:hover { text-decoration: underline; }
+.session-select-all:disabled { opacity: .6; cursor: default; text-decoration: none; }
+.session-list-select-matching { padding: 0 14px 10px; text-align: right; border-bottom: 1px solid var(--line); }
 .session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
 .session-load-more:hover { border-color: var(--accent); color: var(--heading); }
 .session-load-more:disabled { opacity: .6; cursor: default; }
