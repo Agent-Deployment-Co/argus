@@ -256,7 +256,10 @@ function LabelPopover({
   );
 }
 
-function DeleteLabelDialog({
+/** The label-catalog delete confirmation modal — shared with the bulk-mode label editor
+ *  ({@link BulkLabelBar} in `Sessions.tsx`), since deleting a label from the catalog has no
+ *  mixed-state nuance even in bulk mode. */
+export function DeleteLabelDialog({
   label,
   onCancel,
   onConfirm,

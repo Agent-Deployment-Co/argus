@@ -1,11 +1,26 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Calendar, Check, EyeOff, FilterX, Layers, Minus, Plus, Search, Tag, X } from "lucide-react";
+import {
+  Calendar,
+  Check,
+  EyeOff,
+  FilterX,
+  Layers,
+  Minus,
+  Pencil,
+  Plus,
+  Search,
+  Tag,
+  TagPlus,
+  Trash2,
+  X,
+} from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { fetchAllSessionIds, setSessionsHidden, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSessionsLabelsQuery } from "../lib/labels";
 import type { LabelRecord } from "../types";
+import { DeleteLabelDialog } from "../components/LabelBar";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
@@ -344,9 +359,7 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
   const catalog = useLabelsQuery();
   const sessionsLabels = useSessionsLabelsQuery(ids);
   const { setForSessions } = useBulkLabelMutations();
-  const { create } = useLabelCatalogMutations();
-  const [labelQuery, setLabelQuery] = useState("");
-  const labelInputRef = useRef<HTMLInputElement>(null);
+  const { create, rename, remove } = useLabelCatalogMutations();
 
   const clear = () => {
     selection.setIds(new Set());
@@ -363,10 +376,7 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
     return "mixed";
   };
 
-  const toggleLabel = (label: LabelRecord) => {
-    const applied = stateFor(label) !== "checked";
-    setForSessions.mutate({ labelId: label.id, sessionIds: ids, applied });
-  };
+  const setLabel = (labelId: string, applied: boolean) => setForSessions.mutate({ labelId, sessionIds: ids, applied });
 
   const qc = useQueryClient();
   const hide = useMutation({
@@ -376,22 +386,6 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
       clear();
     },
   });
-
-  const labels = catalog.data ?? [];
-  const trimmedQuery = labelQuery.trim();
-  const filteredLabels = trimmedQuery
-    ? labels.filter((l) => l.name.toLowerCase().includes(trimmedQuery.toLowerCase()))
-    : labels;
-  const exactMatch = labels.some((l) => l.name.toLowerCase() === trimmedQuery.toLowerCase());
-  const canCreate = trimmedQuery.length > 0 && !exactMatch;
-
-  const submitCreate = async () => {
-    if (!canCreate) return;
-    const res = await create.mutateAsync(trimmedQuery);
-    setForSessions.mutate({ labelId: res.label.id, sessionIds: ids, applied: true });
-    setLabelQuery("");
-    labelInputRef.current?.focus();
-  };
 
   return (
     <div className="bulk-overlay">
@@ -405,64 +399,25 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
 
       <div className="bulk-overlay-section">
         <h3 className="bulk-overlay-heading">Labels</h3>
-        <input
-          ref={labelInputRef}
-          className="label-popover-input bulk-label-search"
-          placeholder="Find or create a label…"
-          value={labelQuery}
-          onChange={(e) => setLabelQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void submitCreate();
+        <BulkLabelBar
+          labels={catalog.data ?? []}
+          loading={catalog.isPending}
+          stateFor={stateFor}
+          busy={setForSessions.isPending || create.isPending}
+          error={
+            [create.error, setForSessions.error, rename.error, remove.error].find(
+              (e): e is Error => e instanceof Error,
+            )?.message ?? null
+          }
+          onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
+          onRemove={(label) => setLabel(label.id, false)}
+          onCreate={async (name) => {
+            const res = await create.mutateAsync(name);
+            setLabel(res.label.id, true);
           }}
+          onRename={(id, name) => rename.mutate({ id, name })}
+          onDelete={(id) => remove.mutate(id)}
         />
-        {catalog.isPending ? (
-          <p className="label-popover-empty">Loading…</p>
-        ) : labels.length === 0 && !canCreate ? (
-          <p className="label-popover-empty">No labels yet — create one from a session's detail pane.</p>
-        ) : (
-          <div className="label-popover-list bulk-label-list">
-            {filteredLabels.length === 0 && !canCreate ? (
-              <p className="label-popover-empty">No matching labels.</p>
-            ) : (
-              filteredLabels.map((label) => {
-                const state = stateFor(label);
-                return (
-                  <button
-                    key={label.id}
-                    type="button"
-                    className={`label-popover-pick${state === "checked" ? " is-applied" : ""}`}
-                    onClick={() => toggleLabel(label)}
-                    disabled={setForSessions.isPending}
-                  >
-                    <span className={`label-popover-check${state === "mixed" ? " is-mixed" : ""}`}>
-                      {state === "checked" && <Check size={13} strokeWidth={2.25} aria-hidden />}
-                      {state === "mixed" && <Minus size={13} strokeWidth={2.25} aria-hidden />}
-                    </span>
-                    <span className="label-popover-name">{label.name}</span>
-                    {label.origin === "system" && <span className="label-popover-tag">system</span>}
-                  </button>
-                );
-              })
-            )}
-            {canCreate && (
-              <button
-                type="button"
-                className="label-popover-create"
-                onClick={() => void submitCreate()}
-                disabled={create.isPending || setForSessions.isPending}
-              >
-                <Plus size={13} strokeWidth={2} aria-hidden />
-                <span>Create &amp; apply “{trimmedQuery}”</span>
-              </button>
-            )}
-          </div>
-        )}
-        {(setForSessions.isError || create.isError) && (
-          <p className="label-popover-error" role="alert">
-            {[create.error, setForSessions.error].find((e): e is Error => e instanceof Error)?.message ??
-              "Label update failed."}
-          </p>
-        )}
       </div>
 
       <div className="bulk-overlay-section">
@@ -477,6 +432,265 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+/** The bulk-mode counterpart to `LabelBar` (session-and-task-labels): applied-label chips plus an
+ *  "Add Label" popover, styled to match. Not the same component because bulk mode has a third,
+ *  "mixed" state (a label applied to some but not all of the selection) that plain session/task
+ *  label editing never sees — the chip row and the popover's pick list both need to render it. */
+function BulkLabelBar({
+  labels,
+  loading,
+  stateFor,
+  busy,
+  error,
+  onToggle,
+  onRemove,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  labels: LabelRecord[];
+  loading: boolean;
+  stateFor: (label: LabelRecord) => TriState;
+  busy: boolean;
+  error: string | null;
+  onToggle: (label: LabelRecord) => void;
+  onRemove: (label: LabelRecord) => void;
+  onCreate: (name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const appliedLabels = labels.filter((l) => stateFor(l) !== "unchecked");
+
+  return (
+    <div className="labelbar labelbar--md" ref={rootRef}>
+      {!loading &&
+        appliedLabels.map((label) => {
+          const state = stateFor(label);
+          return (
+            <span
+              key={label.id}
+              className={`label-chip${label.origin === "system" ? " label-chip--system" : ""}${
+                state === "mixed" ? " label-chip--mixed" : ""
+              }`}
+              title={
+                state === "mixed"
+                  ? "Applied to some of the selected sessions"
+                  : label.origin === "system"
+                    ? "System label"
+                    : "Label"
+              }
+            >
+              {label.name}
+              <button
+                type="button"
+                className="label-chip-x"
+                aria-label={`Remove label ${label.name}`}
+                onClick={() => onRemove(label)}
+              >
+                <X size={12} strokeWidth={2} aria-hidden />
+              </button>
+            </span>
+          );
+        })}
+
+      <div className="labelbar-add">
+        <button
+          type="button"
+          className="label-add-btn"
+          aria-haspopup="true"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          title="Add a label"
+        >
+          <TagPlus size={13} strokeWidth={2} aria-hidden />
+          <span>Add Label</span>
+        </button>
+
+        {open && (
+          <BulkLabelPopover
+            labels={labels}
+            loading={loading}
+            stateFor={stateFor}
+            busy={busy}
+            error={error}
+            onToggle={onToggle}
+            onCreate={onCreate}
+            onRename={onRename}
+            onDelete={onDelete}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BulkLabelPopover({
+  labels,
+  loading,
+  stateFor,
+  busy,
+  error,
+  onToggle,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  labels: LabelRecord[];
+  loading: boolean;
+  stateFor: (label: LabelRecord) => TriState;
+  busy: boolean;
+  error: string | null;
+  onToggle: (label: LabelRecord) => void;
+  onCreate: (name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const trimmed = query.trim();
+  const filtered = trimmed
+    ? labels.filter((l) => l.name.toLowerCase().includes(trimmed.toLowerCase()))
+    : labels;
+  const exactMatch = labels.some((l) => l.name.toLowerCase() === trimmed.toLowerCase());
+  const canCreate = trimmed.length > 0 && !exactMatch;
+  const confirmingDelete = labels.find((l) => l.id === confirmingDeleteId) ?? null;
+
+  const submitCreate = () => {
+    if (!canCreate) return;
+    onCreate(trimmed);
+    setQuery("");
+  };
+
+  const startRename = (label: LabelRecord) => {
+    setEditingId(label.id);
+    setEditingName(label.name);
+  };
+  const commitRename = () => {
+    if (editingId && editingName.trim()) onRename(editingId, editingName.trim());
+    setEditingId(null);
+  };
+
+  return (
+    <div className="label-popover" role="dialog" aria-label="Manage labels">
+      <input
+        ref={inputRef}
+        className="label-popover-input"
+        placeholder="Find or create a label…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submitCreate();
+        }}
+      />
+
+      {error && <div className="label-popover-error" role="alert">{error}</div>}
+
+      <div className="label-popover-list">
+        {loading ? (
+          <div className="label-popover-empty">Loading…</div>
+        ) : filtered.length === 0 && !canCreate ? (
+          <div className="label-popover-empty">{trimmed ? "No matching labels." : "No labels yet."}</div>
+        ) : (
+          filtered.map((label) =>
+            editingId === label.id ? (
+              <div key={label.id} className="label-popover-row label-popover-row--editing">
+                <input
+                  className="label-popover-input label-popover-rename"
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename();
+                    if (e.key === "Escape") setEditingId(null);
+                  }}
+                  autoFocus
+                />
+                <button type="button" className="label-icon-btn" aria-label="Save name" onClick={commitRename}>
+                  <Check size={14} strokeWidth={2} aria-hidden />
+                </button>
+                <button type="button" className="label-icon-btn" aria-label="Cancel" onClick={() => setEditingId(null)}>
+                  <X size={14} strokeWidth={2} aria-hidden />
+                </button>
+              </div>
+            ) : (
+              <div key={label.id} className="label-popover-row">
+                <button
+                  type="button"
+                  className={`label-popover-pick${stateFor(label) === "checked" ? " is-applied" : ""}`}
+                  onClick={() => onToggle(label)}
+                  disabled={busy}
+                >
+                  <span className={`label-popover-check${stateFor(label) === "mixed" ? " is-mixed" : ""}`}>
+                    {stateFor(label) === "checked" && <Check size={13} strokeWidth={2.25} aria-hidden />}
+                    {stateFor(label) === "mixed" && <Minus size={13} strokeWidth={2.25} aria-hidden />}
+                  </span>
+                  <span className="label-popover-name">{label.name}</span>
+                  {label.origin === "system" && <span className="label-popover-tag">system</span>}
+                </button>
+                <button type="button" className="label-icon-btn" aria-label={`Rename ${label.name}`} onClick={() => startRename(label)}>
+                  <Pencil size={13} strokeWidth={1.75} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  className="label-icon-btn label-icon-btn--danger"
+                  aria-label={`Delete ${label.name}`}
+                  onClick={() => setConfirmingDeleteId(label.id)}
+                >
+                  <Trash2 size={13} strokeWidth={1.75} aria-hidden />
+                </button>
+              </div>
+            ),
+          )
+        )}
+
+        {canCreate && (
+          <button type="button" className="label-popover-create" onClick={submitCreate} disabled={busy}>
+            <Plus size={13} strokeWidth={2} aria-hidden />
+            <span>Create &amp; apply “{trimmed}”</span>
+          </button>
+        )}
+      </div>
+
+      {confirmingDelete && (
+        <DeleteLabelDialog
+          label={confirmingDelete}
+          onCancel={() => setConfirmingDeleteId(null)}
+          onConfirm={() => {
+            onDelete(confirmingDelete.id);
+            setConfirmingDeleteId(null);
+          }}
+        />
+      )}
     </div>
   );
 }

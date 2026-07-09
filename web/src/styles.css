@@ -274,9 +274,8 @@ main:has(.inbox-page) { padding: 0; }
 .bulk-overlay-clear:hover { border-color: var(--accent); color: var(--heading); }
 .bulk-overlay-section { margin-bottom: 28px; }
 .bulk-overlay-heading { margin: 0 0 10px; color: var(--muted); font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
-.bulk-label-list { max-width: 320px; max-height: none; }
-.bulk-label-search { max-width: 320px; margin-bottom: 6px; }
 .label-popover-check.is-mixed { color: var(--muted); }
+.label-chip--mixed { border-style: dashed; }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
 .session-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
 .session-detail-headline { min-width: 0; line-height: 1.2; }
