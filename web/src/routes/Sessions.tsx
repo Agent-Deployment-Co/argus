@@ -503,6 +503,11 @@ function BulkLabelBar({
                     : "Label"
               }
             >
+              {state === "mixed" && (
+                <span className="label-chip-mixed-badge" aria-hidden>
+                  <Minus size={9} strokeWidth={3} />
+                </span>
+              )}
               {label.name}
               <button
                 type="button"
@@ -652,7 +657,7 @@ function BulkLabelPopover({
                 >
                   <span className={`label-popover-check${stateFor(label) === "mixed" ? " is-mixed" : ""}`}>
                     {stateFor(label) === "checked" && <Check size={13} strokeWidth={2.25} aria-hidden />}
-                    {stateFor(label) === "mixed" && <Minus size={13} strokeWidth={2.25} aria-hidden />}
+                    {stateFor(label) === "mixed" && <Minus size={9} strokeWidth={3} aria-hidden />}
                   </span>
                   <span className="label-popover-name">{label.name}</span>
                   {label.origin === "system" && <span className="label-popover-tag">system</span>}
