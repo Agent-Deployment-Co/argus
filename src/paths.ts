@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
 
@@ -35,6 +35,37 @@ export function defaultArgusConfigDir(env: Env = process.env, plat: string = pla
     return join(env.APPDATA, "Argus");
   }
   return join(homedir(), ".config", "argus");
+}
+
+// MDM managed settings (#257). Device-management tools (Jamf, Kandji, Mosyle, …) deliver forced
+// preferences under `/Library/Managed Preferences` keyed by the app's bundle identifier — the same
+// domain the desktop app uses (desktop/src-tauri/tauri.conf.json). A managed settings file is the
+// highest-precedence config source (see `managed-config.ts`).
+export const MANAGED_PREFS_DOMAIN = "co.agentdeployment.argus";
+
+/**
+ * Candidate managed settings files, in precedence order — the first one that exists and parses wins.
+ * macOS MDM convention: per-user managed preferences beat machine-wide ones, and the plist (what an
+ * MDM custom-settings payload actually writes) is checked before a JSON sibling (for orgs that push
+ * a file by script). `ARGUS_MANAGED_CONFIG_FILE` is appended on macOS so a user-controlled env var
+ * can't skip org-delivered preferences; on platforms without a standard managed location it is the
+ * whole list. Empty values count as absent. Windows/Linux get their own lookups separately.
+ */
+export function managedConfigCandidates(
+  env: Env = process.env,
+  plat: string = platform,
+  user: string = userInfo().username,
+): string[] {
+  const explicit = env.ARGUS_MANAGED_CONFIG_FILE;
+  if (plat !== "darwin") return explicit ? [explicit] : [];
+  const base = "/Library/Managed Preferences";
+  const candidates = [
+    join(base, user, `${MANAGED_PREFS_DOMAIN}.plist`),
+    join(base, user, `${MANAGED_PREFS_DOMAIN}.json`),
+    join(base, `${MANAGED_PREFS_DOMAIN}.plist`),
+    join(base, `${MANAGED_PREFS_DOMAIN}.json`),
+  ];
+  return explicit ? [...candidates, explicit] : candidates;
 }
 
 export const PROJECTS_DIR = join(CLAUDE_DIR, "projects");

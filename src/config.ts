@@ -6,10 +6,13 @@
 // a typed shape, a tolerant loader, and one uniform resolver so precedence and the three naming
 // conventions live in exactly one place.
 //
-// Every setting resolves through a single chain: CLI flag > env var > argus.json > built-in default.
-// The three layers don't share a spelling — flags are kebab-case, env vars SCREAMING_SNAKE, and
-// argus.json keys camelCase — and the names aren't mechanical transforms of each other. So each
-// setting binds its three names explicitly via a descriptor; a generic case-converter won't do.
+// Every setting resolves through a single chain: managed (MDM) > CLI flag > env var > argus.json >
+// built-in default. The user-controlled layers don't share a spelling — flags are kebab-case, env
+// vars SCREAMING_SNAKE, and argus.json keys camelCase — and the names aren't mechanical transforms
+// of each other. So each setting binds its three names explicitly via a descriptor; a generic
+// case-converter won't do. The managed layer (#257, `managed-config.ts`) shares argus.json's
+// camelCase shape and sits above everything, per the MDM convention that org-forced settings can't
+// be overridden locally.
 //
 // LLM access (#132) is a top-level `llm` block consumed by any model-driven feature. Task extraction
 // is the first consumer: it references `llm.*` and may override `provider`/`model`/`command` under its
@@ -17,6 +20,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
+import { managedConfig } from "./managed-config.ts";
 import {
   defaultModelByProvider,
   getProvider,
@@ -259,10 +263,39 @@ export function present(value: unknown): boolean {
 }
 
 /**
- * Resolve one setting through CLI flag > env var > argus.json > default. Any absent layer yields
- * undefined and falls through, so the same chain works for settings that don't populate every layer.
+ * The managed (MDM) layer of one setting (#257): the parsed value forced by the organization's
+ * managed settings file, or undefined when the setting isn't managed (no managed file, the key is
+ * absent, or its value is invalid — an invalid managed value warns via `parse()` and falls through
+ * to the user-controlled layers rather than bricking the setting).
+ */
+export function managedSettingValue<T>(setting: Setting<T>): T | undefined {
+  const managed = managedConfig();
+  const raw = getPath(managed, setting.path);
+  if (present(raw)) return setting.parse(raw);
+  const legacy = setting.legacyPath ? getPath(managed, setting.legacyPath) : undefined;
+  if (present(legacy)) return setting.parse(legacy);
+  return undefined;
+}
+
+/**
+ * Resolve one setting through managed (MDM) > CLI flag > env var > argus.json > default. Any absent
+ * layer yields undefined and falls through, so the same chain works for settings that don't populate
+ * every layer.
  */
 export function resolveSetting<T>(
+  setting: Setting<T>,
+  flags: Record<string, unknown>,
+  file: ArgusConfig,
+): T {
+  const fromManaged = managedSettingValue(setting);
+  if (fromManaged !== undefined) return fromManaged;
+  return resolveSettingWithoutManaged(setting, flags, file);
+}
+
+/** Resolve the user-controlled layers of one setting: CLI flag > env var > argus.json > default.
+ *  Used when a related managed setting has already been checked and must block lower-layer
+ *  compatibility overrides from silently winning. */
+function resolveSettingWithoutManaged<T>(
   setting: Setting<T>,
   flags: Record<string, unknown>,
   file: ArgusConfig,
@@ -835,10 +868,25 @@ export function providerConfigPath(provider: string, field: string): string {
   return `llm.providerConfigs.${provider}.${field}`;
 }
 
+/** The managed layer for one provider-scoped `llm.*` setting, checked exactly like
+ *  `resolveProviderScoped`: provider-specific first, then legacy flat `llm.<field>`. */
+export function managedProviderScopedSettingValue<T>(
+  setting: Setting<T>,
+  provider: string,
+): T | undefined {
+  const managed = managedConfig();
+  const managedScoped = getPath(managed, providerConfigPath(provider, llmFieldName(setting)));
+  if (present(managedScoped)) return setting.parse(managedScoped);
+  const managedFlat = getPath(managed, setting.path);
+  if (present(managedFlat)) return setting.parse(managedFlat);
+  return undefined;
+}
+
 /**
  * Resolve a provider-scoped `llm.*` setting for the active provider:
- *   flag > env > `llm.providerConfigs[provider].<field>` > legacy flat `llm.<field>` > default.
- * The flag/env layers stay global overrides of whichever provider is active; the legacy flat value is
+ *   managed > flag > env > `llm.providerConfigs[provider].<field>` > legacy flat `llm.<field>` > default.
+ * The managed layer honors the same two file locations (scoped, then flat) as argus.json; the
+ * flag/env layers stay global overrides of whichever provider is active; the legacy flat value is
  * the pre-`providerConfigs` location, kept so existing argus.json files keep resolving.
  */
 export function resolveProviderScoped<T>(
@@ -847,6 +895,8 @@ export function resolveProviderScoped<T>(
   file: ArgusConfig,
   provider: string,
 ): T {
+  const fromManaged = managedProviderScopedSettingValue(setting, provider);
+  if (fromManaged !== undefined) return fromManaged;
   const fromFlag = setting.flag ? flags[setting.flag] : undefined;
   if (present(fromFlag)) return setting.parse(fromFlag);
   const fromEnv = setting.env ? process.env[setting.env] : undefined;
@@ -858,7 +908,7 @@ export function resolveProviderScoped<T>(
   return setting.default;
 }
 
-/** The active LLM provider: `llm.provider` (flag > env > file), or the built-in default when unset.
+/** The active LLM provider: `llm.provider` (managed > flag > env > file), or the built-in default when unset.
  *  The one place the "what provider is in effect" question is answered. */
 export function resolveActiveProvider(
   file: ArgusConfig = loadConfig(),
@@ -953,6 +1003,25 @@ function resolveLlmConfig(
   return llm;
 }
 
+function resolveConsumerOverride<T>(
+  consumer: Setting<T>,
+  shared: Setting<T>,
+  flags: Record<string, unknown>,
+  file: ArgusConfig,
+  provider?: string,
+): T | undefined {
+  const fromManagedConsumer = managedSettingValue(consumer);
+  if (fromManagedConsumer !== undefined) return fromManagedConsumer;
+
+  const fromManagedShared =
+    shared.providerScoped && provider
+      ? managedProviderScopedSettingValue(shared, provider)
+      : managedSettingValue(shared);
+  if (fromManagedShared !== undefined) return undefined;
+
+  return resolveSettingWithoutManaged(consumer, flags, file);
+}
+
 /** The resolved session-interpretation settings: the opt-in toggle, the LLM config it runs through,
  *  the consumer-specific prompt, the title/summary character limits, and a transient debug sink
  *  (reattached after resolution). */
@@ -977,18 +1046,38 @@ export interface ResolvedSessionInterpretation {
  * Resolve the effective session-interpretation settings. `flags` is the citty-parsed args object (keys
  * are kebab-case flag names); pass `{}` for commands that don't expose the flags. The deprecated
  * `sessionInterpretation.provider`/`model`/`command` keys (and their legacy `taskExtraction.*`
- * fallbacks) resolve as the per-consumer override layer over the shared `llm.*` block. `log` is
- * reattached after resolution since it isn't a persisted setting.
+ * fallbacks) resolve as user-controlled per-consumer overrides over the shared `llm.*` block, but
+ * managed shared `llm.*` values still win over those compatibility overrides. `log` is reattached
+ * after resolution since it isn't a persisted setting.
  */
 export function resolveSessionInterpretation(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
   log?: Log,
 ): ResolvedSessionInterpretation {
+  const providerOverride = resolveConsumerOverride(
+    SESSION_INTERPRETATION_SETTINGS.provider,
+    LLM_SETTINGS.provider,
+    flags,
+    file,
+  );
+  const provider = providerOverride ?? resolveActiveProvider(file, flags);
   const overrides = {
-    provider: resolveSetting(SESSION_INTERPRETATION_SETTINGS.provider, flags, file),
-    model: resolveSetting(SESSION_INTERPRETATION_SETTINGS.model, flags, file),
-    command: resolveSetting(SESSION_INTERPRETATION_SETTINGS.command, flags, file),
+    provider: providerOverride,
+    model: resolveConsumerOverride(
+      SESSION_INTERPRETATION_SETTINGS.model,
+      LLM_SETTINGS.model,
+      flags,
+      file,
+      provider,
+    ),
+    command: resolveConsumerOverride(
+      SESSION_INTERPRETATION_SETTINGS.command,
+      LLM_SETTINGS.command,
+      flags,
+      file,
+      provider,
+    ),
   };
   const llm = resolveLlmConfig(flags, file, overrides);
 
@@ -1011,11 +1100,14 @@ export function resolveSessionInterpretation(
 }
 
 /** Resolve terminal log verbosity. `--log-level` is explicit; `--quiet`, `--verbose`, and the legacy
- *  task-extraction `--debug` flag are command-line shorthands above env and file settings. */
+ *  task-extraction `--debug` flag are command-line shorthands above env and file settings. A managed
+ *  (MDM) level is checked first, since the flag shorthands would otherwise bypass the standard chain. */
 export function resolveLogLevel(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
 ): ArgusLogLevel {
+  const managed = managedSettingValue(LOG_SETTINGS.level);
+  if (managed !== undefined) return managed;
   if (flags["log-level"] != null && flags["log-level"] !== "")
     return parseLogLevel(flags["log-level"]) ?? DEFAULT_LOG_LEVEL;
   if (flags.quiet === true) return "warn";

@@ -26,6 +26,7 @@ import { hubErrorMessage } from "./push.ts";
 import { CliUsageError, syncOptions, toSource } from "./cli-options.ts";
 import {
   loadConfig,
+  managedSettingValue,
   resolveLogLevel,
   resolveSessionInterpretation,
   getPath,
@@ -424,6 +425,14 @@ async function runConfigSet(
   setPath(cfg as Record<string, unknown>, key, parsed);
   writeConfig(cfg);
   log(`${key} = ${JSON.stringify(parsed)}`);
+  // Printed unconditionally (not through the leveled logger): the save "worked" but won't take
+  // effect, and a managed log.level may itself have quieted logger output below the point where a
+  // warning would show.
+  if (managedSettingValue(setting) !== undefined) {
+    printResultLine(
+      `Note: ${key} is managed by your organization, and the managed value takes precedence over the value just saved.`,
+    );
+  }
 }
 
 async function runConfigList(
