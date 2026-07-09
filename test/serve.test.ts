@@ -272,6 +272,63 @@ describe("serve API", () => {
     expect(changed).toBe(0);
   });
 
+  test("POST /api/sessions/:id/hidden flags a session hidden and reports the change", async () => {
+    let changed = 0;
+    const calls: Array<[string, boolean]> = [];
+    const app = createApp(null, {
+      setSessionHidden: async (sessionId, hidden) => {
+        calls.push([sessionId, hidden]);
+      },
+      onStoreChanged: () => { changed++; },
+    });
+
+    const res = await app.request("/api/sessions/codex:sess1/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ hidden: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ hidden: true });
+    expect(calls).toEqual([["codex:sess1", true]]);
+    expect(changed).toBe(1);
+  });
+
+  test("POST /api/sessions/:id/hidden is 400 without a boolean 'hidden' field", async () => {
+    const app = createApp(null, { setSessionHidden: async () => {} });
+    const res = await app.request("/api/sessions/codex:sess1/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("POST /api/sessions/:id/hidden is 503 when it isn't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/codex:sess1/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ hidden: true }),
+    });
+    expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/:id/hidden rejects cross-site requests (CSRF guard)", async () => {
+    let changed = 0;
+    const app = createApp(null, {
+      setSessionHidden: async () => {},
+      onStoreChanged: () => { changed++; },
+    });
+
+    const bare = await app.request("/api/sessions/codex:sess1/hidden", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hidden: true }),
+    });
+    expect(bare.status).toBe(403);
+    expect(changed).toBe(0);
+  });
+
   test("PUT /api/settings/log.level writes the file and updates the running logger immediately", async () => {
     const configPath = join(mkdtempSync(join(tmpdir(), "argus-serve-log-")), "argus.json");
     writeFileSync(configPath, "{}", "utf8");

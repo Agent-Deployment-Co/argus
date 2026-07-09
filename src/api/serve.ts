@@ -172,6 +172,8 @@ export interface ViewReaders {
   recommendations: ViewReader<RecommendationsResponse>;
 }
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
+/** Flag/unflag a session as hidden (local-only UI state). */
+export type SessionHiddenSetter = (sessionId: string, hidden: boolean) => Promise<void>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
 /** A filtered/sorted/paginated page of session list rows, backed by the store's session aggregates. */
@@ -205,6 +207,8 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
+  /** Flag/unflag a session as hidden. Omitted in processes without a store (503). */
+  setSessionHidden?: SessionHiddenSetter;
   /** Session/task label read + write operations. Omitted in processes without a store (503). */
   labels?: LabelOps;
   debugInfo?: DebugInfoReader;
@@ -444,6 +448,20 @@ async function readJsonStringField(c: Context, field: string): Promise<string | 
   return value.trim();
 }
 
+/** Read a required boolean field from a JSON body, or return a 400 Response. */
+async function readJsonBooleanField(c: Context, field: string): Promise<boolean | Response> {
+  let value: unknown;
+  try {
+    value = (await c.req.json())?.[field];
+  } catch {
+    return c.json({ error: `Expected a JSON body with a "${field}".` }, 400);
+  }
+  if (typeof value !== "boolean") {
+    return c.json({ error: `Missing "${field}".` }, 400);
+  }
+  return value;
+}
+
 /** Parse a non-negative integer task position from a route param, or null if malformed. */
 function parseTaskSeq(raw: string): number | null {
   const n = Number.parseInt(raw, 10);
@@ -503,6 +521,25 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     const session = await opts.sessionDetail(sessionId);
     if (!session) return c.json({ error: "Session not found." }, 404);
     return c.json({ session } satisfies SessionDetailResponse);
+  });
+
+  // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
+  // hidden, but its usage still counts in aggregate rollups. No feature-gate beyond store availability
+  // — unlike reindex, this is a pure store write.
+  app.post("/api/sessions/:id/hidden", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.setSessionHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
+
+    const hidden = await readJsonBooleanField(c, "hidden");
+    if (typeof hidden !== "boolean") return hidden;
+
+    await opts.setSessionHidden(sessionId, hidden);
+    opts.onStoreChanged?.();
+    return c.json({ hidden });
   });
 
   // Re-index a single session: re-read its transcript from disk and refresh it in the store
@@ -1043,6 +1080,9 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden);
   };
 
+  const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>
+    withWriteStore((store) => store.setSessionsHidden([sessionId], hidden));
+
   const labels: LabelOps = {
     list: async () => (await readStore()).listLabels(),
     readForSession: async (sessionId) => (await readStore()).readSessionLabels(sessionId),
@@ -1059,6 +1099,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionTaskMetrics,
     sessionList,
     sessionDetail,
+    setSessionHidden,
     labels,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
