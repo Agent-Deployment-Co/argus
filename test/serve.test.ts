@@ -329,6 +329,78 @@ describe("serve API", () => {
     expect(changed).toBe(0);
   });
 
+  test("POST /api/sessions/bulk/hidden flags many sessions hidden and reports the change", async () => {
+    let changed = 0;
+    const calls: Array<[string[], boolean]> = [];
+    const app = createApp(null, {
+      setSessionsHidden: async (sessionIds, hidden) => {
+        calls.push([sessionIds, hidden]);
+      },
+      onStoreChanged: () => { changed++; },
+    });
+
+    const res = await app.request("/api/sessions/bulk/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ sessionIds: ["codex:sess1", "codex:sess2"], hidden: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ hidden: true });
+    expect(calls).toEqual([[["codex:sess1", "codex:sess2"], true]]);
+    expect(changed).toBe(1);
+  });
+
+  test("POST /api/sessions/bulk/hidden is 400 without a non-empty 'sessionIds' array or boolean 'hidden'", async () => {
+    const app = createApp(null, { setSessionsHidden: async () => {} });
+
+    const noIds = await app.request("/api/sessions/bulk/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ hidden: true }),
+    });
+    expect(noIds.status).toBe(400);
+
+    const emptyIds = await app.request("/api/sessions/bulk/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ sessionIds: [], hidden: true }),
+    });
+    expect(emptyIds.status).toBe(400);
+
+    const noHidden = await app.request("/api/sessions/bulk/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ sessionIds: ["codex:sess1"] }),
+    });
+    expect(noHidden.status).toBe(400);
+  });
+
+  test("POST /api/sessions/bulk/hidden is 503 when it isn't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/bulk/hidden", {
+      method: "POST",
+      headers: { "X-Argus-App": "1", "content-type": "application/json" },
+      body: JSON.stringify({ sessionIds: ["codex:sess1"], hidden: true }),
+    });
+    expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/bulk/hidden rejects cross-site requests (CSRF guard)", async () => {
+    let changed = 0;
+    const app = createApp(null, {
+      setSessionsHidden: async () => {},
+      onStoreChanged: () => { changed++; },
+    });
+
+    const bare = await app.request("/api/sessions/bulk/hidden", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionIds: ["codex:sess1"], hidden: true }),
+    });
+    expect(bare.status).toBe(403);
+    expect(changed).toBe(0);
+  });
+
   test("PUT /api/settings/log.level writes the file and updates the running logger immediately", async () => {
     const configPath = join(mkdtempSync(join(tmpdir(), "argus-serve-log-")), "argus.json");
     writeFileSync(configPath, "{}", "utf8");
@@ -665,11 +737,15 @@ describe("label endpoints (session-and-task-labels)", () => {
         calls.push(`remove:${id}`);
       },
       readForSession: async () => ({ session: [], tasks: {} }),
+      readForSessions: async () => new Map(),
       assign: async (labelId, target: LabelTarget, appliedBy) => {
         calls.push(`assign:${labelId}:${target.sessionId}:${target.taskSeq ?? "-"}:${appliedBy}`);
       },
       unassign: async (labelId, target: LabelTarget) => {
         calls.push(`unassign:${labelId}:${target.sessionId}:${target.taskSeq ?? "-"}`);
+      },
+      setForSessions: async (labelId, sessionIds, applied) => {
+        calls.push(`setForSessions:${labelId}:${sessionIds.join(",")}:${applied}`);
       },
       ...overrides,
     };
@@ -742,6 +818,125 @@ describe("label endpoints (session-and-task-labels)", () => {
       "assign:label:bug:s1:2:user",
       "unassign:label:bug:s1:2",
     ]);
+  });
+
+  test("POST /api/sessions/bulk/labels-lookup returns session-level labels keyed by session id", async () => {
+    const { labels } = makeLabels({
+      readForSessions: async (sessionIds) =>
+        new Map(
+          sessionIds
+            .filter((id) => id === "s1")
+            .map((id) => [id, [{ ...label("bug"), appliedBy: "user" as const, appliedAtMs: 5 }]]),
+        ),
+    });
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels-lookup", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1", "s2"] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      labels: { s1: [{ ...label("bug"), appliedBy: "user", appliedAtMs: 5 }] },
+    });
+  });
+
+  test("POST /api/sessions/bulk/labels-lookup is 400 without a non-empty 'sessionIds' array", async () => {
+    const { labels } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels-lookup", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("POST /api/sessions/bulk/labels-lookup is 503 when labels aren't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/bulk/labels-lookup", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1"] }),
+    });
+    expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/bulk/labels applies/removes a label across many sessions", async () => {
+    const { labels, calls } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1", "s2"], labelId: "label:bug", applied: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls).toEqual(["setForSessions:label:bug:s1,s2:true"]);
+  });
+
+  test("POST /api/sessions/bulk/labels is 400 without a non-empty 'sessionIds', 'labelId', or 'applied'", async () => {
+    const { labels } = makeLabels();
+    const app = createApp(null, { labels });
+
+    const noIds = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ labelId: "label:bug", applied: true }),
+    });
+    expect(noIds.status).toBe(400);
+
+    const noLabel = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1"], applied: true }),
+    });
+    expect(noLabel.status).toBe(400);
+
+    const noApplied = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1"], labelId: "label:bug" }),
+    });
+    expect(noApplied.status).toBe(400);
+  });
+
+  test("POST /api/sessions/bulk/labels is 503 when labels aren't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1"], labelId: "label:bug", applied: true }),
+    });
+    expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/bulk/labels rejects cross-site requests (CSRF guard)", async () => {
+    const { labels, calls } = makeLabels();
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionIds: ["s1"], labelId: "label:bug", applied: true }),
+    });
+    expect(res.status).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  test("bulk-applying a missing label maps to 404", async () => {
+    const { labels } = makeLabels({
+      setForSessions: async () => {
+        throw new LabelError("not_found", "That label no longer exists.");
+      },
+    });
+    const app = createApp(null, { labels });
+    const res = await app.request("/api/sessions/bulk/labels", {
+      method: "POST",
+      headers: APP,
+      body: JSON.stringify({ sessionIds: ["s1"], labelId: "label:missing", applied: true }),
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "That label no longer exists." });
   });
 
   test("assigning a missing label maps to 404", async () => {

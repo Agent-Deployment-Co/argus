@@ -2242,6 +2242,55 @@ describe("session/task labels", () => {
     }
   });
 
+  test("setLabelForSessions applies/removes a label across many sessions in one call", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await materialize(cache, "s2");
+      await materialize(cache, "s3");
+
+      // s2 already has it; applying to all three should be idempotent for s2 and new for s1/s3.
+      await cache.assignLabel(bug.id, { sessionId: "s2" });
+      await cache.setLabelForSessions(bug.id, ["s1", "s2", "s3"], true);
+
+      for (const id of ["s1", "s2", "s3"]) {
+        expect((await cache.readSessionLabels(id)).session.map((l) => l.name)).toEqual(["bug"]);
+      }
+
+      // Removing from a subset leaves the rest untouched.
+      await cache.setLabelForSessions(bug.id, ["s1", "s3"], false);
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+      expect((await cache.readSessionLabels("s2")).session.map((l) => l.name)).toEqual(["bug"]);
+      expect((await cache.readSessionLabels("s3")).session).toEqual([]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("setLabelForSessions rejects a missing or deleted label, and no-ops on an empty id list", async () => {
+    const cache = await open();
+    try {
+      await materialize(cache, "s1");
+      await expect(
+        cache.setLabelForSessions("label:missing", ["s1"], true),
+      ).rejects.toMatchObject({ name: "LabelError", code: "not_found" });
+
+      const bug = await cache.createLabel({ name: "bug" });
+      await cache.deleteLabel(bug.id);
+      await expect(cache.setLabelForSessions(bug.id, ["s1"], true)).rejects.toMatchObject({
+        name: "LabelError",
+        code: "not_found",
+      });
+
+      const feature = await cache.createLabel({ name: "feature" });
+      await cache.setLabelForSessions(feature.id, [], true);
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+    } finally {
+      await cache.close();
+    }
+  });
+
   test("assigning a missing or deleted label rejects as a caller-fixable not_found error", async () => {
     const cache = await open();
     try {

@@ -1,9 +1,12 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Calendar, EyeOff, FilterX, Layers, Search, Tag, X } from "lucide-react";
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
-import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
-import { useLabelsQuery } from "../lib/labels";
+import { fetchAllSessionIds, setSessionsHidden, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
+import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSessionsLabelsQuery } from "../lib/labels";
+import type { LabelRecord } from "../types";
+import { LabelPopover, type TriState } from "../components/LabelBar";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
@@ -96,9 +99,26 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
   };
 }
 
+/** Multi-select state for bulk mode, lifted above `SessionList` (into `Sessions`) so the detail pane
+ *  can react to it too — not persisted across reload, and deliberately not part of the URL. */
+export interface SessionSelection {
+  ids: Set<string>;
+  setIds: (ids: Set<string>) => void;
+  /** The row last clicked without a modifier, or toggled via cmd/ctrl-click — the anchor a shift-click
+   *  range extends from. */
+  lastClickedId: string | null;
+  setLastClickedId: (id: string | null) => void;
+  /** True right after cmd/ctrl-clicking the sole selected session off the selection when it was also
+   *  the one open in the detail pane — tells the detail pane to swap in "No sessions selected"
+   *  instead of continuing to show that session's detail. Cleared by any other selection change or
+   *  by normal single-session navigation. */
+  noneSelectedActive: boolean;
+  setNoneSelectedActive: (v: boolean) => void;
+}
+
 /** The session list pane: a plain "Showing X-Y of N sessions" head (the search/filter controls live
  *  in the toolbar above, rendered by `Sessions`) plus the scrollable row list. */
-export function SessionList() {
+export function SessionList({ selection }: { selection: SessionSelection }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
@@ -108,13 +128,36 @@ export function SessionList() {
   const query = useSessionsQuery(filters);
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
+  const [selectingAllMatching, setSelectingAllMatching] = useState(false);
+  // Tracks the current `filters` identity so an in-flight "select all matching" fetch can tell,
+  // once it resolves, whether the filter it was scoped to is still the one in effect.
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
+  // Clear a stale selection when the filters change so the bulk overlay / row highlighting can't
+  // keep pointing at ids from a since-changed view. Skipped on mount so navigating straight to a
+  // filtered URL doesn't wipe a selection that was never made.
+  const isFirstFiltersRender = useRef(true);
+  useEffect(() => {
+    if (isFirstFiltersRender.current) {
+      isFirstFiltersRender.current = false;
+      return;
+    }
+    selection.setIds(new Set());
+    selection.setLastClickedId(null);
+    selection.setNoneSelectedActive(false);
+  }, [filters]);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedId, rows]);
 
   // j/k step the selection to the next/previous row, but only once a row is already selected —
-  // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move.
+  // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move. They
+  // also always clear any multi-selection first: keyboard stepping and bulk-select never coexist
+  // mid-navigation.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "j" && e.key !== "k") return;
@@ -127,28 +170,130 @@ export function SessionList() {
       const next = rows[e.key === "j" ? idx + 1 : idx - 1];
       if (!next) return;
       e.preventDefault();
+      if (selection.ids.size > 0) selection.setIds(new Set());
+      selection.setLastClickedId(null);
+      selection.setNoneSelectedActive(false);
       navigate({ to: "/sessions/$sessionId", params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rows, selectedId, navigate]);
+  }, [rows, selectedId, navigate, selection]);
+
+  // Cmd/Ctrl-click toggles a row into/out of the selection; shift-click selects the contiguous range
+  // from the last-clicked row to this one; a plain click clears any selection and navigates normally
+  // (the default `Link` behavior, left untouched below). Both modifiers preventDefault so they override
+  // the browser's native cmd/ctrl-click-opens-a-new-tab and shift-click-selects-text behavior.
+  const handleRowClick = (e: MouseEvent, sessionId: string, index: number) => {
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      const next = new Set(selection.ids);
+      // The currently-viewed session (from the route) isn't in `selection.ids` until now — a plain
+      // click just navigates without touching the selection. Seed it in first so cmd-clicking a
+      // second session, right after normally opening a first, starts a two-session bulk selection
+      // instead of a one-session one that can't trigger the overlay (which needs >= 2).
+      if (selection.ids.size === 0 && selectedId && selectedId !== sessionId) next.add(selectedId);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      selection.setIds(next);
+      selection.setLastClickedId(sessionId);
+      if (next.size === 0) {
+        // Deselecting the sole selected session, when it's also the one open in the detail pane,
+        // swaps the detail pane to "No sessions selected" rather than leaving that session's detail
+        // on screen with nothing actually selected underneath it.
+        selection.setNoneSelectedActive(sessionId === selectedId);
+      } else if (next.size === 1) {
+        // Dropping to exactly one remaining id no longer qualifies for the bulk overlay (>= 2), so
+        // treat it like a normal single selection: navigate the detail pane to match, in case the
+        // sole remaining id isn't the one currently routed to.
+        selection.setNoneSelectedActive(false);
+        const [soleId] = next;
+        if (soleId !== selectedId) {
+          navigate({ to: "/sessions/$sessionId", params: { sessionId: soleId! }, search: (prev: SessionsSearch) => prev });
+        }
+      } else {
+        selection.setNoneSelectedActive(false);
+      }
+      return;
+    }
+    if (e.shiftKey) {
+      e.preventDefault();
+      const anchorIdx = selection.lastClickedId ? rows.findIndex((r) => r.sessionId === selection.lastClickedId) : -1;
+      if (anchorIdx === -1) {
+        selection.setIds(new Set([sessionId]));
+        selection.setLastClickedId(sessionId);
+        selection.setNoneSelectedActive(false);
+        return;
+      }
+      const [start, end] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx];
+      selection.setIds(new Set(rows.slice(start, end + 1).map((r) => r.sessionId)));
+      selection.setNoneSelectedActive(false);
+      return;
+    }
+    if (selection.ids.size > 0) selection.setIds(new Set());
+    selection.setLastClickedId(sessionId);
+    selection.setNoneSelectedActive(false);
+  };
+
+  // "Select all" first scopes to what's loaded/in view; toggles back to deselect once every loaded
+  // row is already selected. Once all loaded rows are selected and more match the filter but aren't
+  // loaded yet (`query.hasNextPage`), a follow-up link extends the selection to every matching
+  // session by paging through `/api/sessions` itself (`fetchAllSessionIds`) rather than a dedicated
+  // server-side "resolve filter to ids" endpoint.
+  const allLoadedSelected = rows.length > 0 && rows.every((r) => selection.ids.has(r.sessionId));
+  const allMatchingSelected = allLoadedSelected && selection.ids.size === total;
+  const handleSelectAllLoaded = () => {
+    selection.setNoneSelectedActive(false);
+    if (allLoadedSelected) {
+      selection.setIds(new Set());
+      return;
+    }
+    selection.setIds(new Set(rows.map((r) => r.sessionId)));
+    selection.setLastClickedId(rows[rows.length - 1]?.sessionId ?? null);
+  };
+  const handleSelectAllMatching = async () => {
+    selection.setNoneSelectedActive(false);
+    setSelectingAllMatching(true);
+    const requestedFilters = filters;
+    try {
+      const ids = await fetchAllSessionIds(requestedFilters);
+      // Discard the result if the filters changed while the (possibly multi-page) fetch was in
+      // flight — the ids we just resolved no longer describe what's on screen.
+      if (filtersRef.current !== requestedFilters) return;
+      selection.setIds(new Set(ids));
+    } finally {
+      setSelectingAllMatching(false);
+    }
+  };
 
   return (
     <aside className="session-list" aria-label="Sessions">
       <div className="session-list-head session-list-head-count">
-        {total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}
+        <span>{total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}</span>
+        {rows.length > 0 && (
+          <button type="button" className="session-select-all" onClick={handleSelectAllLoaded}>
+            {allLoadedSelected ? "Deselect all" : "Select all"}
+          </button>
+        )}
       </div>
+      {allLoadedSelected && query.hasNextPage && !allMatchingSelected && (
+        <div className="session-list-select-matching">
+          <button type="button" className="session-select-all" onClick={handleSelectAllMatching} disabled={selectingAllMatching}>
+            {selectingAllMatching ? "Selecting…" : `Select all ${total} matching sessions?`}
+          </button>
+        </div>
+      )}
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
-        {rows.map((s) => (
+        {rows.map((s, index) => (
           <li key={`${s.source}:${s.sessionId}`}>
             <Link
               to="/sessions/$sessionId"
               params={{ sessionId: s.sessionId }}
               search={(prev: SessionsSearch) => prev}
-              className="session-item"
+              className={`session-item${selection.ids.has(s.sessionId) ? " selected" : ""}`}
               activeProps={{ className: "active" }}
               ref={s.sessionId === selectedId ? activeRef : undefined}
+              onClick={(e) => handleRowClick(e, s.sessionId, index)}
             >
               <div className="session-item-title">{sessionTitle(s)}</div>
               <div className="session-item-meta">
@@ -214,6 +359,174 @@ export function SessionsEmpty() {
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
 }
 
+/** Swapped in for the detail pane's `<Outlet />` (in `Sessions`) after cmd/ctrl-clicking the sole
+ *  selected — and currently open — session off the selection (`noneSelectedActive`). Mirrors
+ *  `SessionsEmpty`'s pane-swap pattern, but doesn't auto-navigate to another session: the point is
+ *  to stop showing the deselected session's detail, not to pick a new one for the user. */
+function NoSessionsSelected() {
+  return <div className="session-empty">No sessions selected.</div>;
+}
+
+/** Swapped in for the detail pane's `<Outlet />` once 2+ sessions are selected: a count, a way to
+ *  clear the selection, and the bulk actions themselves (labels, hide) — mirrors `SessionsEmpty`'s
+ *  pane-swap pattern as a third detail-pane state. */
+function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
+  const ids = useMemo(() => [...selection.ids], [selection.ids]);
+  const catalog = useLabelsQuery();
+  const sessionsLabels = useSessionsLabelsQuery(ids);
+  const { setForSessions } = useBulkLabelMutations();
+  const { create, rename, remove } = useLabelCatalogMutations();
+
+  const clear = () => {
+    selection.setIds(new Set());
+    selection.setLastClickedId(null);
+    selection.setNoneSelectedActive(false);
+  };
+
+  const stateFor = (label: LabelRecord): TriState => {
+    const labelsBySession = sessionsLabels.data;
+    if (!labelsBySession) return "unchecked";
+    const appliedCount = ids.filter((id) => (labelsBySession.get(id) ?? []).some((l) => l.id === label.id)).length;
+    if (appliedCount === 0) return "unchecked";
+    if (appliedCount === ids.length) return "checked";
+    return "mixed";
+  };
+
+  const setLabel = (labelId: string, applied: boolean) => setForSessions.mutate({ labelId, sessionIds: ids, applied });
+
+  const qc = useQueryClient();
+  const hide = useMutation({
+    mutationFn: () => setSessionsHidden(ids, true),
+    onSuccess: () => {
+      for (const id of ids) {
+        void qc.invalidateQueries({ queryKey: ["session", id] });
+      }
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+      clear();
+    },
+  });
+
+  return (
+    <div className="bulk-overlay">
+      <div className="bulk-overlay-head">
+        <span className="bulk-overlay-count">{ids.length} sessions selected</span>
+        <button type="button" className="bulk-overlay-clear" onClick={clear}>
+          <X size={13} strokeWidth={2} aria-hidden />
+          <span>Clear selection</span>
+        </button>
+      </div>
+
+      <div className="bulk-overlay-section">
+        <h3 className="bulk-overlay-heading">Actions</h3>
+        <div className="bulk-actions-row">
+          <BulkLabelButton
+            labels={catalog.data ?? []}
+            loading={catalog.isPending}
+            stateFor={stateFor}
+            busy={setForSessions.isPending || create.isPending}
+            error={
+              [create.error, setForSessions.error, rename.error, remove.error].find(
+                (e): e is Error => e instanceof Error,
+              )?.message ?? null
+            }
+            onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
+            onCreate={async (name) => {
+              const res = await create.mutateAsync(name);
+              setLabel(res.label.id, true);
+            }}
+            onRename={(id, name) => rename.mutate({ id, name })}
+            onDelete={(id) => remove.mutate(id)}
+          />
+          <button type="button" className="bulk-action-neutral" onClick={() => hide.mutate()} disabled={hide.isPending}>
+            <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+            <span>Hide {ids.length} sessions</span>
+          </button>
+        </div>
+        {hide.isError && (
+          <p className="label-popover-error" role="alert">
+            {hide.error instanceof Error ? hide.error.message : "Failed to hide sessions."}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The bulk-mode label entry point: a `Tag`-icon button (before the "Hide N sessions" action) that
+ *  pops up the same shared `LabelPopover` ({@link LabelPopover} in `components/LabelBar.tsx`) used
+ *  by the per-session/task label bar. Bulk mode has no inline applied-label chip row (that's the
+ *  per-session `LabelBar`'s job) — the popover's pick list itself shows applied/mixed state via
+ *  `stateFor`, so this button is the only bulk-labels UI surface. */
+function BulkLabelButton({
+  labels,
+  loading,
+  stateFor,
+  busy,
+  error,
+  onToggle,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  labels: LabelRecord[];
+  loading: boolean;
+  stateFor: (label: LabelRecord) => TriState;
+  busy: boolean;
+  error: string | null;
+  onToggle: (label: LabelRecord) => void;
+  onCreate: (name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="bulk-label-anchor" ref={rootRef}>
+      <button
+        type="button"
+        className="bulk-action-neutral"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Tag size={14} strokeWidth={1.75} aria-hidden />
+        <span>Edit Labels</span>
+      </button>
+
+      {open && (
+        <LabelPopover
+          labels={labels}
+          loading={loading}
+          stateFor={stateFor}
+          busy={busy}
+          error={error}
+          onToggle={onToggle}
+          onCreate={onCreate}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      )}
+    </div>
+  );
+}
+
 const DEFAULT_SINCE = daysAgo(30);
 const DEFAULT_UNTIL = daysAgo(0);
 
@@ -231,6 +544,23 @@ function toggle<T>(list: T[], value: T): T[] {
 export function Sessions() {
   const [labelSearch, setLabelSearch] = useState("");
   const labelCatalog = useLabelsQuery();
+
+  // Bulk-select state (cmd/ctrl-click toggle, shift-click range) lives here, above `SessionList`, so
+  // it can also drive the detail-pane overlay once 2+ sessions are selected.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
+  const [noneSelectedActive, setNoneSelectedActive] = useState(false);
+  const selection: SessionSelection = useMemo(
+    () => ({
+      ids: selectedIds,
+      setIds: setSelectedIds,
+      lastClickedId,
+      setLastClickedId,
+      noneSelectedActive,
+      setNoneSelectedActive,
+    }),
+    [selectedIds, lastClickedId, noneSelectedActive],
+  );
 
   const navigate = useNavigate();
   const { since, until, committedQ, source, labelIds, labelMode } = useSearch({
@@ -460,9 +790,15 @@ export function Sessions() {
       </div>
 
       <div className="sessions-split">
-        <SessionList />
+        <SessionList selection={selection} />
         <div className="session-detail">
-          <Outlet />
+          {selection.ids.size >= 2 ? (
+            <BulkSelectionOverlay selection={selection} />
+          ) : selection.ids.size === 0 && selection.noneSelectedActive ? (
+            <NoSessionsSelected />
+          ) : (
+            <Outlet />
+          )}
         </div>
       </div>
     </div>

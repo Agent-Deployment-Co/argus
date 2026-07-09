@@ -45,6 +45,21 @@ export async function fetchSessions(filters: SessionListFilters, offset: number)
   return jsonOrThrow<SessionListResponse>(res, "Failed to load sessions");
 }
 
+/** Page through every session matching `filters` (beyond what's loaded in the list), returning just
+ *  the ids — backs "Select all N matching sessions" in bulk mode. Reuses the same filter/pagination
+ *  contract as the list itself rather than a dedicated "resolve filter to ids" endpoint. */
+export async function fetchAllSessionIds(filters: SessionListFilters): Promise<string[]> {
+  const ids: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchSessions(filters, offset);
+    ids.push(...page.rows.map((r) => r.sessionId));
+    offset += page.rows.length;
+    if (offset >= page.total || page.rows.length === 0) break;
+  }
+  return ids;
+}
+
 /** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery so "Load more"
  *  appends; changing any filter starts a fresh first page. */
 export function useSessionsQuery(filters: SessionListFilters) {
@@ -100,6 +115,16 @@ export async function setSessionHidden(sessionId: string, hidden: boolean): Prom
     body: JSON.stringify({ hidden }),
   });
   return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide session" : "Failed to unhide session");
+}
+
+/** Flag/unflag many sessions as hidden at once (bulk mode). */
+export async function setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<{ hidden: boolean }> {
+  const res = await fetchOrOffline("/api/sessions/bulk/hidden", {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ sessionIds, hidden }),
+  });
+  return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide sessions" : "Failed to unhide sessions");
 }
 
 /** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed

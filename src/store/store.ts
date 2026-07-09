@@ -2711,6 +2711,54 @@ export class SqliteStore implements Store {
     });
   }
 
+  setLabelForSessions(
+    labelId: string,
+    sessionIds: string[],
+    applied: boolean,
+  ): Promise<void> {
+    return this.schedule(async () => {
+      const ids = [...new Set(sessionIds)];
+      if (!ids.length) return;
+      await transaction(this.db, async () => {
+        const activeLabel = await get<{ id: string }>(
+          this.db,
+          "SELECT id FROM labels WHERE id = ? AND deleted_at_ms IS NULL",
+          [labelId],
+        );
+        if (!activeLabel)
+          throw new LabelError("not_found", "That label no longer exists.");
+        if (applied) {
+          const now = Date.now();
+          // Three bound params per row (labelId, sessionId, now); 'session' and NULL are inlined.
+          for (const part of chunk(ids, Math.floor(MAX_BOUND_PARAMS / 3))) {
+            const valuesSql = part.map(() => "(?, 'session', ?, NULL, 'user', ?)").join(", ");
+            const params = part.flatMap((sessionId) => [labelId, sessionId, now]);
+            // ON CONFLICT over label_assignments_unique makes re-applying a no-op that preserves the
+            // original applied_by / applied_at_ms, matching assignLabel's single-target behavior.
+            await run(
+              this.db,
+              `INSERT INTO label_assignments (label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms)
+               VALUES ${valuesSql}
+               ON CONFLICT (label_id, session_id, COALESCE(task_seq, -1)) DO NOTHING`,
+              params,
+            );
+          }
+        } else {
+          // One bound slot is taken by `labelId`, so leave room for it in each chunk of ids.
+          for (const part of chunk(ids, MAX_BOUND_PARAMS - 1)) {
+            const placeholders = part.map(() => "?").join(", ");
+            await run(
+              this.db,
+              `DELETE FROM label_assignments WHERE label_id = ? AND task_seq IS NULL AND session_id IN (${placeholders})`,
+              [labelId, ...part],
+            );
+          }
+        }
+      });
+      secureSqliteFiles(this.path);
+    });
+  }
+
   readSessionLabels(sessionId: string): Promise<SessionLabels> {
     return this.schedule(async () => {
       const rows = await all<

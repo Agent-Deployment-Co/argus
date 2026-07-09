@@ -54,6 +54,7 @@ import { CONFIG_FILE } from "../paths.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
 import { LabelError, openStore } from "../store/store.ts";
 import type {
+  AppliedLabel,
   LabelAppliedBy,
   LabelFilterMode,
   LabelRecord,
@@ -141,6 +142,11 @@ export interface LabelResponse {
 export interface SessionLabelsResponse {
   labels: SessionLabels;
 }
+/** POST /api/sessions/bulk/labels-lookup — active session-level labels for many sessions at once,
+ *  keyed by session id (sessions with no labels are omitted). */
+export interface BulkSessionLabelsResponse {
+  labels: Record<string, AppliedLabel[]>;
+}
 
 /** Server-side filters parsed from a dashboard view's query string. Each narrows the store read
  *  (since/until/project/source); omitted fields fall back to the serve process's base options. Every
@@ -174,6 +180,8 @@ export interface ViewReaders {
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 /** Flag/unflag a session as hidden (local-only UI state). */
 export type SessionHiddenSetter = (sessionId: string, hidden: boolean) => Promise<void>;
+/** Flag/unflag many sessions as hidden at once (bulk mode). */
+export type SessionsHiddenSetter = (sessionIds: string[], hidden: boolean) => Promise<void>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
 /** A filtered/sorted/paginated page of session list rows, backed by the store's session aggregates. */
@@ -193,8 +201,12 @@ export interface LabelOps {
   rename(id: string, name: string): Promise<LabelRecord>;
   remove(id: string): Promise<void>;
   readForSession(sessionId: string): Promise<SessionLabels>;
+  /** Active session-level labels for many sessions at once (bulk mode's label picker). */
+  readForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
   assign(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
   unassign(labelId: string, target: LabelTarget): Promise<void>;
+  /** Apply/remove a session-level label across many sessions at once (bulk mode). */
+  setForSessions(labelId: string, sessionIds: string[], applied: boolean): Promise<void>;
 }
 
 interface AppOptions {
@@ -209,6 +221,8 @@ interface AppOptions {
   sessionDetail?: SessionDetailReader;
   /** Flag/unflag a session as hidden. Omitted in processes without a store (503). */
   setSessionHidden?: SessionHiddenSetter;
+  /** Flag/unflag many sessions as hidden at once (bulk mode). Omitted in processes without a store (503). */
+  setSessionsHidden?: SessionsHiddenSetter;
   /** Session/task label read + write operations. Omitted in processes without a store (503). */
   labels?: LabelOps;
   debugInfo?: DebugInfoReader;
@@ -448,6 +462,24 @@ async function readJsonStringField(c: Context, field: string): Promise<string | 
   return value.trim();
 }
 
+/** Read a required non-empty array of non-empty strings from a JSON body, or return a 400 Response. */
+async function readJsonStringArrayField(c: Context, field: string): Promise<string[] | Response> {
+  let value: unknown;
+  try {
+    value = (await c.req.json())?.[field];
+  } catch {
+    return c.json({ error: `Expected a JSON body with a "${field}".` }, 400);
+  }
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    !value.every((v) => typeof v === "string" && v.trim())
+  ) {
+    return c.json({ error: `Missing or empty "${field}".` }, 400);
+  }
+  return value.map((v) => v.trim());
+}
+
 /** Read a required boolean field from a JSON body, or return a 400 Response. */
 async function readJsonBooleanField(c: Context, field: string): Promise<boolean | Response> {
   let value: unknown;
@@ -521,6 +553,23 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     const session = await opts.sessionDetail(sessionId);
     if (!session) return c.json({ error: "Session not found." }, 404);
     return c.json({ session } satisfies SessionDetailResponse);
+  });
+
+  // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
+  // the literal "bulk" segment isn't swallowed by that route's ":id" param.
+  app.post("/api/sessions/bulk/hidden", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!opts.setSessionsHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
+
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const hidden = await readJsonBooleanField(c, "hidden");
+    if (typeof hidden !== "boolean") return hidden;
+
+    await opts.setSessionsHidden(sessionIds, hidden);
+    opts.onStoreChanged?.();
+    return c.json({ hidden });
   });
 
   // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
@@ -634,6 +683,37 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     const sessionId = c.req.param("id").trim();
     if (!sessionId) return c.json({ error: "Missing session id." }, 400);
     return c.json({ labels: await labels.readForSession(sessionId) } satisfies SessionLabelsResponse);
+  });
+
+  // Active session-level labels for many sessions at once (bulk mode's tri-state label picker) — a
+  // POST rather than GET since the id list can be large. Read path, so no CSRF guard. Registered
+  // before the single-id route below so the literal "bulk" segment isn't swallowed by ":id".
+  app.post("/api/sessions/bulk/labels-lookup", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const bySession = await labels.readForSessions(sessionIds);
+    return c.json({ labels: Object.fromEntries(bySession) } satisfies BulkSessionLabelsResponse);
+  });
+
+  // Apply / remove a session-level label across many sessions at once (bulk mode). Registered before
+  // the single-id route below so the literal "bulk" segment isn't swallowed by that route's ":id" param.
+  app.post("/api/sessions/bulk/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    const applied = await readJsonBooleanField(c, "applied");
+    if (typeof applied !== "boolean") return applied;
+    try {
+      await labels.setForSessions(labelId, sessionIds, applied);
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
   });
 
   // Apply / remove a label on a session. The applier is a person using the web app, so applied_by is
@@ -1083,14 +1163,20 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>
     withWriteStore((store) => store.setSessionsHidden([sessionId], hidden));
 
+  const setSessionsHidden: SessionsHiddenSetter = (sessionIds, hidden) =>
+    withWriteStore((store) => store.setSessionsHidden(sessionIds, hidden));
+
   const labels: LabelOps = {
     list: async () => (await readStore()).listLabels(),
     readForSession: async (sessionId) => (await readStore()).readSessionLabels(sessionId),
+    readForSessions: async (sessionIds) => (await readStore()).readSessionLabelsForSessions(sessionIds),
     create: (name) => withWriteStore((store) => store.createLabel({ name })),
     rename: (id, name) => withWriteStore((store) => store.renameLabel(id, name)),
     remove: (id) => withWriteStore((store) => store.deleteLabel(id)),
     assign: (labelId, target, appliedBy) => withWriteStore((store) => store.assignLabel(labelId, target, appliedBy)),
     unassign: (labelId, target) => withWriteStore((store) => store.unassignLabel(labelId, target)),
+    setForSessions: (labelId, sessionIds, applied) =>
+      withWriteStore((store) => store.setLabelForSessions(labelId, sessionIds, applied)),
   };
 
   const app = createApp(webRoot, {
@@ -1100,6 +1186,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionList,
     sessionDetail,
     setSessionHidden,
+    setSessionsHidden,
     labels,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),

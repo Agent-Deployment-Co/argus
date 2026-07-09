@@ -206,6 +206,9 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 
 .filter-dropdown-panel { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 260px; max-width: calc(100vw - 24px); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px rgba(0, 0, 0, .28); }
+/* Date panel needs more room than the default 260px: two fixed-width 132px date inputs (see
+   .filter-dropdown-dates below) plus the dash and gaps between them. */
+.filter-dropdown-panel:has(.filter-dropdown-dates) { width: 320px; }
 .filter-dropdown-panel-right { left: auto; right: 0; }
 .filter-dropdown-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .filter-dropdown-title { color: var(--heading); font: 700 13px var(--font-ui); }
@@ -226,8 +229,13 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
 .filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
 .filter-dropdown-preset.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
-.filter-dropdown-dates { display: flex; align-items: center; gap: 8px; }
-.filter-dropdown-dates .filter-input { flex: 1 1 0; width: auto; }
+/* justify-content: center, not flex-start, so any leftover row width (native date-input rendering
+   varies slightly by browser/OS) splits evenly on both sides instead of piling up after the second
+   input, which read as lopsided right padding. */
+.filter-dropdown-dates { display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* Fixed (not flex-stretched) width: Chrome pads the value/icon to fill whatever box it's given, so
+   letting these grow to split the wider panel evenly leaves an ugly gap before the calendar icon. */
+.filter-dropdown-dates .filter-input { flex: 0 0 auto; width: 132px; }
 /* Second track is minmax(0, 1fr), NOT 1fr: a bare 1fr track has an implicit min-width:auto, so a long
    unbreakable task description would force the track (and the whole page) wider than the viewport and
    defeat the .task-item-desc ellipsis. minmax(0, 1fr) lets the detail pane shrink below its content's
@@ -235,7 +243,11 @@ main:has(.inbox-page) { padding: 0; }
 .sessions-split { display: grid; grid-template-columns: minmax(248px, 320px) minmax(0, 1fr); height: calc(100vh - var(--filter-bar-h)); }
 .session-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
 .session-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.session-list-head-count { padding: 10px 14px; color: var(--muted); font: 600 11px var(--font-ui); }
+.session-list-head-count { flex-direction: row; align-items: center; justify-content: space-between; padding: 10px 14px; color: var(--muted); font: 600 11px var(--font-ui); }
+.session-select-all { flex: 0 0 auto; margin: 0; padding: 0; border: none; background: none; color: var(--accent); font: 600 11px var(--font-ui); cursor: pointer; }
+.session-select-all:hover { text-decoration: underline; }
+.session-select-all:disabled { opacity: .6; cursor: default; text-decoration: none; }
+.session-list-select-matching { display: flex; justify-content: flex-end; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
 .session-load-more:hover { border-color: var(--accent); color: var(--heading); }
 .session-load-more:disabled { opacity: .6; cursor: default; }
@@ -243,6 +255,8 @@ main:has(.inbox-page) { padding: 0; }
 .session-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
 .session-item:hover { background: var(--hover); color: var(--text); }
 .session-item.active { background: color-mix(in srgb, var(--accent) 13%, transparent); border-left-color: var(--accent); }
+.session-item.selected { background: color-mix(in srgb, var(--accent) 8%, transparent); border-left-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.session-item.selected.active { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .session-item-title { color: var(--heading); font-weight: 700; font-size: 13.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .session-item-meta { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; font-size: 11.5px; }
 .session-item-meta .truncate { max-width: 60%; }
@@ -258,6 +272,22 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail { display: flex; min-height: 0; min-width: 0; }
 .session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
+
+/* Bulk mode: the "N sessions selected" panel that swaps in for the detail pane's <Outlet /> once 2+
+   sessions are selected (label picker + Hide, wired to the /api/sessions/bulk/* routes). */
+.bulk-overlay { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
+.bulk-overlay-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.bulk-overlay-count { font: 700 18px "Aleo", Georgia, serif; color: var(--heading); }
+.bulk-overlay-clear { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
+.bulk-overlay-clear:hover { border-color: var(--accent); color: var(--heading); }
+.bulk-action-neutral { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.bulk-action-neutral:hover:not(:disabled) { border-color: var(--accent); color: var(--heading); }
+.bulk-action-neutral:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bulk-overlay-section { margin-bottom: 28px; }
+.bulk-overlay-heading { margin: 0 0 10px; color: var(--muted); font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
+.label-popover-check.is-mixed { height: 14px; border-radius: 3px; background: var(--accent); color: var(--surface); }
+.label-chip--mixed { padding-left: 4px; }
+.label-chip-mixed-badge { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; flex: 0 0 auto; border-radius: 3px; background: var(--muted); color: var(--surface); }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
 .session-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
 .session-detail-headline { min-width: 0; line-height: 1.2; }
@@ -278,6 +308,8 @@ main:has(.inbox-page) { padding: 0; }
 .task-action:hover:not(:disabled) { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
 .task-action:disabled { opacity: .65; cursor: wait; }
 .task-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bulk-actions-row { display: flex; align-items: center; gap: 8px; }
+.bulk-label-anchor { position: relative; display: inline-flex; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 22px; }
 .kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .kv-k { color: var(--muted); font-size: 13px; }
