@@ -398,6 +398,9 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
   const hide = useMutation({
     mutationFn: () => setSessionsHidden(ids, true),
     onSuccess: () => {
+      for (const id of ids) {
+        void qc.invalidateQueries({ queryKey: ["session", id] });
+      }
       void qc.invalidateQueries({ queryKey: ["sessions"] });
       clear();
     },
