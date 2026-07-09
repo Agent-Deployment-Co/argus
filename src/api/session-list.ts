@@ -148,10 +148,20 @@ export function buildSessionDetail(
   meta: SessionMeta | undefined,
   tasks: TaskFact[],
   interpretation?: { title: string | null; summary: string | null; interpreted: boolean },
+  isHidden = false,
 ): SessionRow {
   const summary =
     interpretation?.summary ||
     heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
   const title = interpretation?.title || null;
-  return buildSessionRow(sessionId, messages, meta, summary, tasks, title, interpretation?.interpreted ?? false);
+  return buildSessionRow(
+    sessionId,
+    messages,
+    meta,
+    summary,
+    tasks,
+    title,
+    interpretation?.interpreted ?? false,
+    isHidden,
+  );
 }

@@ -1034,12 +1034,13 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks, interpretation] = await Promise.all([
+    const [meta, tasks, interpretation, isHidden] = await Promise.all([
       store.readSessionMeta(sessionId),
       store.readSessionTasks(sessionId),
       store.readSessionInterpretation(sessionId),
+      store.readSessionHidden(sessionId),
     ]);
-    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden);
   };
 
   const labels: LabelOps = {

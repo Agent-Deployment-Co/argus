@@ -2302,6 +2302,17 @@ export class SqliteStore implements Store {
     });
   }
 
+  readSessionHidden(sessionId: string): Promise<boolean> {
+    return this.schedule(async () => {
+      const row = await get<{ is_hidden: number }>(
+        this.db,
+        "SELECT is_hidden FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row?.is_hidden === 1;
+    });
+  }
+
   // The model-generated title/summary for one session (#234), or nulls when not yet interpreted, plus
   // whether interpretation has run at all (`interpreted_at_ms` is set). Backs the on-demand detail
   // view's title/summary fallback and its "No tasks found." vs "Interpretation pending." distinction.

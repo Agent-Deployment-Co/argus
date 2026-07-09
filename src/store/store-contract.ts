@@ -740,6 +740,9 @@ export interface ReadModelStore {
   readSessionInterpretation(
     sessionId: string,
   ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined>;
+  /** Whether a session is currently hidden (local-only UI state) — false if the session doesn't exist.
+   *  Backs the detail view's Hide/Unhide button. */
+  readSessionHidden(sessionId: string): Promise<boolean>;
   /** Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
    *  order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. A reader
    *  groups by `interactionSeq` as needed. Empty when retention was off at index time. Local-only —

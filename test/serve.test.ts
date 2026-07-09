@@ -84,6 +84,7 @@ function fixtureSession(sessionId: string): SessionRow {
       tokenGrowth: null,
     },
     tasks: [],
+    isHidden: false,
   };
 }
 
