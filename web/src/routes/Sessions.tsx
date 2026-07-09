@@ -196,10 +196,23 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
       else next.add(sessionId);
       selection.setIds(next);
       selection.setLastClickedId(sessionId);
-      // Deselecting the sole selected session, when it's also the one open in the detail pane,
-      // swaps the detail pane to "No sessions selected" rather than leaving that session's detail
-      // on screen with nothing actually selected underneath it.
-      selection.setNoneSelectedActive(next.size === 0 && sessionId === selectedId);
+      if (next.size === 0) {
+        // Deselecting the sole selected session, when it's also the one open in the detail pane,
+        // swaps the detail pane to "No sessions selected" rather than leaving that session's detail
+        // on screen with nothing actually selected underneath it.
+        selection.setNoneSelectedActive(sessionId === selectedId);
+      } else if (next.size === 1) {
+        // Dropping to exactly one remaining id no longer qualifies for the bulk overlay (>= 2), so
+        // treat it like a normal single selection: navigate the detail pane to match, in case the
+        // sole remaining id isn't the one currently routed to.
+        selection.setNoneSelectedActive(false);
+        const [soleId] = next;
+        if (soleId !== selectedId) {
+          navigate({ to: "/sessions/$sessionId", params: { sessionId: soleId! }, search: (prev: SessionsSearch) => prev });
+        }
+      } else {
+        selection.setNoneSelectedActive(false);
+      }
       return;
     }
     if (e.shiftKey) {
