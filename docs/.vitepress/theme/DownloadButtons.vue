@@ -2,11 +2,18 @@
 import { ref, onMounted } from 'vue'
 
 // `center` centers the row; `label` shows a caption inline to the left of the
-// buttons. Quick Start uses both; the Download page uses neither.
-withDefaults(defineProps<{ center?: boolean; label?: string }>(), {
-  center: false,
-  label: ''
-})
+// buttons. Quick Start uses both; the Download page uses neither. `location`
+// identifies where this instance sits (e.g. `home_hero`, `download_page`) and
+// rides along on the PostHog `download_clicked` event as its `location`
+// property, so we can see which placement drives downloads.
+withDefaults(
+  defineProps<{ center?: boolean; label?: string; location?: string }>(),
+  {
+    center: false,
+    label: '',
+    location: ''
+  }
+)
 
 const repo = 'Agent-Deployment-Co/argus'
 // No-JS fallback: the latest release page always shows the newest build.
@@ -51,7 +58,12 @@ onMounted(async () => {
 <template>
   <div class="download-btns" :class="{ 'download-btns--center': center }">
     <span v-if="label" class="download-btns__label">{{ label }}</span>
-    <a class="btn-primary" :href="macHref">
+    <a
+      class="btn-primary"
+      :href="macHref"
+      data-ph-event="download_clicked"
+      :data-ph-location="location || undefined"
+    >
       <svg viewBox="0 0 384 512" width="18" height="18" aria-hidden="true">
         <path
           fill="currentColor"
