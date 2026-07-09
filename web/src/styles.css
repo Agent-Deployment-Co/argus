@@ -260,7 +260,9 @@ main:has(.inbox-page) { padding: 0; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
 .session-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
-.session-detail-headline { min-width: 0; line-height: 1.2; }
+/* Cap the headline (which now carries the potentially long summary) at a comfortable reading width;
+   space-between keeps the Hide/Refresh actions pinned to the right. */
+.session-detail-headline { min-width: 0; max-width: 800px; line-height: 1.2; }
 .session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
 .eyebrow-link { color: var(--link); }
@@ -295,8 +297,8 @@ main:has(.inbox-page) { padding: 0; }
 .task-empty { margin: 0; color: var(--muted); font-size: 13px; }
 .session-summary { margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.55; }
 .session-detail-headline .session-summary { margin-top: 8px; }
-.summary-toggle { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
-.summary-toggle:hover { color: var(--link-hover); text-decoration: underline; }
+.read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
+.read-more:hover { color: var(--link-hover); text-decoration: underline; }
 
 /* Hidden /debug page. */
 .debug { max-width: 980px; }

@@ -23,11 +23,11 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
-/** The session summary. When it exceeds two lines, we truncate it to the exact prefix that fits two
- *  lines with room for a trailing "… More…" link — so the link sits inline at the end of line 2, not
- *  bumped onto a third line — and clicking it expands to the full text (no collapse). The prefix is
- *  measured against an off-DOM clone that mirrors the paragraph's width/font, re-run on text change
- *  and viewport resize. Null prefix = the text fits two lines (or has been expanded), shown whole. */
+/** The session summary. When it exceeds two lines, we truncate it at a word boundary and append an
+ *  ellipsis plus a "Read more" link that expands to the full text (no collapse). The cut point is
+ *  found by measuring against an off-DOM clone that mirrors the paragraph's width/font and reserves
+ *  room for the "… Read more" suffix, re-run on text change and viewport resize. Null prefix = the
+ *  text fits two lines (or has been expanded), shown whole. */
 function SessionSummary({ text }: { text: string }) {
   const ref = useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = useState(false);
@@ -58,21 +58,22 @@ function SessionSummary({ text }: { text: string }) {
         letterSpacing: cs.letterSpacing,
       });
       document.body.appendChild(clone);
+      // The suffix the truncated text carries: an ellipsis + the "Read more" link. Non-breaking spaces
+      // keep it on one line, matching the rendered (nowrap) link, so the reservation is accurate.
+      const suffix = "… Read more";
       clone.textContent = text;
       if (clone.scrollHeight <= maxHeight) {
         setPrefix(null);
         clone.remove();
         return;
       }
-      // Binary-search the longest prefix that still fits two lines once the link is appended. The
-      // trailing nbsp pads a little slack so the rendered link never spills onto a third line.
-      const suffix = "… More… ";
+      // Binary-search the longest character prefix that still fits two lines with the suffix appended.
       let lo = 0;
       let hi = text.length;
       let best = 0;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        clone.textContent = text.slice(0, mid).replace(/\s+$/, "") + suffix;
+        clone.textContent = text.slice(0, mid) + suffix;
         if (clone.scrollHeight <= maxHeight) {
           best = mid;
           lo = mid + 1;
@@ -81,7 +82,11 @@ function SessionSummary({ text }: { text: string }) {
         }
       }
       clone.remove();
-      setPrefix(text.slice(0, best).replace(/\s+$/, ""));
+      // Snap back to a word boundary so we never cut mid-word (fall back to the raw slice for a single
+      // unbroken word), and drop any trailing whitespace before the ellipsis.
+      const raw = text.slice(0, best);
+      const atWord = raw.replace(/\s+\S*$/, "");
+      setPrefix((atWord || raw).trimEnd());
     };
     measure();
     window.addEventListener("resize", measure);
@@ -93,8 +98,8 @@ function SessionSummary({ text }: { text: string }) {
       <p ref={ref} className="session-summary">
         {prefix}
         {"… "}
-        <button type="button" className="summary-toggle" onClick={() => setExpanded(true)}>
-          More…
+        <button type="button" className="read-more" onClick={() => setExpanded(true)}>
+          Read more
         </button>
       </p>
     );
