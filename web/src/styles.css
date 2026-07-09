@@ -277,7 +277,7 @@ main:has(.inbox-page) { padding: 0; }
 .bulk-action-neutral:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bulk-overlay-section { margin-bottom: 28px; }
 .bulk-overlay-heading { margin: 0 0 10px; color: var(--muted); font: 700 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
-.label-popover-check.is-mixed { height: 14px; border-radius: 3px; background: var(--muted); color: var(--surface); }
+.label-popover-check.is-mixed { height: 14px; border-radius: 3px; background: var(--accent); color: var(--surface); }
 .label-chip--mixed { padding-left: 4px; }
 .label-chip-mixed-badge { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; flex: 0 0 auto; border-radius: 3px; background: var(--muted); color: var(--surface); }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }

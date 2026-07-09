@@ -606,7 +606,7 @@ function BulkLabelPopover({
               <div key={label.id} className="label-popover-row">
                 <button
                   type="button"
-                  className={`label-popover-pick${stateFor(label) === "checked" ? " is-applied" : ""}`}
+                  className={`label-popover-pick${stateFor(label) !== "unchecked" ? " is-applied" : ""}`}
                   onClick={() => onToggle(label)}
                   disabled={busy}
                 >
