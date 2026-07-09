@@ -267,8 +267,6 @@ main:has(.inbox-page) { padding: 0; }
 .eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
 .table-link { color: var(--link); }
 .table-link:hover { color: var(--link-hover); text-decoration: underline; }
-.session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-.session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
 .session-detail-headline .labelbar--md { margin: 14px 0 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }

@@ -113,12 +113,11 @@ export function SessionDetail() {
             <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="eyebrow-link truncate" title={`Filter to ${s.project}`}>
               {compactProject(s.project)}
             </Link>
-            {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
             <span className="muted">·</span>
-            <code className="session-id">{s.sessionId}</code>
+            <span>{dtAmPm(s.start)} for {dur(s.durationMs)}</span>
+            {s.user && (<><span className="muted">·</span><span>{s.user}</span></>)}
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
-          <div className="session-detail-range">{dtAmPm(s.start)} for {dur(s.durationMs)}</div>
           <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
         <div className="session-detail-actions">
