@@ -42,6 +42,9 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   /** CLI-only (#234): whether session interpretation has run for this session. Lets the UI show "No
    *  tasks found." (ran, produced none) vs "Interpretation pending." (not yet run). */
   interpreted?: boolean;
+  /** CLI-only: local-only UI state (never pushed by sync). Hidden sessions are excluded from the
+   *  sessions list and search, but their usage still counts in aggregate rollups. */
+  isHidden: boolean;
 };
 
 /**

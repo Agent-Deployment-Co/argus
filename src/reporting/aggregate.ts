@@ -132,6 +132,9 @@ export function buildSessionRow(
   // Whether interpretation has run for this session (#234) — lets the UI distinguish "No tasks found."
   // (ran, none) from "Interpretation pending." (not yet run). CLI-only.
   interpreted = false,
+  // Local-only UI state: whether the session is currently hidden from the list/search. CLI-only, never
+  // pushed by sync.
+  isHidden = false,
 ): SessionRow {
   const u = emptyUsage();
   let c = 0;
@@ -178,5 +181,6 @@ export function buildSessionRow(
       turns: meta?.rawTurns ?? meta?.friction?.turns ?? null,
     },
     tasks,
+    isHidden,
   };
 }

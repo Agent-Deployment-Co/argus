@@ -1,6 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { RefreshCw } from "lucide-react";
+import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Dash, Skills } from "../components/pills";
 import { LabelBar } from "../components/LabelBar";
@@ -8,7 +8,7 @@ import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
-import { reindexSession, useSessionTaskMetrics } from "../lib/sessions";
+import { reindexSession, setSessionHidden, useSessionTaskMetrics } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 
@@ -56,6 +56,19 @@ export function SessionDetail() {
     },
   });
 
+  // Unlike Refresh, hiding stays on this pane (the point is to see the toggle take effect on the
+  // session you're looking at) — invalidate the detail query so the button flips label, and the
+  // sessions list so a now-hidden session vanishes from it immediately if open elsewhere.
+  const qc = useQueryClient();
+  const hide = useMutation({
+    mutationFn: ({ sessionId, hidden }: { sessionId: string; hidden: boolean }) =>
+      setSessionHidden(sessionId, hidden),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["session", sessionId] });
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+
   if (detail.isPending) {
     return <div className="session-empty">Loading session…</div>;
   }
@@ -84,6 +97,11 @@ export function SessionDetail() {
     !refresh.isPending && refresh.variables === s.sessionId && refresh.error instanceof Error
       ? refresh.error.message
       : null;
+  const hidePending = hide.isPending && hide.variables?.sessionId === s.sessionId;
+  const hideError =
+    !hide.isPending && hide.variables?.sessionId === s.sessionId && hide.error instanceof Error
+      ? hide.error.message
+      : null;
 
   return (
     <>
@@ -106,19 +124,32 @@ export function SessionDetail() {
           <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
           <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
-        <button
-          type="button"
-          className="task-action"
-          onClick={() => refresh.mutate(s.sessionId)}
-          disabled={refreshingThisSession}
-          title="Re-read this session's transcript from disk and update it"
-        >
-          <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
-          <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
-        </button>
+        <div className="session-detail-actions">
+          <button
+            type="button"
+            className="task-action"
+            onClick={() => hide.mutate({ sessionId: s.sessionId, hidden: !s.isHidden })}
+            disabled={hidePending}
+            title={s.isHidden ? "Unhide this session" : "Hide this session from the list and search"}
+          >
+            {s.isHidden ? <Eye size={14} strokeWidth={1.75} aria-hidden /> : <EyeOff size={14} strokeWidth={1.75} aria-hidden />}
+            <span>{s.isHidden ? "Unhide" : "Hide"}</span>
+          </button>
+          <button
+            type="button"
+            className="task-action"
+            onClick={() => refresh.mutate(s.sessionId)}
+            disabled={refreshingThisSession}
+            title="Re-read this session's transcript from disk and update it"
+          >
+            <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
+            <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
+          </button>
+        </div>
       </header>
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
+      {hideError && <div className="task-error" role="alert">{hideError}</div>}
 
       <StatCards stats={cards} />
 

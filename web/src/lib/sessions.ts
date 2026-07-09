@@ -91,6 +91,17 @@ export async function reindexSession(sessionId: string): Promise<ReindexResponse
   return jsonOrThrow<ReindexResponse>(res, "Failed to refresh");
 }
 
+/** Flag/unflag a session as hidden (local-only UI state): hidden sessions drop out of the sessions
+ *  list and search, but their usage still counts in aggregate rollups. */
+export async function setSessionHidden(sessionId: string, hidden: boolean): Promise<{ hidden: boolean }> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/hidden`, {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ hidden }),
+  });
+  return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide session" : "Failed to unhide session");
+}
+
 /** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
  *  server-side from the messages attributed to each task. Backs both the task list (tokens per row)
  *  and the detail drawer. */
