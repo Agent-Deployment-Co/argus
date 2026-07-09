@@ -218,6 +218,10 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-option.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 .filter-dropdown-option.selected svg { color: var(--accent); flex: 0 0 auto; }
 .filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
+.filter-dropdown-mode { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.filter-dropdown-mode-btn { flex: 1 1 0; border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; text-align: center; }
+.filter-dropdown-mode-btn:hover { border-color: var(--accent); color: var(--heading); }
+.filter-dropdown-mode-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 .filter-dropdown-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .filter-dropdown-preset { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; }
 .filter-dropdown-preset:hover { border-color: var(--accent); color: var(--heading); }
@@ -254,8 +258,8 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail { display: flex; min-height: 0; min-width: 0; }
 .session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
-.session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.session-detail-headline { min-width: 0; }
+.session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
+.session-detail-headline { min-width: 0; line-height: 1.2; }
 .session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
 .eyebrow-link { color: var(--link); }
@@ -265,6 +269,8 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
+.session-detail-headline .labelbar--md { margin: 14px 0 0; }
+.session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .section-title-row h3 { margin: 0; }
 .task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
@@ -301,6 +307,7 @@ main:has(.inbox-page) { padding: 0; }
    cleanly. Each row is a clickable button that opens the detail drawer; full text is in the drawer
    (and on hover via title). */
 .tasks { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tasks li { background: var(--surface); }
 .tasks li + li .task-item { border-top: 1px solid var(--line); }
 .task-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 8px 12px; border: 0; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
 .task-item:hover { background: var(--hover); }
@@ -535,12 +542,12 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .welcome-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Session/task labels (session-and-task-labels). Chips + an "add label" popover. */
-.labelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.labelbar--md { margin: 2px 0 4px; }
-.labelbar--sm { margin: 6px 0 2px; }
-.label-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid var(--pill-cool-line, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--pill-cool, var(--accent)) 12%, transparent); color: var(--text); font: 600 11.5px var(--font-ui); }
+.labelbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: fit-content; max-width: 100%; }
+.labelbar--md { margin: 10px 0 14px; }
+.labelbar--sm { margin: 8px 0 6px; padding: 0 12px; }
+.label-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid color-mix(in srgb, var(--muted) 16%, transparent); border-radius: 999px; background: transparent; color: var(--muted); font: 400 11.5px var(--font-ui); cursor: default; }
 .labelbar--sm .label-chip { font-size: 10.5px; padding: 1px 3px 1px 8px; }
-.label-chip--system { border-style: dashed; }
+.label-chip--system { font-style: italic; opacity: .78; }
 .label-chip-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
 .label-chip-x:hover { background: var(--accent); color: var(--porcelain); }
 .labelbar-add { position: relative; display: inline-flex; }
@@ -568,5 +575,13 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .label-popover-rename { height: 28px; }
 .label-popover-create { display: inline-flex; align-items: center; gap: 7px; margin-top: 2px; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--accent); font: 600 12.5px var(--font-ui); text-align: left; cursor: pointer; }
 .label-popover-create:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.label-delete-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgba(0, 0, 0, 0.5); }
+.label-delete-dialog { width: 320px; max-width: 100%; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35); }
+.label-delete-text { margin: 0; color: var(--text); font: 400 13.5px/1.5 "Aleo", Georgia, serif; }
+.label-delete-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.label-delete-btn { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font: 600 12.5px var(--font-ui); cursor: pointer; }
+.label-delete-btn:hover { border-color: var(--accent); }
+.label-delete-btn--danger { border-color: transparent; background: #d9534f; color: var(--porcelain); }
+.label-delete-btn--danger:hover { background: color-mix(in srgb, #d9534f 88%, black); border-color: transparent; }
 .session-item-labels { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .label-chip--readonly { padding: 1px 9px; font-size: 10.5px; }

@@ -355,6 +355,10 @@ export type LabelAppliedBy = "user" | "system";
 /** What a label application targets. */
 export type LabelTargetKind = "session" | "task";
 
+/** How a multi-label filter narrows a session list: "any" (union, the default) matches a session
+ *  carrying at least one of the given labels; "all" (intersection) requires every one of them. */
+export type LabelFilterMode = "any" | "all";
+
 /** A label definition. `deletedAtMs` set means the label was soft-deleted (its name can be reused). */
 export interface LabelRecord {
   id: string;
@@ -843,6 +847,10 @@ export interface ReadModelStore {
    *  list's label chips. Task-level labels are excluded (the list shows session labels only). Sessions
    *  with no labels are absent from the map. */
   readSessionLabelsForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
+  /** Session ids matching the given labels (session-level only, matching
+   *  `readSessionLabelsForSessions`'s scope) — backs the session list's label filter. `mode` picks
+   *  union ("any", the default) vs intersection ("all") across multiple label ids. */
+  readSessionIdsForLabels(labelIds: string[], mode?: LabelFilterMode): Promise<Set<string>>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */

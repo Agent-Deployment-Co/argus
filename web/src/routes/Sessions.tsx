@@ -3,6 +3,7 @@ import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, usd } from "../lib/format";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
+import { useLabelsQuery } from "../lib/labels";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
@@ -18,6 +19,14 @@ export interface SessionsSearch {
   file?: string;
   sort?: SessionSort;
   q?: string;
+  /** Comma-separated label ids (union filter). */
+  label?: string;
+}
+
+/** Parse the comma-separated `?label=` search param into an array of label ids. */
+function labelIdsFromSearch(search: Record<string, unknown>): string[] {
+  const raw = search.label;
+  return typeof raw === "string" && raw ? raw.split(",").filter(Boolean) : [];
 }
 
 /** A human-facing title for a session: the model-generated title when the session has been interpreted
@@ -81,6 +90,8 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
     project: typeof search.project === "string" ? search.project : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
     file: typeof search.file === "string" && search.file ? search.file : undefined,
+    label: labelIdsFromSearch(search),
+    labelMode: search.labelMode === "all" ? "all" : "any",
     sort: (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent",
   };
 }
@@ -197,13 +208,11 @@ export function SessionsEmpty() {
   }
   if (query.isPending) return <div className="session-empty">Loading sessions…</div>;
   if (query.isError) return <div className="session-empty">{(query.error as Error).message}</div>;
-  const filtered = Boolean(filters.project || filters.q || filters.file || filters.source || filters.since || filters.until);
+  const filtered = Boolean(
+    filters.project || filters.q || filters.file || filters.source || filters.since || filters.until || filters.label?.length,
+  );
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
 }
-
-// Standing labels aren't implemented yet — this is a placeholder set so the dropdown has something
-// to filter by. Alphabetical (no inherent ranking yet).
-const DUMMY_LABELS = ["Blocked", "Escalated", "Follow-up", "Needs review", "Resolved"];
 
 const DEFAULT_SINCE = daysAgo(30);
 const DEFAULT_UNTIL = daysAgo(0);
@@ -214,25 +223,25 @@ function toggle<T>(list: T[], value: T): T[] {
 
 /** /sessions: the rail + app shell, with a search-first toolbar (search box + labels/date/sources
  *  dropdowns) instead of the shared date/source FilterBar — see Layout's isSessions check for how
- *  the global FilterBar is suppressed for this route. The date range, search text, and source are URL
- *  search params (?since=&until=&q=&source=) so a shared link carries its state and the default range
- *  (last 30 days) is always loaded up front — see sessionsRoute's validateSearch in router.tsx.
- *  `source` is single-valued (not multi-select) because /api/sessions only ever filters by one source
- *  at a time. */
+ *  the global FilterBar is suppressed for this route. The date range, search text, source, and labels
+ *  are URL search params (?since=&until=&q=&source=&label=) so a shared link carries its state and the
+ *  default range (last 30 days) is always loaded up front — see sessionsRoute's validateSearch in
+ *  router.tsx. `source` is single-valued (not multi-select) because /api/sessions only ever filters
+ *  by one source at a time; `label` is multi-valued (comma-separated ids, union match). */
 export function Sessions() {
   const [labelSearch, setLabelSearch] = useState("");
-  const [labels, setLabels] = useState<string[]>([]);
+  const labelCatalog = useLabelsQuery();
 
   const navigate = useNavigate();
-  const { since, until, committedQ, source, showLabels } = useSearch({
+  const { since, until, committedQ, source, labelIds, labelMode } = useSearch({
     strict: false,
     select: (s) => ({
       since: s.since ?? DEFAULT_SINCE,
       until: s.until ?? DEFAULT_UNTIL,
       committedQ: s.q ?? "",
       source: s.source,
-      // Labels are a placeholder (DUMMY_LABELS) — hide the dropdown unless explicitly opted into via ?labels=1.
-      showLabels: s.labels === "1",
+      labelIds: labelIdsFromSearch(s as Record<string, unknown>),
+      labelMode: s.labelMode === "all" ? "all" : "any",
     }),
   });
   const setRange = (patch: Record<string, string | undefined>) =>
@@ -240,6 +249,8 @@ export function Sessions() {
   const today = daysAgo(0);
   const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
   const setUntil = (v: string) => setRange({ until: v > today ? today : v < since ? since : v });
+  const setLabelIds = (ids: string[]) => setRange({ label: ids.length ? ids.join(",") : undefined });
+  const setLabelMode = (mode: "any" | "all") => setRange({ labelMode: mode === "all" ? "all" : undefined });
 
   // Local text mirrors the committed `q`; debounce edits into the URL so we don't refetch per keystroke.
   const [query, setQuery] = useState(committedQ);
@@ -254,18 +265,24 @@ export function Sessions() {
 
   const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
   const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
-  const labelsSummary = labels.length === 0 ? "Labels" : labels.length === 1 ? labels[0] : `${labels.length} labels`;
+  const labelNameById = useMemo(() => new Map((labelCatalog.data ?? []).map((l) => [l.id, l.name])), [labelCatalog.data]);
+  const labelsSummary =
+    labelIds.length === 0
+      ? "Labels"
+      : labelIds.length === 1
+        ? (labelNameById.get(labelIds[0]!) ?? "1 label")
+        : `${labelIds.length} labels`;
   const sourcesSummary = source ? sourceLabel(source) : "All sources";
 
   // Reset mirrors the shared FilterBar's reset (source + date range), plus the toolbar's own search
-  // box — enabled only when one of those three is off its default.
-  const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "";
+  // box and label selection — enabled only when one of those is off its default.
+  const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0;
   const resetFilters = () => {
     setQuery("");
-    setRange({ since: undefined, until: undefined, source: undefined, q: undefined });
+    setRange({ since: undefined, until: undefined, source: undefined, q: undefined, label: undefined, labelMode: undefined });
   };
 
-  const filteredLabels = DUMMY_LABELS.filter((l) => l.toLowerCase().includes(labelSearch.toLowerCase()));
+  const filteredLabels = (labelCatalog.data ?? []).filter((l) => l.name.toLowerCase().includes(labelSearch.toLowerCase()));
 
   // Cmd/Ctrl+K (or "/", the common search-focus shortcut) jumps focus to the search box and
   // selects its text, so typing replaces rather than appends, from anywhere on the page. "/" is
@@ -304,31 +321,58 @@ export function Sessions() {
         </span>
 
         <div className="inbox-toolbar-filters">
-          {showLabels && (
-            <FilterDropdown
-              icon={<Tag size={14} strokeWidth={2} aria-hidden />}
-              label="Labels"
-              summary={labelsSummary}
-              active={labels.length > 0}
-              onClear={labels.length > 0 ? () => setLabels([]) : undefined}
-              align="right"
-            >
-              <input
-                type="search"
-                className="filter-dropdown-search"
-                placeholder="Search labels"
-                value={labelSearch}
-                onChange={(e) => setLabelSearch(e.target.value)}
-                aria-label="Search labels"
-              />
-              <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
-                {filteredLabels.map((l) => (
-                  <FilterDropdownOption key={l} label={l} selected={labels.includes(l)} onToggle={() => setLabels((prev) => toggle(prev, l))} />
-                ))}
-                {filteredLabels.length === 0 && <p className="filter-dropdown-empty">No labels match.</p>}
-              </div>
-            </FilterDropdown>
-          )}
+          <FilterDropdown
+            icon={<Tag size={14} strokeWidth={2} aria-hidden />}
+            label="Labels"
+            summary={labelsSummary}
+            active={labelIds.length > 0}
+            onClear={labelIds.length > 0 ? () => setLabelIds([]) : undefined}
+            align="right"
+          >
+            <input
+              type="search"
+              className="filter-dropdown-search"
+              placeholder="Search labels"
+              value={labelSearch}
+              onChange={(e) => setLabelSearch(e.target.value)}
+              aria-label="Search labels"
+            />
+            <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
+              {filteredLabels.map((l) => (
+                <FilterDropdownOption
+                  key={l.id}
+                  label={l.name}
+                  selected={labelIds.includes(l.id)}
+                  onToggle={() => setLabelIds(toggle(labelIds, l.id))}
+                />
+              ))}
+              {filteredLabels.length === 0 && (
+                <p className="filter-dropdown-empty">
+                  {(labelCatalog.data ?? []).length === 0 ? "No labels yet." : "No labels match."}
+                </p>
+              )}
+            </div>
+            <div className="filter-dropdown-mode" role="radiogroup" aria-label="How to combine selected labels">
+              <button
+                type="button"
+                className={`filter-dropdown-mode-btn${labelMode === "any" ? " active" : ""}`}
+                role="radio"
+                aria-checked={labelMode === "any"}
+                onClick={() => setLabelMode("any")}
+              >
+                Match any
+              </button>
+              <button
+                type="button"
+                className={`filter-dropdown-mode-btn${labelMode === "all" ? " active" : ""}`}
+                role="radio"
+                aria-checked={labelMode === "all"}
+                onClick={() => setLabelMode("all")}
+              >
+                Match all
+              </button>
+            </div>
+          </FilterDropdown>
 
           <FilterDropdown
             icon={<Calendar size={14} strokeWidth={2} aria-hidden />}

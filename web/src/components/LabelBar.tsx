@@ -1,5 +1,6 @@
-import { Check, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, TagPlus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLabelCatalogMutations, useLabelsQuery, useSessionLabelMutations } from "../lib/labels";
 import type { AppliedLabel, LabelRecord } from "../types";
 
@@ -79,14 +80,8 @@ export function LabelBar({
           onClick={() => setOpen((v) => !v)}
           title="Add a label"
         >
-          {applied.length === 0 ? (
-            <>
-              <Tag size={12} strokeWidth={1.75} aria-hidden />
-              <span>Label</span>
-            </>
-          ) : (
-            <Plus size={13} strokeWidth={2} aria-hidden />
-          )}
+          <TagPlus size={13} strokeWidth={2} aria-hidden />
+          <span>Add Label</span>
         </button>
 
         {open && (
@@ -138,6 +133,7 @@ function LabelPopover({
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -150,6 +146,7 @@ function LabelPopover({
     : labels;
   const exactMatch = labels.some((l) => l.name.toLowerCase() === trimmed.toLowerCase());
   const canCreate = trimmed.length > 0 && !exactMatch;
+  const confirmingDelete = labels.find((l) => l.id === confirmingDeleteId) ?? null;
 
   const submitCreate = () => {
     if (!canCreate) return;
@@ -224,7 +221,12 @@ function LabelPopover({
                 <button type="button" className="label-icon-btn" aria-label={`Rename ${label.name}`} onClick={() => startRename(label)}>
                   <Pencil size={13} strokeWidth={1.75} aria-hidden />
                 </button>
-                <button type="button" className="label-icon-btn label-icon-btn--danger" aria-label={`Delete ${label.name}`} onClick={() => onDelete(label.id)}>
+                <button
+                  type="button"
+                  className="label-icon-btn label-icon-btn--danger"
+                  aria-label={`Delete ${label.name}`}
+                  onClick={() => setConfirmingDeleteId(label.id)}
+                >
                   <Trash2 size={13} strokeWidth={1.75} aria-hidden />
                 </button>
               </div>
@@ -239,6 +241,60 @@ function LabelPopover({
           </button>
         )}
       </div>
+
+      {confirmingDelete && (
+        <DeleteLabelDialog
+          label={confirmingDelete}
+          onCancel={() => setConfirmingDeleteId(null)}
+          onConfirm={() => {
+            onDelete(confirmingDelete.id);
+            setConfirmingDeleteId(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function DeleteLabelDialog({
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  label: LabelRecord;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return createPortal(
+    <div className="label-delete-backdrop" onMouseDown={onCancel}>
+      <div
+        className="label-delete-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Delete label"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <p className="label-delete-text">
+          Delete the label “{label.name}”? It will be removed from every session it's applied to.
+        </p>
+        <div className="label-delete-actions">
+          <button type="button" className="label-delete-btn" onClick={onCancel} autoFocus>
+            Cancel
+          </button>
+          <button type="button" className="label-delete-btn label-delete-btn--danger" onClick={onConfirm}>
+            Delete label
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

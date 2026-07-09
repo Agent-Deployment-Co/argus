@@ -28,6 +28,9 @@ const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 // suppressed in "card".
 const TASK_VIEW: "card" | "drawer" = "drawer";
 
+// Per-task label bars are hidden for now (session-level labeling stays on). Flip to re-enable.
+const SHOW_TASK_LABELS = false;
+
 export function SessionDetail() {
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
@@ -101,6 +104,7 @@ export function SessionDetail() {
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
           <div className="session-detail-range">{dtAmPm(s.start)} → {dtAmPm(s.end)}</div>
+          <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
         </div>
         <button
           type="button"
@@ -115,8 +119,6 @@ export function SessionDetail() {
       </header>
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
-
-      <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
 
       <StatCards stats={cards} />
 
@@ -140,7 +142,9 @@ export function SessionDetail() {
                   </span>
                 </button>
                 {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
-                <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
+                {SHOW_TASK_LABELS && (
+                  <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
+                )}
                 {TASK_VIEW === "card" && task.id === selectedTaskId && (
                   <div className="task-card">
                     <TaskDetails sessionId={s.sessionId} task={task} />
