@@ -538,9 +538,10 @@ function BulkLabelPopover({
   }, []);
 
   const trimmed = query.trim();
-  const filtered = trimmed
-    ? labels.filter((l) => l.name.toLowerCase().includes(trimmed.toLowerCase()))
-    : labels;
+  const stateRank: Record<TriState, number> = { checked: 0, mixed: 1, unchecked: 2 };
+  const filtered = (trimmed ? labels.filter((l) => l.name.toLowerCase().includes(trimmed.toLowerCase())) : labels)
+    .slice()
+    .sort((a, b) => stateRank[stateFor(a)] - stateRank[stateFor(b)] || a.name.localeCompare(b.name));
   const exactMatch = labels.some((l) => l.name.toLowerCase() === trimmed.toLowerCase());
   const canCreate = trimmed.length > 0 && !exactMatch;
   const confirmingDelete = labels.find((l) => l.id === confirmingDeleteId) ?? null;
