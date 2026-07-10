@@ -2980,6 +2980,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Map each of a session's task seqs -> task id (from resolved_tasks). Runs the query directly (no
+  // schedule wrap) so it composes inside an already-scheduled read. Shared by the task-grain readers.
+  private async taskIdBySeq(sessionId: string): Promise<Map<number, string>> {
+    const rows = await all<{ seq: number; task_json: string }>(
+      this.db,
+      "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+      [sessionId],
+    );
+    const idBySeq = new Map<number, string>();
+    for (const row of rows) idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+    return idBySeq;
+  }
+
   readSessionTaskMessages(
     sessionId: string,
   ): Promise<Map<string, MessageRecord[]>> {
@@ -2988,14 +3001,7 @@ export class SqliteStore implements Store {
       // messages by task id. Task membership lives on resolved_interactions.task_seq (#122), so a usage
       // row's task is its owning interaction's task: usage -> interaction (interaction_seq) -> task_seq.
       // Tasks with no attributed messages simply don't appear in the map (callers treat that as zero).
-      const taskRows = await all<{ seq: number; task_json: string }>(
-        this.db,
-        "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
-        [sessionId],
-      );
-      const idBySeq = new Map<number, string>();
-      for (const row of taskRows)
-        idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+      const idBySeq = await this.taskIdBySeq(sessionId);
 
       const rows = await all<{ record_json: string; task_seq: number | null }>(
         this.db,
@@ -3023,13 +3029,7 @@ export class SqliteStore implements Store {
   // readSessionTaskMessages misses — and matches the timeline's chapter grouping (#124).
   readSessionTaskInteractionCounts(sessionId: string): Promise<Map<string, number>> {
     return this.schedule(async () => {
-      const taskRows = await all<{ seq: number; task_json: string }>(
-        this.db,
-        "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
-        [sessionId],
-      );
-      const idBySeq = new Map<number, string>();
-      for (const row of taskRows) idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+      const idBySeq = await this.taskIdBySeq(sessionId);
 
       const rows = await all<{ task_seq: number; n: number }>(
         this.db,

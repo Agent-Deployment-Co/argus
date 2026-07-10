@@ -1,16 +1,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, MessagesSquare, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClampText } from "../components/ClampText";
 import { DataTable, type Column } from "../components/DataTable";
-import { Dash, Skills } from "../components/pills";
+import { Dash, InteractionCount, Skills } from "../components/pills";
+import { Kv, KvRow } from "../components/kv";
 import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
 import { SessionTimeline } from "../components/SessionTimeline";
 import { SessionDataCard } from "../components/SessionDataCard";
-import { compactProject, dtAmPm, dur, fmt, modelFamilyColor } from "../lib/format";
+import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, pluralize } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden } from "../lib/sessions";
 import { useSessionDetailQuery, useSessionTaskMetrics } from "../lib/sessions";
@@ -24,15 +25,6 @@ const toolColumns: Column<SessionToolStat>[] = [
   { id: "calls", label: "Calls", num: true, sortValue: (r) => r.calls, cell: (r) => fmt(r.calls) },
   { id: "resultTokens", label: "Result tokens", num: true, sortValue: (r) => r.approxResultTokens, cell: (r) => fmt(r.approxResultTokens) },
 ];
-
-function Row({ k, v }: { k: string; v: ReactNode }) {
-  return (
-    <div className="kv-row">
-      <span className="kv-k">{k}</span>
-      <span className="kv-v">{v}</span>
-    </div>
-  );
-}
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
@@ -247,48 +239,53 @@ export function SessionDetail() {
               </div>
               {tasks.length > 0 ? (
                 <ol className="tasks">
-                  {tasks.map((task, taskIndex) => (
-                    <li key={task.id}>
-                      <div className="task-row">
-                        <button
-                          type="button"
-                          className={`task-item${openTaskIds.has(task.id) ? " selected" : ""}`}
-                          onClick={() => onTaskClick(task.id)}
-                          aria-pressed={openTaskIds.has(task.id)}
-                          aria-expanded={openTaskIds.has(task.id)}
-                        >
-                          {openTaskIds.has(task.id) ? (
-                            <ChevronDown className="task-caret" size={16} strokeWidth={2} aria-hidden />
-                          ) : (
-                            <ChevronRight className="task-caret" size={16} strokeWidth={2} aria-hidden />
-                          )}
-                          <span className="task-item-desc" title={task.description}>{task.description}</span>
-                          {task.outcome && <OutcomeBadge outcome={task.outcome} />}
-                        </button>
-                        <button
-                          type="button"
-                          className="task-timeline-link"
-                          onClick={() => openInTimeline(taskIndex)}
-                          title="View this task in the timeline"
-                          aria-label="View this task in the timeline"
-                        >
-                          {taskMetrics?.[task.id]?.interactions != null && (
-                            <span className="task-timeline-count">{taskMetrics?.[task.id]?.interactions}</span>
-                          )}
-                          <MessagesSquare size={14} strokeWidth={1.75} aria-hidden />
-                        </button>
-                      </div>
-                      {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
-                      {SHOW_TASK_LABELS && (
-                        <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
-                      )}
-                      <div className={`task-card${openTaskIds.has(task.id) ? " open" : ""}`}>
-                        <div className="task-card-inner">
-                          <TaskDetails sessionId={s.sessionId} task={task} />
+                  {tasks.map((task, taskIndex) => {
+                    const open = openTaskIds.has(task.id);
+                    const interactions = taskMetrics?.[task.id]?.interactions;
+                    return (
+                      <li key={task.id}>
+                        <div className="task-row">
+                          <button
+                            type="button"
+                            className={`task-item${open ? " selected" : ""}`}
+                            onClick={() => onTaskClick(task.id)}
+                            aria-pressed={open}
+                            aria-expanded={open}
+                          >
+                            {open ? (
+                              <ChevronDown className="task-caret" size={16} strokeWidth={2} aria-hidden />
+                            ) : (
+                              <ChevronRight className="task-caret" size={16} strokeWidth={2} aria-hidden />
+                            )}
+                            <span className="task-item-desc" title={task.description}>{task.description}</span>
+                            {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                          </button>
+                          <button
+                            type="button"
+                            className="task-timeline-link"
+                            onClick={() => openInTimeline(taskIndex)}
+                            title="View this task in the timeline"
+                            aria-label="View this task in the timeline"
+                          >
+                            {interactions != null ? (
+                              <InteractionCount n={interactions} size={14} />
+                            ) : (
+                              <MessagesSquare size={14} strokeWidth={1.75} aria-hidden />
+                            )}
+                          </button>
                         </div>
-                      </div>
-                    </li>
-                  ))}
+                        {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
+                        {SHOW_TASK_LABELS && (
+                          <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
+                        )}
+                        <div className={`task-card${open ? " open" : ""}`}>
+                          <div className="task-card-inner">
+                            <TaskDetails sessionId={s.sessionId} task={task} />
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ol>
               ) : (
                 <div className="overview-card">
@@ -325,7 +322,7 @@ export function SessionDetail() {
                       {topTools.map((t) => (
                         <div className="kv-row" key={t.name}>
                           <span className="kv-k" title={t.display}>{t.display}</span>
-                          <span className="kv-v" title={`${t.calls} ${t.calls === 1 ? "call" : "calls"}`}><span className="calls-x">×</span>{t.calls}</span>
+                          <span className="kv-v" title={`${t.calls} ${pluralize(t.calls, "call")}`}><span className="calls-x">×</span>{t.calls}</span>
                         </div>
                       ))}
                       {restTools.length > 0 && (
@@ -333,7 +330,7 @@ export function SessionDetail() {
                           <button type="button" className="kv-more-link" onClick={() => setTab("details")}>
                             {restTools.length} more
                           </button>
-                          <span className="kv-v" title={`${restCalls} ${restCalls === 1 ? "call" : "calls"}`}><span className="calls-x">×</span>{restCalls}</span>
+                          <span className="kv-v" title={`${restCalls} ${pluralize(restCalls, "call")}`}><span className="calls-x">×</span>{restCalls}</span>
                         </div>
                       )}
                     </div>
@@ -363,14 +360,14 @@ export function SessionDetail() {
             <section className="details-col-wide">
               <h3 className="t-subhead">Friction</h3>
               <div className="overview-card">
-                <div className="kv">
-                  <Row k="Interruptions" v={numOrDash(h.interruptions)} />
-                  <Row k="Rejections" v={numOrDash(h.rejections)} />
-                  <Row k="Compactions" v={numOrDash(h.compactions)} />
-                  <Row k="Median turn" v={h.medianTurnMs != null ? dur(h.medianTurnMs) : <Dash />} />
-                  <Row k="Max turn" v={h.maxTurnMs != null ? dur(h.maxTurnMs) : <Dash />} />
-                  <Row k="Token growth" v={h.tokenGrowth != null ? h.tokenGrowth.toFixed(1) + "×" : <Dash />} />
-                </div>
+                <Kv>
+                  <KvRow k="Interruptions" v={numOrDash(h.interruptions)} />
+                  <KvRow k="Rejections" v={numOrDash(h.rejections)} />
+                  <KvRow k="Compactions" v={numOrDash(h.compactions)} />
+                  <KvRow k="Median turn" v={h.medianTurnMs != null ? dur(h.medianTurnMs) : <Dash />} />
+                  <KvRow k="Max turn" v={h.maxTurnMs != null ? dur(h.maxTurnMs) : <Dash />} />
+                  <KvRow k="Token growth" v={h.tokenGrowth != null ? h.tokenGrowth.toFixed(1) + "×" : <Dash />} />
+                </Kv>
               </div>
             </section>
           </div>

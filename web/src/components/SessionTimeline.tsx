@@ -1,8 +1,9 @@
-import { ChevronDown, ChevronRight, MessagesSquare } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClampText } from "./ClampText";
+import { InteractionCount } from "./pills";
 import { OutcomeBadge } from "./TaskDetails";
-import { dtAmPm, fmt } from "../lib/format";
+import { dtAmPm, fmt, pluralize } from "../lib/format";
 import { useSessionInteractionsQuery } from "../lib/sessions";
 import type { TimelineInteraction, TimelineTask } from "../types";
 
@@ -26,7 +27,7 @@ function Details({ it }: { it: TimelineInteraction }) {
         </div>
         <div className="tl-side-stat">
           <span className="tl-side-n">{it.toolCalls}</span>
-          <span className="tl-side-label">tool {it.toolCalls === 1 ? "call" : "calls"}</span>
+          <span className="tl-side-label">tool {pluralize(it.toolCalls, "call")}</span>
         </div>
       </div>
       {it.tools.length > 0 && (
@@ -201,14 +202,7 @@ export function SessionTimeline({
                     {chapter.task ? chapter.task.description : "No task"}
                   </span>
                   {chapter.task && chapter.task.outcome && <OutcomeBadge outcome={chapter.task.outcome} />}
-                  <span
-                    className="tl-chapter-count"
-                    title={`${chapter.items.length} ${chapter.items.length === 1 ? "interaction" : "interactions"}`}
-                    aria-label={`${chapter.items.length} ${chapter.items.length === 1 ? "interaction" : "interactions"}`}
-                  >
-                    {chapter.items.length}
-                    <MessagesSquare size={13} strokeWidth={1.75} aria-hidden />
-                  </span>
+                  <InteractionCount n={chapter.items.length} className="tl-chapter-count" />
                 </button>
               )}
               {!isCollapsed && (

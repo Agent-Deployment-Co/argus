@@ -24,8 +24,8 @@ export function TaskDetails({ sessionId, task }: { sessionId: string; task: Task
   const metrics = metricsQuery.data?.[task.id];
 
   return (
-    <div className="task-panel-body">
-      {task.outcomeReason && <div className="task-panel-value">{task.outcomeReason}</div>}
+    <div className="task-detail-body">
+      {task.outcomeReason && <div className="task-detail-reason">{task.outcomeReason}</div>}
 
       {metricsQuery.isPending ? (
         <span className="muted">Loading…</span>

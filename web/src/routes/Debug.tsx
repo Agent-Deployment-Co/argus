@@ -1,32 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import { dtAmPm } from "../lib/format";
+import { KvRow as Row } from "../components/kv";
+import { dtAmPm, fmtBytes } from "../lib/format";
 import { fetchDebugInfo } from "../lib/debug";
-
-function Row({ k, v }: { k: string; v: ReactNode }) {
-  return (
-    <div className="kv-row">
-      <span className="kv-k">{k}</span>
-      <span className="kv-v">{v}</span>
-    </div>
-  );
-}
 
 function Bool({ value }: { value: boolean }) {
   return <span className={`pill ${value ? "task-success" : "task-failure"}`}>{value ? "yes" : "no"}</span>;
-}
-
-function bytes(n: number | null): string {
-  if (n == null) return "—";
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(1)} ${units[i]}`;
 }
 
 export function Debug() {
@@ -65,7 +43,7 @@ export function Debug() {
         <div className="kv">
           <Row k="Store path" v={<code>{d.store.path}</code>} />
           <Row k="Exists" v={<Bool value={d.store.exists} />} />
-          <Row k="Size" v={bytes(d.store.sizeBytes)} />
+          <Row k="Size" v={fmtBytes(d.store.sizeBytes)} />
           <Row
             k="Schema version"
             v={

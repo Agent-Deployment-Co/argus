@@ -297,11 +297,12 @@ main:has(.inbox-page) { padding: 0; }
 /* Session Data card: top kv block (id / source / transcript) plus lineage groups. */
 .session-data { display: grid; gap: 14px; }
 .session-data .kv-v.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right; overflow-wrap: anywhere; word-break: break-all; }
-.transcript-val { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; }
+/* A kv value with an inline action (copy button) hugging the right edge. */
+.kv-inline-val { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; }
 .id-text { font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; word-break: break-all; }
-.copy-path-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
-.copy-path-btn:hover { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
-.copy-path-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.copy-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.copy-btn:hover { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
+.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .session-data-lineage { display: grid; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
 .session-data-file-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
 .session-data-ids { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
@@ -329,9 +330,11 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail-headline .session-summary { margin-top: 8px; }
 .read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
 .read-more:hover { color: var(--link-hover); text-decoration: underline; }
-/* The "N more" row in the Overview Tools list: a muted link that jumps to the Details tab. */
 /* Small multiply sign before a tool's call count, e.g. "×13" — signals "times used". */
 .calls-x { color: var(--muted); font-size: .85em; margin-right: 1px; }
+/* "N" + chat icon: the shared interaction-count badge (timeline chapter header, task timeline link). */
+.interaction-count { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+/* The "N more" row in the Overview Tools list: a muted link that jumps to the Details tab. */
 .kv-more-link { appearance: none; background: none; border: 0; padding: 0; text-align: left; font-family: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .kv-more-link:hover { color: var(--link-hover); text-decoration: underline; }
 
@@ -348,7 +351,7 @@ main:has(.inbox-page) { padding: 0; }
 .tl-chapter-head { position: relative; display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .tl-chapter-caret { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
 .tl-chapter-title { flex: 1 1 auto; min-width: 0; color: var(--heading); font-size: 15px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
-.tl-chapter-count { flex: 0 0 auto; margin-top: 3px; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tl-chapter-count { flex: 0 0 auto; margin-top: 3px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .tl-chapter-head .pill { flex: 0 0 auto; margin-top: 1px; }
 .tl-chapter-head--none .tl-chapter-title { color: var(--muted); font-weight: 600; }
 .tl-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; container-type: inline-size; }
@@ -409,8 +412,7 @@ main:has(.inbox-page) { padding: 0; }
 .task-item { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 12px; text-align: left; padding: 8px 12px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .task-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Small icon action to jump to this task in the Timeline tab. */
-.task-timeline-link { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 12px 0 2px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
-.task-timeline-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-timeline-link { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0 12px 0 2px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .task-timeline-link:hover { color: var(--link-hover); }
 .task-timeline-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .task-caret { flex: 0 0 auto; color: var(--muted); margin-right: -4px; }
@@ -422,13 +424,13 @@ main:has(.inbox-page) { padding: 0; }
 .task-card { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.22s ease; background: var(--surface); }
 .task-card.open { grid-template-rows: 1fr; }
 .task-card-inner { overflow: hidden; }
-.task-card .task-panel-body { padding: 0 12px 12px; overflow: visible; }
+.task-card .task-detail-body { padding: 0 12px 12px; overflow: visible; }
 @media (prefers-reduced-motion: reduce) { .task-card { transition: none; } }
 
 /* The expanded task detail's field layout (reason text + metrics). Padding/overflow come from the
    .task-card override above; this supplies the grid + gap. */
-.task-panel-body { display: grid; gap: 14px; }
-.task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
+.task-detail-body { display: grid; gap: 14px; }
+.task-detail-reason { color: var(--text); font-size: 13.5px; line-height: 1.5; }
 .task-metrics { display: flex; flex-wrap: wrap; gap: 8px 28px; }
 .task-metric { flex: 1 1 0; min-width: 0; color: var(--muted); font-size: 12.5px; }
 .task-metric-n { display: block; color: var(--heading); font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }

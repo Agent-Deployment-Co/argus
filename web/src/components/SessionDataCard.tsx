@@ -1,29 +1,8 @@
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
+import { Kv, KvRow } from "./kv";
+import { fmtBytes } from "../lib/format";
 import { useSessionProvenanceQuery } from "../lib/sessions";
-
-/** Human-readable byte size (SI-ish, base-1024). */
-function fmtBytes(n: number | null): string {
-  if (n == null) return "—";
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-}
-
-function Row({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
-  return (
-    <div className="kv-row">
-      <span className="kv-k">{k}</span>
-      <span className={`kv-v${mono ? " mono" : ""}`}>{v}</span>
-    </div>
-  );
-}
 
 /** A copy icon that writes `value` to the clipboard, flipping to a check briefly. `label` is the
  *  tooltip / accessible name (e.g. "Copy session ID", "Copy transcript path"). */
@@ -32,7 +11,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   return (
     <button
       type="button"
-      className="copy-path-btn"
+      className="copy-btn"
       title={label}
       aria-label={label}
       onClick={async () => {
@@ -67,29 +46,29 @@ export function SessionDataCard({ sessionId, enabled }: { sessionId: string; ena
 
   return (
     <div className="overview-card session-data">
-      <div className="kv">
-        <Row
+      <Kv>
+        <KvRow
           k="ID"
           v={
-            <span className="transcript-val">
+            <span className="kv-inline-val">
               <span className="id-text">{sessionId}</span>
               <CopyButton value={sessionId} label="Copy session ID" />
             </span>
           }
         />
-        {p && <Row k="Source" v={p.source} />}
+        {p && <KvRow k="Source" v={p.source} />}
         {mainFile && (
-          <Row
+          <KvRow
             k="Transcript"
             v={
-              <span className="transcript-val">
+              <span className="kv-inline-val">
                 {fmtBytes(mainFile.sizeBytes)}
                 {path && <CopyButton value={path} label="Copy transcript path" />}
               </span>
             }
           />
         )}
-      </div>
+      </Kv>
 
       {q.isPending ? (
         <p className="muted">Loading…</p>
