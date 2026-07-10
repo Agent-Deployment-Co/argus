@@ -316,12 +316,14 @@ main:has(.inbox-page) { padding: 0; }
 .tl-chapter-count { flex: 0 0 auto; margin-top: 3px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .tl-chapter-head .pill { flex: 0 0 auto; margin-top: 1px; }
 .tl-chapter-icon { flex: 0 0 auto; margin-top: 3px; color: var(--accent); }
+.tl-chapter-icon--none { color: var(--muted); }
+.tl-chapter-head--none .tl-chapter-title { color: var(--muted); font-weight: 600; }
 .tl-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; container-type: inline-size; }
 /* Task chapters: when a task is expanded, a connector line descends from under the caret alongside the
    indented cards. The line lives on .tl-cards, which only renders while the chapter is open, so it
    disappears when collapsed. */
-.tl-cards--task { position: relative; padding-left: 24px; }
-.tl-cards--task::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+.tl-cards--chapter { position: relative; padding-left: 24px; }
+.tl-cards--chapter::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--line); }
 .tl-item { display: grid; grid-template-columns: minmax(0, 1fr) 180px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
 .tl-main { min-width: 0; padding: 14px 16px; }
 .tl-turn { min-width: 0; }

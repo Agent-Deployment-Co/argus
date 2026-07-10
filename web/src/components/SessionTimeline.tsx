@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Goal } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDashed, Goal } from "lucide-react";
 import { useState } from "react";
 import { ClampText } from "./ClampText";
 import { FrustrationBadge, OutcomeBadge } from "./TaskPanel";
@@ -124,6 +124,9 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
     return <p className="task-empty">No interactions found for this session.</p>;
   }
   const chapters = toChapters(data.interactions, data.tasks);
+  // Only chapter (add headers + rail) once a session has tasks. Runs of interactions with no task
+  // become synthetic "No task" chapters; an un-interpreted session (no tasks at all) stays a flat list.
+  const chaptered = data.tasks.length > 0;
   return (
     <>
       {!data.retainedText && (
@@ -138,10 +141,10 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
           const isCollapsed = collapsed.has(key);
           return (
             <section className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`} key={key}>
-              {chapter.task && (
+              {chaptered && (
                 <button
                   type="button"
-                  className="tl-chapter-head"
+                  className={`tl-chapter-head${chapter.task ? "" : " tl-chapter-head--none"}`}
                   aria-expanded={!isCollapsed}
                   onClick={() => toggle(key)}
                 >
@@ -150,12 +153,16 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
                   ) : (
                     <ChevronDown className="tl-chapter-caret" size={16} strokeWidth={2} aria-hidden />
                   )}
-                  <Goal className="tl-chapter-icon" size={15} strokeWidth={2} aria-hidden />
-                  <span className="tl-chapter-title" title={chapter.task.description}>
-                    {chapter.task.description}
+                  {chapter.task ? (
+                    <Goal className="tl-chapter-icon" size={15} strokeWidth={2} aria-hidden />
+                  ) : (
+                    <CircleDashed className="tl-chapter-icon tl-chapter-icon--none" size={15} strokeWidth={2} aria-hidden />
+                  )}
+                  <span className="tl-chapter-title" title={chapter.task ? chapter.task.description : undefined}>
+                    {chapter.task ? chapter.task.description : "No task"}
                   </span>
-                  {chapter.task.outcome && <OutcomeBadge outcome={chapter.task.outcome} />}
-                  {chapter.task.frustration && chapter.task.frustration !== "none" && (
+                  {chapter.task && chapter.task.outcome && <OutcomeBadge outcome={chapter.task.outcome} />}
+                  {chapter.task && chapter.task.frustration && chapter.task.frustration !== "none" && (
                     <FrustrationBadge frustration={chapter.task.frustration} />
                   )}
                   <span className="tl-chapter-count">
@@ -164,7 +171,7 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
                 </button>
               )}
               {!isCollapsed && (
-                <ol className={`tl-cards${chapter.task ? " tl-cards--task" : ""}`}>
+                <ol className={`tl-cards${chaptered ? " tl-cards--chapter" : ""}`}>
                   {chapter.items.map((it) => (
                     <InteractionCard it={it} key={it.seq} />
                   ))}
