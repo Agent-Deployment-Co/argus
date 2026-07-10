@@ -289,7 +289,9 @@ export function SessionDetail() {
                   ))}
                 </ol>
               ) : (
-                <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
+                <div className="overview-card">
+                  <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
+                </div>
               )}
             </div>
 
