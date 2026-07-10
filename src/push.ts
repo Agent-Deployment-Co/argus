@@ -2,12 +2,6 @@ import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "./store/store.ts";
 import { PARSED_FRAGMENT_CONTRACT_VERSION } from "./store/store-contract.ts";
-// Wire contract from the shared schema package (single source of truth). SCHEMA_VERSION comes
-// from the zod-free entry so the CLI doesn't pull zod into its runtime.
-import { SCHEMA_VERSION } from "@agentdeploymentco/argus-schema/version";
-import type { PushPayload } from "@agentdeploymentco/argus-schema";
-export { SCHEMA_VERSION };
-export type { PushPayload };
 
 /** Pull the human-readable message out of a Hub/Worker JSON error body (`{ "error": "..." }`),
  *  falling back to the raw text when it isn't that shape. The Hub's 422 body states the actual

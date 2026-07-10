@@ -1,22 +1,92 @@
-// Data model for argus. The stable wire-contract types come from the shared schema package.
-// Local dashboard types extend that contract with fields this CLI can emit ahead of a schema
-// package release.
+// Data model for argus. The base Dashboard/SessionRow shapes below mirror what was formerly the
+// shared `@agentdeploymentco/argus-schema` wire contract (retired in #235); CLI-only fields extend
+// them from there.
 // CLI-internal parsing types (MessageRecord, ParseResult, …) are defined locally below.
-import type {
-  Dashboard as SchemaDashboard,
-  NamedUsage,
-  SessionRow as SchemaSessionRow,
-  Usage,
-} from "@agentdeploymentco/argus-schema";
 import type { TaskFact } from "./store/store-contract.ts";
 import type { ToolCategory } from "./tool-categories.ts";
-export type {
-  DayBucket,
-  NamedUsage,
-  PluginRow,
-  Usage,
-} from "@agentdeploymentco/argus-schema";
 export type { ToolCategory } from "./tool-categories.ts";
+
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+}
+
+export interface DayBucket {
+  date: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  cost: number;
+}
+
+export interface NamedUsage {
+  name: string;
+  messages: number;
+  total: number;
+  cost: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface PluginRow {
+  name: string;
+  marketplace: string;
+  enabled: boolean;
+  used: boolean;
+  version?: string;
+  installedAt?: string;
+  skills: string[];
+  skillMessages: number;
+  skillTokens: number;
+  skillCost: number;
+  mcpCalls: number;
+}
+
+interface SchemaSessionRow {
+  source: "claude" | "codex" | "gemini";
+  sessionId: string;
+  project: string;
+  start: number;
+  end: number;
+  durationMs: number;
+  messages: number;
+  models: string[];
+  topSkills: string[];
+  toolCounts: Record<string, number>;
+  filesTouched: string[];
+  total: number;
+  cost: number;
+  firstPrompt: string;
+  summary: string;
+  user?: string;
+}
+
+interface SchemaDashboard {
+  generatedAtMs: number;
+  range: { start: string; end: string };
+  totals: { sessions: number; messages: number; usage: Usage; total: number; cost: number };
+  unpriced: string[];
+  daily: DayBucket[];
+  byModel: NamedUsage[];
+  bySource: NamedUsage[];
+  bySkill: NamedUsage[];
+  skillInvocations: { name: string; count: number; plugin: string | null; sampleArgs: string }[];
+  byMcpServer: {
+    server: string;
+    calls: number;
+    approxResultTokens: number;
+    topTools: { tool: string; count: number }[];
+  }[];
+  heaviestToolResults: { tool: string; count: number; approxTokens: number }[];
+  byPlugin: PluginRow[];
+  byProject: NamedUsage[];
+  sessions: SessionRow[];
+  byUser?: NamedUsage[];
+}
 
 export type AgentSource = "claude" | "codex" | "gemini" | "cowork" | "claude-chat";
 
