@@ -253,8 +253,7 @@ main:has(.inbox-page) { padding: 0; }
 .session-item-snippet-meta { display: block; margin-top: 2px; color: var(--muted); font: 600 10px var(--font-ui); }
 .session-empty-row { padding: 18px 14px; color: var(--muted); font-size: 13px; }
 
-/* Flex row: the scrolling content pane plus the task panel, which lays out inline beside it (not
-   over it) and shrinks the content pane to fit — see .task-panel below. */
+/* The scrolling content pane wrapper. */
 .session-detail { display: flex; min-height: 0; min-width: 0; }
 .session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
@@ -405,43 +404,18 @@ main:has(.inbox-page) { padding: 0; }
 .task-caret { flex: 0 0 auto; color: var(--muted); margin-right: -4px; }
 .task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
 .task-item .pill { flex: 0 0 auto; margin: 0; }
-/* Inline expanded card: the clicked task's full detail, shown in-list instead of the drawer. Reuses
-   .task-panel-body for the field layout. */
-/* Expanded task detail flows straight out of its row: same surface, no divider, aligned padding. It's
-   always rendered and blinds down/up via the grid-rows 0fr<->1fr trick so open and close both animate. */
+/* Inline expanded card: the clicked task's full detail flows straight out of its row — same surface,
+   no divider, aligned padding. It's always rendered and blinds down/up via the grid-rows 0fr<->1fr
+   trick so open and close both animate. */
 .task-card { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.22s ease; background: var(--surface); }
 .task-card.open { grid-template-rows: 1fr; }
 .task-card-inner { overflow: hidden; }
 .task-card .task-panel-body { padding: 0 12px 12px; overflow: visible; }
 @media (prefers-reduced-motion: reduce) { .task-card { transition: none; } }
 
-/* Task detail panel: a flex sibling of .session-detail-inner within .session-detail, so it takes
-   its own column instead of floating over the content (which shrinks via flex to make room). */
-.task-panel { flex: 0 0 auto; width: min(400px, 38vw); min-width: 280px; display: flex; flex-direction: column; background: color-mix(in srgb, var(--surface) 50%, var(--bg)); border-left: 1px solid var(--line); animation: panel-slide-in .24s cubic-bezier(.4,0,.2,1) both; }
-.task-panel.closing { animation: panel-slide-out .2s cubic-bezier(.4,0,1,1) both; }
-@keyframes panel-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-@keyframes panel-slide-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
-/* Keep a tiny duration under reduced-motion so onAnimationEnd still fires and the panel unmounts. */
-@media (prefers-reduced-motion: reduce) {
-  .task-panel, .task-panel.closing { animation-duration: 1ms; }
-}
-/* Below this width the session list's own min-width floor leaves too little room for the panel to
-   sit beside the content without squeezing it to a sliver, so stack the panel under it instead. */
-@media (max-width: 900px) {
-  .session-detail { flex-direction: column; }
-  .task-panel { width: 100%; min-width: 0; max-height: 55vh; border-left: none; border-top: 1px solid var(--line); animation: panel-slide-up .24s cubic-bezier(.4,0,.2,1) both; }
-  .task-panel.closing { animation: panel-slide-down .2s cubic-bezier(.4,0,1,1) both; }
-}
-@keyframes panel-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-@keyframes panel-slide-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
-@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
-  .task-panel, .task-panel.closing { animation-duration: 1ms; }
-}
-.task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
-.task-panel-nav { display: flex; align-items: center; gap: 14px; }
-.task-panel-nav-group { display: flex; align-items: center; gap: 6px; }
-.task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
+/* The expanded task detail's field layout (reason text + metrics). Padding/overflow come from the
+   .task-card override above; this supplies the grid + gap. */
+.task-panel-body { display: grid; gap: 14px; }
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
 .task-metrics { display: flex; flex-wrap: wrap; gap: 8px 28px; }
 .task-metric { flex: 1 1 0; min-width: 0; color: var(--muted); font-size: 12.5px; }

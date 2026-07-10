@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, CircleDashed, Goal } from "lucide-react";
 import { useState } from "react";
 import { ClampText } from "./ClampText";
-import { FrustrationBadge, OutcomeBadge } from "./TaskPanel";
+import { FrustrationBadge, OutcomeBadge } from "./TaskDetails";
 import { dtAmPm, fmt } from "../lib/format";
 import { useSessionInteractionsQuery } from "../lib/sessions";
 import type { TimelineInteraction, TimelineTask } from "../types";

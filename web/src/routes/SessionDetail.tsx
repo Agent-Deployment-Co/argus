@@ -7,7 +7,7 @@ import { DataTable, type Column } from "../components/DataTable";
 import { Dash, Skills } from "../components/pills";
 import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
-import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
+import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
 import { SessionTimeline } from "../components/SessionTimeline";
 import { SessionDataCard } from "../components/SessionDataCard";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor } from "../lib/format";
@@ -36,11 +36,6 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 
 const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 
-// How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
-// side panel next to the content. Flip this to compare; the drawer (TaskPanel) is kept, just
-// suppressed in "card".
-const TASK_VIEW: "card" | "drawer" = "card";
-
 // Per-task label bars are hidden for now (session-level labeling stays on). Flip to re-enable.
 const SHOW_TASK_LABELS = false;
 
@@ -49,15 +44,13 @@ export function SessionDetail() {
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
   const [tab, setTab] = useState<"overview" | "timeline" | "details">("overview");
-  // Open tasks are a set — several can be expanded at once. Card mode toggles a task in/out; drawer
-  // mode (disabled) treats it as a single selection via setOpenTaskIds(new Set([id])).
+  // Open tasks are a set — several can be expanded at once; clicking a task toggles it in/out.
   const [openTaskIds, setOpenTaskIds] = useState<Set<string>>(() => new Set());
   const onTaskClick = (id: string) =>
     setOpenTaskIds((cur) => {
       const next = new Set(cur);
-      if (TASK_VIEW === "card" && next.has(id)) next.delete(id);
-      else if (TASK_VIEW === "card") next.add(id);
-      else return new Set([id]);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
@@ -123,12 +116,6 @@ export function SessionDetail() {
   const topTools = allTools.slice(0, 5);
   const restTools = allTools.slice(5);
   const restCalls = restTools.reduce((sum, t) => sum + t.calls, 0);
-  // The drawer (disabled) shows a single task; derive it from the open set as the first open task.
-  const selectedTaskId = tasks.find((t) => openTaskIds.has(t.id))?.id ?? null;
-  const selectedTaskIndex = tasks.findIndex((t) => t.id === selectedTaskId);
-  const selectedTask = selectedTaskIndex >= 0 ? tasks[selectedTaskIndex] : null;
-  const prevTask = selectedTaskIndex > 0 ? tasks[selectedTaskIndex - 1] : null;
-  const nextTask = selectedTaskIndex >= 0 && selectedTaskIndex < tasks.length - 1 ? tasks[selectedTaskIndex + 1] : null;
   const refreshingThisSession = refresh.isPending && refresh.variables === s.sessionId;
   const refreshError =
     !refresh.isPending && refresh.variables === s.sessionId && refresh.error instanceof Error
@@ -141,7 +128,6 @@ export function SessionDetail() {
       : null;
 
   return (
-    <>
     <div className="session-detail-inner">
       <header className="session-detail-head">
         <div className="session-detail-headline">
@@ -251,7 +237,7 @@ export function SessionDetail() {
                         className={`task-item${openTaskIds.has(task.id) ? " selected" : ""}`}
                         onClick={() => onTaskClick(task.id)}
                         aria-pressed={openTaskIds.has(task.id)}
-                        aria-expanded={TASK_VIEW === "card" ? openTaskIds.has(task.id) : undefined}
+                        aria-expanded={openTaskIds.has(task.id)}
                       >
                         {openTaskIds.has(task.id) ? (
                           <ChevronDown className="task-caret" size={16} strokeWidth={2} aria-hidden />
@@ -265,13 +251,11 @@ export function SessionDetail() {
                       {SHOW_TASK_LABELS && (
                         <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
                       )}
-                      {TASK_VIEW === "card" && (
-                        <div className={`task-card${openTaskIds.has(task.id) ? " open" : ""}`}>
-                          <div className="task-card-inner">
-                            <TaskDetails sessionId={s.sessionId} task={task} />
-                          </div>
+                      <div className={`task-card${openTaskIds.has(task.id) ? " open" : ""}`}>
+                        <div className="task-card-inner">
+                          <TaskDetails sessionId={s.sessionId} task={task} />
                         </div>
-                      )}
+                      </div>
                     </li>
                   ))}
                 </ol>
@@ -379,15 +363,5 @@ export function SessionDetail() {
         </div>
       )}
     </div>
-    {TASK_VIEW === "drawer" && selectedTask && (
-      <TaskPanel
-        sessionId={s.sessionId}
-        task={selectedTask}
-        onClose={() => setOpenTaskIds(new Set())}
-        onPrev={prevTask ? () => setOpenTaskIds(new Set([prevTask.id])) : undefined}
-        onNext={nextTask ? () => setOpenTaskIds(new Set([nextTask.id])) : undefined}
-      />
-    )}
-    </>
   );
 }
