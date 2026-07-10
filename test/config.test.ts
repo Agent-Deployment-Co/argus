@@ -309,6 +309,7 @@ describe("resolveLogLevel", () => {
 describe("Setting secret flag", () => {
   test("desktop settings are known and not secret", () => {
     expect(ALL_SETTINGS["desktop.startAtLogin"]?.secret).toBeFalsy();
+    expect(ALL_SETTINGS["desktop.silent"]?.secret).toBeFalsy();
   });
 
   test("auto-update settings are known and not secret", () => {
@@ -328,6 +329,24 @@ describe("Setting secret flag", () => {
     for (const key of ["taskExtraction.enabled", "taskExtraction.provider", "taskExtraction.model"]) {
       expect(ALL_SETTINGS[key]?.secret).toBeFalsy();
     }
+  });
+});
+
+// `desktop.silent` (#255) is an operator-level switch: `argus config get/set` must know it, but the
+// Settings screen must never show it (no `ui` metadata — the layout in src/api/settings.ts only
+// surfaces settings it lists explicitly).
+describe("desktop.silent", () => {
+  test("is registered for `argus config get/set` with a false default", () => {
+    const setting = ALL_SETTINGS["desktop.silent"]!;
+    expect(setting).toBeDefined();
+    expect(setting.default).toBe(false);
+    expect(setting.env).toBe("ARGUS_DESKTOP_SILENT");
+    expect(setting.parse("true")).toBe(true);
+    expect(setting.parse("off")).toBe(false);
+  });
+
+  test("carries no UI metadata, keeping it out of the Settings screen", () => {
+    expect(ALL_SETTINGS["desktop.silent"]!.ui).toBeUndefined();
   });
 });
 
