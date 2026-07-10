@@ -330,6 +330,8 @@ main:has(.inbox-page) { padding: 0; }
 .read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
 .read-more:hover { color: var(--link-hover); text-decoration: underline; }
 /* The "N more" row in the Overview Tools list: a muted link that jumps to the Details tab. */
+/* Small multiply sign before a tool's call count, e.g. "×13" — signals "times used". */
+.calls-x { color: var(--muted); font-size: .85em; margin-right: 1px; }
 .kv-more-link { appearance: none; background: none; border: 0; padding: 0; text-align: left; font-family: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .kv-more-link:hover { color: var(--link-hover); text-decoration: underline; }
 

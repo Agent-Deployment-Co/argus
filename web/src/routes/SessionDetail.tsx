@@ -116,6 +116,8 @@ export function SessionDetail() {
   const h = s.health;
   const cards: Stat[] = [
     { label: "Tokens", value: fmt(s.total) },
+    // Only show a task count once interpretation has run (otherwise 0 would read as "no tasks").
+    ...(s.interpreted ? [{ label: "Tasks", value: String(s.tasks?.length ?? 0) }] : []),
     { label: "Interactions", value: String(s.interactions ?? 0) },
     { label: "Skills used", value: String(s.skillsUsed ?? 0) },
     { label: "Tools used", value: String(s.toolBreakdown?.length ?? 0) },
@@ -323,7 +325,7 @@ export function SessionDetail() {
                       {topTools.map((t) => (
                         <div className="kv-row" key={t.name}>
                           <span className="kv-k" title={t.display}>{t.display}</span>
-                          <span className="kv-v">{t.calls}</span>
+                          <span className="kv-v" title={`${t.calls} ${t.calls === 1 ? "call" : "calls"}`}><span className="calls-x">×</span>{t.calls}</span>
                         </div>
                       ))}
                       {restTools.length > 0 && (
@@ -331,7 +333,7 @@ export function SessionDetail() {
                           <button type="button" className="kv-more-link" onClick={() => setTab("details")}>
                             {restTools.length} more
                           </button>
-                          <span className="kv-v">{restCalls}</span>
+                          <span className="kv-v" title={`${restCalls} ${restCalls === 1 ? "call" : "calls"}`}><span className="calls-x">×</span>{restCalls}</span>
                         </div>
                       )}
                     </div>
