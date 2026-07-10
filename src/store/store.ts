@@ -3162,12 +3162,25 @@ export class SqliteStore implements Store {
         });
       }
 
+      // Per-session interaction + task counts (grouped once, mapped by session id) for the list stats.
+      const countBySession = async (table: string): Promise<Map<string, number>> => {
+        const rows = await all<{ session_id: string; n: number }>(
+          this.db,
+          `SELECT session_id, COUNT(*) AS n FROM ${table} GROUP BY session_id`,
+        );
+        return new Map(rows.map((r) => [r.session_id, r.n]));
+      };
+      const interactionsBySession = await countBySession("resolved_interactions");
+      const tasksBySession = await countBySession("resolved_tasks");
+
       return sessionRows.map((row) => ({
         meta: JSON.parse(row.meta_json) as SessionMeta,
         byModel: byModelBySession.get(row.session_id) ?? [],
         firstTs: row.first_ts,
         lastTs: row.last_ts,
         messageCount: row.message_count,
+        interactions: interactionsBySession.get(row.session_id) ?? 0,
+        tasks: tasksBySession.get(row.session_id) ?? 0,
         title: row.title,
         summary: row.summary,
       }));

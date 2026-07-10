@@ -1,7 +1,9 @@
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Calendar, FilterX, Layers, Search, Tag } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { compactProject, dayStamp, fmt, usd } from "../lib/format";
+import { compactProject, dayStamp, fmt, pluralize } from "../lib/format";
+import { TasksIcon, TokensIcon } from "../lib/icons";
+import { IconStat, InteractionCount } from "../components/pills";
 import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { useLabelsQuery } from "../lib/labels";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
@@ -155,10 +157,11 @@ export function SessionList() {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
-                {s.userMessages != null && <span>{fmt(s.userMessages)} user</span>}
-                {s.agentMessages != null && <span>{fmt(s.agentMessages)} agent</span>}
-                <span>{fmt(s.total)} tok</span>
-                <span>{usd(s.cost)}</span>
+                <IconStat value={fmt(s.total)} title={`${fmt(s.total)} tokens`} icon={TokensIcon} size={12} iconFirst />
+                <InteractionCount n={s.interactions} size={12} iconFirst />
+                {s.tasks > 0 && (
+                  <IconStat value={s.tasks} title={`${s.tasks} ${pluralize(s.tasks, "task")}`} icon={TasksIcon} size={12} iconFirst />
+                )}
               </div>
               {s.labels && s.labels.length > 0 && (
                 <div className="session-item-labels">

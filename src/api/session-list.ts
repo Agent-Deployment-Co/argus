@@ -28,6 +28,11 @@ export interface SessionListItem {
   agentMessages: number | null;
   total: number;
   cost: number;
+  /** Interaction count for the session (#124). */
+  interactions: number;
+  /** Task count for the session; 0 when it has no tasks / isn't interpreted. The list shows it only
+   *  when > 0. */
+  tasks: number;
   /** Present when a store-side search ran (#155) and this session matched an FTS table — the
    *  conversation/task-text snippet + count the UI highlights. Absent for a metadata-only match
    *  (title/project/source substring, or a bare `file:` search). Local-only, not on the sync wire. */
@@ -95,6 +100,8 @@ function listItem(agg: SessionAggregate): SessionListItem {
     agentMessages: meta.agentMessages ?? null,
     total,
     cost: c,
+    interactions: agg.interactions,
+    tasks: agg.tasks,
   };
 }
 

@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, MessagesSquare, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClampText } from "../components/ClampText";
 import { DataTable, type Column } from "../components/DataTable";
 import { Dash, InteractionCount, Skills } from "../components/pills";
 import { Kv, KvRow } from "../components/kv";
+import { InteractionsIcon } from "../lib/icons";
 import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
@@ -108,9 +109,10 @@ export function SessionDetail() {
   const h = s.health;
   const cards: Stat[] = [
     { label: "Tokens", value: fmt(s.total) },
-    // Only show a task count once interpretation has run (otherwise 0 would read as "no tasks").
-    ...(s.interpreted ? [{ label: "Tasks", value: String(s.tasks?.length ?? 0) }] : []),
     { label: "Interactions", value: String(s.interactions ?? 0) },
+    // Tasks follow interactions (matching the session-list order); only shown once interpretation has
+    // run (otherwise 0 would read as "no tasks").
+    ...(s.interpreted ? [{ label: "Tasks", value: String(s.tasks?.length ?? 0) }] : []),
     { label: "Skills used", value: String(s.skillsUsed ?? 0) },
     { label: "Tools used", value: String(s.toolBreakdown?.length ?? 0) },
   ];
@@ -270,7 +272,7 @@ export function SessionDetail() {
                             {interactions != null ? (
                               <InteractionCount n={interactions} size={14} />
                             ) : (
-                              <MessagesSquare size={14} strokeWidth={1.75} aria-hidden />
+                              <InteractionsIcon size={14} strokeWidth={1.75} aria-hidden />
                             )}
                           </button>
                         </div>

@@ -641,6 +641,10 @@ export interface SessionAggregate {
   firstTs: number | null;
   lastTs: number | null;
   messageCount: number;
+  /** Interaction count for the session (resolved_interactions), for the list's interaction stat (#124). */
+  interactions: number;
+  /** Task count for the session (resolved_tasks); 0 when the session has no tasks / isn't interpreted. */
+  tasks: number;
   /** Model-generated title/summary (#234), when the session has been interpreted; null otherwise. The
    *  list surfaces them with a first-prompt fallback. */
   title: string | null;
