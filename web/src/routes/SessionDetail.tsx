@@ -237,7 +237,7 @@ export function SessionDetail() {
 
             <aside className="overview-side">
               <div className="overview-block">
-                <h3 className="t-subhead">Models</h3>
+                <h3 className="t-subhead">Models <span className="muted">({s.models.length})</span></h3>
                 <div className="overview-card chips">
                   {s.models.length ? (
                     s.models.map((m) => (
@@ -252,7 +252,7 @@ export function SessionDetail() {
                 </div>
               </div>
               <div className="overview-block">
-                <h3 className="t-subhead">Skills</h3>
+                <h3 className="t-subhead">Skills <span className="muted">({(s.skills ?? []).length})</span></h3>
                 <div className="overview-card chips"><Skills skills={s.skills ?? []} /></div>
               </div>
               <div className="overview-block">
