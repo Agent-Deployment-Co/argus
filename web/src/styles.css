@@ -286,6 +286,22 @@ main:has(.inbox-page) { padding: 0; }
 .overview-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .overview-card .kv-row:last-child { border-bottom: 0; }
 @container (max-width: 560px) { .overview-split { grid-template-columns: 1fr; } }
+/* Details tab: Session Data (1/3) beside Friction (2/3); stacks on a narrow pane. */
+.details-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 28px; align-items: start; }
+.details-col-narrow, .details-col-wide { min-width: 0; }
+@container (max-width: 620px) { .details-row { grid-template-columns: 1fr; } }
+/* Session Data card: top kv block (id / source / transcript) plus lineage groups. */
+.session-data { display: grid; gap: 14px; }
+.session-data .kv-v.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right; overflow-wrap: anywhere; word-break: break-all; }
+.transcript-val { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; }
+.id-text { font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; word-break: break-all; }
+.copy-path-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.copy-path-btn:hover { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
+.copy-path-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-data-lineage { display: grid; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.session-data-file-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.session-data-ids { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.session-data-ids li { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-detail-headline .labelbar--md { margin: 12px 0 0 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }

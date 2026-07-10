@@ -309,6 +309,44 @@ export interface SessionInvocation {
   filePath?: string;
 }
 
+/** One transcript file that a session was parsed from (#124 detail "Session Data" card). Joined from
+ *  index_sessions -> index_files, so it carries the structural-index provenance the resolved_* tables
+ *  don't: the on-disk path, size/mtime, and the parse outcome. Local-only (index_* is never synced). */
+export interface SessionProvenanceFile {
+  /** The transcript path as recorded on the session record (index_sessions.transcript_path). */
+  transcriptPath: string | null;
+  /** The path the indexer observed the file at (index_files.observed_path). */
+  observedPath: string | null;
+  /** Path relative to its root, when known. */
+  relativePath: string | null;
+  /** File classification: transcript / auxiliary / external. */
+  kind: string;
+  /** This session's role within the file (index_sessions.kind — e.g. main / subagent), when known. */
+  sessionKind: string | null;
+  /** File size in bytes (stored as TEXT in the index; parsed to a number, null if absent/unparseable). */
+  sizeBytes: number | null;
+  /** File mtime in epoch milliseconds (index stores nanoseconds; converted, null if absent). */
+  mtimeMs: number | null;
+  /** Parse outcome: success / failed / unstable. */
+  status: string;
+  /** Why the file was invalidated, when status isn't success. */
+  invalidationReason: string | null;
+  parserName: string | null;
+  parserVersion: string | null;
+}
+
+/** Structural-index provenance for one session (#124): the transcript file(s) it was parsed from plus
+ *  its subagent/resumed-session lineage. Read from the index_* tables (never synced). Null when the
+ *  session id isn't in the store. */
+export interface SessionProvenance {
+  source: AgentSource;
+  files: SessionProvenanceFile[];
+  /** Parent sessions (this session is a subagent/child of these), source session ids, sorted. */
+  parents: string[];
+  /** Child sessions (subagents spawned by this session), source session ids, sorted. */
+  children: string[];
+}
+
 export interface ToolResultFact {
   id: string;
   source: AgentSource;
@@ -779,6 +817,10 @@ export interface ReadModelStore {
    *  input for the pass-2 tool-usage summary. Read straight off resolved_invocations (no task_seq join,
    *  which isn't written until interpretation completes), ordered by seq. */
   readSessionInvocations(sessionId: string): Promise<SessionInvocation[]>;
+  /** Structural-index provenance for a session (#124): the transcript file(s) it was parsed from
+   *  (path/size/mtime/parse status) and its subagent/resumed-session lineage, from the index_* tables.
+   *  Null when the session id isn't in the store. Local-only — index_* is never synced. */
+  readSessionProvenance(sessionId: string): Promise<SessionProvenance | null>;
   /** Take up to `want` credits from the persisted Interpret rate limiter (#153) — one credit = one
    *  session's worth of interpretation (unrelated to LLM tokens). Refilled continuously at
    *  `maxPerHour`/hour (capacity `maxPerHour`, fresh bucket full). Returns how many were granted,

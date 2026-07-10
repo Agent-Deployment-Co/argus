@@ -64,7 +64,7 @@ import type {
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
-import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
+import type { ParserDiagnostic, SessionProvenance, TaskFact } from "../store/store-contract.ts";
 import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "../logger.ts";
 
 export interface ServeOptions {
@@ -184,6 +184,8 @@ export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | nu
 /** The interaction timeline for one session (prompt -> loop summary -> response), or null if the
  *  session has no interactions. */
 export type SessionInteractionsReader = (sessionId: string) => Promise<SessionInteractionsResponse | null>;
+/** Structural-index provenance for one session (transcript files + lineage), or null if unknown (#124). */
+export type SessionProvenanceReader = (sessionId: string) => Promise<SessionProvenance | null>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
@@ -212,6 +214,7 @@ interface AppOptions {
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
   sessionInteractions?: SessionInteractionsReader;
+  sessionProvenance?: SessionProvenanceReader;
   /** Flag/unflag a session as hidden. Omitted in processes without a store (503). */
   setSessionHidden?: SessionHiddenSetter;
   /** Session/task label read + write operations. Omitted in processes without a store (503). */
@@ -537,6 +540,17 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     const timeline = await opts.sessionInteractions(sessionId);
     if (!timeline) return c.json({ error: "Session not found." }, 404);
     return c.json(timeline satisfies SessionInteractionsResponse);
+  });
+
+  // Structural-index provenance for one session (transcript files + subagent/resumed lineage), built on
+  // demand for the detail view's "Session Data" card. Local-only (index_* is never synced).
+  app.get("/api/session/:id/provenance", async (c) => {
+    if (!opts.sessionProvenance) return c.json({ error: "Session provenance is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const provenance = await opts.sessionProvenance(sessionId);
+    if (!provenance) return c.json({ error: "Session not found." }, 404);
+    return c.json(provenance satisfies SessionProvenance);
   });
 
   // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
@@ -1109,6 +1123,9 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     return buildSessionInteractions(interactions, invocations, messages, tasks);
   };
 
+  const sessionProvenance: SessionProvenanceReader = async (sessionId) =>
+    (await readStore()).readSessionProvenance(sessionId);
+
   const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>
     withWriteStore((store) => store.setSessionsHidden([sessionId], hidden));
 
@@ -1129,6 +1146,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionList,
     sessionDetail,
     sessionInteractions,
+    sessionProvenance,
     setSessionHidden,
     labels,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),

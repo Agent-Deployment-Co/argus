@@ -40,6 +40,7 @@ import type {
   ResolvedQuery,
   SessionAggregate,
   SessionInvocation,
+  SessionProvenance,
   SessionSearchMatch,
   SessionSearchQuery,
   SessionSearchResult,
@@ -2440,6 +2441,79 @@ export class SqliteStore implements Store {
         ...(row.mcp_tool != null ? { mcpTool: row.mcp_tool } : {}),
         ...(row.file_path != null ? { filePath: row.file_path } : {}),
       }));
+    });
+  }
+
+  // Structural-index provenance for a session (#124): the transcript file(s) it was parsed from and
+  // its subagent/resumed-session lineage. resolved_sessions.session_id equals the source's session id
+  // (sid = session.meta.sessionId at materialize), which is also index_sessions.source_session_id, so
+  // we look up the source once then match on (source, source_session_id).
+  readSessionProvenance(sessionId: string): Promise<SessionProvenance | null> {
+    return this.schedule(async () => {
+      const srcRow = await get<{ source: string }>(
+        this.db,
+        "SELECT source FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      if (!srcRow) return null;
+      const source = srcRow.source as AgentSource;
+      const fileRows = await all<{
+        transcript_path: string | null;
+        observed_path: string | null;
+        relative_path: string | null;
+        kind: string;
+        session_kind: string | null;
+        size_bytes: string | null;
+        mtime_ns: string | null;
+        status: string;
+        invalidation_reason: string | null;
+        parser_name: string | null;
+        parser_version: string | null;
+      }>(
+        this.db,
+        `SELECT f.observed_path, f.relative_path, f.kind, f.size_bytes, f.mtime_ns, f.status,
+                f.invalidation_reason, f.parser_name, f.parser_version,
+                s.transcript_path, s.kind AS session_kind
+         FROM index_sessions s JOIN index_files f ON f.id = s.file_id
+         WHERE s.source = ? AND s.source_session_id = ?
+         ORDER BY f.observed_path`,
+        [source, sessionId],
+      );
+      const relRows = await all<{ child: string; parent: string }>(
+        this.db,
+        `SELECT child_source_session_id AS child, parent_source_session_id AS parent
+         FROM index_relationships
+         WHERE source = ? AND (child_source_session_id = ? OR parent_source_session_id = ?)`,
+        [source, sessionId, sessionId],
+      );
+      const parents = [...new Set(relRows.filter((r) => r.child === sessionId).map((r) => r.parent))].sort();
+      const children = [...new Set(relRows.filter((r) => r.parent === sessionId).map((r) => r.child))].sort();
+      const toNum = (v: string | null): number | null => {
+        if (v == null) return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      return {
+        source,
+        files: fileRows.map((r) => {
+          const mtimeNs = toNum(r.mtime_ns);
+          return {
+            transcriptPath: r.transcript_path,
+            observedPath: r.observed_path,
+            relativePath: r.relative_path,
+            kind: r.kind,
+            sessionKind: r.session_kind,
+            sizeBytes: toNum(r.size_bytes),
+            mtimeMs: mtimeNs != null ? Math.round(mtimeNs / 1e6) : null,
+            status: r.status,
+            invalidationReason: r.invalidation_reason,
+            parserName: r.parser_name,
+            parserVersion: r.parser_version,
+          };
+        }),
+        parents,
+        children,
+      };
     });
   }
 

@@ -9,6 +9,7 @@ import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { SessionTimeline } from "../components/SessionTimeline";
+import { SessionDataCard } from "../components/SessionDataCard";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden } from "../lib/sessions";
@@ -47,7 +48,7 @@ export function SessionDetail() {
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
-  const [tab, setTab] = useState<"overview" | "timeline" | "metrics">("overview");
+  const [tab, setTab] = useState<"overview" | "timeline" | "details">("overview");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
   const onTaskClick = (id: string) =>
@@ -182,11 +183,11 @@ export function SessionDetail() {
         <button
           type="button"
           role="tab"
-          aria-selected={tab === "metrics"}
-          className={`detail-tab${tab === "metrics" ? " active" : ""}`}
-          onClick={() => setTab("metrics")}
+          aria-selected={tab === "details"}
+          className={`detail-tab${tab === "details" ? " active" : ""}`}
+          onClick={() => setTab("details")}
         >
-          Metrics
+          Details
         </button>
       </div>
 
@@ -232,6 +233,21 @@ export function SessionDetail() {
 
             <aside className="overview-side">
               <div className="overview-block">
+                <h3 className="t-subhead">Models</h3>
+                <div className="overview-card chips">
+                  {s.models.length ? (
+                    s.models.map((m) => (
+                      <span className="chip" key={m}>
+                        <span className="chip-dot" style={{ background: modelFamilyColor(m) }} />
+                        {m}
+                      </span>
+                    ))
+                  ) : (
+                    <Dash />
+                  )}
+                </div>
+              </div>
+              <div className="overview-block">
                 <h3 className="t-subhead">Skills</h3>
                 <div className="overview-card chips"><Skills skills={s.skills ?? []} /></div>
               </div>
@@ -263,38 +279,27 @@ export function SessionDetail() {
         </div>
       )}
 
-      {tab === "metrics" && (
+      {tab === "details" && (
         <div className="detail-tab-panel">
-          <section>
-            <h3 className="t-subhead">Friction</h3>
-            <div className="kv">
-              <Row k="Interruptions" v={numOrDash(h.interruptions)} />
-              <Row k="Rejections" v={numOrDash(h.rejections)} />
-              <Row k="Compactions" v={numOrDash(h.compactions)} />
-              <Row k="Median turn" v={h.medianTurnMs != null ? dur(h.medianTurnMs) : <Dash />} />
-              <Row k="Max turn" v={h.maxTurnMs != null ? dur(h.maxTurnMs) : <Dash />} />
-              <Row k="Token growth" v={h.tokenGrowth != null ? h.tokenGrowth.toFixed(1) + "×" : <Dash />} />
-            </div>
-          </section>
-
-          <section>
-            <h3 className="t-subhead">Models</h3>
-            {s.models.length ? (
-              <div className="chips">
-                {s.models.map((m) => (
-                  <span className="chip" key={m}>
-                    <span className="chip-dot" style={{ background: modelFamilyColor(m) }} />
-                    {m}
-                  </span>
-                ))}
+          <div className="details-row">
+            <section className="details-col-narrow">
+              <h3 className="t-subhead">Session Data</h3>
+              <SessionDataCard sessionId={s.sessionId} enabled={tab === "details"} />
+            </section>
+            <section className="details-col-wide">
+              <h3 className="t-subhead">Friction</h3>
+              <div className="overview-card">
+                <div className="kv">
+                  <Row k="Interruptions" v={numOrDash(h.interruptions)} />
+                  <Row k="Rejections" v={numOrDash(h.rejections)} />
+                  <Row k="Compactions" v={numOrDash(h.compactions)} />
+                  <Row k="Median turn" v={h.medianTurnMs != null ? dur(h.medianTurnMs) : <Dash />} />
+                  <Row k="Max turn" v={h.maxTurnMs != null ? dur(h.maxTurnMs) : <Dash />} />
+                  <Row k="Token growth" v={h.tokenGrowth != null ? h.tokenGrowth.toFixed(1) + "×" : <Dash />} />
+                </div>
               </div>
-            ) : <Dash />}
-          </section>
-
-          <section>
-            <h3 className="t-subhead">Skills</h3>
-            <div className="chips"><Skills skills={s.topSkills} /></div>
-          </section>
+            </section>
+          </div>
 
           {(s.toolBreakdown?.length ?? 0) > 0 && (
             <section>
@@ -306,9 +311,11 @@ export function SessionDetail() {
           {s.filesTouched.length > 0 && (
             <section>
               <h3 className="t-subhead">Files touched <span className="muted">({s.filesTouched.length})</span></h3>
-              <ul className="file-list">
-                {s.filesTouched.slice(0, 30).map((f) => <li key={f} title={f}>{f}</li>)}
-              </ul>
+              <div className="overview-card">
+                <ul className="file-list">
+                  {s.filesTouched.slice(0, 30).map((f) => <li key={f} title={f}>{f}</li>)}
+                </ul>
+              </div>
             </section>
           )}
 

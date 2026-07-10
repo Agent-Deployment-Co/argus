@@ -4,6 +4,7 @@ import { KNOWN_SOURCES, type SnapshotFilters } from "./filters";
 import type {
   SessionInteractionsResponse,
   SessionListResponse,
+  SessionProvenance,
   SessionRow,
   SessionSort,
   TaskMetrics,
@@ -136,6 +137,21 @@ export function useSessionInteractionsQuery(sessionId: string | undefined, enabl
   return useQuery({
     queryKey: ["session-interactions", sessionId],
     queryFn: () => fetchSessionInteractions(sessionId!),
+    enabled: enabled && Boolean(sessionId),
+  });
+}
+
+/** A session's structural-index provenance (transcript files + lineage), fetched on demand. */
+export async function fetchSessionProvenance(sessionId: string): Promise<SessionProvenance> {
+  const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}/provenance`);
+  return jsonOrThrow<SessionProvenance>(res, "Failed to load session data");
+}
+
+/** Session provenance, fetched only when `enabled` (i.e. the Details tab is open). */
+export function useSessionProvenanceQuery(sessionId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["session-provenance", sessionId],
+    queryFn: () => fetchSessionProvenance(sessionId!),
     enabled: enabled && Boolean(sessionId),
   });
 }
