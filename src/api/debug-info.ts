@@ -3,6 +3,7 @@
 // best-effort — every section degrades gracefully so the page still renders when something is off.
 import { existsSync, statSync } from "node:fs";
 import { loadConfig, resolveSessionInterpretation, type ArgusConfig } from "../config.ts";
+import { managedConfigSource } from "../managed-config.ts";
 import { scanStore, type SourceScan } from "../indexing/pipeline.ts";
 import {
   ARGUS_CONFIG_DIR,
@@ -159,6 +160,8 @@ export async function collectDebugInfo(opts: { serveReadOnly: boolean }): Promis
       pathEntry("ARGUS_CONFIG_DIR", ARGUS_CONFIG_DIR),
       pathEntry("store (argus.db)", STORE_FILE),
       pathEntry("config (argus.json)", CONFIG_FILE),
+      // Present only on managed machines: the MDM-delivered settings file that wins over argus.json.
+      pathEntry("managed settings", managedConfigSource()?.path),
       pathEntry("CLAUDE_DIR", CLAUDE_DIR),
       pathEntry("Claude projects", PROJECTS_DIR),
       pathEntry("Claude history", HISTORY_FILE),

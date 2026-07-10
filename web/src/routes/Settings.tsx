@@ -271,8 +271,9 @@ export function SettingsSurface({
  *  the wrong provider while another is actually in effect. A text input still seeds from the file value
  *  only, so an env override stays surfaced as a separate badge rather than masquerading as edited text. */
 function seedValue(s: SettingDescriptor): unknown {
-  if (s.ui.control === "toggle") return Boolean(s.fileValue ?? s.effectiveValue);
-  const value = s.ui.control === "select" ? (s.fileValue ?? s.effectiveValue) : s.fileValue;
+  const effectiveControlValue = s.override ? s.effectiveValue : (s.fileValue ?? s.effectiveValue);
+  if (s.ui.control === "toggle") return Boolean(effectiveControlValue);
+  const value = s.ui.control === "select" ? effectiveControlValue : s.fileValue;
   return value != null ? String(value) : "";
 }
 
@@ -807,12 +808,18 @@ function SettingRow({
       <div className="setting-label">
         <span className="setting-name">{ui.label}</span>
         {ui.description && <span className="setting-desc">{ui.description}</span>}
-        {override && (
-          <span className="setting-override">
-            Set by <code>{override.name}</code> — that value takes precedence; an edit here won't take
-            effect until it's unset.
-          </span>
-        )}
+        {override &&
+          (override.layer === "managed" ? (
+            <span className="setting-override">
+              Managed by your organization (<code>{override.name}</code>) — that value takes
+              precedence; an edit here won't take effect.
+            </span>
+          ) : (
+            <span className="setting-override">
+              Set by <code>{override.name}</code> — that value takes precedence; an edit here won't
+              take effect until it's unset.
+            </span>
+          ))}
       </div>
       <div className="setting-control">{control}</div>
     </div>

@@ -64,3 +64,11 @@ The app surfaces the everyday settings. A few advanced ones are set from the
 command line instead, including text retention, which controls whether Argus
 keeps the text of your prompts and responses on your machine (it stays local
 either way). See the [CLI Reference](/cli-reference).
+
+## Managed by your organization
+
+If your organization manages this computer with a device-management tool (an
+MDM such as Jamf or Kandji), it can set Argus settings for everyone. A managed
+setting always wins: the app shows "Managed by your organization" next to it,
+and changing it here or from the command line has no effect. Ask your IT team
+if you need one changed.

@@ -223,9 +223,18 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 - **`config.ts`** — The `argus.json` settings store (the config peer of `argus.db`; full design in
   `docs/internals/configuration.md`). Tolerant loader (missing → defaults; malformed/bad value → warn + default,
   never crash) plus a **settings registry + resolver**: each setting binds its kebab/SCREAMING_SNAKE/
-  camelCase names + `parse()` in one descriptor, and `resolveSetting` walks `flag > env > argus.json >
-  default` (empty values count as absent). `resolveTaskExtraction` produces the effective
+  camelCase names + `parse()` in one descriptor, and `resolveSetting` walks `managed > flag > env >
+  argus.json > default` (empty values count as absent). `resolveTaskExtraction` produces the effective
   `TaskExtractionOptions` + `enabled` toggle. Settings only — `token.json`/`pricing.json` stay separate.
+
+- **`managed-config.ts`** — MDM managed settings (#257), the top layer of the resolution chain. Finds
+  the first parseable candidate from `managedConfigCandidates` (paths.ts): the macOS
+  `/Library/Managed Preferences` locations (per-user before machine-wide, `co.agentdeployment.argus`
+  plist before json), then `ARGUS_MANAGED_CONFIG_FILE` as an additional candidate. On platforms without
+  a standard managed location, `ARGUS_MANAGED_CONFIG_FILE` is the whole candidate list. Same camelCase
+  shape as `argus.json`, as JSON or plist (converted via the system `plutil`, behind an injectable seam).
+  Tolerant like `loadConfig` (a bad candidate warns and falls through), cached per process. Surfaced as
+  a "managed" override in the web settings and a note from `argus config set`.
 
 - **`indexing/interpret/` (`index.ts`, `task-extraction.ts`, `task-candidates.ts`, `dialogue.ts`)** —
   The Interpret stage: the one model-driven, opt-in step (#88/#91; full design in
