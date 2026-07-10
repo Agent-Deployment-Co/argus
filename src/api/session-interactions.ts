@@ -13,6 +13,7 @@ import type {
   TaskFrustration,
   TaskOutcome,
 } from "../store/store-contract.ts";
+import { toolDisplayName } from "../tool-categories.ts";
 import { totalTokens, type MessageRecord } from "../types.ts";
 
 /** A tool used inside an interaction's loop, with how many times it was called. */
@@ -63,11 +64,10 @@ export interface SessionInteractionsResponse {
   retainedText: boolean;
 }
 
-/** Readable label for an invocation in the loop summary: `server / tool` for MCP calls, else the raw
- *  tool name. */
+/** Readable label for an invocation in the loop summary. Uses the canonical `toolDisplayName`
+ *  (MCP → `server · tool`) so a tool reads identically here and in the Details-tab tool table. */
 function invocationLabel(inv: SessionInvocation): string {
-  if (inv.mcpServer) return inv.mcpTool ? `${inv.mcpServer} / ${inv.mcpTool}` : inv.mcpServer;
-  return inv.tool;
+  return toolDisplayName(inv.tool);
 }
 
 /** Fold the interaction spine + its per-interaction invocations and usage into timeline units. Usage

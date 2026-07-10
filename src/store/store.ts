@@ -3163,10 +3163,14 @@ export class SqliteStore implements Store {
       }
 
       // Per-session interaction + task counts (grouped once, mapped by session id) for the list stats.
+      // Scoped by the same source filter as the token sums above (both tables carry a `source` column),
+      // so a source-narrowed request doesn't scan the whole store. `table` is a fixed literal, never
+      // user input.
       const countBySession = async (table: string): Promise<Map<string, number>> => {
         const rows = await all<{ session_id: string; n: number }>(
           this.db,
-          `SELECT session_id, COUNT(*) AS n FROM ${table} GROUP BY session_id`,
+          `SELECT session_id, COUNT(*) AS n FROM ${table} ${msgFilters.messageWhere} GROUP BY session_id`,
+          msgFilters.messageParams,
         );
         return new Map(rows.map((r) => [r.session_id, r.n]));
       };

@@ -129,13 +129,16 @@ export function SessionTimeline({
   // Honor a focus request: expand the target chapter and scroll to it. Reruns when the request or the
   // data changes (the timeline may still be loading when the tab first opens).
   useEffect(() => {
-    if (!focus || !q.data) return;
-    const key = `task-${focus.seq}`;
+    const data = q.data;
+    if (!focus || !data) return;
+    const chaps = toChapters(data.interactions, data.tasks);
+    // The first chapter carrying the requested task seq (chapters are keyed by running index, so the
+    // same taskSeq heading two chapters can't collide — see chapterKey below).
+    const idx = chaps.findIndex((c) => c.taskSeq === focus.seq);
+    if (idx < 0) return;
+    const key = `ch-${idx}`;
     setCollapsed((prev) => {
-      const tasks = q.data!.tasks;
-      const chaps = toChapters(q.data!.interactions, tasks);
-      const keyOf = (c: Chapter, i: number) => (c.taskSeq != null ? `task-${c.taskSeq}` : `untasked-${i}`);
-      const base = prev ?? (tasks.length > 1 ? new Set(chaps.map(keyOf)) : new Set<string>());
+      const base = prev ?? (data.tasks.length > 1 ? new Set(chaps.map((_, i) => `ch-${i}`)) : new Set<string>());
       if (!base.has(key)) return prev; // already expanded (or default-open)
       const next = new Set(base);
       next.delete(key);
@@ -157,12 +160,16 @@ export function SessionTimeline({
   // Only chapter (add headers + rail) once a session has tasks. Runs of interactions with no task
   // become synthetic "No task" chapters; an un-interpreted session (no tasks at all) stays a flat list.
   const chaptered = data.tasks.length > 0;
-  const chapterKey = (chapter: Chapter, i: number) =>
-    chapter.taskSeq != null ? `task-${chapter.taskSeq}` : `untasked-${i}`;
+  // Key chapters by running index, not taskSeq: task membership is *usually* monotonic across the
+  // timeline, but clock skew or interleaved subagent/resumed interactions can make the same taskSeq
+  // head two separate chapters — index keys stay unique so collapse/focus never conflate them.
+  const chapterKey = (i: number) => `ch-${i}`;
   // More than one task → open with every chapter collapsed; a single task (or none) → expanded.
   const defaultCollapsed =
-    data.tasks.length > 1 ? new Set(chapters.map(chapterKey)) : new Set<string>();
+    data.tasks.length > 1 ? new Set(chapters.map((_, i) => chapterKey(i))) : new Set<string>();
   const effectiveCollapsed = collapsed ?? defaultCollapsed;
+  // The chapter a "view in timeline" link targets: the first one carrying that task seq.
+  const focusChapterIndex = focus != null ? chapters.findIndex((c) => c.taskSeq === focus.seq) : -1;
   const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev ?? defaultCollapsed);
@@ -180,9 +187,9 @@ export function SessionTimeline({
       )}
       <div className="timeline">
         {chapters.map((chapter, i) => {
-          const key = chapterKey(chapter, i);
+          const key = chapterKey(i);
           const isCollapsed = effectiveCollapsed.has(key);
-          const isFocusTarget = focus != null && chapter.taskSeq === focus.seq;
+          const isFocusTarget = i === focusChapterIndex;
           return (
             <section
               className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`}
