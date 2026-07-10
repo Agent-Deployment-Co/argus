@@ -223,7 +223,7 @@ export function SessionDetail() {
 
       {tab === "timeline" && (
         <div className="detail-tab-panel">
-          <SessionTimeline sessionId={s.sessionId} />
+          <SessionTimeline key={s.sessionId} sessionId={s.sessionId} />
         </div>
       )}
 

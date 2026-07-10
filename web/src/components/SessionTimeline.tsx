@@ -108,15 +108,9 @@ function toChapters(interactions: TimelineInteraction[], tasks: TimelineTask[]):
  *  retention was on at index time. */
 export function SessionTimeline({ sessionId }: { sessionId: string }) {
   const q = useSessionInteractionsQuery(sessionId);
-  // Collapsed task chapters, keyed by chapter key. Default expanded; a header click hides its cards.
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const toggle = (key: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  // Per-chapter collapse overrides. null = the user hasn't touched anything yet, so the default below
+  // applies: a session with a single task opens expanded, one with several opens collapsed.
+  const [collapsed, setCollapsed] = useState<Set<string> | null>(null);
   if (q.isPending) return <p className="task-empty">Loading timeline…</p>;
   if (q.isError) return <p className="task-empty">Couldn’t load the timeline.</p>;
   const data = q.data;
@@ -127,6 +121,19 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
   // Only chapter (add headers + rail) once a session has tasks. Runs of interactions with no task
   // become synthetic "No task" chapters; an un-interpreted session (no tasks at all) stays a flat list.
   const chaptered = data.tasks.length > 0;
+  const chapterKey = (chapter: Chapter, i: number) =>
+    chapter.taskSeq != null ? `task-${chapter.taskSeq}` : `untasked-${i}`;
+  // More than one task → open with every chapter collapsed; a single task (or none) → expanded.
+  const defaultCollapsed =
+    data.tasks.length > 1 ? new Set(chapters.map(chapterKey)) : new Set<string>();
+  const effectiveCollapsed = collapsed ?? defaultCollapsed;
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev ?? defaultCollapsed);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   return (
     <>
       {!data.retainedText && (
@@ -137,8 +144,8 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
       )}
       <div className="timeline">
         {chapters.map((chapter, i) => {
-          const key = chapter.taskSeq != null ? `task-${chapter.taskSeq}` : `untasked-${i}`;
-          const isCollapsed = collapsed.has(key);
+          const key = chapterKey(chapter, i);
+          const isCollapsed = effectiveCollapsed.has(key);
           return (
             <section className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`} key={key}>
               {chaptered && (
