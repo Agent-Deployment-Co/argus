@@ -173,8 +173,8 @@ export interface ToolCategoryStat {
 export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   bySource: NamedUsage[];
   sessions: SessionRow[];
-  // CLI-only fields emitted ahead of a schema-package release (stripped on push until the
-  // wire contract adopts them).
+  // CLI-only fields, not (yet) part of the sync wire contract (stripped on push until it
+  // adopts them).
   byTool: ToolStat[];
   byToolCategory: ToolCategoryStat[];
   frictionTotals: FrictionTotals;
