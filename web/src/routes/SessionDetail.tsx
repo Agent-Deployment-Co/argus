@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, MessagesSquare, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ClampText } from "../components/ClampText";
 import { DataTable, type Column } from "../components/DataTable";
@@ -44,6 +44,18 @@ export function SessionDetail() {
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
   const [tab, setTab] = useState<"overview" | "timeline" | "details">("overview");
+  // A one-shot request to open the Timeline tab focused on a task chapter (from a task's timeline
+  // link). The nonce makes each click a fresh value so re-clicking the same task re-focuses it.
+  const [timelineFocus, setTimelineFocus] = useState<{ seq: number; nonce: number } | null>(null);
+  const openInTimeline = (seq: number) => {
+    setTimelineFocus((prev) => ({ seq, nonce: (prev?.nonce ?? 0) + 1 }));
+    setTab("timeline");
+  };
+  // Manual tab navigation clears any pending timeline focus so it doesn't re-fire on a later visit.
+  const goToTab = (t: "overview" | "timeline" | "details") => {
+    setTimelineFocus(null);
+    setTab(t);
+  };
   // Open tasks are a set — several can be expanded at once; clicking a task toggles it in/out.
   const [openTaskIds, setOpenTaskIds] = useState<Set<string>>(() => new Set());
   const onTaskClick = (id: string) =>
@@ -180,7 +192,7 @@ export function SessionDetail() {
           role="tab"
           aria-selected={tab === "overview"}
           className={`detail-tab${tab === "overview" ? " active" : ""}`}
-          onClick={() => setTab("overview")}
+          onClick={() => goToTab("overview")}
         >
           Overview
         </button>
@@ -189,7 +201,7 @@ export function SessionDetail() {
           role="tab"
           aria-selected={tab === "timeline"}
           className={`detail-tab${tab === "timeline" ? " active" : ""}`}
-          onClick={() => setTab("timeline")}
+          onClick={() => goToTab("timeline")}
         >
           Timeline
         </button>
@@ -198,7 +210,7 @@ export function SessionDetail() {
           role="tab"
           aria-selected={tab === "details"}
           className={`detail-tab${tab === "details" ? " active" : ""}`}
-          onClick={() => setTab("details")}
+          onClick={() => goToTab("details")}
         >
           Details
         </button>
@@ -232,21 +244,32 @@ export function SessionDetail() {
                 <ol className="tasks">
                   {tasks.map((task, taskIndex) => (
                     <li key={task.id}>
-                      <button
-                        type="button"
-                        className={`task-item${openTaskIds.has(task.id) ? " selected" : ""}`}
-                        onClick={() => onTaskClick(task.id)}
-                        aria-pressed={openTaskIds.has(task.id)}
-                        aria-expanded={openTaskIds.has(task.id)}
-                      >
-                        {openTaskIds.has(task.id) ? (
-                          <ChevronDown className="task-caret" size={16} strokeWidth={2} aria-hidden />
-                        ) : (
-                          <ChevronRight className="task-caret" size={16} strokeWidth={2} aria-hidden />
-                        )}
-                        <span className="task-item-desc" title={task.description}>{task.description}</span>
-                        {task.outcome && <OutcomeBadge outcome={task.outcome} />}
-                      </button>
+                      <div className="task-row">
+                        <button
+                          type="button"
+                          className={`task-item${openTaskIds.has(task.id) ? " selected" : ""}`}
+                          onClick={() => onTaskClick(task.id)}
+                          aria-pressed={openTaskIds.has(task.id)}
+                          aria-expanded={openTaskIds.has(task.id)}
+                        >
+                          {openTaskIds.has(task.id) ? (
+                            <ChevronDown className="task-caret" size={16} strokeWidth={2} aria-hidden />
+                          ) : (
+                            <ChevronRight className="task-caret" size={16} strokeWidth={2} aria-hidden />
+                          )}
+                          <span className="task-item-desc" title={task.description}>{task.description}</span>
+                          {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                        </button>
+                        <button
+                          type="button"
+                          className="task-timeline-link"
+                          onClick={() => openInTimeline(taskIndex)}
+                          title="View this task in the timeline"
+                          aria-label="View this task in the timeline"
+                        >
+                          <MessagesSquare size={14} strokeWidth={1.75} aria-hidden />
+                        </button>
+                      </div>
                       {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
                       {SHOW_TASK_LABELS && (
                         <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
@@ -316,7 +339,7 @@ export function SessionDetail() {
 
       {tab === "timeline" && (
         <div className="detail-tab-panel">
-          <SessionTimeline key={s.sessionId} sessionId={s.sessionId} />
+          <SessionTimeline key={s.sessionId} sessionId={s.sessionId} focus={timelineFocus} />
         </div>
       )}
 

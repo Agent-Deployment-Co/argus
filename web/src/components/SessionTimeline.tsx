@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, CircleDashed, Goal } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClampText } from "./ClampText";
 import { FrustrationBadge, OutcomeBadge } from "./TaskDetails";
 import { dtAmPm, fmt } from "../lib/format";
@@ -106,11 +106,43 @@ function toChapters(interactions: TimelineInteraction[], tasks: TimelineTask[]):
 /** The session as an interaction timeline, grouped into task chapters. Each interaction is one unit
  *  (prompt / loop details / response); prompt/response text shows only when conversation-text
  *  retention was on at index time. */
-export function SessionTimeline({ sessionId }: { sessionId: string }) {
+export function SessionTimeline({
+  sessionId,
+  focus,
+}: {
+  sessionId: string;
+  /** A one-shot request (from a task's timeline link) to open a chapter by task seq and scroll to it.
+   *  `nonce` changes per click so re-focusing the same task re-triggers. */
+  focus?: { seq: number; nonce: number } | null;
+}) {
   const q = useSessionInteractionsQuery(sessionId);
   // Per-chapter collapse overrides. null = the user hasn't touched anything yet, so the default below
   // applies: a session with a single task opens expanded, one with several opens collapsed.
   const [collapsed, setCollapsed] = useState<Set<string> | null>(null);
+  // The section for the focused chapter, so we can scroll it into view once the tab is shown.
+  const focusRef = useRef<HTMLElement | null>(null);
+
+  // Honor a focus request: expand the target chapter and scroll to it. Reruns when the request or the
+  // data changes (the timeline may still be loading when the tab first opens).
+  useEffect(() => {
+    if (!focus || !q.data) return;
+    const key = `task-${focus.seq}`;
+    setCollapsed((prev) => {
+      const tasks = q.data!.tasks;
+      const chaps = toChapters(q.data!.interactions, tasks);
+      const keyOf = (c: Chapter, i: number) => (c.taskSeq != null ? `task-${c.taskSeq}` : `untasked-${i}`);
+      const base = prev ?? (tasks.length > 1 ? new Set(chaps.map(keyOf)) : new Set<string>());
+      if (!base.has(key)) return prev; // already expanded (or default-open)
+      const next = new Set(base);
+      next.delete(key);
+      return next;
+    });
+    const raf = requestAnimationFrame(() =>
+      focusRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [focus, q.data]);
+
   if (q.isPending) return <p className="task-empty">Loading timeline…</p>;
   if (q.isError) return <p className="task-empty">Couldn’t load the timeline.</p>;
   const data = q.data;
@@ -146,8 +178,13 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
         {chapters.map((chapter, i) => {
           const key = chapterKey(chapter, i);
           const isCollapsed = effectiveCollapsed.has(key);
+          const isFocusTarget = focus != null && chapter.taskSeq === focus.seq;
           return (
-            <section className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`} key={key}>
+            <section
+              className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`}
+              key={key}
+              ref={isFocusTarget ? focusRef : undefined}
+            >
               {chaptered && (
                 <button
                   type="button"
