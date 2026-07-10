@@ -12,6 +12,8 @@ export interface TaskMetrics {
   totalTokens: number;
   /** USD, priced per message by that message's own model (mixed-model tasks stay correct). */
   cost: number;
+  /** Distinct interactions in the task's chapter. */
+  interactions: number;
   /** Total tool calls across the task's messages. */
   toolCalls: number;
   /** Per-tool call counts, highest first. */
@@ -25,6 +27,7 @@ export function computeTaskMetrics(messages: MessageRecord[]): TaskMetrics {
   const usage = emptyUsage();
   const toolCounts: Record<string, number> = {};
   const models = new Set<string>();
+  const interactions = new Set<number>();
   let totalCost = 0;
   let toolCalls = 0;
 
@@ -32,6 +35,7 @@ export function computeTaskMetrics(messages: MessageRecord[]): TaskMetrics {
     addUsage(usage, m.usage);
     totalCost += cost(m.usage, m.model);
     if (m.model) models.add(m.model);
+    if (m.interactionSeq != null) interactions.add(m.interactionSeq);
     for (const tu of m.toolUses) {
       toolCounts[tu.name] = (toolCounts[tu.name] ?? 0) + 1;
       toolCalls++;
@@ -43,6 +47,7 @@ export function computeTaskMetrics(messages: MessageRecord[]): TaskMetrics {
     usage,
     totalTokens: totalTokens(usage),
     cost: totalCost,
+    interactions: interactions.size,
     toolCalls,
     toolCounts: Object.fromEntries(Object.entries(toolCounts).sort((a, b) => b[1] - a[1])),
     models: [...models],

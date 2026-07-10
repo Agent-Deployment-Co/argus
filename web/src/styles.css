@@ -260,15 +260,14 @@ main:has(.inbox-page) { padding: 0; }
 .session-item-title { color: var(--heading); font-weight: 700; font-size: 13.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .session-item-meta { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; font-size: 11.5px; }
 .session-item-meta .truncate { max-width: 60%; }
-.session-item-stats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; color: var(--muted); font: 600 10.5px var(--font-ui); }
+.session-item-stats { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin-top: 5px; color: var(--muted); font: 600 10.5px var(--font-ui); }
 .session-item-snippet { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); font-size: 11.5px; line-height: 1.4; }
 .session-item-snippet-text { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .session-item-snippet-text mark { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--text); border-radius: 2px; padding: 0 1px; }
 .session-item-snippet-meta { display: block; margin-top: 2px; color: var(--muted); font: 600 10px var(--font-ui); }
 .session-empty-row { padding: 18px 14px; color: var(--muted); font-size: 13px; }
 
-/* Flex row: the scrolling content pane plus the task panel, which lays out inline beside it (not
-   over it) and shrinks the content pane to fit — see .task-panel below. */
+/* The scrolling content pane wrapper. */
 .session-detail { display: flex; min-height: 0; min-width: 0; }
 .session-detail-inner { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 28px 32px 64px; }
 .session-empty { flex: 1 1 auto; display: grid; place-items: center; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
@@ -290,20 +289,59 @@ main:has(.inbox-page) { padding: 0; }
 .label-chip-mixed-badge { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; flex: 0 0 auto; border-radius: 3px; background: var(--muted); color: var(--surface); }
 .session-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
 .session-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
-.session-detail-headline { min-width: 0; line-height: 1.2; }
-.session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12.5px; }
+/* Cap the headline (which now carries the potentially long summary) at a comfortable reading width;
+   space-between keeps the Hide/Refresh actions pinned to the right. */
+.session-detail-headline { min-width: 0; max-width: 800px; line-height: 1.2; }
+.session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
 .eyebrow-link { color: var(--link); }
 .eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
 .table-link { color: var(--link); }
 .table-link:hover { color: var(--link-hover); text-decoration: underline; }
-.session-detail-range { margin-top: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-.session-id { display: inline-block; font-size: 11px; }
 .session-detail-inner section { margin: 22px 0 0; }
-.session-detail-headline .labelbar--md { margin: 14px 0 0; }
+.detail-tabs { display: flex; gap: 2px; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+.detail-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.detail-tab:hover { color: var(--text); }
+.detail-tab.active { color: var(--heading); border-bottom-color: var(--accent); }
+.detail-tab-panel { margin-top: 30px; container-type: inline-size; }
+/* Keep the gap between the tab bar and the first component uniform across tabs: the general
+   .session-detail-inner section rule adds a top margin that would otherwise double up for the first
+   (nested) section in the Timeline/Details panels but not for Overview's leading card. */
+.detail-tab-panel > section:first-child { margin-top: 0; }
+.detail-tab-panel .details-row section { margin-top: 0; }
+.detail-tab-panel .timeline > section:first-child { margin-top: 0; }
+/* Overview: tasks on the left, a Skills + Top tools sidebar on the right. */
+.overview-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 24px; }
+.overview-main { min-width: 0; }
+.overview-side { min-width: 0; display: grid; gap: 22px; align-content: start; }
+.overview-block { min-width: 0; }
+.overview-block .t-subhead { margin-bottom: 8px; }
+/* The pills / tool list sit in a surface card; the heading stays outside it. */
+.overview-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.overview-card .kv-row:last-child { border-bottom: 0; }
+@container (max-width: 560px) { .overview-split { grid-template-columns: 1fr; } }
+/* Details tab: Session Data (1/3) beside Friction (2/3); stacks on a narrow pane. */
+.details-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 28px; align-items: start; }
+.details-col-narrow, .details-col-wide { min-width: 0; }
+@container (max-width: 620px) { .details-row { grid-template-columns: 1fr; } }
+/* Session Data card: top kv block (id / source / transcript) plus lineage groups. */
+.session-data { display: grid; gap: 14px; }
+.session-data .kv-v.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right; overflow-wrap: anywhere; word-break: break-all; }
+/* A kv value with an inline action (copy button) hugging the right edge. */
+.kv-inline-val { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; }
+.id-text { font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; word-break: break-all; }
+.copy-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.copy-btn:hover { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
+.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-data-lineage { display: grid; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.session-data-file-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.session-data-ids { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.session-data-ids li { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-detail-headline .labelbar--md { margin: 12px 0 0 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .section-title-row h3 { margin: 0; }
+.section-title-row .rail-icon-btn { width: 24px; height: 24px; border-radius: 6px; }
 .task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .task-action:hover:not(:disabled) { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
 .task-action:disabled { opacity: .65; cursor: wait; }
@@ -319,8 +357,70 @@ main:has(.inbox-page) { padding: 0; }
 .chip-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .file-list li { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.first-prompt { margin: 0; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 8px 8px 0; color: var(--text); font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
 .task-empty { margin: 0; color: var(--muted); font-size: 13px; }
+.session-summary { margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.55; }
+.session-detail-headline .session-summary { margin-top: 8px; }
+.read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
+.read-more:hover { color: var(--link-hover); text-decoration: underline; }
+/* Small multiply sign before a tool's call count, e.g. "×13" — signals "times used". */
+.calls-x { color: var(--muted); font-size: .85em; margin-right: 1px; }
+/* A compact "value + icon" stat (tokens/interactions/tasks) — the shared IconStat badge. */
+.icon-stat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+/* The "N more" row in the Overview Tools list: a muted link that jumps to the Details tab. */
+.kv-more-link { appearance: none; background: none; border: 0; padding: 0; text-align: left; font-family: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
+.kv-more-link:hover { color: var(--link-hover); text-decoration: underline; }
+
+/* Session timeline (Timeline tab): interactions grouped into task chapters. Each interaction is a
+   card — user prompt (top) and agent response (bottom) in the main column, with a details rail
+   (tokens / tools) off to the right. */
+.timeline { display: grid; }
+.tl-note { margin: 0 0 16px; }
+/* Spacing between chapters lives on each chapter's bottom margin (not a uniform grid gap) so a
+   collapsed chapter — just its header — sits tight against the next. */
+.tl-chapter { display: grid; gap: 12px; min-width: 0; margin-bottom: 26px; }
+.tl-chapter--collapsed { margin-bottom: 6px; }
+.tl-chapter:last-child { margin-bottom: 0; }
+.tl-chapter-head { position: relative; display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.tl-chapter-caret { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
+.tl-chapter-title { flex: 1 1 auto; min-width: 0; color: var(--heading); font-size: 15px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.tl-chapter-count { flex: 0 0 auto; margin-top: 3px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tl-chapter-head .pill { flex: 0 0 auto; margin-top: 1px; }
+.tl-chapter-head--none .tl-chapter-title { color: var(--muted); font-weight: 600; }
+.tl-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; container-type: inline-size; }
+/* Task chapters: when a task is expanded, a connector line descends from under the caret alongside the
+   indented cards. The line lives on .tl-cards, which only renders while the chapter is open, so it
+   disappears when collapsed. */
+.tl-cards--chapter { position: relative; padding-left: 24px; }
+.tl-cards--chapter::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+.tl-item { display: grid; grid-template-columns: minmax(0, 1fr) 180px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.tl-main { min-width: 0; padding: 14px 16px; }
+.tl-turn { min-width: 0; position: relative; }
+/* Copy-to-clipboard button hugging the top-right of each half (prompt / response). */
+.tl-turn > .copy-btn { position: absolute; top: 0; right: 0; }
+.tl-turn--user { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+/* Reserve a right gutter so the role/text clear the copy button pinned to the turn's top-right. */
+.tl-turn--user .tl-text, .tl-turn--agent .tl-text, .tl-turn .tl-role { padding-right: 30px; }
+.tl-role { display: block; margin-bottom: 5px; font: 600 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.tl-turn--user .tl-role { color: var(--accent); }
+.tl-turn--agent .tl-role { color: var(--heading); }
+.tl-role-model { text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--muted); }
+.tl-text { margin: 0; line-height: 1.55; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tl-side { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, var(--bg)); font-size: 12px; }
+.tl-side-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tl-side-stats { display: flex; gap: 18px; }
+.tl-side-stat { display: flex; flex-direction: column; gap: 1px; }
+.tl-side-n { color: var(--heading); font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.tl-side-label { color: var(--muted); font-size: 11px; }
+.tl-side-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.tl-side-tool { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.tl-side-tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.tl-side-tool-n { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Stack the details rail under the main column when the card itself gets narrow (container query on
+   .tl-cards), so a narrow detail pane never forces a horizontal scroll. */
+@container (max-width: 440px) {
+  .tl-item { grid-template-columns: 1fr; }
+  .tl-side { border-left: 0; border-top: 1px solid var(--line); }
+}
 
 /* Hidden /debug page. */
 .debug { max-width: 980px; }
@@ -341,50 +441,34 @@ main:has(.inbox-page) { padding: 0; }
    (and on hover via title). */
 .tasks { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .tasks li { background: var(--surface); }
-.tasks li + li .task-item { border-top: 1px solid var(--line); }
-.task-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 8px 12px; border: 0; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
-.task-item:hover { background: var(--hover); }
+.tasks li + li .task-row { border-top: 1px solid var(--line); }
+/* The header row: the (clickable) task button plus the timeline-link action, sharing one surface. */
+.task-row { display: flex; align-items: stretch; }
+.task-row:hover { background: var(--hover); }
+.task-item { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 12px; text-align: left; padding: 8px 12px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .task-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.task-item.selected { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 2px 0 0 var(--accent); }
-.task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
-.task-item-tokens { flex: 0 0 auto; min-width: 64px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Small icon action to jump to this task in the Timeline tab. */
+.task-timeline-link { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0 12px 0 2px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.task-timeline-link:hover { color: var(--link-hover); }
+.task-timeline-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.task-caret { flex: 0 0 auto; color: var(--muted); margin-right: -4px; }
+.task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
 .task-item .pill { flex: 0 0 auto; margin: 0; }
-/* Inline expanded card: the clicked task's full detail, shown in-list instead of the drawer. Reuses
-   .task-panel-body for the field layout. */
-.task-card { border-top: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+/* Inline expanded card: the clicked task's full detail flows straight out of its row — same surface,
+   no divider, aligned padding. It's always rendered and blinds down/up via the grid-rows 0fr<->1fr
+   trick so open and close both animate. */
+.task-card { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.22s ease; background: var(--surface); }
+.task-card.open { grid-template-rows: 1fr; }
+.task-card-inner { overflow: hidden; }
+.task-card .task-detail-body { padding: 0 12px 12px; overflow: visible; }
+@media (prefers-reduced-motion: reduce) { .task-card { transition: none; } }
 
-/* Task detail panel: a flex sibling of .session-detail-inner within .session-detail, so it takes
-   its own column instead of floating over the content (which shrinks via flex to make room). */
-.task-panel { flex: 0 0 auto; width: min(400px, 38vw); min-width: 280px; display: flex; flex-direction: column; background: color-mix(in srgb, var(--surface) 50%, var(--bg)); border-left: 1px solid var(--line); animation: panel-slide-in .24s cubic-bezier(.4,0,.2,1) both; }
-.task-panel.closing { animation: panel-slide-out .2s cubic-bezier(.4,0,1,1) both; }
-@keyframes panel-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-@keyframes panel-slide-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
-/* Keep a tiny duration under reduced-motion so onAnimationEnd still fires and the panel unmounts. */
-@media (prefers-reduced-motion: reduce) {
-  .task-panel, .task-panel.closing { animation-duration: 1ms; }
-}
-/* Below this width the session list's own min-width floor leaves too little room for the panel to
-   sit beside the content without squeezing it to a sliver, so stack the panel under it instead. */
-@media (max-width: 900px) {
-  .session-detail { flex-direction: column; }
-  .task-panel { width: 100%; min-width: 0; max-height: 55vh; border-left: none; border-top: 1px solid var(--line); animation: panel-slide-up .24s cubic-bezier(.4,0,.2,1) both; }
-  .task-panel.closing { animation: panel-slide-down .2s cubic-bezier(.4,0,1,1) both; }
-}
-@keyframes panel-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-@keyframes panel-slide-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
-@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
-  .task-panel, .task-panel.closing { animation-duration: 1ms; }
-}
-.task-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.task-panel-head .t-subhead { margin: 0; } /* flex header — no bottom gap */
-.task-panel-nav { display: flex; align-items: center; gap: 14px; }
-.task-panel-nav-group { display: flex; align-items: center; gap: 6px; }
-.task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
-.task-panel-field { display: grid; gap: 4px; }
-.task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
-.task-panel-desc { white-space: pre-wrap; }
-.task-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.task-metric { color: var(--muted); font-size: 12.5px; }
+/* The expanded task detail's field layout (reason text + metrics). Padding/overflow come from the
+   .task-card override above; this supplies the grid + gap. */
+.task-detail-body { display: grid; gap: 14px; }
+.task-detail-reason { color: var(--text); font-size: 13.5px; line-height: 1.5; }
+.task-metrics { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.task-metric { flex: 1 1 0; min-width: 0; color: var(--muted); font-size: 12.5px; }
 .task-metric-n { display: block; color: var(--heading); font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* Per-task outcome / frustration pills. */

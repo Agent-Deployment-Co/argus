@@ -438,6 +438,7 @@ describe("serve API", () => {
       usage: { input: 10, output: 5, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
       totalTokens: 15,
       cost: 0.01,
+      interactions: 2,
       toolCalls: 2,
       toolCounts: { Bash: 2 },
       models: ["claude-sonnet-4-5"],

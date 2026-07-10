@@ -9,6 +9,7 @@ import type {
   NamedUsage,
   PluginRow,
   SessionRow,
+  SessionToolStat,
   ToolCategoryStat,
   ToolStat,
   Usage,
@@ -17,6 +18,12 @@ import type { Recommendation } from "../../src/api/recommendations";
 import type { TaskMetrics } from "../../src/api/task-metrics";
 import type { DebugInfo } from "../../src/api/debug-info";
 import type { SessionListItem, SessionListResponse, SessionSort } from "../../src/api/session-list";
+import type {
+  SessionInteractionsResponse,
+  TimelineInteraction,
+  TimelineTask,
+  TimelineTool,
+} from "../../src/api/session-interactions";
 import type {
   BulkSessionLabelsResponse,
   LabelResponse,
@@ -33,6 +40,8 @@ import type {
   LabelOrigin,
   LabelRecord,
   SessionLabels,
+  SessionProvenance,
+  SessionProvenanceFile,
 } from "../../src/store/store-contract";
 // Per-view endpoint payloads (#217) — the single source of truth for each view's shape, imported
 // type-only so the server responses and the UI can't drift.
@@ -76,6 +85,10 @@ export type {
   SessionListItem,
   SessionListResponse,
   SessionDetailResponse,
+  SessionInteractionsResponse,
+  TimelineInteraction,
+  TimelineTask,
+  TimelineTool,
   SessionSort,
   ConnectionTestDescriptor,
   ConnectionTestResult,
@@ -88,6 +101,7 @@ export type {
   SettingOverride,
   SettingUi,
   TaskMetrics,
+  SessionToolStat,
   ToolCategoryStat,
   ToolStat,
   Usage,
@@ -114,4 +128,6 @@ export type {
   LabelsResponse,
   SessionLabels,
   SessionLabelsResponse,
+  SessionProvenance,
+  SessionProvenanceFile,
 };

@@ -49,6 +49,7 @@ import type { PluginRow, SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
+import { buildSessionInteractions, type SessionInteractionsResponse } from "./session-interactions.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { CONFIG_FILE } from "../paths.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
@@ -64,7 +65,7 @@ import type {
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
-import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
+import type { ParserDiagnostic, SessionProvenance, TaskFact } from "../store/store-contract.ts";
 import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "../logger.ts";
 
 export interface ServeOptions {
@@ -188,6 +189,11 @@ export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<str
 export type SessionListReader = (query: SessionListQuery) => Promise<SessionListResponse>;
 /** Full detail for one session (built on demand), or null if it has no messages / doesn't exist. */
 export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | null>;
+/** The interaction timeline for one session (prompt -> loop summary -> response), or null if the
+ *  session has no interactions. */
+export type SessionInteractionsReader = (sessionId: string) => Promise<SessionInteractionsResponse | null>;
+/** Structural-index provenance for one session (transcript files + lineage), or null if unknown (#124). */
+export type SessionProvenanceReader = (sessionId: string) => Promise<SessionProvenance | null>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
 
@@ -219,6 +225,8 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
+  sessionInteractions?: SessionInteractionsReader;
+  sessionProvenance?: SessionProvenanceReader;
   /** Flag/unflag a session as hidden. Omitted in processes without a store (503). */
   setSessionHidden?: SessionHiddenSetter;
   /** Flag/unflag many sessions as hidden at once (bulk mode). Omitted in processes without a store (503). */
@@ -553,6 +561,28 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     const session = await opts.sessionDetail(sessionId);
     if (!session) return c.json({ error: "Session not found." }, 404);
     return c.json({ session } satisfies SessionDetailResponse);
+  });
+
+  // The interaction timeline for one session (prompt -> loop summary -> response), built on demand and
+  // fetched only when the detail view's Timeline tab is opened.
+  app.get("/api/session/:id/interactions", async (c) => {
+    if (!opts.sessionInteractions) return c.json({ error: "Session interactions are unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const timeline = await opts.sessionInteractions(sessionId);
+    if (!timeline) return c.json({ error: "Session not found." }, 404);
+    return c.json(timeline satisfies SessionInteractionsResponse);
+  });
+
+  // Structural-index provenance for one session (transcript files + subagent/resumed lineage), built on
+  // demand for the detail view's "Session Data" card. Local-only (index_* is never synced).
+  app.get("/api/session/:id/provenance", async (c) => {
+    if (!opts.sessionProvenance) return c.json({ error: "Session provenance is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const provenance = await opts.sessionProvenance(sessionId);
+    if (!provenance) return c.json({ error: "Session not found." }, 404);
+    return c.json(provenance satisfies SessionProvenance);
   });
 
   // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
@@ -1097,9 +1127,19 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
 
   const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
     const store = await readStore();
-    const byTask = await store.readSessionTaskMessages(sessionId);
+    const [byTask, interactionCounts] = await Promise.all([
+      store.readSessionTaskMessages(sessionId),
+      store.readSessionTaskInteractionCounts(sessionId),
+    ]);
     const out: Record<string, TaskMetrics> = {};
     for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+    // The interaction count comes from the spine (matches the timeline): it also covers interactions
+    // with no usage rows, which the message-derived distinct-interactionSeq undercounts. A task with
+    // interactions but no attributed messages still gets an entry (zeroed metrics + its count).
+    for (const [taskId, n] of interactionCounts) {
+      const m = out[taskId] ?? (out[taskId] = computeTaskMetrics([]));
+      m.interactions = n;
+    }
     return out;
   };
 
@@ -1151,14 +1191,30 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks, interpretation, isHidden] = await Promise.all([
+    const [meta, tasks, interpretation, isHidden, interactions] = await Promise.all([
       store.readSessionMeta(sessionId),
       store.readSessionTasks(sessionId),
       store.readSessionInterpretation(sessionId),
       store.readSessionHidden(sessionId),
+      store.readSessionInteractionCount(sessionId),
     ]);
-    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden, interactions);
   };
+
+  const sessionInteractions: SessionInteractionsReader = async (sessionId) => {
+    const store = await readStore();
+    const [interactions, invocations, messages, tasks] = await Promise.all([
+      store.readSessionInteractions(sessionId),
+      store.readSessionInvocations(sessionId),
+      store.readSessionMessages(sessionId),
+      store.readSessionTasks(sessionId),
+    ]);
+    if (!interactions.length) return null;
+    return buildSessionInteractions(interactions, invocations, messages, tasks);
+  };
+
+  const sessionProvenance: SessionProvenanceReader = async (sessionId) =>
+    (await readStore()).readSessionProvenance(sessionId);
 
   const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>
     withWriteStore((store) => store.setSessionsHidden([sessionId], hidden));
@@ -1185,6 +1241,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionTaskMetrics,
     sessionList,
     sessionDetail,
+    sessionInteractions,
+    sessionProvenance,
     setSessionHidden,
     setSessionsHidden,
     labels,

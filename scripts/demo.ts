@@ -107,7 +107,14 @@ async function main(): Promise<void> {
       await store.materializeSessions(owner, sessions);
     }
     for (const [sessionId, tasks] of demo.tasksBySession) {
-      await store.writeSessionTasks(sessionId, tasks, INTERPRETER_VERSION);
+      const interp = demo.interpretationBySession.get(sessionId);
+      await store.writeSessionTasks(
+        sessionId,
+        tasks,
+        INTERPRETER_VERSION,
+        interp?.title ?? null,
+        interp?.summary ?? null,
+      );
     }
   } finally {
     await store.close();

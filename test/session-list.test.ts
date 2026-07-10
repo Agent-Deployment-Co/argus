@@ -23,6 +23,8 @@ function agg(sessionId: string, over: Partial<SessionMeta> & { input: number; st
     firstTs: start,
     lastTs: start,
     messageCount: 1,
+    interactions: 1,
+    tasks: 0,
     title: null,
     summary: null,
   };
@@ -127,8 +129,43 @@ describe("buildSessionDetail", () => {
     expect(row.toolCounts).toEqual({ Edit: 1 });
     expect(row.filesTouched).toEqual(["a.ts"]);
     expect(row.firstPrompt).toBe("do the thing");
-    // Summary comes from the shared summaryFactsFromMessages derivation (matches the dashboard path).
-    expect(row.summary).toContain("do the thing");
-    expect(row.summary).toContain("Edit");
+    // Summary is the stored interpretation summary verbatim — empty when interpretation hasn't run
+    // (no heuristic fallback), and null title until it has.
+    expect(row.summary).toBe("");
+    expect(row.title).toBeNull();
+  });
+
+  test("carries the interpreted title and summary verbatim when interpreted", () => {
+    const meta: SessionMeta = {
+      source: "codex",
+      sessionId: "codex:e",
+      project: "p",
+      cwd: "/tmp/p",
+      filePath: "/tmp/p/r.jsonl",
+      firstPrompt: "do the thing",
+    };
+    const messages: MessageRecord[] = [
+      {
+        source: "codex",
+        sessionId: "codex:e",
+        project: "p",
+        cwd: "/tmp/p",
+        gitBranch: "",
+        ts: 1000,
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: usage(50),
+        attributionSkill: null,
+        toolUses: [],
+      },
+    ];
+    const row = buildSessionDetail("codex:e", messages, meta, [], {
+      title: "Do the thing",
+      summary: "Did the thing across two steps.",
+      interpreted: true,
+    });
+    expect(row.title).toBe("Do the thing");
+    expect(row.summary).toBe("Did the thing across two steps.");
+    expect(row.interpreted).toBe(true);
   });
 });

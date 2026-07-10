@@ -8,6 +8,25 @@ export const fmt = (n: number): string =>
 
 export const usd = (n: number): string => "$" + (n < 1 ? n.toFixed(3) : n.toFixed(2));
 
+/** The singular or plural form of `word` for a count, e.g. `pluralize(1, "call")` → "call",
+ *  `pluralize(3, "call")` → "calls". Pass `plural` for irregular plurals. */
+export const pluralize = (n: number, word: string, plural = word + "s"): string =>
+  n === 1 ? word : plural;
+
+/** Human-readable byte size (base-1024), e.g. 2048 → "2.0 KB". `—` when unknown. */
+export const fmtBytes = (n: number | null): string => {
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+};
+
 export const dur = (ms: number): string => {
   const m = Math.round(ms / 60000);
   if (m < 60) return m + "m";

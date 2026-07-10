@@ -102,6 +102,16 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   agentMessages: number | null;
   /** CLI-only: raw turn count when the source exposes it. */
   rawTurns: number | null;
+  /** CLI-only (#124): number of interactions (prompt→loop→response units) in the session. */
+  interactions?: number;
+  /** CLI-only (#124): count of distinct skills used in the session (topSkills is only the top 3). */
+  skillsUsed?: number;
+  /** CLI-only (#124): every distinct skill used in the session, most-used first (topSkills is capped
+   *  at 3; this is the full list for the detail sidebar). */
+  skills?: string[];
+  /** CLI-only (#124): per-tool usage breakdown for the session (name/category/interactions/calls/
+   *  result tokens), for the session-detail tool table. */
+  toolBreakdown?: SessionToolStat[];
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
   /** CLI-only: tasks generated for this session via session interpretation. */
@@ -157,6 +167,19 @@ export interface ToolStat {
   display: string;
   calls: number;
   sessions: number;
+  approxResultTokens: number;
+}
+
+/** Per-tool usage within a single session (#124): like ToolStat but scoped to one session, so the
+ *  cross-session `sessions` count is replaced by `interactions` (distinct interactions that used it). */
+export interface SessionToolStat {
+  name: string;
+  category: ToolCategory;
+  /** Display label — `server · tool` for MCP tools, else the raw name. */
+  display: string;
+  /** Distinct interactions that invoked this tool. */
+  interactions: number;
+  calls: number;
   approxResultTokens: number;
 }
 

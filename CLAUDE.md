@@ -184,11 +184,6 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 - **`reporting/inventory.ts`** — Reads `~/.claude/settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`
   to map skills (`plugin:skill`) to owning plugins and to surface **enabled-but-unused** plugins.
 
-- **`indexing/interpret/summarize.ts`** — Per-session heuristic summary (`heuristicSummary`): a free one-liner built
-  from the first prompt, top skills, top tools, and edited-file count. Fills `SessionRow.summary`
-  for the web app's session-title fallback. (The old opt-in `claude -p` summarizer was removed in
-  favor of #88's task interpretation.)
-
 - **`api/serve.ts`** + **`web/`** — `argus serve`: a Hono server (`createApp` for routes, `startServer`
   to listen via `@hono/node-server`) serving the React+Vite SPA in `web/` from `dist/web` (SPA fallback
   to `index.html`) and exposing the JSON API. There is **no monolithic `/api/snapshot`** (#217): each
@@ -232,7 +227,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   default` (empty values count as absent). `resolveTaskExtraction` produces the effective
   `TaskExtractionOptions` + `enabled` toggle. Settings only — `token.json`/`pricing.json` stay separate.
 
-- **`indexing/interpret/` (`index.ts`, `task-extraction.ts`, `task-candidates.ts`, `dialogue.ts`, `summarize.ts`)** —
+- **`indexing/interpret/` (`index.ts`, `task-extraction.ts`, `task-candidates.ts`, `dialogue.ts`)** —
   The Interpret stage: the one model-driven, opt-in step (#88/#91; full design in
   `docs/internals/task-interpretation.md`). `interpret/index.ts` is the stage entry (`extractTasksForSessions`,
   `taskExtractionActive`) the pipeline calls. `task-candidates.ts`

@@ -2,7 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Calendar, EyeOff, FilterX, Layers, Search, Tag, X } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { compactProject, dayStamp, fmt, usd } from "../lib/format";
+import { compactProject, dayStamp, fmt, pluralize } from "../lib/format";
+import { TasksIcon, TokensIcon } from "../lib/icons";
+import { IconStat, InteractionCount } from "../components/pills";
 import { fetchAllSessionIds, setSessionsHidden, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
 import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSessionsLabelsQuery } from "../lib/labels";
 import type { LabelRecord } from "../types";
@@ -33,15 +35,13 @@ function labelIdsFromSearch(search: Record<string, unknown>): string[] {
 }
 
 /** A human-facing title for a session: the model-generated title when the session has been interpreted
- *  (#234), else its opening prompt, else the summary, else a placeholder. Accepts both the list-lite
- *  item and the full row. */
-export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null; summary?: string | null }): string {
+ *  (#234), else its opening prompt, else a placeholder. The summary is never used as a title fallback.
+ *  Accepts both the list-lite item and the full row. */
+export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null }): string {
   const title = s.title?.trim();
   if (title) return title;
   const prompt = s.firstPrompt?.trim();
   if (prompt) return prompt.length > 90 ? prompt.slice(0, 90) + "…" : prompt;
-  const summary = s.summary?.trim().replace(/^"|"$/g, "");
-  if (summary) return summary;
   return "(untitled session)";
 }
 
@@ -302,10 +302,11 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
-                {s.userMessages != null && <span>{fmt(s.userMessages)} user</span>}
-                {s.agentMessages != null && <span>{fmt(s.agentMessages)} agent</span>}
-                <span>{fmt(s.total)} tok</span>
-                <span>{usd(s.cost)}</span>
+                <IconStat value={fmt(s.total)} title={`${fmt(s.total)} tokens`} icon={TokensIcon} size={12} iconFirst />
+                <InteractionCount n={s.interactions} size={12} iconFirst />
+                {s.tasks > 0 && (
+                  <IconStat value={s.tasks} title={`${s.tasks} ${pluralize(s.tasks, "task")}`} icon={TasksIcon} size={12} iconFirst />
+                )}
               </div>
               {s.labels && s.labels.length > 0 && (
                 <div className="session-item-labels">

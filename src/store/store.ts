@@ -40,6 +40,7 @@ import type {
   ResolvedQuery,
   SessionAggregate,
   SessionInvocation,
+  SessionProvenance,
   SessionSearchMatch,
   SessionSearchQuery,
   SessionSearchResult,
@@ -2402,6 +2403,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Count of a session's interactions (#124): a cheap COUNT over resolved_interactions, for the
+  // detail page's interaction tally without rehydrating prompt/response text.
+  readSessionInteractionCount(sessionId: string): Promise<number> {
+    return this.schedule(async () => {
+      const row = await get<{ n: number }>(
+        this.db,
+        "SELECT COUNT(*) AS n FROM resolved_interactions WHERE session_id = ?",
+        [sessionId],
+      );
+      return row?.n ?? 0;
+    });
+  }
+
   // All tool invocations for a session with their owning interaction seq (#234). Read straight off
   // resolved_invocations — deliberately NOT joined to task_seq, which writeSessionTasks assigns only
   // after pass 2 runs, so a task-grain read would come back empty mid-interpretation.
@@ -2427,6 +2441,79 @@ export class SqliteStore implements Store {
         ...(row.mcp_tool != null ? { mcpTool: row.mcp_tool } : {}),
         ...(row.file_path != null ? { filePath: row.file_path } : {}),
       }));
+    });
+  }
+
+  // Structural-index provenance for a session (#124): the transcript file(s) it was parsed from and
+  // its subagent/resumed-session lineage. resolved_sessions.session_id equals the source's session id
+  // (sid = session.meta.sessionId at materialize), which is also index_sessions.source_session_id, so
+  // we look up the source once then match on (source, source_session_id).
+  readSessionProvenance(sessionId: string): Promise<SessionProvenance | null> {
+    return this.schedule(async () => {
+      const srcRow = await get<{ source: string }>(
+        this.db,
+        "SELECT source FROM resolved_sessions WHERE session_id = ?",
+        [sessionId],
+      );
+      if (!srcRow) return null;
+      const source = srcRow.source as AgentSource;
+      const fileRows = await all<{
+        transcript_path: string | null;
+        observed_path: string | null;
+        relative_path: string | null;
+        kind: string;
+        session_kind: string | null;
+        size_bytes: string | null;
+        mtime_ns: string | null;
+        status: string;
+        invalidation_reason: string | null;
+        parser_name: string | null;
+        parser_version: string | null;
+      }>(
+        this.db,
+        `SELECT f.observed_path, f.relative_path, f.kind, f.size_bytes, f.mtime_ns, f.status,
+                f.invalidation_reason, f.parser_name, f.parser_version,
+                s.transcript_path, s.kind AS session_kind
+         FROM index_sessions s JOIN index_files f ON f.id = s.file_id
+         WHERE s.source = ? AND s.source_session_id = ?
+         ORDER BY f.observed_path`,
+        [source, sessionId],
+      );
+      const relRows = await all<{ child: string; parent: string }>(
+        this.db,
+        `SELECT child_source_session_id AS child, parent_source_session_id AS parent
+         FROM index_relationships
+         WHERE source = ? AND (child_source_session_id = ? OR parent_source_session_id = ?)`,
+        [source, sessionId, sessionId],
+      );
+      const parents = [...new Set(relRows.filter((r) => r.child === sessionId).map((r) => r.parent))].sort();
+      const children = [...new Set(relRows.filter((r) => r.parent === sessionId).map((r) => r.child))].sort();
+      const toNum = (v: string | null): number | null => {
+        if (v == null) return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      return {
+        source,
+        files: fileRows.map((r) => {
+          const mtimeNs = toNum(r.mtime_ns);
+          return {
+            transcriptPath: r.transcript_path,
+            observedPath: r.observed_path,
+            relativePath: r.relative_path,
+            kind: r.kind,
+            sessionKind: r.session_kind,
+            sizeBytes: toNum(r.size_bytes),
+            mtimeMs: mtimeNs != null ? Math.round(mtimeNs / 1e6) : null,
+            status: r.status,
+            invalidationReason: r.invalidation_reason,
+            parserName: r.parser_name,
+            parserVersion: r.parser_version,
+          };
+        }),
+        parents,
+        children,
+      };
     });
   }
 
@@ -2941,6 +3028,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Map each of a session's task seqs -> task id (from resolved_tasks). Runs the query directly (no
+  // schedule wrap) so it composes inside an already-scheduled read. Shared by the task-grain readers.
+  private async taskIdBySeq(sessionId: string): Promise<Map<number, string>> {
+    const rows = await all<{ seq: number; task_json: string }>(
+      this.db,
+      "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+      [sessionId],
+    );
+    const idBySeq = new Map<number, string>();
+    for (const row of rows) idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+    return idBySeq;
+  }
+
   readSessionTaskMessages(
     sessionId: string,
   ): Promise<Map<string, MessageRecord[]>> {
@@ -2949,14 +3049,7 @@ export class SqliteStore implements Store {
       // messages by task id. Task membership lives on resolved_interactions.task_seq (#122), so a usage
       // row's task is its owning interaction's task: usage -> interaction (interaction_seq) -> task_seq.
       // Tasks with no attributed messages simply don't appear in the map (callers treat that as zero).
-      const taskRows = await all<{ seq: number; task_json: string }>(
-        this.db,
-        "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
-        [sessionId],
-      );
-      const idBySeq = new Map<number, string>();
-      for (const row of taskRows)
-        idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+      const idBySeq = await this.taskIdBySeq(sessionId);
 
       const rows = await all<{ record_json: string; task_seq: number | null }>(
         this.db,
@@ -2973,6 +3066,30 @@ export class SqliteStore implements Store {
         if (!id) continue;
         const list = byTask.get(id) ?? byTask.set(id, []).get(id)!;
         list.push(JSON.parse(row.record_json) as MessageRecord);
+      }
+      return byTask;
+    });
+  }
+
+  // Per-task interaction counts straight off the interaction spine (resolved_interactions grouped by
+  // task_seq), keyed by task id. This is the true interaction count for a task — it includes
+  // interactions with no usage rows (interruptions, prompt-only turns) that the usage-joined
+  // readSessionTaskMessages misses — and matches the timeline's chapter grouping (#124).
+  readSessionTaskInteractionCounts(sessionId: string): Promise<Map<string, number>> {
+    return this.schedule(async () => {
+      const idBySeq = await this.taskIdBySeq(sessionId);
+
+      const rows = await all<{ task_seq: number; n: number }>(
+        this.db,
+        `SELECT task_seq, COUNT(*) AS n FROM resolved_interactions
+         WHERE session_id = ? AND task_seq IS NOT NULL
+         GROUP BY task_seq`,
+        [sessionId],
+      );
+      const byTask = new Map<string, number>();
+      for (const row of rows) {
+        const id = idBySeq.get(row.task_seq);
+        if (id) byTask.set(id, row.n);
       }
       return byTask;
     });
@@ -3093,12 +3210,29 @@ export class SqliteStore implements Store {
         });
       }
 
+      // Per-session interaction + task counts (grouped once, mapped by session id) for the list stats.
+      // Scoped by the same source filter as the token sums above (both tables carry a `source` column),
+      // so a source-narrowed request doesn't scan the whole store. `table` is a fixed literal, never
+      // user input.
+      const countBySession = async (table: string): Promise<Map<string, number>> => {
+        const rows = await all<{ session_id: string; n: number }>(
+          this.db,
+          `SELECT session_id, COUNT(*) AS n FROM ${table} ${msgFilters.messageWhere} GROUP BY session_id`,
+          msgFilters.messageParams,
+        );
+        return new Map(rows.map((r) => [r.session_id, r.n]));
+      };
+      const interactionsBySession = await countBySession("resolved_interactions");
+      const tasksBySession = await countBySession("resolved_tasks");
+
       return sessionRows.map((row) => ({
         meta: JSON.parse(row.meta_json) as SessionMeta,
         byModel: byModelBySession.get(row.session_id) ?? [],
         firstTs: row.first_ts,
         lastTs: row.last_ts,
         messageCount: row.message_count,
+        interactions: interactionsBySession.get(row.session_id) ?? 0,
+        tasks: tasksBySession.get(row.session_id) ?? 0,
         title: row.title,
         summary: row.summary,
       }));

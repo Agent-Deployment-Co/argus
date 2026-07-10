@@ -4,6 +4,7 @@
 // logic: `buildSessionRow` (the on-demand /api/session/:id + /api/sessions detail) and `foldPlugins`
 // (the /api/plugins builder).
 import { cost } from "../pricing.ts";
+import { toolDisplayName } from "../tool-categories.ts";
 import {
   addUsage,
   emptyUsage,
@@ -15,6 +16,8 @@ import {
   type SessionHealth,
   type SessionMeta,
   type SessionRow,
+  type SessionToolStat,
+  type ToolCategory,
   totalTokens,
   type Usage,
 } from "../types.ts";
@@ -135,6 +138,8 @@ export function buildSessionRow(
   // Local-only UI state: whether the session is currently hidden from the list/search. CLI-only, never
   // pushed by sync.
   isHidden = false,
+  // Number of interactions in the session (#124), counted from the interaction spine. CLI-only.
+  interactions = 0,
 ): SessionRow {
   const u = emptyUsage();
   let c = 0;
@@ -142,6 +147,12 @@ export function buildSessionRow(
   const skillCounts = new Map<string, number>();
   const toolCounts: Record<string, number> = {};
   const files = new Set<string>();
+  // Per-tool session breakdown (#124): calls, result-token weight, and the distinct interactions that
+  // used each tool. `interactions` is a Set of interaction seqs so repeat calls in one loop count once.
+  const toolStats = new Map<
+    string,
+    { category: ToolCategory; display: string; calls: number; approxResultTokens: number; interactions: Set<number> }
+  >();
   for (const m of msgs) {
     addUsage(u, m.usage);
     c += usageCost(m.usage, m.model);
@@ -150,11 +161,30 @@ export function buildSessionRow(
     for (const tu of m.toolUses) {
       toolCounts[tu.name] = (toolCounts[tu.name] || 0) + 1;
       if (tu.filePath) files.add(tu.filePath);
+      let stat = toolStats.get(tu.name);
+      if (!stat) {
+        stat = { category: tu.category, display: toolDisplayName(tu.name), calls: 0, approxResultTokens: 0, interactions: new Set() };
+        toolStats.set(tu.name, stat);
+      }
+      stat.calls += 1;
+      stat.approxResultTokens += tu.approxResultTokens ?? 0;
+      if (m.interactionSeq != null) stat.interactions.add(m.interactionSeq);
     }
   }
+  const toolBreakdown: SessionToolStat[] = [...toolStats.entries()]
+    .map(([name, s]) => ({
+      name,
+      category: s.category,
+      display: s.display,
+      interactions: s.interactions.size,
+      calls: s.calls,
+      approxResultTokens: s.approxResultTokens,
+    }))
+    .sort((a, b) => b.calls - a.calls || a.display.localeCompare(b.display));
   const start = msgs[0]!.ts;
   const end = msgs[msgs.length - 1]!.ts;
-  const topSkills = [...skillCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+  const skills = [...skillCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  const topSkills = skills.slice(0, 3);
   return {
     source: meta?.source || msgs[0]!.source,
     sessionId: sid,
@@ -168,7 +198,10 @@ export function buildSessionRow(
     rawTurns: meta?.rawTurns ?? null,
     models: [...models],
     topSkills,
+    skills,
+    skillsUsed: skillCounts.size,
     toolCounts,
+    toolBreakdown,
     filesTouched: [...files],
     total: totalTokens(u),
     cost: c,
@@ -182,5 +215,6 @@ export function buildSessionRow(
     },
     tasks,
     isHidden,
+    interactions,
   };
 }

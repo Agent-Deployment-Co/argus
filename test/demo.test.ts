@@ -33,7 +33,10 @@ async function seedAndAggregate() {
   const write = await openStore({ path, now: () => ANCHOR });
   try {
     for (const [owner, sessions] of demo.sessionsByOwner) await write.materializeSessions(owner, sessions);
-    for (const [id, tasks] of demo.tasksBySession) await write.writeSessionTasks(id, tasks, INTERPRETER_VERSION);
+    for (const [id, tasks] of demo.tasksBySession) {
+      const interp = demo.interpretationBySession.get(id);
+      await write.writeSessionTasks(id, tasks, INTERPRETER_VERSION, interp?.title ?? null, interp?.summary ?? null);
+    }
   } finally {
     await write.close();
   }
@@ -80,6 +83,7 @@ async function seedAndAggregate() {
     });
     const firstSessionId = [...demo.tasksBySession.keys()][0]!;
     const roundTrippedTasks = await store.readSessionTasks(firstSessionId);
+    const roundTrippedInterp = await store.readSessionInterpretation(firstSessionId);
 
     // Roll up per-task metrics the way the /task-metrics endpoint does: a task's messages come from
     // usage -> interaction -> task_seq, so this is zero unless the interaction spine is seeded.
@@ -98,7 +102,7 @@ async function seedAndAggregate() {
       }
     }
     const taskMetrics = { taskTokens, taskToolCalls, tasksWithMessages, totalTasks };
-    return { demo, views, recs, roundTrippedTasks, firstSessionId, taskMetrics };
+    return { demo, views, recs, roundTrippedTasks, roundTrippedInterp, firstSessionId, taskMetrics };
   } finally {
     await store.close();
   }
@@ -210,6 +214,41 @@ test("interaction compaction counts reconcile with session-level friction", () =
       expect(interactionCompactions).toBe(sessionCompactions);
     }
   }
+});
+
+test("every session gets an interpreted title and summary that round-trip", async () => {
+  const { demo, roundTrippedInterp, firstSessionId } = await seedAndAggregate();
+  // Every session has a non-empty authored title + summary.
+  for (const [, sessions] of demo.sessionsByOwner) {
+    for (const s of sessions) {
+      const interp = demo.interpretationBySession.get(s.meta.sessionId);
+      expect((interp?.title ?? "").length).toBeGreaterThan(0);
+      expect((interp?.summary ?? "").length).toBeGreaterThan(0);
+    }
+  }
+  // And they come back off the store as the interpreted title/summary (not blank).
+  const expected = demo.interpretationBySession.get(firstSessionId)!;
+  expect(roundTrippedInterp?.title).toBe(expected.title);
+  expect(roundTrippedInterp?.summary).toBe(expected.summary);
+  expect(roundTrippedInterp?.interpreted).toBe(true);
+});
+
+test("tasks span one or more interactions", () => {
+  const demo = generateDemoData({ asOfMs: ANCHOR, seed: 42 });
+  let multiInteractionSessions = 0;
+  for (const [, sessions] of demo.sessionsByOwner) {
+    for (const s of sessions) {
+      const nInteractions = s.interactions?.length ?? 0;
+      const nTasks = demo.tasksBySession.get(s.meta.sessionId)!.length;
+      // At least one interaction per task, and never more interactions than there are messages
+      // to slice across them.
+      expect(nInteractions).toBeGreaterThanOrEqual(nTasks);
+      expect(nInteractions).toBeLessThanOrEqual(s.messages.length);
+      if (nInteractions > nTasks) multiInteractionSessions++;
+    }
+  }
+  // The point of the multi-interaction change: plenty of tasks span more than one interaction.
+  expect(multiInteractionSessions).toBeGreaterThanOrEqual(10);
 });
 
 test("every task carries its token and tool activity (tied to interactions)", async () => {
