@@ -11,7 +11,7 @@ import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { SessionTimeline } from "../components/SessionTimeline";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
-import { reindexSession, setSessionHidden, useSessionTaskMetrics } from "../lib/sessions";
+import { reindexSession, setSessionHidden } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 import type { SessionToolStat } from "../types";
@@ -38,7 +38,7 @@ const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 // How a clicked task shows its detail. "card" expands an inline card in the list; "drawer" opens the
 // side panel next to the content. Flip this to compare; the drawer (TaskPanel) is kept, just
 // suppressed in "card".
-const TASK_VIEW: "card" | "drawer" = "drawer";
+const TASK_VIEW: "card" | "drawer" = "card";
 
 // Per-task label bars are hidden for now (session-level labeling stays on). Flip to re-enable.
 const SHOW_TASK_LABELS = false;
@@ -55,9 +55,6 @@ export function SessionDetail() {
 
   // Reindexing refreshes the whole session and rebuilds the server-side snapshot, so reload the page
   // once it's done — the user gets the fully updated session without a manual refresh.
-  // Per-task metrics (tokens/cost/tools) fetched on demand for the whole session — shared with the
-  // detail drawer via React Query's cache.
-  const taskMetrics = useSessionTaskMetrics(sessionId ?? "").data;
   // A session's labels + its per-task labels (keyed by task position). Refreshes on every label edit
   // via React Query invalidation in the label mutation hooks.
   const sessionLabels = useSessionLabelsQuery(sessionId).data;
@@ -213,17 +210,16 @@ export function SessionDetail() {
                       >
                         <span className="task-item-desc" title={task.description}>{task.description}</span>
                         {task.outcome && <OutcomeBadge outcome={task.outcome} />}
-                        <span className="task-item-tokens">
-                          {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
-                        </span>
                       </button>
                       {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
                       {SHOW_TASK_LABELS && (
                         <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
                       )}
-                      {TASK_VIEW === "card" && task.id === selectedTaskId && (
-                        <div className="task-card">
-                          <TaskDetails sessionId={s.sessionId} task={task} />
+                      {TASK_VIEW === "card" && (
+                        <div className={`task-card${task.id === selectedTaskId ? " open" : ""}`}>
+                          <div className="task-card-inner">
+                            <TaskDetails sessionId={s.sessionId} task={task} />
+                          </div>
                         </div>
                       )}
                     </li>

@@ -382,13 +382,17 @@ main:has(.inbox-page) { padding: 0; }
 .task-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 8px 12px; border: 0; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
 .task-item:hover { background: var(--hover); }
 .task-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.task-item.selected { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 2px 0 0 var(--accent); }
-.task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
-.task-item-tokens { flex: 0 0 auto; min-width: 64px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
 .task-item .pill { flex: 0 0 auto; margin: 0; }
 /* Inline expanded card: the clicked task's full detail, shown in-list instead of the drawer. Reuses
    .task-panel-body for the field layout. */
-.task-card { border-top: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+/* Expanded task detail flows straight out of its row: same surface, no divider, aligned padding. It's
+   always rendered and blinds down/up via the grid-rows 0fr<->1fr trick so open and close both animate. */
+.task-card { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.22s ease; background: var(--surface); }
+.task-card.open { grid-template-rows: 1fr; }
+.task-card-inner { overflow: hidden; }
+.task-card .task-panel-body { padding: 0 12px 12px; overflow: visible; }
+@media (prefers-reduced-motion: reduce) { .task-card { transition: none; } }
 
 /* Task detail panel: a flex sibling of .session-detail-inner within .session-detail, so it takes
    its own column instead of floating over the content (which shrinks via flex to make room). */
@@ -417,11 +421,9 @@ main:has(.inbox-page) { padding: 0; }
 .task-panel-nav { display: flex; align-items: center; gap: 14px; }
 .task-panel-nav-group { display: flex; align-items: center; gap: 6px; }
 .task-panel-body { padding: 16px; overflow-y: auto; display: grid; gap: 14px; }
-.task-panel-field { display: grid; gap: 4px; }
 .task-panel-value { color: var(--text); font-size: 13.5px; line-height: 1.5; }
-.task-panel-desc { white-space: pre-wrap; }
-.task-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.task-metric { color: var(--muted); font-size: 12.5px; }
+.task-metrics { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.task-metric { flex: 1 1 0; min-width: 0; color: var(--muted); font-size: 12.5px; }
 .task-metric-n { display: block; color: var(--heading); font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* Per-task outcome / frustration pills. */
