@@ -13,7 +13,7 @@ import { SessionDataCard } from "../components/SessionDataCard";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden } from "../lib/sessions";
-import { useSessionDetailQuery } from "../lib/sessions";
+import { useSessionDetailQuery, useSessionTaskMetrics } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
 import type { SessionToolStat } from "../types";
 
@@ -43,6 +43,9 @@ export function SessionDetail() {
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
+  // Per-task metrics (interaction counts for the task list's timeline links). Same query key as the
+  // expanded task detail's, so React Query serves both from one request.
+  const taskMetrics = useSessionTaskMetrics(sessionId ?? "").data;
   const [tab, setTab] = useState<"overview" | "timeline" | "details">("overview");
   // A one-shot request to open the Timeline tab focused on a task chapter (from a task's timeline
   // link). The nonce makes each click a fresh value so re-clicking the same task re-focuses it.
@@ -267,6 +270,9 @@ export function SessionDetail() {
                           title="View this task in the timeline"
                           aria-label="View this task in the timeline"
                         >
+                          {taskMetrics?.[task.id]?.interactions != null && (
+                            <span className="task-timeline-count">{taskMetrics?.[task.id]?.interactions}</span>
+                          )}
                           <MessagesSquare size={14} strokeWidth={1.75} aria-hidden />
                         </button>
                       </div>

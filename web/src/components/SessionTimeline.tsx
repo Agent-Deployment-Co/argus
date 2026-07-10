@@ -1,7 +1,7 @@
-import { ChevronDown, ChevronRight, CircleDashed, Goal } from "lucide-react";
+import { ChevronDown, ChevronRight, MessagesSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClampText } from "./ClampText";
-import { FrustrationBadge, OutcomeBadge } from "./TaskDetails";
+import { OutcomeBadge } from "./TaskDetails";
 import { dtAmPm, fmt } from "../lib/format";
 import { useSessionInteractionsQuery } from "../lib/sessions";
 import type { TimelineInteraction, TimelineTask } from "../types";
@@ -197,20 +197,17 @@ export function SessionTimeline({
                   ) : (
                     <ChevronDown className="tl-chapter-caret" size={16} strokeWidth={2} aria-hidden />
                   )}
-                  {chapter.task ? (
-                    <Goal className="tl-chapter-icon" size={15} strokeWidth={2} aria-hidden />
-                  ) : (
-                    <CircleDashed className="tl-chapter-icon tl-chapter-icon--none" size={15} strokeWidth={2} aria-hidden />
-                  )}
                   <span className="tl-chapter-title" title={chapter.task ? chapter.task.description : undefined}>
                     {chapter.task ? chapter.task.description : "No task"}
                   </span>
                   {chapter.task && chapter.task.outcome && <OutcomeBadge outcome={chapter.task.outcome} />}
-                  {chapter.task && chapter.task.frustration && chapter.task.frustration !== "none" && (
-                    <FrustrationBadge frustration={chapter.task.frustration} />
-                  )}
-                  <span className="tl-chapter-count">
-                    {chapter.items.length} {chapter.items.length === 1 ? "interaction" : "interactions"}
+                  <span
+                    className="tl-chapter-count"
+                    title={`${chapter.items.length} ${chapter.items.length === 1 ? "interaction" : "interactions"}`}
+                    aria-label={`${chapter.items.length} ${chapter.items.length === 1 ? "interaction" : "interactions"}`}
+                  >
+                    {chapter.items.length}
+                    <MessagesSquare size={13} strokeWidth={1.75} aria-hidden />
                   </span>
                 </button>
               )}

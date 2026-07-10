@@ -1047,9 +1047,19 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
 
   const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
     const store = await readStore();
-    const byTask = await store.readSessionTaskMessages(sessionId);
+    const [byTask, interactionCounts] = await Promise.all([
+      store.readSessionTaskMessages(sessionId),
+      store.readSessionTaskInteractionCounts(sessionId),
+    ]);
     const out: Record<string, TaskMetrics> = {};
     for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+    // The interaction count comes from the spine (matches the timeline): it also covers interactions
+    // with no usage rows, which the message-derived distinct-interactionSeq undercounts. A task with
+    // interactions but no attributed messages still gets an entry (zeroed metrics + its count).
+    for (const [taskId, n] of interactionCounts) {
+      const m = out[taskId] ?? (out[taskId] = computeTaskMetrics([]));
+      m.interactions = n;
+    }
     return out;
   };
 

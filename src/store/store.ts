@@ -3017,6 +3017,36 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Per-task interaction counts straight off the interaction spine (resolved_interactions grouped by
+  // task_seq), keyed by task id. This is the true interaction count for a task — it includes
+  // interactions with no usage rows (interruptions, prompt-only turns) that the usage-joined
+  // readSessionTaskMessages misses — and matches the timeline's chapter grouping (#124).
+  readSessionTaskInteractionCounts(sessionId: string): Promise<Map<string, number>> {
+    return this.schedule(async () => {
+      const taskRows = await all<{ seq: number; task_json: string }>(
+        this.db,
+        "SELECT seq, task_json FROM resolved_tasks WHERE session_id = ? ORDER BY seq",
+        [sessionId],
+      );
+      const idBySeq = new Map<number, string>();
+      for (const row of taskRows) idBySeq.set(row.seq, (JSON.parse(row.task_json) as TaskFact).id);
+
+      const rows = await all<{ task_seq: number; n: number }>(
+        this.db,
+        `SELECT task_seq, COUNT(*) AS n FROM resolved_interactions
+         WHERE session_id = ? AND task_seq IS NOT NULL
+         GROUP BY task_seq`,
+        [sessionId],
+      );
+      const byTask = new Map<string, number>();
+      for (const row of rows) {
+        const id = idBySeq.get(row.task_seq);
+        if (id) byTask.set(id, row.n);
+      }
+      return byTask;
+    });
+  }
+
   readSessionMessages(sessionId: string): Promise<MessageRecord[]> {
     return this.schedule(async () => {
       const rows = await all<{ record_json: string }>(

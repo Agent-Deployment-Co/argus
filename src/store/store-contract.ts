@@ -833,6 +833,10 @@ export interface ReadModelStore {
   /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
    *  task id, oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
+  /** Interaction count per task straight off the interaction spine (resolved_interactions grouped by
+   *  task_seq), keyed by task id. Unlike readSessionTaskMessages, this includes interactions with no
+   *  usage rows, so it matches the timeline's chapter grouping (#124). */
+  readSessionTaskInteractionCounts(sessionId: string): Promise<Map<string, number>>;
   /** All messages for one session, oldest first. Backs the on-demand /api/session/:id detail. */
   readSessionMessages(sessionId: string): Promise<MessageRecord[]>;
   /** Per-session token rollups for the paginated session list: one entry per matching session with
