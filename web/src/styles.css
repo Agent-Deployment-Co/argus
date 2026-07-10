@@ -273,8 +273,13 @@ main:has(.inbox-page) { padding: 0; }
 .detail-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
 .detail-tab:hover { color: var(--text); }
 .detail-tab.active { color: var(--heading); border-bottom-color: var(--accent); }
-.detail-tab-panel { margin-top: 22px; container-type: inline-size; }
+.detail-tab-panel { margin-top: 30px; container-type: inline-size; }
+/* Keep the gap between the tab bar and the first component uniform across tabs: the general
+   .session-detail-inner section rule adds a top margin that would otherwise double up for the first
+   (nested) section in the Timeline/Details panels but not for Overview's leading card. */
 .detail-tab-panel > section:first-child { margin-top: 0; }
+.detail-tab-panel .details-row section { margin-top: 0; }
+.detail-tab-panel .timeline > section:first-child { margin-top: 0; }
 /* Overview: tasks on the left, a Skills + Top tools sidebar on the right. */
 .overview-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 24px; }
 .overview-main { min-width: 0; }
