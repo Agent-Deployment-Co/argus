@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ClampText } from "../components/ClampText";
+import { DataTable, type Column } from "../components/DataTable";
 import { Dash, Skills } from "../components/pills";
 import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
@@ -13,6 +14,15 @@ import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden, useSessionTaskMetrics } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
 import { sessionTitle, type SessionsSearch } from "./Sessions";
+import type { SessionToolStat } from "../types";
+
+const toolColumns: Column<SessionToolStat>[] = [
+  { id: "display", label: "Tool", sortValue: (r) => r.display, cell: (r) => r.display },
+  { id: "category", label: "Category", sortValue: (r) => r.category, cell: (r) => <span className="pill">{r.category}</span> },
+  { id: "interactions", label: "Interactions", num: true, sortValue: (r) => r.interactions, cell: (r) => r.interactions },
+  { id: "calls", label: "Calls", num: true, sortValue: (r) => r.calls, cell: (r) => fmt(r.calls) },
+  { id: "resultTokens", label: "Result tokens", num: true, sortValue: (r) => r.approxResultTokens, cell: (r) => fmt(r.approxResultTokens) },
+];
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
   return (
@@ -37,7 +47,7 @@ export function SessionDetail() {
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
-  const [tab, setTab] = useState<"content" | "timeline" | "metrics">("content");
+  const [tab, setTab] = useState<"overview" | "timeline" | "metrics">("overview");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
   const onTaskClick = (id: string) =>
@@ -84,9 +94,9 @@ export function SessionDetail() {
     { label: "Tokens", value: fmt(s.total) },
     { label: "Est. cost", value: usd(s.cost) },
     { label: "Interactions", value: String(s.interactions ?? 0) },
+    { label: "Skills used", value: String(s.skillsUsed ?? 0) },
   ];
 
-  const tools = Object.entries(s.toolCounts).sort((a, b) => b[1] - a[1]);
   const tasks = s.tasks ?? [];
   const selectedTaskIndex = tasks.findIndex((t) => t.id === selectedTaskId);
   const selectedTask = selectedTaskIndex >= 0 ? tasks[selectedTaskIndex] : null;
@@ -155,11 +165,11 @@ export function SessionDetail() {
         <button
           type="button"
           role="tab"
-          aria-selected={tab === "content"}
-          className={`detail-tab${tab === "content" ? " active" : ""}`}
-          onClick={() => setTab("content")}
+          aria-selected={tab === "overview"}
+          className={`detail-tab${tab === "overview" ? " active" : ""}`}
+          onClick={() => setTab("overview")}
         >
-          Content
+          Overview
         </button>
         <button
           type="button"
@@ -181,8 +191,10 @@ export function SessionDetail() {
         </button>
       </div>
 
-      {tab === "content" && (
+      {tab === "overview" && (
         <div className="detail-tab-panel">
+          <StatCards stats={cards} />
+
           <section>
             <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
             {tasks.length > 0 ? (
@@ -229,8 +241,6 @@ export function SessionDetail() {
 
       {tab === "metrics" && (
         <div className="detail-tab-panel">
-          <StatCards stats={cards} />
-
           <section>
             <h3 className="t-subhead">Friction</h3>
             <div className="kv">
@@ -262,12 +272,10 @@ export function SessionDetail() {
             <div className="chips"><Skills skills={s.topSkills} /></div>
           </section>
 
-          {tools.length > 0 && (
+          {(s.toolBreakdown?.length ?? 0) > 0 && (
             <section>
-              <h3 className="t-subhead">Tools used</h3>
-              <div className="kv">
-                {tools.slice(0, 12).map(([tool, count]) => <Row key={tool} k={tool} v={count} />)}
-              </div>
+              <h3 className="t-subhead">Tools used <span className="muted">({s.toolBreakdown!.length})</span></h3>
+              <DataTable columns={toolColumns} rows={s.toolBreakdown!} initialSort="calls" />
             </section>
           )}
 
@@ -280,12 +288,6 @@ export function SessionDetail() {
             </section>
           )}
 
-          {s.firstPrompt && (
-            <section>
-              <h3 className="t-subhead">Opening prompt</h3>
-              <blockquote className="first-prompt">{s.firstPrompt}</blockquote>
-            </section>
-          )}
         </div>
       )}
     </div>
