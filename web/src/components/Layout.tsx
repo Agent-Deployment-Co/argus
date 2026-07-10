@@ -1,6 +1,6 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useIsFetching } from "@tanstack/react-query";
-import { Activity, Folder, HeartPulse, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Folder, HeartPulse, Inbox, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { VIEW_QUERY_KEY } from "../lib/views";
@@ -49,7 +49,7 @@ function readCollapsed(): boolean {
 // carry friction data (native Claude transcripts), so it needs no cross-cutting pre-fetch here.
 const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/", label: "Activity", icon: Activity },
-  { to: "/sessions", label: "Sessions", icon: MessagesSquare },
+  { to: "/sessions", label: "Sessions", icon: Inbox },
   { to: "/projects", label: "Projects", icon: Folder },
   { to: "/tools", label: "Tools", icon: Wrench },
   { to: "/health", label: "Health", icon: HeartPulse },
