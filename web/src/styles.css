@@ -362,8 +362,12 @@ main:has(.inbox-page) { padding: 0; }
 .tl-cards--chapter::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--line); }
 .tl-item { display: grid; grid-template-columns: minmax(0, 1fr) 180px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
 .tl-main { min-width: 0; padding: 14px 16px; }
-.tl-turn { min-width: 0; }
+.tl-turn { min-width: 0; position: relative; }
+/* Copy-to-clipboard button hugging the top-right of each half (prompt / response). */
+.tl-turn > .copy-btn { position: absolute; top: 0; right: 0; }
 .tl-turn--user { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+/* Reserve a right gutter so the role/text clear the copy button pinned to the turn's top-right. */
+.tl-turn--user .tl-text, .tl-turn--agent .tl-text, .tl-turn .tl-role { padding-right: 30px; }
 .tl-role { display: block; margin-bottom: 5px; font: 600 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .tl-turn--user .tl-role { color: var(--accent); }
 .tl-turn--agent .tl-role { color: var(--heading); }

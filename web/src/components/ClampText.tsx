@@ -32,6 +32,10 @@ export function ClampText({
       const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.55;
       const maxHeight = lineHeight * maxLines + 1;
       const clone = document.createElement("p");
+      // Measure at the host's CONTENT width — clientWidth includes padding, so subtract it (the clone
+      // itself has padding:0). This keeps truncation correct when the text has a right gutter (e.g. the
+      // timeline turns reserve room for their copy button).
+      const contentWidth = host.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       Object.assign(clone.style, {
         position: "absolute",
         left: "-9999px",
@@ -39,7 +43,7 @@ export function ClampText({
         margin: "0",
         padding: "0",
         border: "0",
-        width: `${host.clientWidth}px`,
+        width: `${contentWidth}px`,
         fontStyle: cs.fontStyle,
         fontWeight: cs.fontWeight,
         fontSize: cs.fontSize,

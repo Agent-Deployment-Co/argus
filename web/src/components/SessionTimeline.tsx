@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClampText } from "./ClampText";
+import { CopyButton } from "./CopyButton";
 import { InteractionCount } from "./pills";
 import { OutcomeBadge } from "./TaskDetails";
 import { dtAmPm, fmt, pluralize } from "../lib/format";
@@ -53,6 +54,7 @@ function InteractionCard({ it }: { it: TimelineInteraction }) {
     <li className="tl-item">
       <div className="tl-main">
         <div className="tl-turn tl-turn--user">
+          {it.promptText && <CopyButton value={it.promptText} label="Copy prompt" />}
           <span className="tl-role">You</span>
           {it.promptText ? (
             <ClampText text={it.promptText} maxLines={10} className="tl-text" />
@@ -61,6 +63,7 @@ function InteractionCard({ it }: { it: TimelineInteraction }) {
           )}
         </div>
         <div className="tl-turn tl-turn--agent">
+          {it.responseText && <CopyButton value={it.responseText} label="Copy agent response" />}
           <span className="tl-role">
             Agent
             {it.models.length > 0 && <span className="tl-role-model"> ({it.models.join(", ")})</span>}
