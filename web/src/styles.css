@@ -274,8 +274,18 @@ main:has(.inbox-page) { padding: 0; }
 .detail-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
 .detail-tab:hover { color: var(--text); }
 .detail-tab.active { color: var(--heading); border-bottom-color: var(--accent); }
-.detail-tab-panel { margin-top: 22px; }
+.detail-tab-panel { margin-top: 22px; container-type: inline-size; }
 .detail-tab-panel > section:first-child { margin-top: 0; }
+/* Overview: tasks on the left, a Skills + Top tools sidebar on the right. */
+.overview-split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; margin-top: 24px; }
+.overview-main { min-width: 0; }
+.overview-side { min-width: 0; display: grid; gap: 22px; align-content: start; }
+.overview-block { min-width: 0; }
+.overview-block .t-subhead { margin-bottom: 8px; }
+/* The pills / tool list sit in a surface card; the heading stays outside it. */
+.overview-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.overview-card .kv-row:last-child { border-bottom: 0; }
+@container (max-width: 560px) { .overview-split { grid-template-columns: 1fr; } }
 .session-detail-headline .labelbar--md { margin: 12px 0 0 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }

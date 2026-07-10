@@ -183,7 +183,8 @@ export function buildSessionRow(
     .sort((a, b) => b.calls - a.calls || a.display.localeCompare(b.display));
   const start = msgs[0]!.ts;
   const end = msgs[msgs.length - 1]!.ts;
-  const topSkills = [...skillCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+  const skills = [...skillCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  const topSkills = skills.slice(0, 3);
   return {
     source: meta?.source || msgs[0]!.source,
     sessionId: sid,
@@ -197,6 +198,7 @@ export function buildSessionRow(
     rawTurns: meta?.rawTurns ?? null,
     models: [...models],
     topSkills,
+    skills,
     skillsUsed: skillCounts.size,
     toolCounts,
     toolBreakdown,

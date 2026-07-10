@@ -9,7 +9,7 @@ import { LabelBar } from "../components/LabelBar";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails, TaskPanel } from "../components/TaskPanel";
 import { SessionTimeline } from "../components/SessionTimeline";
-import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, usd } from "../lib/format";
+import { compactProject, dtAmPm, dur, fmt, modelFamilyColor } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden, useSessionTaskMetrics } from "../lib/sessions";
 import { useSessionDetailQuery } from "../lib/sessions";
@@ -92,12 +92,14 @@ export function SessionDetail() {
   const h = s.health;
   const cards: Stat[] = [
     { label: "Tokens", value: fmt(s.total) },
-    { label: "Est. cost", value: usd(s.cost) },
     { label: "Interactions", value: String(s.interactions ?? 0) },
     { label: "Skills used", value: String(s.skillsUsed ?? 0) },
+    { label: "Tools used", value: String(s.toolBreakdown?.length ?? 0) },
   ];
 
   const tasks = s.tasks ?? [];
+  // Top 10 tools by calls for the Overview sidebar (toolBreakdown is already sorted by calls desc).
+  const topTools = (s.toolBreakdown ?? []).slice(0, 10);
   const selectedTaskIndex = tasks.findIndex((t) => t.id === selectedTaskId);
   const selectedTask = selectedTaskIndex >= 0 ? tasks[selectedTaskIndex] : null;
   const prevTask = selectedTaskIndex > 0 ? tasks[selectedTaskIndex - 1] : null;
@@ -195,41 +197,67 @@ export function SessionDetail() {
         <div className="detail-tab-panel">
           <StatCards stats={cards} />
 
-          <section>
-            <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
-            {tasks.length > 0 ? (
-              <ol className="tasks">
-                {tasks.map((task, taskIndex) => (
-                  <li key={task.id}>
-                    <button
-                      type="button"
-                      className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
-                      onClick={() => onTaskClick(task.id)}
-                      aria-pressed={task.id === selectedTaskId}
-                      aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
-                    >
-                      <span className="task-item-desc" title={task.description}>{task.description}</span>
-                      {task.outcome && <OutcomeBadge outcome={task.outcome} />}
-                      <span className="task-item-tokens">
-                        {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
-                      </span>
-                    </button>
-                    {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
-                    {SHOW_TASK_LABELS && (
-                      <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
-                    )}
-                    {TASK_VIEW === "card" && task.id === selectedTaskId && (
-                      <div className="task-card">
-                        <TaskDetails sessionId={s.sessionId} task={task} />
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
-            )}
-          </section>
+          <div className="overview-split">
+            <div className="overview-main">
+              <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
+              {tasks.length > 0 ? (
+                <ol className="tasks">
+                  {tasks.map((task, taskIndex) => (
+                    <li key={task.id}>
+                      <button
+                        type="button"
+                        className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
+                        onClick={() => onTaskClick(task.id)}
+                        aria-pressed={task.id === selectedTaskId}
+                        aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
+                      >
+                        <span className="task-item-desc" title={task.description}>{task.description}</span>
+                        {task.outcome && <OutcomeBadge outcome={task.outcome} />}
+                        <span className="task-item-tokens">
+                          {taskMetrics ? `${fmt(taskMetrics[task.id]?.totalTokens ?? 0)} tok` : ""}
+                        </span>
+                      </button>
+                      {/* Task labels are anchored to the task's position (taskIndex === the store's task_seq). */}
+                      {SHOW_TASK_LABELS && (
+                        <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
+                      )}
+                      {TASK_VIEW === "card" && task.id === selectedTaskId && (
+                        <div className="task-card">
+                          <TaskDetails sessionId={s.sessionId} task={task} />
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="task-empty">{s.interpreted ? "No tasks found." : "Interpretation pending."}</p>
+              )}
+            </div>
+
+            <aside className="overview-side">
+              <div className="overview-block">
+                <h3 className="t-subhead">Skills</h3>
+                <div className="overview-card chips"><Skills skills={s.skills ?? []} /></div>
+              </div>
+              <div className="overview-block">
+                <h3 className="t-subhead">Top tools</h3>
+                <div className="overview-card">
+                  {topTools.length > 0 ? (
+                    <div className="kv">
+                      {topTools.map((t) => (
+                        <div className="kv-row" key={t.name}>
+                          <span className="kv-k" title={t.display}>{t.display}</span>
+                          <span className="kv-v">{t.calls}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <Dash />
+                  )}
+                </div>
+              </div>
+            </aside>
+          </div>
         </div>
       )}
 

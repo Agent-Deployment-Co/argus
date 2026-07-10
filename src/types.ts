@@ -36,6 +36,9 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   interactions?: number;
   /** CLI-only (#124): count of distinct skills used in the session (topSkills is only the top 3). */
   skillsUsed?: number;
+  /** CLI-only (#124): every distinct skill used in the session, most-used first (topSkills is capped
+   *  at 3; this is the full list for the detail sidebar). */
+  skills?: string[];
   /** CLI-only (#124): per-tool usage breakdown for the session (name/category/interactions/calls/
    *  result tokens), for the session-detail tool table. */
   toolBreakdown?: SessionToolStat[];
