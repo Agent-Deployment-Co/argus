@@ -41,7 +41,7 @@ A task is no longer just `{description, messageIndexes}`; it's a set of the sess
 - **`outcomeReason`** — a one-line rationale.
 
 `TaskFact` (in `src/store/store-contract.ts`) carries these. It is **local-only** — not part of the
-pushed wire contract (`@agentdeploymentco/argus-schema`) — so these fields don't affect `argus sync`.
+pushed wire contract — so these fields don't affect `argus sync`.
 
 ### Interaction → task attribution (#122)
 

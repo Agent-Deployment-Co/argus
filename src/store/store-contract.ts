@@ -900,6 +900,11 @@ export interface ReadModelStore {
   assignLabel(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
   /** Remove a label application from a session or task. No-op if it wasn't applied. */
   unassignLabel(labelId: string, target: LabelTarget): Promise<void>;
+  /** Apply or remove a session-level label across many sessions at once (bulk precedent:
+   *  `setSessionsHidden`). `applied: true` assigns to every session missing it (idempotent, `appliedBy`
+   *  "user"); `applied: false` unassigns from every session that has it. Rejects (LabelError) if the
+   *  label doesn't exist or was deleted. */
+  setLabelForSessions(labelId: string, sessionIds: string[], applied: boolean): Promise<void>;
   /** Active labels for a session and each of its tasks (keyed by task position). */
   readSessionLabels(sessionId: string): Promise<SessionLabels>;
   /** Active session-level labels for many sessions at once, keyed by session id — backs the session

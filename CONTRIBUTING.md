@@ -214,23 +214,20 @@ essentials for working on it:
 
 ## Wire contract
 
-Stable payload types come from `@agentdeploymentco/argus-schema` (pinned to a git tag in
-`package.json`), which is shared with Argus Hub. `src/types.ts` re-exports them and extends
-`Dashboard`/`SessionRow` with CLI-only fields.
+`Dashboard`/`SessionRow`/`Usage`/`NamedUsage`/`DayBucket`/`PluginRow` are plain local types defined
+in `src/types.ts` (formerly sourced from the external `@agentdeploymentco/argus-schema` package,
+retired in #235). `src/types.ts` extends the base shapes with CLI-only fields.
 
 `sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads raw `resolved_*` rows and the
-Hub aggregates them server-side, so there is no dashboard-vs-schema contract test. The schema
-package's `Dashboard` type still backs the web app's per-view response types (imported type-only by
-`web/src/types.ts`).
+Hub aggregates them server-side, so there is no dashboard-vs-schema contract test. `Dashboard` still
+backs the web app's per-view response types (imported type-only by `web/src/types.ts` from
+`src/types.ts`).
 
 Not everything is on the wire. `TaskFact` and the task-interpretation fields (chapter span, outcome,
 frustration), along with retained interaction text, live in `src/store/store-contract.ts` and are
-**local-only** — they are never pushed by `sync`, so adding or changing them needs no schema-package
-bump. When you *do* change the pushed row shape:
-
-1. Update and release the `@agentdeploymentco/argus-schema` package.
-2. Bump the pinned schema version in `package.json`.
-3. Update the CLI implementation in the same change.
+**local-only** — they are never pushed by `sync`, so adding or changing them needs no wire-contract
+change. When you *do* change the pushed row shape, update `push.ts`'s `HubUpload*` row types and the
+CLI implementation together in the same change.
 
 ## Tests
 

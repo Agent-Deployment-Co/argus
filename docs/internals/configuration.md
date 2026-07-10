@@ -83,6 +83,23 @@ menu's `Install Update` item.
 }
 ```
 
+The desktop tray app can also run in silent mode: the tray icon is hidden, no notifications are
+shown, and no browser tab opens on a fresh install. Everything else keeps working in the
+background, including indexing, the local dashboard, and update installs. Silent mode is set only
+through the config file or `argus config set desktop.silent true`; it never appears in the web
+Settings surface. Changing it takes effect immediately, so the tray icon hides or returns without
+a restart.
+
+| Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
+|---|---|---|---|
+| silent mode (run the desktop app invisibly) | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | — |
+
+```json
+{
+  "desktop": { "silent": true }
+}
+```
+
 ### Session text retention
 
 Argus keeps the prompt and response text of your sessions in the local store (`argus.db`) so that

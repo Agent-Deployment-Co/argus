@@ -210,7 +210,7 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
   UI; full design + rationale in **`docs/internals/web-app.md`**. `serve` takes only `--port`/`-p` and `--open`
   (the date/source filters are per-request query params, not CLI flags) and resolves per-session-reindex
   task extraction from `argus.json`. New `/api/sessions`+`/api/session/:id` response shapes are
-  local-only (not on the `@agentdeploymentco/argus-schema` sync wire).
+  local-only (not on the `sync` wire).
 
 - **`push.ts`** — The upload mechanics behind `argus sync` (the command was renamed from `push`; the
   module keeps its name). Detects user (git email → `$USER@host`) and org (email domain), POSTs the
@@ -275,18 +275,20 @@ serve-only modules that build its responses — `session-list.ts`, `recommendati
 
 ## The wire contract (important)
 
-Stable types come from the external package `@agentdeploymentco/argus-schema` (pinned to a git tag in
-`package.json`). `types.ts` re-exports them and extends `Dashboard`/`SessionRow` with CLI-only fields
-(e.g. `bySource`, `source`). The schema package is the single source of truth shared with `argus-hub`.
+`Dashboard`/`SessionRow`/`Usage`/`NamedUsage`/`DayBucket`/`PluginRow` are plain local types in
+`types.ts`, extended there with CLI-only fields (e.g. `bySource`, `source`). These used to come from
+the external `@agentdeploymentco/argus-schema` package; that dependency was retired in #235 once it
+was reduced to unvalidated type-only imports and two dead re-exports (`argus-hub`, the active
+backend, had already inlined its own copies and dropped the package too).
 
 `sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads raw `resolved_*` rows and the
 Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check (`test/contract.test.ts`)
-was removed in #217. The `@agentdeploymentco/argus-schema` `Dashboard` type still backs the web app's
-per-view response types (imported type-only by `web/src/types.ts`); the wire contract itself is being
+was removed in #217. `Dashboard` still backs the web app's per-view response types (imported
+type-only by `web/src/types.ts` from local `src/types.ts`); the wire contract itself is being
 reworked separately.
 
 Not everything is on the wire: `TaskFact` and the task-interpretation fields (chapter span, outcome,
-frustration) live in `store/store-contract.ts` and are **local-only** — they are not pushed by `sync`,
-so adding/changing them needs no schema-package bump. `store/store-contract.ts` (the parse→store fact
-contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`) is separate from the
-`@agentdeploymentco/argus-schema` wire contract.
+frustration) live in `store/store-contract.ts` and are **local-only** — they are not pushed by `sync`.
+`store/store-contract.ts` (the parse→store fact contract, including
+`PARSED_FRAGMENT_CONTRACT_VERSION`) is a separate contract from the `Dashboard`/`SessionRow` types
+above.

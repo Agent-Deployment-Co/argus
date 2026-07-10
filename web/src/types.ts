@@ -25,6 +25,7 @@ import type {
   TimelineTool,
 } from "../../src/api/session-interactions";
 import type {
+  BulkSessionLabelsResponse,
   LabelResponse,
   LabelsResponse,
   RecommendationsResponse,
@@ -119,6 +120,7 @@ export type {
   RecommendationsResponse,
   // Labels (session-and-task-labels).
   AppliedLabel,
+  BulkSessionLabelsResponse,
   LabelAppliedBy,
   LabelOrigin,
   LabelRecord,

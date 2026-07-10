@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { APP_HEADER, fetchOrOffline, jsonOrThrow } from "./http";
-import type { LabelRecord, LabelsResponse, SessionLabels, SessionLabelsResponse } from "../types";
+import type {
+  AppliedLabel,
+  BulkSessionLabelsResponse,
+  LabelRecord,
+  LabelsResponse,
+  SessionLabels,
+  SessionLabelsResponse,
+} from "../types";
 
 // The web data layer for session/task labels (session-and-task-labels). Reads go through the shared
 // fetch helpers; every write sends the same-origin APP_HEADER the server's CSRF guard requires. All
@@ -35,6 +42,27 @@ export function useSessionLabelsQuery(sessionId: string | undefined) {
   });
 }
 
+export async function fetchSessionsLabels(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>> {
+  const res = await fetchOrOffline("/api/sessions/bulk/labels-lookup", {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ sessionIds }),
+  });
+  const body = await jsonOrThrow<BulkSessionLabelsResponse>(res, "Failed to load session labels");
+  return new Map(Object.entries(body.labels));
+}
+
+/** Active session-level labels for many sessions at once, in one request — backs the bulk-mode
+ *  label picker's tri-state chips. */
+export function useSessionsLabelsQuery(sessionIds: string[]) {
+  const sortedIds = [...sessionIds].sort();
+  return useQuery({
+    queryKey: ["sessions-labels", sortedIds],
+    queryFn: () => fetchSessionsLabels(sortedIds),
+    enabled: sortedIds.length >= 2,
+  });
+}
+
 // ---- Write helpers ----
 
 /** POST/PATCH/DELETE JSON with the same-origin marker; returns the parsed body (or void). */
@@ -66,6 +94,9 @@ export const assignLabel = (labelId: string, target: LabelTargetInput) =>
   mutateJson<{ ok: true }>(targetUrl(target), "POST", { labelId });
 export const unassignLabel = (labelId: string, target: LabelTargetInput) =>
   mutateJson<{ ok: true }>(`${targetUrl(target)}/${encodeURIComponent(labelId)}`, "DELETE");
+/** Apply/remove one label across many sessions at once (bulk mode). */
+export const setLabelForSessions = (labelId: string, sessionIds: string[], applied: boolean) =>
+  mutateJson<{ ok: true }>("/api/sessions/bulk/labels", "POST", { sessionIds, labelId, applied });
 
 // ---- Mutation hooks ----
 
@@ -85,6 +116,26 @@ export function useLabelCatalogMutations() {
       onSuccess: invalidateAll,
     }),
     remove: useMutation({ mutationFn: (id: string) => deleteLabel(id), onSuccess: invalidateAll }),
+  };
+}
+
+/** Applying/removing one label across many sessions at once (bulk mode). Invalidates every affected
+ *  session's labels plus the catalog and list — same shape as the single-session mutation, just
+ *  broader invalidation since we don't know which of the many sessions were touched. */
+export function useBulkLabelMutations() {
+  const qc = useQueryClient();
+  const invalidateAll = () => {
+    void qc.invalidateQueries({ queryKey: LABELS_KEY });
+    void qc.invalidateQueries({ queryKey: ["session-labels"] });
+    void qc.invalidateQueries({ queryKey: ["sessions-labels"] });
+    void qc.invalidateQueries({ queryKey: ["sessions"] });
+  };
+  return {
+    setForSessions: useMutation({
+      mutationFn: ({ labelId, sessionIds, applied }: { labelId: string; sessionIds: string[]; applied: boolean }) =>
+        setLabelForSessions(labelId, sessionIds, applied),
+      onSuccess: invalidateAll,
+    }),
   };
 }
 
