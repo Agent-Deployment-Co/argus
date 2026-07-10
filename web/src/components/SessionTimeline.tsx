@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Target } from "lucide-react";
+import { ChevronDown, ChevronRight, Goal } from "lucide-react";
 import { useState } from "react";
 import { ClampText } from "./ClampText";
 import { FrustrationBadge, OutcomeBadge } from "./TaskPanel";
@@ -137,7 +137,7 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
           const key = chapter.taskSeq != null ? `task-${chapter.taskSeq}` : `untasked-${i}`;
           const isCollapsed = collapsed.has(key);
           return (
-            <section className="tl-chapter" key={key}>
+            <section className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`} key={key}>
               {chapter.task && (
                 <button
                   type="button"
@@ -150,7 +150,7 @@ export function SessionTimeline({ sessionId }: { sessionId: string }) {
                   ) : (
                     <ChevronDown className="tl-chapter-caret" size={16} strokeWidth={2} aria-hidden />
                   )}
-                  <Target className="tl-chapter-icon" size={14} strokeWidth={2} aria-hidden />
+                  <Goal className="tl-chapter-icon" size={15} strokeWidth={2} aria-hidden />
                   <span className="tl-chapter-title" title={chapter.task.description}>
                     {chapter.task.description}
                   </span>

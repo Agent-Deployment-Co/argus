@@ -303,9 +303,13 @@ main:has(.inbox-page) { padding: 0; }
 /* Session timeline (Timeline tab): interactions grouped into task chapters. Each interaction is a
    card — user prompt (top) and agent response (bottom) in the main column, with a details rail
    (tokens / tools) off to the right. */
-.timeline { display: grid; gap: 26px; }
+.timeline { display: grid; }
 .tl-note { margin: 0 0 16px; }
-.tl-chapter { display: grid; gap: 12px; min-width: 0; }
+/* Spacing between chapters lives on each chapter's bottom margin (not a uniform grid gap) so a
+   collapsed chapter — just its header — sits tight against the next. */
+.tl-chapter { display: grid; gap: 12px; min-width: 0; margin-bottom: 26px; }
+.tl-chapter--collapsed { margin-bottom: 6px; }
+.tl-chapter:last-child { margin-bottom: 0; }
 .tl-chapter-head { position: relative; display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .tl-chapter-caret { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
 .tl-chapter-title { flex: 1 1 auto; min-width: 0; color: var(--heading); font-size: 15px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
