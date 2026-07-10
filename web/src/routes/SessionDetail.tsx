@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { Eye, EyeOff, RefreshCw } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ClampText } from "../components/ClampText";
 import { DataTable, type Column } from "../components/DataTable";
 import { Dash, Skills } from "../components/pills";
@@ -49,10 +49,28 @@ export function SessionDetail() {
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
   const [tab, setTab] = useState<"overview" | "timeline" | "details">("overview");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  // Card mode toggles (click again to collapse); drawer mode just opens (it has its own close).
+  // Open tasks are a set — several can be expanded at once. Card mode toggles a task in/out; drawer
+  // mode (disabled) treats it as a single selection via setOpenTaskIds(new Set([id])).
+  const [openTaskIds, setOpenTaskIds] = useState<Set<string>>(() => new Set());
   const onTaskClick = (id: string) =>
-    setSelectedTaskId((cur) => (TASK_VIEW === "card" && cur === id ? null : id));
+    setOpenTaskIds((cur) => {
+      const next = new Set(cur);
+      if (TASK_VIEW === "card" && next.has(id)) next.delete(id);
+      else if (TASK_VIEW === "card") next.add(id);
+      else return new Set([id]);
+      return next;
+    });
+
+  // Open the first task by default when landing on a session (once per session, so later manual
+  // toggles stick). Keyed on sessionId since the route reuses this component across sessions.
+  const firstTaskId = s?.tasks?.[0]?.id ?? null;
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (sessionId && firstTaskId && openedFor.current !== sessionId) {
+      setOpenTaskIds(new Set([firstTaskId]));
+      openedFor.current = sessionId;
+    }
+  }, [sessionId, firstTaskId]);
 
   // Reindexing refreshes the whole session and rebuilds the server-side snapshot, so reload the page
   // once it's done — the user gets the fully updated session without a manual refresh.
@@ -96,12 +114,17 @@ export function SessionDetail() {
   ];
 
   const tasks = s.tasks ?? [];
+  const allTasksOpen = tasks.length > 0 && tasks.every((t) => openTaskIds.has(t.id));
+  const toggleAllTasks = () =>
+    setOpenTaskIds(allTasksOpen ? new Set() : new Set(tasks.map((t) => t.id)));
   // Top 5 tools by calls for the Overview sidebar (toolBreakdown is already sorted by calls desc); the
   // rest collapse into a single "N more" row summing their calls.
   const allTools = s.toolBreakdown ?? [];
   const topTools = allTools.slice(0, 5);
   const restTools = allTools.slice(5);
   const restCalls = restTools.reduce((sum, t) => sum + t.calls, 0);
+  // The drawer (disabled) shows a single task; derive it from the open set as the first open task.
+  const selectedTaskId = tasks.find((t) => openTaskIds.has(t.id))?.id ?? null;
   const selectedTaskIndex = tasks.findIndex((t) => t.id === selectedTaskId);
   const selectedTask = selectedTaskIndex >= 0 ? tasks[selectedTaskIndex] : null;
   const prevTask = selectedTaskIndex > 0 ? tasks[selectedTaskIndex - 1] : null;
@@ -201,18 +224,40 @@ export function SessionDetail() {
 
           <div className="overview-split">
             <div className="overview-main">
-              <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
+              <div className="section-title-row">
+                <h3 className="t-subhead">Tasks <span className="muted">({tasks.length})</span></h3>
+                {tasks.length > 1 && (
+                  <button
+                    type="button"
+                    className="rail-icon-btn"
+                    onClick={toggleAllTasks}
+                    title={allTasksOpen ? "Collapse all tasks" : "Expand all tasks"}
+                    aria-label={allTasksOpen ? "Collapse all tasks" : "Expand all tasks"}
+                  >
+                    {allTasksOpen ? (
+                      <ChevronsDownUp size={14} strokeWidth={2} aria-hidden />
+                    ) : (
+                      <ChevronsUpDown size={14} strokeWidth={2} aria-hidden />
+                    )}
+                  </button>
+                )}
+              </div>
               {tasks.length > 0 ? (
                 <ol className="tasks">
                   {tasks.map((task, taskIndex) => (
                     <li key={task.id}>
                       <button
                         type="button"
-                        className={`task-item${task.id === selectedTaskId ? " selected" : ""}`}
+                        className={`task-item${openTaskIds.has(task.id) ? " selected" : ""}`}
                         onClick={() => onTaskClick(task.id)}
-                        aria-pressed={task.id === selectedTaskId}
-                        aria-expanded={TASK_VIEW === "card" ? task.id === selectedTaskId : undefined}
+                        aria-pressed={openTaskIds.has(task.id)}
+                        aria-expanded={TASK_VIEW === "card" ? openTaskIds.has(task.id) : undefined}
                       >
+                        {openTaskIds.has(task.id) ? (
+                          <ChevronDown className="task-caret" size={16} strokeWidth={2} aria-hidden />
+                        ) : (
+                          <ChevronRight className="task-caret" size={16} strokeWidth={2} aria-hidden />
+                        )}
                         <span className="task-item-desc" title={task.description}>{task.description}</span>
                         {task.outcome && <OutcomeBadge outcome={task.outcome} />}
                       </button>
@@ -221,7 +266,7 @@ export function SessionDetail() {
                         <LabelBar sessionId={s.sessionId} taskSeq={taskIndex} applied={sessionLabels?.tasks[taskIndex] ?? []} size="sm" />
                       )}
                       {TASK_VIEW === "card" && (
-                        <div className={`task-card${task.id === selectedTaskId ? " open" : ""}`}>
+                        <div className={`task-card${openTaskIds.has(task.id) ? " open" : ""}`}>
                           <div className="task-card-inner">
                             <TaskDetails sessionId={s.sessionId} task={task} />
                           </div>
@@ -338,9 +383,9 @@ export function SessionDetail() {
       <TaskPanel
         sessionId={s.sessionId}
         task={selectedTask}
-        onClose={() => setSelectedTaskId(null)}
-        onPrev={prevTask ? () => setSelectedTaskId(prevTask.id) : undefined}
-        onNext={nextTask ? () => setSelectedTaskId(nextTask.id) : undefined}
+        onClose={() => setOpenTaskIds(new Set())}
+        onPrev={prevTask ? () => setOpenTaskIds(new Set([prevTask.id])) : undefined}
+        onNext={nextTask ? () => setOpenTaskIds(new Set([nextTask.id])) : undefined}
       />
     )}
     </>

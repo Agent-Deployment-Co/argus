@@ -306,6 +306,7 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail-inner .cards { margin: 0 0 28px; }
 .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .section-title-row h3 { margin: 0; }
+.section-title-row .rail-icon-btn { width: 24px; height: 24px; border-radius: 6px; }
 .task-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--link); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .task-action:hover:not(:disabled) { border-color: var(--link); background: var(--hover); color: var(--link-hover); }
 .task-action:disabled { opacity: .65; cursor: wait; }
@@ -401,6 +402,7 @@ main:has(.inbox-page) { padding: 0; }
 .task-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 8px 12px; border: 0; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
 .task-item:hover { background: var(--hover); }
 .task-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.task-caret { flex: 0 0 auto; color: var(--muted); margin-right: -4px; }
 .task-item-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
 .task-item .pill { flex: 0 0 auto; margin: 0; }
 /* Inline expanded card: the clicked task's full detail, shown in-list instead of the drawer. Reuses
