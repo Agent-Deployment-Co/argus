@@ -277,7 +277,7 @@ main:has(.inbox-page) { padding: 0; }
 .detail-tab-panel { margin-top: 22px; container-type: inline-size; }
 .detail-tab-panel > section:first-child { margin-top: 0; }
 /* Overview: tasks on the left, a Skills + Top tools sidebar on the right. */
-.overview-split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; margin-top: 24px; }
+.overview-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 24px; }
 .overview-main { min-width: 0; }
 .overview-side { min-width: 0; display: grid; gap: 22px; align-content: start; }
 .overview-block { min-width: 0; }
