@@ -549,6 +549,9 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .settings-cat-link:hover { background: var(--hover); color: var(--heading); }
 .settings-cat-link[aria-current="page"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .settings-cat-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-reference-link { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 9px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font: 600 13px var(--font-ui); }
+.settings-reference-link:hover { background: var(--hover); color: var(--heading); }
+.settings-reference-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .settings-pane { overflow-y: auto; padding: 40px 48px 80px; }
 /* --setting-control-w: the fixed width of the right-hand control column (inputs, selects, secret

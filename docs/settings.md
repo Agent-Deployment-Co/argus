@@ -3,6 +3,9 @@
 Configure Argus from inside the app. The gear icon at the bottom of the left nav
 opens Settings, grouped into a few categories.
 
+For the exact `argus.json` keys, environment variables, command flags and
+managed-settings behavior, see the [Settings Reference](/settings-reference).
+
 ## General
 
 - **Appearance** sets the color theme: follow your system, or force light or
@@ -63,7 +66,8 @@ showing up and you want to see what Argus sees.
 The app surfaces the everyday settings. A few advanced ones are set from the
 command line instead, including text retention, which controls whether Argus
 keeps the text of your prompts and responses on your machine (it stays local
-either way). See the [CLI Reference](/cli-reference).
+either way). See the [CLI Reference](/cli-reference) and
+[Settings Reference](/settings-reference).
 
 ## Managed by your organization
 

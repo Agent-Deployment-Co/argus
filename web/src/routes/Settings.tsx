@@ -4,6 +4,7 @@ import {
   Brain,
   Bug,
   Check,
+  ExternalLink,
   Loader2,
   Lock,
   Monitor,
@@ -237,6 +238,15 @@ export function SettingsSurface({
             );
           })}
         </nav>
+        <a
+          className="settings-reference-link"
+          href="https://argus.agentdeployment.co/settings-reference"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
+          <span>Settings reference</span>
+        </a>
       </aside>
 
       <main className="settings-pane">
