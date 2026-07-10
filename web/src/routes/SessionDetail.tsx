@@ -96,8 +96,12 @@ export function SessionDetail() {
   ];
 
   const tasks = s.tasks ?? [];
-  // Top 10 tools by calls for the Overview sidebar (toolBreakdown is already sorted by calls desc).
-  const topTools = (s.toolBreakdown ?? []).slice(0, 10);
+  // Top 5 tools by calls for the Overview sidebar (toolBreakdown is already sorted by calls desc); the
+  // rest collapse into a single "N more" row summing their calls.
+  const allTools = s.toolBreakdown ?? [];
+  const topTools = allTools.slice(0, 5);
+  const restTools = allTools.slice(5);
+  const restCalls = restTools.reduce((sum, t) => sum + t.calls, 0);
   const selectedTaskIndex = tasks.findIndex((t) => t.id === selectedTaskId);
   const selectedTask = selectedTaskIndex >= 0 ? tasks[selectedTaskIndex] : null;
   const prevTask = selectedTaskIndex > 0 ? tasks[selectedTaskIndex - 1] : null;
@@ -252,7 +256,7 @@ export function SessionDetail() {
                 <div className="overview-card chips"><Skills skills={s.skills ?? []} /></div>
               </div>
               <div className="overview-block">
-                <h3 className="t-subhead">Top tools</h3>
+                <h3 className="t-subhead">Tools <span className="muted">({allTools.length})</span></h3>
                 <div className="overview-card">
                   {topTools.length > 0 ? (
                     <div className="kv">
@@ -262,6 +266,14 @@ export function SessionDetail() {
                           <span className="kv-v">{t.calls}</span>
                         </div>
                       ))}
+                      {restTools.length > 0 && (
+                        <div className="kv-row">
+                          <button type="button" className="kv-more-link" onClick={() => setTab("details")}>
+                            {restTools.length} more
+                          </button>
+                          <span className="kv-v">{restCalls}</span>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <Dash />

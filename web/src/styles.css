@@ -324,6 +324,9 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail-headline .session-summary { margin-top: 8px; }
 .read-more { appearance: none; background: none; border: 0; margin: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; white-space: nowrap; }
 .read-more:hover { color: var(--link-hover); text-decoration: underline; }
+/* The "N more" row in the Overview Tools list: a muted link that jumps to the Details tab. */
+.kv-more-link { appearance: none; background: none; border: 0; padding: 0; text-align: left; font-family: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
+.kv-more-link:hover { color: var(--link-hover); text-decoration: underline; }
 
 /* Session timeline (Timeline tab): interactions grouped into task chapters. Each interaction is a
    card — user prompt (top) and agent response (bottom) in the main column, with a details rail
