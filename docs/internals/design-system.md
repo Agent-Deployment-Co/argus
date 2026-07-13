@@ -55,6 +55,35 @@ Apply one in the markup; never set font-size/weight on a heading inline.
 
 Body text is the Aleo serif (set on `body`); labels and headings use `--font-ui` (Poppins).
 
+## Iconography
+
+Icons come from **[lucide-react](https://lucide.dev)** — the one icon set. Render at
+`strokeWidth={1.75}` (the app-wide weight); size `18` for nav / controls and `12`–`13` for inline
+stats.
+
+**Semantic metric icons have a single source of truth: `web/src/lib/icons.ts`.** A concept that
+recurs across views gets a named export there so it looks identical everywhere it appears:
+
+| Export | Icon | Concept |
+|--------|------|---------|
+| `TokensIcon` | `Coins` | tokens |
+| `InteractionsIcon` | `MessagesSquare` | interactions |
+| `TasksIcon` | `ClipboardList` | tasks |
+
+Reference these exports rather than reaching for a lucide icon directly for one of these concepts,
+and add a new export here when a new metric earns a recurring icon — don't inline a one-off. (This is
+the convention SessionDetail and the session list standardized on; a rare case where it, not the
+primitives, is the thing to copy.)
+
+**Render a value + its icon with `<IconStat>` (`components/pills.tsx`).** It places the icon after the
+value by default (`iconFirst` flips it), treats the icon as decorative (`aria-hidden`), and carries
+the accessible name / tooltip on the wrapper via `title` + `aria-label`. `<InteractionCount>` is the
+ready-made count-of-interactions variant.
+
+```tsx
+<IconStat value={fmt(total)} title={`${fmt(total)} tokens`} icon={TokensIcon} size={12} iconFirst />
+```
+
 ## Layout primitives
 
 Two components express the composition rules so they can't drift. Import them from
