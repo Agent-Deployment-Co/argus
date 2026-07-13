@@ -24,12 +24,12 @@ When you need example data, synthesize it. Use redacted, obviously-fake fixtures
 Argus is a Bun + TypeScript CLI that audits local Claude Code, Codex, and Gemini usage. It reads
 local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`, …) and
 presents them two ways: an interactive local web app (`serve` — the preferred UI; see
-`docs/internals/web-app.md`), or a per-(org, user) snapshot uploaded to a private Cloudflare Worker backend
+`docs/internals/web-app.md`), or a per-(org, user) snapshot uploaded to a private Hub backend
 (`sync`, formerly `push`). `argus run` ties the long-running pieces together: it keeps the local
 store current (`index --watch`), serves the web app, and uploads on a schedule (`sync --watch`) in
 one supervised foreground process. Nothing is uploaded during `serve`/`index`; all parsing is local.
 
-The Worker + D1 dashboard backend lives in a **separate public repo**, `agentdeploymentco/argus-hub`.
+The Hub dashboard backend lives in a **separate public repo**, `agentdeploymentco/argus-hub`.
 This repo is the public CLI only.
 
 ## Commands
