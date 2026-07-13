@@ -94,6 +94,10 @@ Rules for anything presented in the web app (and any other UI surface):
    ranking, so it should be alpha — not registry/declaration order.)
 3. **Sort the data, don't rely on how it arrived.** Order explicitly at the point of display (or in
    the query) so it can't drift when the underlying source reorders.
+4. **Compose views from the shared layout primitives.** Build screens from `<Section>` and `<Panel>`
+   (`web/src/components/`) and the shared type scale; don't hand-roll `.panel`/section markup or
+   invent new card tokens, radii, or heading patterns. Charts go in a `<Panel>`; tables sit bare in a
+   `<Section>`. Full spec: **`docs/internals/design-system.md`**.
 
 ## Writing the docs
 

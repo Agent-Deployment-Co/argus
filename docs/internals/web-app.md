@@ -79,7 +79,9 @@ previous view on screen while a filter change refetches.
 | `types.ts` | Re-exports the CLI's per-view response types + `Dashboard` sub-types (type-only) so the API payload and UI never drift. |
 
 The visual design (CSS variables, the coffee-bean/antique-white themes, the brand fonts) lives in
-`web/src` and defines the Argus brand look.
+`web/src` and defines the Argus brand look. How a view is composed from those tokens — the type
+scale and the `<Section>`/`<Panel>` layout primitives every screen builds from — is documented
+separately in **[Design system](./design-system.md)**.
 
 ---
 
