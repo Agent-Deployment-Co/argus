@@ -491,6 +491,10 @@ section { margin: 0 0 42px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 @media (max-width: 880px) { .grid2 { grid-template-columns: 1fr; } }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+/* Panel title row (the <Panel title actions> head): heading left, optional actions right. Owns the
+   gap below the title so the inner .t-subhead margin is reset to avoid doubling. */
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.panel-head .t-subhead { margin: 0; }
 .chart-box { position: relative; }
 canvas { max-width: 100%; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
