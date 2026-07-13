@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, retainSearchParams } from "
 import { Layout } from "./components/Layout";
 import { Activity } from "./routes/Activity";
 import { Health } from "./routes/Health";
+import { Home } from "./routes/Home";
 import { Projects } from "./routes/Projects";
 import { SessionDetail } from "./routes/SessionDetail";
 import { Sessions, SessionsEmpty } from "./routes/Sessions";
@@ -89,6 +90,9 @@ const sessionsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   dashboardRoute.addChildren([
     createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: Activity }),
+    // Temporary home for the new Home screen (#270) while it's designed alongside Activity; it
+    // takes over "/" once the design settles.
+    createRoute({ getParentRoute: () => dashboardRoute, path: "/home", component: Home }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/projects", component: Projects }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/tools", component: Tools }),
     createRoute({ getParentRoute: () => dashboardRoute, path: "/health", component: Health }),
