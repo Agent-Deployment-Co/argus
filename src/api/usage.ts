@@ -182,9 +182,19 @@ export function buildSessionsBySource(
 export function buildUsageBySource(
   rows: BySourceModel[],
   sessionsBySource: Array<{ source: string; sessions: number }>,
+  interactionsBySource: Array<{ source: string; n: number }> = [],
+  tasksBySource: Array<{ source: string; n: number }> = [],
 ): UsageBySourceResponse {
   const sessions = new Map(sessionsBySource.map((r) => [r.source, r.sessions]));
-  return { bySource: foldNamedUsage(rows, (r) => r.source, (name) => ({ sessions: sessions.get(name) ?? 0 })) };
+  const interactions = new Map(interactionsBySource.map((r) => [r.source, r.n]));
+  const tasks = new Map(tasksBySource.map((r) => [r.source, r.n]));
+  return {
+    bySource: foldNamedUsage(rows, (r) => r.source, (name) => ({
+      sessions: sessions.get(name) ?? 0,
+      interactions: interactions.get(name) ?? 0,
+      tasks: tasks.get(name) ?? 0,
+    })),
+  };
 }
 
 /** GET /api/usage/by-project — tokens/cost per project with its distinct-session count. (Per-project

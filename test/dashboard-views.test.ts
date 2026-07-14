@@ -51,16 +51,23 @@ describe("usage builders", () => {
     expect(res.byModelDaily[1]!.byModel.opus).toBe(1000);
   });
 
-  test("buildUsageBySource prices a mixed-model source per model and carries session counts", () => {
+  test("buildUsageBySource prices a mixed-model source per model and carries session/interaction/task counts", () => {
     const rows = [
       { source: "claude", model: "opus", usage: u(1000), messages: 1 },
       { source: "claude", model: "haiku", usage: u(1000), messages: 1 },
     ];
-    const { bySource } = buildUsageBySource(rows, [{ source: "claude", sessions: 3 }]);
+    const { bySource } = buildUsageBySource(
+      rows,
+      [{ source: "claude", sessions: 3 }],
+      [{ source: "claude", n: 12 }],
+      [{ source: "claude", n: 2 }],
+    );
     const claude = bySource.find((s) => s.name === "claude")!;
     // opus input 15/Mtok + haiku input 1/Mtok, priced separately then summed.
     expect(claude.cost).toBeCloseTo((1000 * 15 + 1000 * 1) / 1e6, 9);
     expect(claude.meta?.sessions).toBe(3);
+    expect(claude.meta?.interactions).toBe(12);
+    expect(claude.meta?.tasks).toBe(2);
   });
 
   test("buildUsageByProject carries per-project session counts", () => {

@@ -1,15 +1,29 @@
 import type { ChartOptions } from "chart.js";
 import { ChartCanvas } from "../components/charts/ChartCanvas";
+import { type Column, DataTable } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { Section } from "../components/Section";
 import { fmt, SKILL_PALETTE } from "../lib/format";
 import { useDashboardFilters, useSessionsBySourceQuery, useUsageBySourceQuery, viewGate } from "../lib/views";
+import type { NamedUsage } from "../types";
 
 // The Home screen (#270) — the future root of the web UI. It leads with a few complementary lenses
 // (recency, exceptions, repetition, a little metrics) rather than one big table, and routes the user
 // into the detail views from there. Mounted at /home for now while it's designed alongside the
 // existing Activity page; it takes over "/" once the design settles.
 const rotated = { maxRotation: 90, minRotation: 45 };
+
+// interactions/tasks ride NamedUsage.meta (a loose bag) alongside sessions; read them as numbers.
+const metaNum = (r: NamedUsage, key: string): number => Number(r.meta?.[key] ?? 0);
+
+// Per-source breakdown table: session count, tokens, interactions, tasks.
+const sourceColumns: Column<NamedUsage>[] = [
+  { id: "name", label: "Source", sortValue: (r) => r.name, cell: (r) => r.name },
+  { id: "sessions", label: "Sessions", num: true, sortValue: (r) => metaNum(r, "sessions"), cell: (r) => fmt(metaNum(r, "sessions")) },
+  { id: "total", label: "Tokens", num: true, sortValue: (r) => r.total, cell: (r) => fmt(r.total) },
+  { id: "interactions", label: "Interactions", num: true, sortValue: (r) => metaNum(r, "interactions"), cell: (r) => fmt(metaNum(r, "interactions")) },
+  { id: "tasks", label: "Tasks", num: true, sortValue: (r) => metaNum(r, "tasks"), cell: (r) => fmt(metaNum(r, "tasks")) },
+];
 
 export function Home() {
   const filters = useDashboardFilters();
@@ -94,6 +108,14 @@ export function Home() {
             <p className="note">No sessions in this range.</p>
           )}
         </Panel>
+      </Section>
+
+      <Section eyebrow="By source">
+        {bySourceQ.data!.bySource.length ? (
+          <DataTable columns={sourceColumns} rows={bySourceQ.data!.bySource} initialSort="sessions" />
+        ) : (
+          <p className="note">No sessions in this range.</p>
+        )}
       </Section>
     </>
   );

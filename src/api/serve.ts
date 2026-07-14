@@ -1046,11 +1046,13 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       withStore(filters, async (store, query) => buildUsageByModel(await store.readUsageByDateModel(query))),
     usageBySource: (filters) =>
       withStore(filters, async (store, query) => {
-        const [rows, sessions] = await Promise.all([
+        const [rows, sessions, interactions, tasks] = await Promise.all([
           store.readUsageBySourceModel(query),
           store.readSessionsBySource(query),
+          store.readInteractionsBySource(query),
+          store.readTasksBySource(query),
         ]);
-        return buildUsageBySource(rows, sessions);
+        return buildUsageBySource(rows, sessions, interactions, tasks);
       }),
     usageByProject: (filters) =>
       withStore(filters, async (store, query) => {

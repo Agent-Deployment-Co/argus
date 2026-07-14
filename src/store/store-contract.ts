@@ -874,6 +874,10 @@ export interface ReadModelStore {
    *  A session active across several days is counted on each day it has usage. */
   readSessionsByDateSource(query?: ResolvedQuery): Promise<Array<{ date: string; source: string; sessions: number }>>;
   readSessionsByProject(query?: ResolvedQuery): Promise<Array<{ project: string; sessions: number }>>;
+  /** Per-source interaction / task counts over the sessions active in range (interactions/tasks are
+   *  keyed by ts, not date, so they're scoped to the in-range session set, not date-windowed directly). */
+  readInteractionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; n: number }>>;
+  readTasksBySource(query?: ResolvedQuery): Promise<Array<{ source: string; n: number }>>;
   /** Per-tool result-size stats, scoped by source ONLY (not date/project) — mirrors the legacy
    *  `ParseResult.toolResults` map. Joined for `approxResultTokens` and `heaviestToolResults`. */
   readToolResultStats(query?: ResolvedQuery): Promise<Array<{ tool: string; count: number; approxTokens: number }>>;

@@ -3520,6 +3520,34 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Per-source interaction / task counts for the sessions active in range. resolved_interactions and
+  // resolved_tasks are keyed by ts (no `date` column), so they can't be date-windowed directly; scope
+  // them to the in-range session set instead (the same "sessions with usage in range" selection the
+  // session list uses), grouping on the table's own single-source `source` column.
+  private countBySourceForRangeSessions(
+    table: "resolved_interactions" | "resolved_tasks",
+    query?: ResolvedQuery,
+  ): Promise<Array<{ source: string; n: number }>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return all<{ source: string; n: number }>(
+        this.db,
+        `SELECT source, COUNT(*) AS n FROM ${table}
+         WHERE session_id IN (SELECT DISTINCT session_id FROM resolved_usage ${usage.messageWhere})
+         GROUP BY source`,
+        usage.messageParams,
+      );
+    });
+  }
+
+  readInteractionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; n: number }>> {
+    return this.countBySourceForRangeSessions("resolved_interactions", query);
+  }
+
+  readTasksBySource(query?: ResolvedQuery): Promise<Array<{ source: string; n: number }>> {
+    return this.countBySourceForRangeSessions("resolved_tasks", query);
+  }
+
   // Tool breakdowns run over resolved_invocations. Call counts/sessions are fully filtered
   // (source/date/project) against the invocation's OWN denormalized columns (source/date/cwd);
   // result-size totals are scoped by SOURCE ONLY, mirroring the legacy ParseResult.toolResults map
