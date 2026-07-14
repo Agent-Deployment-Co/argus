@@ -28,7 +28,8 @@ export function Home() {
             type="bar"
             height={260}
             data={{
-              labels: daily.map((d) => d.date),
+              // Axis labels drop the year (MM-DD) to cut noise; the tooltip title restores the full date.
+              labels: daily.map((d) => d.date.slice(5)),
               datasets: sources.map((s, i) => ({
                 label: s,
                 data: daily.map((d) => d.bySource[s] ?? 0),
@@ -39,7 +40,12 @@ export function Home() {
             options={{
               plugins: {
                 legend: { position: "bottom" },
-                tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt(Number(c.parsed.y))} sessions` } },
+                tooltip: {
+                  callbacks: {
+                    title: (items) => daily[items[0]!.dataIndex]!.date,
+                    label: (c) => `${c.dataset.label}: ${fmt(Number(c.parsed.y))} sessions`,
+                  },
+                },
               },
               scales: {
                 x: { stacked: true, ticks: rotated },
