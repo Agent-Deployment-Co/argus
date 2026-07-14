@@ -3,7 +3,7 @@ import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { Panel } from "../components/Panel";
 import { Section } from "../components/Section";
 import { fmt, SKILL_PALETTE } from "../lib/format";
-import { useDashboardFilters, useSessionsBySourceQuery, viewGate } from "../lib/views";
+import { useDashboardFilters, useSessionsBySourceQuery, useUsageBySourceQuery, viewGate } from "../lib/views";
 
 // The Home screen (#270) — the future root of the web UI. It leads with a few complementary lenses
 // (recency, exceptions, repetition, a little metrics) rather than one big table, and routes the user
@@ -14,49 +14,87 @@ const rotated = { maxRotation: 90, minRotation: 45 };
 export function Home() {
   const filters = useDashboardFilters();
   const sessionsQ = useSessionsBySourceQuery(filters);
-  const gate = viewGate([sessionsQ]);
+  const bySourceQ = useUsageBySourceQuery(filters);
+  const gate = viewGate([sessionsQ, bySourceQ]);
   if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
   const { sources, daily } = sessionsQ.data!;
+  // Total sessions per source = the DISTINCT session count over the whole range (from by-source), not
+  // the sum of the daily series — a session active on several days is counted once per day there, so
+  // summing it would overcount. Keyed by source so the donut can follow the stacked chart's `sources`
+  // order (and thus its colors), so the two charts read as one system.
+  const sessionTotals = new Map(
+    bySourceQ.data!.bySource.map((s) => [s.name, s.meta?.sessions ?? 0] as [string, number]),
+  );
 
   return (
-    <Section eyebrow="Home">
-      <Panel title="Sessions by source">
-        {daily.length ? (
-          <ChartCanvas
-            type="bar"
-            height={260}
-            data={{
-              // Axis labels drop the year (MM-DD) to cut noise; the tooltip title restores the full date.
-              labels: daily.map((d) => d.date.slice(5)),
-              datasets: sources.map((s, i) => ({
-                label: s,
-                data: daily.map((d) => d.bySource[s] ?? 0),
-                backgroundColor: SKILL_PALETTE[i % SKILL_PALETTE.length],
-                stack: "s",
-              })),
-            }}
-            options={{
-              plugins: {
-                legend: { position: "bottom" },
-                tooltip: {
-                  callbacks: {
-                    title: (items) => daily[items[0]!.dataIndex]!.date,
-                    label: (c) => `${c.dataset.label}: ${fmt(Number(c.parsed.y))} sessions`,
+    <>
+      <Section eyebrow="Home">
+        <Panel title="Sessions by source">
+          {daily.length ? (
+            <ChartCanvas
+              type="bar"
+              height={260}
+              data={{
+                // Axis labels drop the year (MM-DD) to cut noise; the tooltip title restores the full date.
+                labels: daily.map((d) => d.date.slice(5)),
+                datasets: sources.map((s, i) => ({
+                  label: s,
+                  data: daily.map((d) => d.bySource[s] ?? 0),
+                  backgroundColor: SKILL_PALETTE[i % SKILL_PALETTE.length],
+                  stack: "s",
+                })),
+              }}
+              options={{
+                plugins: {
+                  legend: { position: "bottom" },
+                  tooltip: {
+                    callbacks: {
+                      title: (items) => daily[items[0]!.dataIndex]!.date,
+                      label: (c) => `${c.dataset.label}: ${fmt(Number(c.parsed.y))} sessions`,
+                    },
                   },
                 },
-              },
-              scales: {
-                x: { stacked: true, ticks: rotated },
-                y: { stacked: true, ticks: { precision: 0 } },
-              },
-            } satisfies ChartOptions<"bar">}
-          />
-        ) : (
-          <p className="note">No sessions in this range.</p>
-        )}
-      </Panel>
-    </Section>
+                scales: {
+                  x: { stacked: true, ticks: rotated },
+                  y: { stacked: true, ticks: { precision: 0 } },
+                },
+              } satisfies ChartOptions<"bar">}
+            />
+          ) : (
+            <p className="note">No sessions in this range.</p>
+          )}
+        </Panel>
+      </Section>
+
+      <Section>
+        <Panel title="Total sessions by source">
+          {sources.length ? (
+            <ChartCanvas
+              type="doughnut"
+              height={260}
+              data={{
+                labels: sources,
+                datasets: [
+                  {
+                    data: sources.map((s) => sessionTotals.get(s) ?? 0),
+                    backgroundColor: sources.map((_, i) => SKILL_PALETTE[i % SKILL_PALETTE.length]),
+                  },
+                ],
+              }}
+              options={{
+                plugins: {
+                  legend: { position: "right" },
+                  tooltip: { callbacks: { label: (c) => `${c.label}: ${fmt(Number(c.parsed))} sessions` } },
+                },
+              } satisfies ChartOptions<"doughnut">}
+            />
+          ) : (
+            <p className="note">No sessions in this range.</p>
+          )}
+        </Panel>
+      </Section>
+    </>
   );
 }
