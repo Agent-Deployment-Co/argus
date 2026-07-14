@@ -3,6 +3,7 @@ import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { type Column, DataTable } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { Section } from "../components/Section";
+import { SourceOverviewCard, type SourceMetrics } from "../components/SourceOverviewCard";
 import { fmt } from "../lib/format";
 import { SourceBadge, sourceColor, sourceLabel } from "../lib/sources";
 import { useDashboardFilters, useSessionsBySourceQuery, useUsageBySourceQuery, viewGate } from "../lib/views";
@@ -43,8 +44,38 @@ export function Home() {
     bySourceQ.data!.bySource.map((s) => [s.name, s.meta?.sessions ?? 0] as [string, number]),
   );
 
+  // Per-source overview cards: key metrics from by-source, the day heatmap from the daily series.
+  const metricsBySource = new Map<string, SourceMetrics>(
+    bySourceQ.data!.bySource.map((s) => [
+      s.name,
+      { sessions: metaNum(s, "sessions"), tokens: s.total, interactions: metaNum(s, "interactions"), tasks: metaNum(s, "tasks") },
+    ]),
+  );
+  // Heatmap span: the selected window when set, else the range the data actually covers.
+  const rangeStart = filters.since ?? daily[0]?.date ?? "";
+  const rangeEnd = filters.until ?? daily.at(-1)?.date ?? "";
+
   return (
     <>
+      <Section eyebrow="Source overview">
+        {sources.length ? (
+          <div className="source-overview-stack">
+            {sources.map((s) => (
+              <SourceOverviewCard
+                key={s}
+                source={s}
+                metrics={metricsBySource.get(s) ?? { sessions: 0, tokens: 0, interactions: 0, tasks: 0 }}
+                dailyCounts={new Map(daily.map((d) => [d.date, d.bySource[s] ?? 0]))}
+                rangeStart={rangeStart}
+                rangeEnd={rangeEnd}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="note">No sessions in this range.</p>
+        )}
+      </Section>
+
       <Section eyebrow="Home">
         <Panel title="Sessions by source">
           {daily.length ? (

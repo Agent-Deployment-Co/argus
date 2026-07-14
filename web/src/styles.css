@@ -224,6 +224,25 @@ main:has(.inbox-page) { padding: 0; }
    muted icon color (source color is reserved for charts), brightening like other icons in context. */
 .source-badge { display: inline-flex; align-items: center; gap: 8px; }
 .source-badge svg { flex: 0 0 auto; color: var(--muted); }
+
+/* Per-source overview cards (Home): all in one row, each split into metrics (left) + a session-per-day
+   heatmap (right). Each card is a container: it keeps the horizontal split when wide, and stacks the
+   two sections vertically once it gets narrow (many sources in the row), instead of overflowing. */
+.source-overview-stack { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.source-overview-card { container-type: inline-size; }
+.source-overview { display: flex; gap: 24px; align-items: stretch; }
+.source-overview-metrics { flex: 0 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 16px 22px; align-content: center; }
+.metric-value { color: var(--heading); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.metric-label { margin-top: 4px; }
+.source-overview-heat { flex: 1 1 auto; min-width: 0; border-left: 1px solid var(--line); padding-left: 24px; }
+.day-heatmap-wrap { display: flex; flex-direction: column; gap: 8px; }
+.day-heatmap { display: grid; grid-template-columns: repeat(7, 14px); grid-auto-flow: row; grid-auto-rows: 14px; gap: 4px; }
+.day-cell { border-radius: 3px; background: transparent; }
+.day-cell--empty { background: var(--hover); }
+@container (max-width: 420px) {
+  .source-overview { flex-direction: column; gap: 16px; }
+  .source-overview-heat { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 16px; }
+}
 .filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
 .filter-dropdown-mode { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .filter-dropdown-mode-btn { flex: 1 1 0; border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; text-align: center; }
