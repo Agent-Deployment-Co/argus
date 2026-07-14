@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -31,6 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # Release events check out the release tag by default. The generated changelog is
+          # committed to the default branch, so always build and update main.
+          ref: main
           fetch-depth: 0 # for lastUpdated git timestamps
       - uses: oven-sh/setup-bun@v2
         with:
@@ -41,6 +44,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bun run docs:changelog
+      - name: Commit refreshed changelog
+        run: |
+          if git diff --quiet -- docs/changelog.md; then
+            echo "Changelog is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/changelog.md
+          git commit -m "docs: refresh release changelog [skip ci]"
+          git push origin HEAD:main
       - run: bun run docs:build
         env:
           # PostHog analytics token. PUBLIC_*, so Vite inlines it into the

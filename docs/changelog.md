@@ -4,6 +4,46 @@
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.21
+
+Published July 10, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.21).
+
+### Changes
+
+- Read MDM managed settings as the highest-precedence config source ([#258](https://github.com/Agent-Deployment-Co/argus/pull/258))
+- Add settings reference documentation ([#260](https://github.com/Agent-Deployment-Co/argus/pull/260))
+- Bump version to 0.1.21 ([#265](https://github.com/Agent-Deployment-Co/argus/pull/265))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.20...argus-v0.1.21).
+
+## Argus v0.1.20
+
+Published July 10, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.20).
+
+### Changes
+
+- Refresh About dialog: Argus wordmark, updated copy, MIT License ([#233](https://github.com/Agent-Deployment-Co/argus/pull/233))
+- Add full-text conversation/task search + file-usage search to /sessions ([#238](https://github.com/Agent-Deployment-Co/argus/pull/238))
+- Clean up banner, Makefile, and Sessions filters ([#239](https://github.com/Agent-Deployment-Co/argus/pull/239))
+- Automate release changelog publishing ([#240](https://github.com/Agent-Deployment-Co/argus/pull/240))
+- Start desktop app at login by default ([#241](https://github.com/Agent-Deployment-Co/argus/pull/241))
+- Session Interpretation 2.0 (\#234) ([#237](https://github.com/Agent-Deployment-Co/argus/pull/237))
+- Temporarily disable the desktop start-at-login entirely ([#244](https://github.com/Agent-Deployment-Co/argus/pull/244))
+- Overhaul the sessions view and global filter bar ([#245](https://github.com/Agent-Deployment-Co/argus/pull/245))
+- Labels: data model + storage for sessions and tasks (Phase 1) ([#242](https://github.com/Agent-Deployment-Co/argus/pull/242))
+- Labels: HTTP API + web UI for sessions and tasks (Phase 2) ([#243](https://github.com/Agent-Deployment-Co/argus/pull/243))
+- Bring back sessions labels filter and label catalog management ([#246](https://github.com/Agent-Deployment-Co/argus/pull/246))
+- Add hidden sessions ([#249](https://github.com/Agent-Deployment-Co/argus/pull/249))
+- Add PostHog analytics to the docs site ([#250](https://github.com/Agent-Deployment-Co/argus/pull/250))
+- Add bulk selection: multi-select, bulk label, and bulk hide for sessions ([#252](https://github.com/Agent-Deployment-Co/argus/pull/252))
+- Retire the @agentdeploymentco/argus-schema dependency ([#259](https://github.com/Agent-Deployment-Co/argus/pull/259))
+- Desktop silent mode: hide the tray, suppress first-run auto-open, silence notifications ([#256](https://github.com/Agent-Deployment-Co/argus/pull/256))
+- new ADC signing identity ([#262](https://github.com/Agent-Deployment-Co/argus/pull/262))
+- Task/interaction-centric session detail UI (\#124) ([#263](https://github.com/Agent-Deployment-Co/argus/pull/263))
+- Bump version to 0.1.20 ([#264](https://github.com/Agent-Deployment-Co/argus/pull/264))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.19...argus-v0.1.20).
+
 ## Argus v0.1.19
 
 Published July 6, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.19).
