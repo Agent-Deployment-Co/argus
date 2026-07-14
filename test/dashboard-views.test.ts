@@ -3,7 +3,7 @@
 // synthetic store rows (the same shape the store's per-view read methods return), plus buildSessionRow
 // (still shared by the session-detail path) and the narrowed recommendation rules.
 import { describe, expect, test } from "bun:test";
-import { buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageDaily } from "../src/api/usage.ts";
+import { buildSessionsBySource, buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageDaily } from "../src/api/usage.ts";
 import {
   buildByMcpServer,
   buildByTool,
@@ -68,6 +68,20 @@ describe("usage builders", () => {
     const { byProject } = buildUsageByProject(rows, [{ project: "web", sessions: 2 }]);
     expect(byProject[0]!.name).toBe("web");
     expect(byProject[0]!.meta?.sessions).toBe(2);
+  });
+
+  test("buildSessionsBySource orders sources by total desc and builds a per-day session series", () => {
+    const res = buildSessionsBySource([
+      { date: "2026-06-02", source: "claude", sessions: 2 },
+      { date: "2026-06-01", source: "claude", sessions: 1 },
+      { date: "2026-06-01", source: "codex", sessions: 5 },
+    ]);
+    // codex total 5 > claude total 3, so codex leads the stack order.
+    expect(res.sources).toEqual(["codex", "claude"]);
+    // Days sorted ascending, each carrying its source→count map.
+    expect(res.daily.map((d) => d.date)).toEqual(["2026-06-01", "2026-06-02"]);
+    expect(res.daily[0]!.bySource).toEqual({ claude: 1, codex: 5 });
+    expect(res.daily[1]!.bySource).toEqual({ claude: 2 });
   });
 });
 

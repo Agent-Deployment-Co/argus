@@ -14,6 +14,7 @@ import type {
   HeaviestResultsResponse,
   PluginsResponse,
   RecommendationsResponse,
+  SessionsBySourceResponse,
   SkillsResponse,
   UsageByModelResponse,
   UsageByProjectResponse,
@@ -68,6 +69,7 @@ export const useUsageDailyQuery = makeViewHook<UsageDailyResponse>("/api/usage/d
 export const useUsageByModelQuery = makeViewHook<UsageByModelResponse>("/api/usage/by-model");
 export const useUsageBySourceQuery = makeViewHook<UsageBySourceResponse>("/api/usage/by-source");
 export const useUsageByProjectQuery = makeViewHook<UsageByProjectResponse>("/api/usage/by-project");
+export const useSessionsBySourceQuery = makeViewHook<SessionsBySourceResponse>("/api/usage/sessions-by-source");
 export const useSkillsQuery = makeViewHook<SkillsResponse>("/api/skills");
 export const useToolsByToolQuery = makeViewHook<ByToolResponse>("/api/tools/by-tool");
 export const useToolsByCategoryQuery = makeViewHook<ByToolCategoryResponse>("/api/tools/by-category");

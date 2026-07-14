@@ -870,6 +870,9 @@ export interface ReadModelStore {
   readActiveDates(query?: ResolvedQuery): Promise<string[]>;
   /** Distinct session counts per source/project (each session has exactly one source). */
   readSessionsBySource(query?: ResolvedQuery): Promise<Array<{ source: string; sessions: number }>>;
+  /** Distinct session counts per (date, source) — backs the sessions-by-source-by-day column chart.
+   *  A session active across several days is counted on each day it has usage. */
+  readSessionsByDateSource(query?: ResolvedQuery): Promise<Array<{ date: string; source: string; sessions: number }>>;
   readSessionsByProject(query?: ResolvedQuery): Promise<Array<{ project: string; sessions: number }>>;
   /** Per-tool result-size stats, scoped by source ONLY (not date/project) — mirrors the legacy
    *  `ParseResult.toolResults` map. Joined for `approxResultTokens` and `heaviestToolResults`. */

@@ -3494,6 +3494,19 @@ export class SqliteStore implements Store {
     });
   }
 
+  readSessionsByDateSource(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; source: string; sessions: number }>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return all<{ date: string; source: string; sessions: number }>(
+        this.db,
+        `SELECT date, source, COUNT(DISTINCT session_id) AS sessions FROM resolved_usage ${usage.messageWhere} GROUP BY date, source`,
+        usage.messageParams,
+      );
+    });
+  }
+
   readSessionsByProject(
     query?: ResolvedQuery,
   ): Promise<Array<{ project: string; sessions: number }>> {

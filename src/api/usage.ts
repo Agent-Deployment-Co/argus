@@ -38,6 +38,13 @@ export interface UsageByProjectResponse {
   byProject: NamedUsage[];
 }
 
+export interface SessionsBySourceResponse {
+  /** Sources present in scope, ordered by total sessions descending — the stack/legend order. */
+  sources: string[];
+  /** One entry per active day (ascending), each with a source→session-count map. */
+  daily: { date: string; bySource: Record<string, number> }[];
+}
+
 /** Fold (dimension, model) usage rows by an arbitrary key, summing usage/messages and pricing each
  *  row by its own model. Shared by the source/project/skill builders. */
 export function foldUsageByKey<R extends { model: string; usage: Usage; messages: number }>(
@@ -142,6 +149,33 @@ export function buildUsageByModel(rows: ByDateModel[]): UsageByModelResponse {
     .sort()
     .map((d) => ({ date: d, byModel: Object.fromEntries(modelDayMap.get(d) ?? []) }));
   return { byModel, byModelDaily };
+}
+
+/** Fold per-(date, source) session counts into a daily series plus the source list (ordered by total
+ *  sessions desc), for the sessions-by-source-by-day stacked column chart. */
+export function buildSessionsBySource(
+  rows: Array<{ date: string; source: string; sessions: number }>,
+): SessionsBySourceResponse {
+  const dates = new Set<string>();
+  const dayMap = new Map<string, Map<string, number>>();
+  const sourceTotals = new Map<string, number>();
+  for (const r of rows) {
+    dates.add(r.date);
+    let day = dayMap.get(r.date);
+    if (!day) {
+      day = new Map();
+      dayMap.set(r.date, day);
+    }
+    day.set(r.source, (day.get(r.source) ?? 0) + r.sessions);
+    sourceTotals.set(r.source, (sourceTotals.get(r.source) ?? 0) + r.sessions);
+  }
+  const sources = [...sourceTotals.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([s]) => s);
+  const daily = [...dates]
+    .sort()
+    .map((d) => ({ date: d, bySource: Object.fromEntries(dayMap.get(d) ?? []) }));
+  return { sources, daily };
 }
 
 /** GET /api/usage/by-source — tokens/cost per source with its distinct-session count. */

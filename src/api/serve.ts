@@ -15,10 +15,12 @@ import { unpricedModels } from "../pricing.ts";
 import type { ResolvedQuery, SessionSearchMatch, Store } from "../store/store-contract.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
+  buildSessionsBySource,
   buildUsageByModel,
   buildUsageByProject,
   buildUsageBySource,
   buildUsageDaily,
+  type SessionsBySourceResponse,
   type UsageByModelResponse,
   type UsageByProjectResponse,
   type UsageBySourceResponse,
@@ -169,6 +171,7 @@ export interface ViewReaders {
   usageByModel: ViewReader<UsageByModelResponse>;
   usageBySource: ViewReader<UsageBySourceResponse>;
   usageByProject: ViewReader<UsageByProjectResponse>;
+  usageSessionsBySource: ViewReader<SessionsBySourceResponse>;
   skills: ViewReader<SkillsResponse>;
   toolsByTool: ViewReader<ByToolResponse>;
   toolsByCategory: ViewReader<ByToolCategoryResponse>;
@@ -533,6 +536,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   viewRoute("/api/usage/by-model", views?.usageByModel);
   viewRoute("/api/usage/by-source", views?.usageBySource);
   viewRoute("/api/usage/by-project", views?.usageByProject);
+  viewRoute("/api/usage/sessions-by-source", views?.usageSessionsBySource);
   viewRoute("/api/skills", views?.skills);
   viewRoute("/api/tools/by-tool", views?.toolsByTool);
   viewRoute("/api/tools/by-category", views?.toolsByCategory);
@@ -1056,6 +1060,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
         ]);
         return buildUsageByProject(rows, sessions);
       }),
+    usageSessionsBySource: (filters) =>
+      withStore(filters, async (store, query) => buildSessionsBySource(await store.readSessionsByDateSource(query))),
     skills: (filters) =>
       withStore(filters, async (store, query) => {
         const [rows, byDate, dates] = await Promise.all([
