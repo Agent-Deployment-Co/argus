@@ -35,12 +35,6 @@ const CHART_THEMES: Record<Theme, { grid: string; muted: string; panel: string; 
   light: { grid: "rgba(52,31,9,.13)", muted: "#6f5331", panel: "#fefaf5", fg: "#1c1105" },
 };
 
-export const fmtNum = (n: number): string =>
-  n >= 1e9 ? (n / 1e9).toFixed(2) + "B"
-  : n >= 1e6 ? (n / 1e6).toFixed(2) + "M"
-  : n >= 1e3 ? (n / 1e3).toFixed(1) + "k"
-  : String(n);
-
 /** Theme-dependent chrome merged into every chart's options for the current theme. */
 export function chartChrome(theme: Theme): ChartOptions {
   const c = CHART_THEMES[theme];

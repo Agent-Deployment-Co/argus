@@ -14,7 +14,7 @@ const projectColumns: Column<ProjectFriction>[] = [
   {
     id: "project", label: "Project", className: "session-project", sortValue: (r) => r.project,
     cell: (r) => (
-      <Link to="/sessions" search={{ project: r.project }} className="table-link" title={`View sessions in ${r.project}`}>
+      <Link to="/sessions" search={{ project: r.project }} className="text-link" title={`View sessions in ${r.project}`}>
         <span className="truncate">{compactProject(r.project)}</span>
       </Link>
     ),

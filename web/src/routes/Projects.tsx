@@ -16,7 +16,7 @@ const projectColumns: Column<NamedUsage>[] = namedUsageColumns("Project").map((c
     ? {
         ...col,
         cell: (r) => (
-          <Link to="/sessions" search={{ project: r.name }} className="table-link" title={`View sessions in ${r.name}`}>
+          <Link to="/sessions" search={{ project: r.name }} className="text-link" title={`View sessions in ${r.name}`}>
             {r.name}
           </Link>
         ),

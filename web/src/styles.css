@@ -294,10 +294,9 @@ main:has(.inbox-page) { padding: 0; }
 .session-detail-headline { min-width: 0; max-width: 800px; line-height: 1.2; }
 .session-detail-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--muted); font-size: 12.5px; }
 .session-detail-eyebrow .truncate { max-width: 280px; }
-.eyebrow-link { color: var(--link); }
-.eyebrow-link:hover { color: var(--link-hover); text-decoration: underline; }
-.table-link { color: var(--link); }
-.table-link:hover { color: var(--link-hover); text-decoration: underline; }
+/* An inline link in body / table / eyebrow text: link color, underline on hover. */
+.text-link { color: var(--link); }
+.text-link:hover { color: var(--link-hover); text-decoration: underline; }
 .session-detail-inner section { margin: 22px 0 0; }
 .detail-tabs { display: flex; gap: 2px; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
 .detail-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 12px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
@@ -630,7 +629,6 @@ code { background: var(--code-bg); color: var(--code-text); padding: 1px 5px; bo
 .save-indicator.saved { color: var(--sky-surge); }
 .save-indicator.error { color: var(--racing-red); }
 .spin { animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 640px) {
   .settings-surface { grid-template-columns: 1fr; }

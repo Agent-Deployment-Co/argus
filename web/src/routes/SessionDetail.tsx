@@ -143,11 +143,11 @@ export function SessionDetail() {
       <header className="session-detail-head">
         <div className="session-detail-headline">
           <div className="session-detail-eyebrow">
-            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="eyebrow-link" title={`Filter to ${s.source}`}>
+            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="text-link" title={`Filter to ${s.source}`}>
               {s.source}
             </Link>
             <span className="muted">·</span>
-            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="eyebrow-link truncate" title={`Filter to ${s.project}`}>
+            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="text-link truncate" title={`Filter to ${s.project}`}>
               {compactProject(s.project)}
             </Link>
             <span className="muted">·</span>
