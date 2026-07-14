@@ -54,6 +54,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/changelog.md
           git commit -m "docs: refresh release changelog [skip ci]"
+          # main may have advanced since checkout (bun install + the API sweep take a
+          # while); rebase so the push isn't rejected as non-fast-forward.
+          git pull --rebase origin main
           git push origin HEAD:main
       - run: bun run docs:build
         env:
