@@ -371,10 +371,13 @@ function readLabelRows(db: Database): HubUploadLabel[] {
 function labelFingerprint(
   labels: { name: string; origin: string; applied_by: string; target_kind: string; task_seq: number | null }[],
 ): string {
-  return labels
-    .map((l) => `${l.target_kind}:${l.task_seq ?? ""}:${l.name}:${l.origin}:${l.applied_by}`)
-    .sort()
-    .join("|");
+  return JSON.stringify(
+    labels
+      // JSON-encode each field as a tuple so a name containing the old ":"/"|" delimiters can't
+      // collide two distinct label states onto the same fingerprint (missed re-sync).
+      .map((l) => [l.target_kind, l.task_seq, l.name, l.origin, l.applied_by])
+      .sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)),
+  );
 }
 
 /** Compute a stable digest from session fields that can change without advancing last_ts:
