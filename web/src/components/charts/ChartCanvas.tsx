@@ -25,10 +25,16 @@ interface Props<T extends ChartType> {
   height?: number;
 }
 
+// Chart types that use cartesian x/y scales. Non-cartesian types (doughnut/pie/polarArea/radar)
+// must NOT inherit the chrome's x/y scales, or Chart.js draws stray axes/gridlines behind them.
+const CARTESIAN = new Set<ChartType>(["bar", "line", "scatter", "bubble"]);
+
 /** react-chartjs-2 wrapper that applies the current theme's chrome and a fixed-height container. */
 export function ChartCanvas<T extends ChartType>({ type, data, options, height = 240 }: Props<T>) {
   const { theme } = useTheme();
-  const merged = deepMerge<ChartOptions<T>>(chartChrome(theme), options ?? {});
+  const { scales, ...rest } = chartChrome(theme);
+  const chrome = CARTESIAN.has(type) ? { ...rest, scales } : rest;
+  const merged = deepMerge<ChartOptions<T>>(chrome, options ?? {});
   return (
     <div className="chart-box" style={{ height }}>
       <ReactChart type={type} data={data} options={merged} />
