@@ -3,7 +3,8 @@ import { ChartCanvas } from "../components/charts/ChartCanvas";
 import { type Column, DataTable } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { Section } from "../components/Section";
-import { fmt, SKILL_PALETTE } from "../lib/format";
+import { fmt } from "../lib/format";
+import { SourceBadge, sourceColor, sourceLabel } from "../lib/sources";
 import { useDashboardFilters, useSessionsBySourceQuery, useUsageBySourceQuery, viewGate } from "../lib/views";
 import type { NamedUsage } from "../types";
 
@@ -18,7 +19,7 @@ const metaNum = (r: NamedUsage, key: string): number => Number(r.meta?.[key] ?? 
 
 // Per-source breakdown table: session count, tokens, interactions, tasks.
 const sourceColumns: Column<NamedUsage>[] = [
-  { id: "name", label: "Source", sortValue: (r) => r.name, cell: (r) => r.name },
+  { id: "name", label: "Source", sortValue: (r) => r.name, cell: (r) => <SourceBadge id={r.name} /> },
   { id: "sessions", label: "Sessions", num: true, sortValue: (r) => metaNum(r, "sessions"), cell: (r) => fmt(metaNum(r, "sessions")) },
   { id: "total", label: "Tokens", num: true, sortValue: (r) => r.total, cell: (r) => fmt(r.total) },
   { id: "interactions", label: "Interactions", num: true, sortValue: (r) => metaNum(r, "interactions"), cell: (r) => fmt(metaNum(r, "interactions")) },
@@ -53,10 +54,10 @@ export function Home() {
               data={{
                 // Axis labels drop the year (MM-DD) to cut noise; the tooltip title restores the full date.
                 labels: daily.map((d) => d.date.slice(5)),
-                datasets: sources.map((s, i) => ({
-                  label: s,
+                datasets: sources.map((s) => ({
+                  label: sourceLabel(s),
                   data: daily.map((d) => d.bySource[s] ?? 0),
-                  backgroundColor: SKILL_PALETTE[i % SKILL_PALETTE.length],
+                  backgroundColor: sourceColor(s),
                   stack: "s",
                 })),
               }}
@@ -89,11 +90,11 @@ export function Home() {
               type="doughnut"
               height={260}
               data={{
-                labels: sources,
+                labels: sources.map(sourceLabel),
                 datasets: [
                   {
                     data: sources.map((s) => sessionTotals.get(s) ?? 0),
-                    backgroundColor: sources.map((_, i) => SKILL_PALETTE[i % SKILL_PALETTE.length]),
+                    backgroundColor: sources.map((s) => sourceColor(s)),
                   },
                 ],
               }}

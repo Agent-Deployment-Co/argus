@@ -81,7 +81,7 @@ export function FilterDropdownOption({
   selected,
   onToggle,
 }: {
-  label: string;
+  label: ReactNode;
   selected: boolean;
   onToggle: () => void;
 }) {

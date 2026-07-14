@@ -1,6 +1,7 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Calendar, FilterX, Layers, Loader2 } from "lucide-react";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
+import { SourceBadge } from "../lib/sources";
 import { daysAgo, type RootSearch } from "../router";
 import { FilterDropdown, FilterDropdownOption } from "./FilterDropdown";
 
@@ -102,7 +103,7 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
             {SORTED_SOURCES.map((s) => (
               <FilterDropdownOption
                 key={s}
-                label={sourceLabel(s)}
+                label={<SourceBadge id={s} />}
                 selected={source === s}
                 onToggle={() => {
                   set({ source: source === s ? undefined : s });

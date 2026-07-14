@@ -220,6 +220,10 @@ main:has(.inbox-page) { padding: 0; }
 .filter-dropdown-option:hover { background: var(--hover); }
 .filter-dropdown-option.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
 .filter-dropdown-option.selected svg { color: var(--accent); flex: 0 0 auto; }
+/* Source icon + label pairing (filter picker, table cells, legends). The icon uses the standard
+   muted icon color (source color is reserved for charts), brightening like other icons in context. */
+.source-badge { display: inline-flex; align-items: center; gap: 8px; }
+.source-badge svg { flex: 0 0 auto; color: var(--muted); }
 .filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
 .filter-dropdown-mode { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .filter-dropdown-mode-btn { flex: 1 1 0; border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; text-align: center; }
