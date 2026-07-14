@@ -7,8 +7,8 @@ each session with a model, groups its back-and-forth into the
 
 This is the one place Argus uses a model to interpret your sessions. It's what
 lets you see not just how many [tokens](/terminology#token) and how much
-[cost](/terminology#cost) a session used, but which of your goals succeeded,
-which frustrated you and what each one took.
+[cost](/terminology#cost) a session used, but which of your goals succeeded and
+what each one took.
 
 ## What Argus captures per task
 
@@ -17,24 +17,21 @@ For each task it finds, Argus records:
 - **A short description** of what you were trying to do.
 - **An outcome**: success, failure or unclear, judged from the whole exchange
   rather than just the last message.
-- **A frustration level**: none, low or high, read from signs like repeated
-  re-asks, corrections or an escalating tone.
-- **Signals**: short tags that back up the judgment, like "repeated re-asks" or
-  "no access".
 - **A one-line reason** for the outcome.
-- **Its own tokens, cost and tool calls**, so you can see what each goal took,
-  not just the session total.
+- **Its own tokens, interactions and tool calls**, so you can see what each goal
+  took, not just the session total.
 
 ## Where you see them
 
 Open a session (see [Sessions](/sessions)) and its tasks are listed under
-**Tasks**, each with its outcome and token count. Click one to open its detail,
-with the frustration level, the signals behind the judgment, the reason and the
-[tools](/terminology#tool) it used.
+**Tasks**, each with its outcome and an [interaction](/terminology#interaction)
+count. Click one to expand it in place, showing the reason for the outcome and what
+the task took: its interactions, [tokens](/terminology#token) and tool calls. Each
+task also links into the Timeline, where you can read that stretch of the session.
 
 <div class="screenshot">
 
-![A task's detail drawer showing a failed task: its outcome, frustration, signals and tools.](./images/screenshots/session-detail--open-failure@1920x1080@2.webp)
+![A session's tasks with a failed task expanded: its outcome and what the task took.](./images/screenshots/session-detail--open-failure@1920x1080@2.webp)
 
 </div>
 
@@ -44,9 +41,10 @@ Argus reads a session in two passes:
 
 1. **It finds the tasks.** It reads your prompts and splits the session into the
    goals you pursued, combining messages that belong to the same goal and
-   skipping setup and noise.
+   skipping setup and noise. The same read also gives the session its title and
+   short summary.
 2. **It judges each one.** For every task, it reads the full exchange between you
-   and the agent and decides how it turned out and how smooth it was.
+   and the agent and decides how it turned out.
 
 This runs quietly as Argus indexes, and only on sessions that have changed.
 Judging an outcome means re-reading your prompts and responses, so Argus keeps
@@ -58,7 +56,7 @@ interpreting a task does send it to the model you pick, covered below.
 Task interpretation is on by default. You control it in [Settings](/settings)
 under **Sessions**:
 
-- **Extract tasks** turns it on or off.
+- **Interpret sessions** turns it on or off.
 - **Max sessions per hour** caps how many sessions Argus interprets on its own,
   so a large backlog doesn't run all at once. Refreshing a single session by hand
   isn't capped.
@@ -113,11 +111,10 @@ account for what it reads and writes.
 Two things decide where your task data goes:
 
 - **Syncing to a Hub.** If you [sync](/terminology#sync) usage to an
-  [Argus Hub](/terminology#argus-hub), your tasks and their judgments (the
-  outcome, frustration and signals) are included, so an ops leader can see them
-  across a team, along with short snippets like a session's opening prompt and
-  the brief evidence behind each judgment. The full text of your sessions is
-  never uploaded; it stays on your machine.
+  [Argus Hub](/terminology#argus-hub), your tasks and how each one turned out (the
+  outcome and the brief evidence behind it) are included, so an ops leader can see
+  them across a team, along with short snippets like a session's opening prompt.
+  The full text of your sessions is never uploaded; it stays on your machine.
 - **Interpretation.** To judge a task, Argus sends its prompts and responses to
   the model provider you chose. Every provider does this over the internet,
   including the default Claude CLI, which sends the text to Anthropic. The one

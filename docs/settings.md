@@ -38,7 +38,9 @@ managed-settings behavior, see the [Settings Reference](/settings-reference).
 - **Max sessions per hour** caps how many sessions Argus interprets
   automatically each hour. Refreshing a session by hand isn't limited.
 - **Model provider**, **Model**, **Reasoning effort** and **Claude CLI path** choose
-  which model backend does the interpretation and how hard it works. The cheap
+  which model backend does the interpretation and how hard it works. Some fields
+  appear only for the provider that uses them: the Claude CLI path for the local
+  Claude CLI, or a **Command** to run for the Command provider. The cheap
   defaults (Claude Haiku on the local Claude CLI) are good enough out of the box; for
   sharper titles, summaries, and outcome calls, point Argus at a stronger model such
   as Claude Sonnet or Opus. Argus stores any API key in your operating system's secure

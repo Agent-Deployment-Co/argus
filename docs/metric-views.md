@@ -11,12 +11,12 @@ The home view. It opens with headline totals for the range you're looking at:
 
 - **Sessions** and **Model responses**: how many [sessions](/terminology#session)
   you ran and how many replies your agents sent.
-- **Total tokens**, **Output tokens** and **Est. cost**: how many
-  [tokens](/terminology#token) moved through your agents, how many they wrote back
-  and the estimated [cost](/terminology#cost).
+- **Total tokens** and **Est. cost**: how many [tokens](/terminology#token) moved
+  through your agents and the estimated [cost](/terminology#cost).
 - **Cache read**: the share of input tokens served from cache. A higher number
   means more of your context was reused rather than reprocessed, which is
   cheaper.
+- **Output tokens**: how many tokens your agents wrote back.
 
 Below the totals:
 
@@ -25,8 +25,7 @@ Below the totals:
   context grew unusually fast.
 - **Trends** plot your tokens per day and cost per day across the range.
 - **Sources** breaks your usage down by agent, as charts and a table you can
-  sort. If your usage spans more than one person, a **By user** breakdown appears
-  too.
+  sort.
 - **Models** shows your token use by [model](/terminology#model) over time.
 
 <div class="screenshot">
@@ -39,8 +38,8 @@ Below the totals:
 
 Your usage grouped by [project](/terminology#project), the folder an agent was
 working in. Charts rank your projects by tokens and by cost, and a table lists
-them all with their session, token and cost totals. Click a project to open its
-sessions.
+them all with their session, response, token and cost totals. Click a project to
+open its sessions.
 
 <div class="screenshot">
 
