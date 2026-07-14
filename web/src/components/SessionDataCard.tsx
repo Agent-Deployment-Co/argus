@@ -1,6 +1,7 @@
 import { CopyButton } from "./CopyButton";
 import { Kv, KvRow } from "./kv";
 import { fmtBytes } from "../lib/format";
+import { SourceBadge } from "../lib/sources";
 import { useSessionProvenanceQuery } from "../lib/sessions";
 
 /** The Details-tab "Session Data" card: the session id plus its structural-index provenance —
@@ -30,7 +31,7 @@ export function SessionDataCard({ sessionId, enabled }: { sessionId: string; ena
             </span>
           }
         />
-        {p && <KvRow k="Source" v={p.source} />}
+        {p && <KvRow k="Source" v={<SourceBadge id={p.source} />} />}
         {mainFile && (
           <KvRow
             k="Transcript"

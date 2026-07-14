@@ -11,6 +11,7 @@ import type { LabelRecord } from "../types";
 import { LabelPopover, type TriState } from "../components/LabelBar";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
+import { SourceBadge } from "../lib/sources";
 import { daysAgo } from "../router";
 import type { SessionListItem, SessionSort } from "../types";
 
@@ -301,7 +302,7 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
                 <span className="truncate" title={s.project}>{compactProject(s.project)}</span>
               </div>
               <div className="session-item-stats">
-                <span>{s.source}</span>
+                <SourceBadge id={s.source} size={13} />
                 <IconStat value={fmt(s.total)} title={`${fmt(s.total)} tokens`} icon={TokensIcon} size={12} iconFirst />
                 <InteractionCount n={s.interactions} size={12} iconFirst />
                 {s.tasks > 0 && (
@@ -769,7 +770,7 @@ export function Sessions() {
               {SORTED_SOURCES.map((s) => (
                 <FilterDropdownOption
                   key={s}
-                  label={sourceLabel(s)}
+                  label={<SourceBadge id={s} />}
                   selected={source === s}
                   onToggle={() => setRange({ source: source === s ? undefined : s })}
                 />

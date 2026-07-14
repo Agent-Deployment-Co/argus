@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { KvRow as Row } from "../components/kv";
 import { dtAmPm, fmtBytes } from "../lib/format";
+import { SourceBadge } from "../lib/sources";
 import { fetchDebugInfo } from "../lib/debug";
 
 function Bool({ value }: { value: boolean }) {
@@ -67,7 +68,7 @@ export function Debug() {
             <tbody>
               {d.store.sources.map((s) => (
                 <tr key={s.source}>
-                  <td>{s.source}</td>
+                  <td><SourceBadge id={s.source} /></td>
                   <td>{s.sessionCount}</td>
                   <td>{s.archivedCount}</td>
                   <td>{s.lastSyncAtMs != null ? dtAmPm(s.lastSyncAtMs) : "—"}</td>

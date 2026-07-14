@@ -4,7 +4,8 @@ import { DataTable } from "../components/DataTable";
 import { Recommendations } from "../components/Recommendations";
 import { StatCards, type Stat } from "../components/StatCards";
 import { namedUsageColumns } from "../components/tables";
-import { fmt, modelFamilyColor, SERIES, SKILL_PALETTE, usd } from "../lib/format";
+import { fmt, modelFamilyColor, SERIES, usd } from "../lib/format";
+import { SourceBadge, sourceColor, sourceLabel } from "../lib/sources";
 import {
   useDashboardFilters,
   useRecommendationsQuery,
@@ -112,10 +113,10 @@ export function Activity() {
               type="doughnut"
               height={220}
               data={{
-                labels: bySource.map((s) => s.name),
-                // One color per source by position so the palette scales to however many sources exist
-                // (a fixed 4-color array left the 5th+ slice uncolored once claude-chat was added).
-                datasets: [{ data: bySource.map((s) => s.total), backgroundColor: bySource.map((_, i) => SKILL_PALETTE[i % SKILL_PALETTE.length]) }],
+                labels: bySource.map((s) => sourceLabel(s.name)),
+                // Each source keeps its stable identity color (see lib/sources), so a source is the
+                // same color here, in the cost bars, and on the Home charts.
+                datasets: [{ data: bySource.map((s) => s.total), backgroundColor: bySource.map((s) => sourceColor(s.name)) }],
               }}
               options={{
                 plugins: {
@@ -130,7 +131,7 @@ export function Activity() {
             <ChartCanvas
               type="bar"
               height={220}
-              data={{ labels: bySource.map((s) => s.name), datasets: [{ label: "USD", data: bySource.map((s) => s.cost), backgroundColor: SERIES.accent }] }}
+              data={{ labels: bySource.map((s) => sourceLabel(s.name)), datasets: [{ label: "USD", data: bySource.map((s) => s.cost), backgroundColor: bySource.map((s) => sourceColor(s.name)) }] }}
               options={{
                 indexAxis: "y",
                 plugins: { legend: { display: false } },
@@ -140,7 +141,7 @@ export function Activity() {
           </div>
         </div>
         <div style={{ marginTop: 24 }}>
-          <DataTable columns={namedUsageColumns("Source")} rows={bySource} initialSort="total" />
+          <DataTable columns={namedUsageColumns("Source", (r) => <SourceBadge id={r.name} />)} rows={bySource} initialSort="total" />
         </div>
       </section>
 

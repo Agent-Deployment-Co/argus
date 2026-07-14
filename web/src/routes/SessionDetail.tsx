@@ -13,6 +13,7 @@ import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
 import { SessionTimeline } from "../components/SessionTimeline";
 import { SessionDataCard } from "../components/SessionDataCard";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, pluralize } from "../lib/format";
+import { sourceLabel } from "../lib/sources";
 import { useSessionLabelsQuery } from "../lib/labels";
 import { reindexSession, setSessionHidden } from "../lib/sessions";
 import { useSessionDetailQuery, useSessionTaskMetrics } from "../lib/sessions";
@@ -143,8 +144,8 @@ export function SessionDetail() {
       <header className="session-detail-head">
         <div className="session-detail-headline">
           <div className="session-detail-eyebrow">
-            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="text-link" title={`Filter to ${s.source}`}>
-              {s.source}
+            <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, source: s.source })} className="text-link" title={`Filter to ${sourceLabel(s.source)}`}>
+              {sourceLabel(s.source)}
             </Link>
             <span className="muted">·</span>
             <Link to="/sessions/$sessionId" params={{ sessionId: s.sessionId }} search={(prev: SessionsSearch) => ({ ...prev, project: s.project })} className="text-link truncate" title={`Filter to ${s.project}`}>

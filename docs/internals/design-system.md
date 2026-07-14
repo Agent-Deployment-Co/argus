@@ -136,7 +136,8 @@ Two mechanisms, used deliberately:
 
 Icons come from **[lucide-react](https://lucide.dev)** — the one icon set. Render at
 `strokeWidth={1.75}` (the app-wide weight); size `18` for nav / controls and `12`–`13` for inline
-stats.
+stats. The **one exception** is the per-source brand marks (`components/source-icons.tsx`, surfaced
+via `<SourceBadge>`); see *Source identity* under Data visualization. Everything else is lucide.
 
 **Semantic metric icons have a single source of truth: `web/src/lib/icons.ts`.** A concept that
 recurs across views gets a named export there so it looks identical everywhere it appears:
@@ -222,8 +223,31 @@ never a raw `<Chart>`. Color and theming are centralized so charts read as one s
   (orange). Pull the key that matches the series' meaning.
 - **`modelFamilyColor(name)`** — maps a model to a fixed family hue (Claude = oranges, Gemini = blues,
   GPT = green, Codex = teal), so a given model keeps its color across charts.
-- **`SKILL_PALETTE`** (12) / **`CATEGORY_PALETTE`** (9) — categorical arrays for per-skill / per-source /
-  per-category series, indexed positionally (`palette[i % palette.length]`).
+- **`SKILL_PALETTE`** (12) / **`CATEGORY_PALETTE`** (9) — categorical arrays for per-skill /
+  per-category series, indexed positionally (`palette[i % palette.length]`). **Not for sources** —
+  sources have their own identity colors (see below).
+
+### Source identity (`lib/sources`)
+
+Agent sources (Claude Code, Codex, Gemini, Claude Cowork, Claude Chat) are **not** colored from the
+categorical palette — they carry a stable identity so a source reads the same in every chart, legend,
+table, and filter:
+
+- **`src/sources.ts`** is the canonical registry: one descriptor per source (`id`, `label`, `order`,
+  `localOnly`). It's the single source of truth for the source set, display labels, and ordering. It's
+  runtime-safe (no Node deps) so both the web app and the CLI derive from it;
+  `web/src/lib/filters.ts` re-exports `sourceLabel` / `KNOWN_SOURCES` / `SORTED_SOURCES` from it.
+- **`sourceColor(id)`** (`web/src/lib/sources.tsx`) — a stable, identity-keyed hex per source (the
+  Claude family as a warm dark→light ramp, Codex a monochrome-leaning slate, Gemini blue). Color chart
+  series *by source id*, never by position — the same source must be the same color everywhere.
+- **`<SourceBadge id>`** — the icon + label pairing for wherever a source is *named* (filter picker,
+  table cells, legends). The badge icon uses the standard muted icon color; **color is reserved for
+  charts** and is not carried onto the icon.
+
+Adding or relabeling a source is a one-line edit to `src/sources.ts` (plus a color + icon entry in
+`web/src/lib/sources.tsx`). The backend source lists (`AgentSource` union, `SOURCE_ORDER`,
+`ALL_SOURCES`, `toSource`, the SQL `CHECK`, CLI flag strings) still keep their own copies — folding
+them onto the registry is tracked in #147.
 
 ### Theming
 
@@ -249,6 +273,7 @@ Reuse these; don't rebuild them. (Star = has a real React component; others are 
 | `Kv` / `KvRow` ★ | `components/kv.tsx` | key/value detail grid |
 | `Select` ★ (default / pill) | `components/Select.tsx` | the one native-select wrapper |
 | `FilterDropdown` ★ | `components/FilterDropdown.tsx` | checkable popover filter (FilterBar + inbox) |
+| `SourceBadge` ★ + `sourceColor`/`sourceLabel` | `lib/sources.tsx` | naming a source (icon + label); source chart colors |
 | `CopyButton` ★ | `components/CopyButton.tsx` | copy-to-clipboard (Copy→Check flip) |
 | `ClampText` ★ | `components/ClampText.tsx` | truncate with a "read more" toggle |
 | `pills.tsx` helpers ★ | `components/pills.tsx` | `IconStat`, `InteractionCount`, `SkillPill`/`Skills`, `TokGrowthCell`, `Dash` |
