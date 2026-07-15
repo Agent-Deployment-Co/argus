@@ -114,24 +114,40 @@ export class ArgusDemoStore {
     const store = this.store!;
     const driver = this.driver!;
 
-    await driver.transaction(async () => {
-      for (const table of SESSION_SCOPED_TABLES) driver.exec(`DELETE FROM ${table}`);
-    });
-    for (const [owner, sessions] of snapshot.sessionsByOwner) {
-      await store.materializeSessions(owner, sessions);
+    const wipe = () =>
+      driver.transaction(async () => {
+        for (const table of SESSION_SCOPED_TABLES) driver.exec(`DELETE FROM ${table}`);
+      });
+
+    await wipe();
+    // Each of these calls opens its own transaction internally (materializeSessions per owner,
+    // writeSessionTasks per session), but there's no single transaction spanning the whole reseed —
+    // DO SQLite's transaction API rejects nested `transaction()` calls, so this can't just be wrapped
+    // in one outer `driver.transaction(...)`. If anything below throws partway through (e.g. malformed
+    // per-session data the outer-shape-only `parseDemoSnapshot` validation missed), wipe again rather
+    // than leave the store showing a mix of the old-deleted and partially-reseeded data to visitors.
+    try {
+      for (const [owner, sessions] of snapshot.sessionsByOwner) {
+        await store.materializeSessions(owner, sessions);
+      }
+      const interpretationBySession = new Map(snapshot.interpretationBySession);
+      for (const [sessionId, tasks] of snapshot.tasksBySession) {
+        const interpretation = interpretationBySession.get(sessionId);
+        await store.writeSessionTasks(
+          sessionId,
+          tasks,
+          INTERPRETER_VERSION,
+          interpretation?.title ?? null,
+          interpretation?.summary ?? null,
+        );
+      }
+      await store.setPluginInventoryJson(snapshot.settingsJson, snapshot.installedPluginsJson);
+    } catch (error) {
+      await wipe();
+      await this.rebuildApp();
+      const message = error instanceof Error ? error.message : String(error);
+      return textResponse(`Seed failed partway through and the store was cleared: ${message}`, 500);
     }
-    const interpretationBySession = new Map(snapshot.interpretationBySession);
-    for (const [sessionId, tasks] of snapshot.tasksBySession) {
-      const interpretation = interpretationBySession.get(sessionId);
-      await store.writeSessionTasks(
-        sessionId,
-        tasks,
-        INTERPRETER_VERSION,
-        interpretation?.title ?? null,
-        interpretation?.summary ?? null,
-      );
-    }
-    await store.setPluginInventoryJson(snapshot.settingsJson, snapshot.installedPluginsJson);
 
     // The plugin inventory the running app closes over is stale the moment setPluginInventoryJson
     // above returns — rebuild so the very next request sees it, not just the one after that.
