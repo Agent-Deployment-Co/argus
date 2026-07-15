@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import { Database, SQLiteError } from "bun:sqlite";
+import { BunSqliteDriver, type SqlDriver } from "./sql-driver.ts";
 import { assignInteractionTaskSeqs } from "./store-contract.ts";
 import type {
   AuxiliaryFact,
@@ -688,32 +689,27 @@ const INSERT_FRAGMENT_SQL = `
     updated_at_ms = excluded.updated_at_ms
 `;
 
-function run(db: Database, sql: string, params: unknown[] = []) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return db.query(sql).run(...(params as any[]));
+function run(db: SqlDriver, sql: string, params: unknown[] = []) {
+  return db.run(sql, params);
 }
 
-function exec(db: Database, sql: string): void {
-  db.run(sql);
+function exec(db: SqlDriver, sql: string): void {
+  db.exec(sql);
 }
 
 function get<T>(
-  db: Database,
+  db: SqlDriver,
   sql: string,
   params: unknown[] = [],
 ): T | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (
-    (db.query<T, any[]>(sql).get(...(params as any[])) as T | null) ?? undefined
-  );
+  return db.get<T>(sql, params);
 }
 
-function all<T>(db: Database, sql: string, params: unknown[] = []): T[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return db.query<T, any[]>(sql).all(...(params as any[]));
+function all<T>(db: SqlDriver, sql: string, params: unknown[] = []): T[] {
+  return db.all<T>(sql, params);
 }
 
-function closeDatabase(db: Database): void {
+function closeDatabase(db: SqlDriver): void {
   db.close();
 }
 
@@ -814,7 +810,7 @@ interface ResolvedSessionSnapshot {
 }
 
 async function readResolvedSessionSnapshot(
-  db: Database,
+  db: SqlDriver,
   sessionId: string,
 ): Promise<ResolvedSessionSnapshot | undefined> {
   const row = await get<{
@@ -874,7 +870,7 @@ function materializedSessionMatchesSnapshot(
 
 /** Insert many rows in as few statements as possible (multi-row INSERT, chunked by param limit). */
 async function insertRows(
-  db: Database,
+  db: SqlDriver,
   table: string,
   columns: readonly string[],
   rows: unknown[][],
@@ -967,10 +963,10 @@ function secureSqliteFiles(path: string): void {
   }
 }
 
-function openDatabase(path: string, busyTimeoutMs: number): Database {
+function openDatabase(path: string, busyTimeoutMs: number): SqlDriver {
   const db = new Database(path, { create: true });
   db.run(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
-  return db;
+  return new BunSqliteDriver(db);
 }
 
 function rebuildHint(_path: string): string {
@@ -1016,32 +1012,25 @@ function asStoreError(
   );
 }
 
-async function transaction<T>(
-  db: Database,
-  operation: () => Promise<T>,
-): Promise<T> {
-  exec(db, "BEGIN IMMEDIATE");
-  try {
-    const value = await operation();
-    exec(db, "COMMIT");
-    return value;
-  } catch (error) {
-    try {
-      exec(db, "ROLLBACK");
-    } catch {}
-    throw error;
-  }
+// Thin pass-through to the driver's own `transaction` — kept as a module-level helper (rather than
+// calling `db.transaction(...)` at each of the ~15 call sites below) so a future change to how
+// transactions are wrapped (retries, timing/logging) has one place to land. `BunSqliteDriver` issues
+// raw BEGIN IMMEDIATE/COMMIT/ROLLBACK here; `DoSqliteDriver` routes through the DO storage API instead
+// (raw BEGIN is rejected on real DO SQLite — see that driver's own comment for why it uses the async
+// `ctx.storage.transaction`, not `transactionSync`).
+function transaction<T>(db: SqlDriver, operation: () => Promise<T>): Promise<T> {
+  return db.transaction(operation);
 }
 
 async function pragmaNumber(
-  db: Database,
+  db: SqlDriver,
   name: "application_id" | "user_version",
 ): Promise<number> {
   const row = await get<PragmaNumberRow>(db, `PRAGMA ${name}`);
   return row?.[name] ?? 0;
 }
 
-async function validateOwnership(db: Database, path: string): Promise<number> {
+async function validateOwnership(db: SqlDriver, path: string): Promise<number> {
   const applicationId = await pragmaNumber(db, "application_id");
   const userVersion = await pragmaNumber(db, "user_version");
   const tables = await all<TableNameRow>(
@@ -1067,7 +1056,7 @@ async function validateOwnership(db: Database, path: string): Promise<number> {
   return userVersion;
 }
 
-async function createSchema(db: Database): Promise<void> {
+async function createSchema(db: SqlDriver): Promise<void> {
   await transaction(db, async () => {
     await exec(db, CREATE_SCHEMA_SQL);
     await exec(db, `PRAGMA application_id = ${STORE_APPLICATION_ID}`);
@@ -1540,7 +1529,7 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
 async function migrateSchema(
-  db: Database,
+  db: SqlDriver,
   path: string,
   fromVersion: number,
 ): Promise<void> {
@@ -1563,7 +1552,7 @@ async function migrateSchema(
   }
 }
 
-function tableExists(db: Database, name: string): boolean {
+function tableExists(db: SqlDriver, name: string): boolean {
   return !!get<TableNameRow>(
     db,
     "SELECT name FROM sqlite_schema WHERE type IN ('table', 'virtual') AND name = ?",
@@ -1571,14 +1560,14 @@ function tableExists(db: Database, name: string): boolean {
   );
 }
 
-function tableHasColumn(db: Database, table: string, column: string): boolean {
+function tableHasColumn(db: SqlDriver, table: string, column: string): boolean {
   return all<TableColumnRow>(db, `PRAGMA table_info(${table})`).some(
     (row) => row.name === column,
   );
 }
 
 async function repairKnownStampedSchemaGaps(
-  db: Database,
+  db: SqlDriver,
   path: string,
 ): Promise<void> {
   try {
@@ -1647,7 +1636,7 @@ async function repairKnownStampedSchemaGaps(
  * `client-<uuid>` string scoped to this argus.db; an INSERT OR IGNORE means a concurrent open won't
  * race two distinct ids in (only one row survives the unique key constraint).
  */
-async function ensureClientIdRow(db: Database): Promise<string> {
+async function ensureClientIdRow(db: SqlDriver): Promise<string> {
   const existing = await get<{ value: string }>(
     db,
     "SELECT value FROM store_metadata WHERE key = 'client_id'",
@@ -1666,7 +1655,7 @@ async function ensureClientIdRow(db: Database): Promise<string> {
   return row?.value ?? id;
 }
 
-async function initializeDatabase(db: Database, path: string): Promise<void> {
+async function initializeDatabase(db: SqlDriver, path: string): Promise<void> {
   await exec(db, "PRAGMA foreign_keys = ON");
   const currentVersion = await validateOwnership(db, path);
 
@@ -1813,7 +1802,7 @@ function envelopeJson(fragment: StoredFragment): string | null {
  * so reconstruction is byte-faithful (e.g. friction turn-duration ordering).
  */
 async function materializeFactRows(
-  db: Database,
+  db: SqlDriver,
   fragment: StoredFragment,
 ): Promise<void> {
   for (const table of INDEX_TABLES) {
@@ -1896,7 +1885,7 @@ interface FactJsonRow {
 }
 
 async function loadFactArray<T>(
-  db: Database,
+  db: SqlDriver,
   table: string,
   fragmentId: string,
 ): Promise<T[]> {
@@ -2014,7 +2003,7 @@ export class SqliteStore implements Store {
   private closePromise: Promise<void> | undefined;
 
   constructor(
-    private readonly db: Database,
+    private readonly db: SqlDriver,
     readonly path: string,
     private readonly busyTimeoutMs: number,
     private readonly now: () => number,
@@ -4440,6 +4429,38 @@ export class SqliteStore implements Store {
   }
 }
 
+/** Run the schema/migration bootstrap on an already-open driver and wrap it in a `SqliteStore`.
+ *  Shared by `openStore` (the file-backed CLI path) and `openStoreWithDriver` (any other `SqlDriver`
+ *  — a Durable Object's `DoSqliteDriver`, or a test's own driver) so the two can't drift. */
+async function initializeStore(
+  db: SqlDriver,
+  path: string,
+  busyTimeoutMs: number,
+  now: () => number,
+): Promise<SqliteStore> {
+  await initializeDatabase(db, path);
+  return new SqliteStore(db, path, busyTimeoutMs, now);
+}
+
+/** Bootstrap a `SqliteStore` on top of a `SqlDriver` the caller already opened — no file-path setup
+ *  (`prepareDatabaseFile`, `openDatabase`, WAL/`-shm` cleanup), since a non-file backend (a Durable
+ *  Object) has no file to prepare. `path` is used only for error messages and `StoreError.path` — a
+ *  DO caller can pass something descriptive like `"do:demo"`. `openStore` below is a thin wrapper
+ *  over this for the file-backed case (#281 Part B.1). */
+export async function openStoreWithDriver(
+  db: SqlDriver,
+  path: string,
+  options: { busyTimeoutMs?: number; now?: () => number } = {},
+): Promise<SqliteStore> {
+  const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_STORE_BUSY_TIMEOUT_MS;
+  const now = options.now ?? Date.now;
+  try {
+    return await initializeStore(db, path, busyTimeoutMs, now);
+  } catch (error) {
+    throw asStoreError(error, path, busyTimeoutMs);
+  }
+}
+
 export async function openStore(
   options: OpenStoreOptions = {},
 ): Promise<SqliteStore> {
@@ -4463,11 +4484,10 @@ export async function openStore(
     throw asStoreError(error, path, busyTimeoutMs);
   }
 
-  let db: Database | undefined;
+  let db: SqlDriver | undefined;
   try {
     db = openDatabase(path, busyTimeoutMs);
-    await initializeDatabase(db, path);
-    return new SqliteStore(db, path, busyTimeoutMs, now);
+    return await initializeStore(db, path, busyTimeoutMs, now);
   } catch (error) {
     if (db)
       try {
