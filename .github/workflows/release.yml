@@ -70,6 +70,10 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       TAURI_UPDATER_ARGS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
+      # Keep Bun's package and cross-compiled-runtime cache on the same volume as the checkout.
+      # GitHub's Windows workspace is on D:, while Bun otherwise defaults to C:\Users\runneradmin\.bun;
+      # cross-volume moves fail when `bun build --compile --target=bun-windows-arm64` populates it.
+      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-cache
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
