@@ -195,6 +195,24 @@ body {
   background-color: var(--vp-c-bg);
 }
 
+/* Desktop sidebar: the default theme fixes it full-height (top:0) so its scroll
+ * container — and scrollbar — runs up behind the translucent, blurred nav, and
+ * uses a sticky ".curtain" to mask that region. Anchor the top to the nav
+ * height instead so the scroll area (and scrollbar) starts at the logo line;
+ * the curtain is then unnecessary. */
+@media (min-width: 960px) {
+  #app .VPSidebar {
+    top: calc(var(--vp-layout-top-height, 0px) + var(--vp-nav-height));
+    padding-top: 0;
+  }
+  #app .VPSidebar .curtain {
+    display: none;
+  }
+  #app .VPNavBar.has-sidebar > .wrapper > .container > .title {
+    background-color: var(--vp-sidebar-bg-color);
+  }
+}
+
 .VPNavBarTitle .title {
   font-family: 'Poppins', var(--vp-font-family-base);
   font-weight: 700;
