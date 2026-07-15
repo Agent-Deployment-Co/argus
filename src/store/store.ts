@@ -3404,6 +3404,27 @@ export class SqliteStore implements Store {
     });
   }
 
+  readUsageByDateSourceModel(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; source: string } & UsageGroupRow>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return (
+        await all<UsageSumRow & { date: string; source: string; model: string | null }>(
+          this.db,
+          `SELECT date, source, model, ${USAGE_SUMS} FROM resolved_usage ${usage.messageWhere} GROUP BY date, source, model`,
+          usage.messageParams,
+        )
+      ).map((r) => ({
+        date: r.date,
+        source: r.source,
+        model: r.model ?? "",
+        usage: sumRowToUsage(r),
+        messages: r.messages,
+      }));
+    });
+  }
+
   readUsageByProjectModel(
     query?: ResolvedQuery,
   ): Promise<Array<{ project: string } & UsageGroupRow>> {

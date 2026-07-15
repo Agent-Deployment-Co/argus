@@ -18,6 +18,7 @@ import type {
   SkillsResponse,
   UsageByModelResponse,
   UsageByProjectResponse,
+  UsageBySourceDailyResponse,
   UsageBySourceResponse,
   UsageDailyResponse,
 } from "../types";
@@ -68,6 +69,7 @@ function makeViewHook<T>(path: string) {
 export const useUsageDailyQuery = makeViewHook<UsageDailyResponse>("/api/usage/daily");
 export const useUsageByModelQuery = makeViewHook<UsageByModelResponse>("/api/usage/by-model");
 export const useUsageBySourceQuery = makeViewHook<UsageBySourceResponse>("/api/usage/by-source");
+export const useUsageBySourceDailyQuery = makeViewHook<UsageBySourceDailyResponse>("/api/usage/by-source-daily");
 export const useUsageByProjectQuery = makeViewHook<UsageByProjectResponse>("/api/usage/by-project");
 export const useSessionsBySourceQuery = makeViewHook<SessionsBySourceResponse>("/api/usage/sessions-by-source");
 export const useSkillsQuery = makeViewHook<SkillsResponse>("/api/skills");

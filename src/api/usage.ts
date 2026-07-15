@@ -38,6 +38,18 @@ export interface UsageByProjectResponse {
   byProject: NamedUsage[];
 }
 
+export interface UsageBySourceDailyResponse {
+  /** Sources in scope, ordered by total tokens descending — the stack + legend order. */
+  sources: string[];
+  /** One entry per active day (ascending), each with source→tokens and source→cost maps. */
+  daily: { date: string; tokens: Record<string, number>; cost: Record<string, number> }[];
+  /** Per-source period totals (the legend sums), keyed by source. */
+  totalsBySource: Record<string, { tokens: number; cost: number }>;
+  /** Grand totals over the whole period — the panel title values. */
+  totalTokens: number;
+  totalCost: number;
+}
+
 export interface SessionsBySourceResponse {
   /** Sources present in scope, ordered by total sessions descending — the stack/legend order. */
   sources: string[];
@@ -176,6 +188,56 @@ export function buildSessionsBySource(
     .sort()
     .map((d) => ({ date: d, bySource: Object.fromEntries(dayMap.get(d) ?? []) }));
   return { sources, daily };
+}
+
+/** GET /api/usage/by-source-daily — the per-day, per-source token/cost series behind the Home usage
+ *  hero (stacked columns, one series per source, switchable tokens/cost). Prices each (date, source,
+ *  model) row by its own model, so cost is exact per source and per day. Sources are ordered by total
+ *  tokens desc (the stack/legend order); the same ordering drives cost mode so the two modes stay
+ *  visually aligned. */
+export function buildUsageBySourceDaily(
+  rows: Array<{ date: string; source: string } & UsageGroupRow>,
+): UsageBySourceDailyResponse {
+  const dates = new Set<string>();
+  const dayTokens = new Map<string, Map<string, number>>();
+  const dayCost = new Map<string, Map<string, number>>();
+  const totals = new Map<string, { tokens: number; cost: number }>();
+  let totalTokensAll = 0;
+  let totalCostAll = 0;
+  for (const r of rows) {
+    dates.add(r.date);
+    const tok = totalTokens(r.usage);
+    const c = cost(r.usage, r.model);
+
+    const tokRow = dayTokens.get(r.date) ?? new Map<string, number>();
+    tokRow.set(r.source, (tokRow.get(r.source) ?? 0) + tok);
+    dayTokens.set(r.date, tokRow);
+    const costRow = dayCost.get(r.date) ?? new Map<string, number>();
+    costRow.set(r.source, (costRow.get(r.source) ?? 0) + c);
+    dayCost.set(r.date, costRow);
+
+    const t = totals.get(r.source) ?? { tokens: 0, cost: 0 };
+    t.tokens += tok;
+    t.cost += c;
+    totals.set(r.source, t);
+    totalTokensAll += tok;
+    totalCostAll += c;
+  }
+  const sources = [...totals.entries()]
+    .sort((a, b) => b[1].tokens - a[1].tokens || a[0].localeCompare(b[0]))
+    .map(([s]) => s);
+  const daily = [...dates].sort().map((d) => ({
+    date: d,
+    tokens: Object.fromEntries(dayTokens.get(d) ?? []),
+    cost: Object.fromEntries(dayCost.get(d) ?? []),
+  }));
+  return {
+    sources,
+    daily,
+    totalsBySource: Object.fromEntries(totals),
+    totalTokens: totalTokensAll,
+    totalCost: totalCostAll,
+  };
 }
 
 /** GET /api/usage/by-source — tokens/cost per source with its distinct-session count. */

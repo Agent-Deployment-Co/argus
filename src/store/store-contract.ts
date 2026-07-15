@@ -860,6 +860,9 @@ export interface ReadModelStore {
   // return per-model token sums (cost is priced per model in JS by the serve-side builders).
   readUsageByDateModel(query?: ResolvedQuery): Promise<Array<{ date: string } & UsageGroupRow>>;
   readUsageBySourceModel(query?: ResolvedQuery): Promise<Array<{ source: string } & UsageGroupRow>>;
+  readUsageByDateSourceModel(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; source: string } & UsageGroupRow>>;
   readUsageByProjectModel(query?: ResolvedQuery): Promise<Array<{ project: string } & UsageGroupRow>>;
   /** skill === "" means unattributed ("(none)"). */
   readUsageBySkillModel(query?: ResolvedQuery): Promise<Array<{ skill: string } & UsageGroupRow>>;

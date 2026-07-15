@@ -4,9 +4,16 @@ import { type Column, DataTable } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { Section } from "../components/Section";
 import { SourceOverviewCard, type SourceMetrics } from "../components/SourceOverviewCard";
+import { UsageHero } from "../components/UsageHero";
 import { fmt } from "../lib/format";
 import { SourceBadge, sourceColor, sourceLabel } from "../lib/sources";
-import { useDashboardFilters, useSessionsBySourceQuery, useUsageBySourceQuery, viewGate } from "../lib/views";
+import {
+  useDashboardFilters,
+  useSessionsBySourceQuery,
+  useUsageBySourceDailyQuery,
+  useUsageBySourceQuery,
+  viewGate,
+} from "../lib/views";
 import type { NamedUsage } from "../types";
 
 // The Home screen (#270) — the future root of the web UI. It leads with a few complementary lenses
@@ -31,7 +38,8 @@ export function Home() {
   const filters = useDashboardFilters();
   const sessionsQ = useSessionsBySourceQuery(filters);
   const bySourceQ = useUsageBySourceQuery(filters);
-  const gate = viewGate([sessionsQ, bySourceQ]);
+  const bySourceDailyQ = useUsageBySourceDailyQuery(filters);
+  const gate = viewGate([sessionsQ, bySourceQ, bySourceDailyQ]);
   if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
@@ -57,6 +65,10 @@ export function Home() {
 
   return (
     <>
+      <Section>
+        <UsageHero data={bySourceDailyQ.data!} />
+      </Section>
+
       <Section eyebrow="Source overview">
         {sources.length ? (
           <div className="source-overview-stack">

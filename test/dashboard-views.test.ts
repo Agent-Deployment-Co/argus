@@ -3,7 +3,7 @@
 // synthetic store rows (the same shape the store's per-view read methods return), plus buildSessionRow
 // (still shared by the session-detail path) and the narrowed recommendation rules.
 import { describe, expect, test } from "bun:test";
-import { buildSessionsBySource, buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageDaily } from "../src/api/usage.ts";
+import { buildSessionsBySource, buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageBySourceDaily, buildUsageDaily } from "../src/api/usage.ts";
 import {
   buildByMcpServer,
   buildByTool,
@@ -89,6 +89,24 @@ describe("usage builders", () => {
     expect(res.daily.map((d) => d.date)).toEqual(["2026-06-01", "2026-06-02"]);
     expect(res.daily[0]!.bySource).toEqual({ claude: 1, codex: 5 });
     expect(res.daily[1]!.bySource).toEqual({ claude: 2 });
+  });
+
+  test("buildUsageBySourceDaily builds the per-day token+cost series, ordered by total tokens desc", () => {
+    const res = buildUsageBySourceDaily([
+      { date: "2026-06-02", source: "claude", model: "opus", usage: u(1000), messages: 1 },
+      { date: "2026-06-01", source: "claude", model: "haiku", usage: u(1000), messages: 1 },
+      { date: "2026-06-01", source: "codex", model: "haiku", usage: u(3000), messages: 1 },
+    ]);
+    // codex total 3000 > claude total 2000, so codex leads the stack order.
+    expect(res.sources).toEqual(["codex", "claude"]);
+    expect(res.totalTokens).toBe(5000);
+    expect(res.daily.map((d) => d.date)).toEqual(["2026-06-01", "2026-06-02"]); // ascending
+    expect(res.daily[0]!.tokens).toEqual({ claude: 1000, codex: 3000 });
+    expect(res.daily[1]!.tokens).toEqual({ claude: 1000 });
+    // Cost is priced per (source, model): claude = opus 15/Mtok + haiku 1/Mtok over its 2000 tokens.
+    expect(res.totalsBySource.claude!.tokens).toBe(2000);
+    expect(res.totalsBySource.claude!.cost).toBeCloseTo((1000 * 15 + 1000 * 1) / 1e6, 9);
+    expect(res.totalCost).toBeCloseTo(res.totalsBySource.claude!.cost + res.totalsBySource.codex!.cost, 9);
   });
 });
 

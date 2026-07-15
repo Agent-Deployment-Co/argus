@@ -517,6 +517,21 @@ section { margin: 0 0 42px; }
    gap below the title so the inner .t-subhead margin is reset to avoid doubling. */
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .panel-head .t-subhead { margin: 0; }
+
+/* Home usage hero (#270): a wide lead panel spanning 3/4 of the content width. */
+.usage-hero { width: 75%; }
+@media (max-width: 900px) { .usage-hero { width: 100%; } }
+
+/* Segmented tokens/cost switch in the hero's title row: two integrated buttons sharing one pill
+   outline, mutually-exclusive selected state (house accent-tint, matching the filter mode toggles). */
+.mode-switch { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.mode-switch-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background: transparent; border: 0; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.mode-switch-btn + .mode-switch-btn { border-left: 1px solid var(--line); }
+.mode-switch-btn:hover:not(.is-active) { color: var(--heading); }
+.mode-switch-btn.is-active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); }
+.mode-switch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mode-switch-btn svg { flex: 0 0 auto; }
+
 .chart-box { position: relative; }
 canvas { max-width: 100%; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

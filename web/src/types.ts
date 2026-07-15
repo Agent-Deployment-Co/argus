@@ -49,6 +49,7 @@ import type {
   SessionsBySourceResponse,
   UsageByModelResponse,
   UsageByProjectResponse,
+  UsageBySourceDailyResponse,
   UsageBySourceResponse,
   UsageDailyResponse,
 } from "../../src/api/usage";
@@ -110,6 +111,7 @@ export type {
   UsageDailyResponse,
   UsageByModelResponse,
   UsageBySourceResponse,
+  UsageBySourceDailyResponse,
   UsageByProjectResponse,
   SessionsBySourceResponse,
   SkillsResponse,
