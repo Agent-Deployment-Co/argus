@@ -76,8 +76,8 @@
   --vp-nav-logo-height: 24px;
   --vp-nav-bg-color: rgba(249, 235, 220, 0.92);
   --vp-nav-screen-bg-color: var(--adc-antique-white);
-  --vp-sidebar-bg-color: rgba(243, 215, 186, 0.46);
-  --vp-local-nav-bg-color: rgba(249, 235, 220, 0.94);
+  --vp-sidebar-bg-color: var(--adc-soft-apricot);
+  --vp-local-nav-bg-color: var(--adc-antique-white);
 
   --vp-code-color: var(--adc-cornflower-ocean);
   --vp-code-bg: rgba(239, 137, 32, 0.12);
@@ -147,7 +147,7 @@
   --vp-nav-bg-color: rgba(28, 17, 5, 0.92);
   --vp-nav-screen-bg-color: var(--adc-coffee-bean);
   --vp-sidebar-bg-color: #241607;
-  --vp-local-nav-bg-color: rgba(28, 17, 5, 0.94);
+  --vp-local-nav-bg-color: var(--adc-coffee-bean);
 
   --vp-code-color: var(--adc-sky-surge);
   --vp-code-bg: rgba(93, 188, 223, 0.14);
@@ -184,6 +184,37 @@ body {
 
 .VPNav {
   backdrop-filter: blur(14px);
+}
+
+#app .VPNavBar > .wrapper > .container > .title {
+  transition: none;
+}
+
+/* The expanded "On this page" dropdown (VPLocalNavOutlineDropdown) sits over
+ * page content; the default theme paints its sections with the translucent
+ * --vp-c-bg-soft, letting text bleed through. Force them opaque (the 1px gaps
+ * between sections still show the gutter color as divider lines). */
+.VPLocalNavOutlineDropdown .header,
+.VPLocalNavOutlineDropdown .outline {
+  background-color: var(--vp-c-bg);
+}
+
+/* Desktop sidebar: the default theme fixes it full-height (top:0) so its scroll
+ * container — and scrollbar — runs up behind the translucent, blurred nav, and
+ * uses a sticky ".curtain" to mask that region. Anchor the top to the nav
+ * height instead so the scroll area (and scrollbar) starts at the logo line;
+ * the curtain is then unnecessary. */
+@media (min-width: 960px) {
+  #app .VPSidebar {
+    top: calc(var(--vp-layout-top-height, 0px) + var(--vp-nav-height));
+    padding-top: 0;
+  }
+  #app .VPSidebar .curtain {
+    display: none;
+  }
+  #app .VPNavBar.has-sidebar > .wrapper > .container > .title {
+    background-color: var(--vp-sidebar-bg-color);
+  }
 }
 
 .VPNavBarTitle .title {
