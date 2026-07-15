@@ -186,6 +186,15 @@ body {
   backdrop-filter: blur(14px);
 }
 
+/* The expanded "On this page" dropdown (VPLocalNavOutlineDropdown) sits over
+ * page content; the default theme paints its sections with the translucent
+ * --vp-c-bg-soft, letting text bleed through. Force them opaque (the 1px gaps
+ * between sections still show the gutter color as divider lines). */
+.VPLocalNavOutlineDropdown .header,
+.VPLocalNavOutlineDropdown .outline {
+  background-color: var(--vp-c-bg);
+}
+
 .VPNavBarTitle .title {
   font-family: 'Poppins', var(--vp-font-family-base);
   font-weight: 700;
