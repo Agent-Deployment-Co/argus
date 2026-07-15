@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
-import { createApp, type LabelOps, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
+import { createApp, defaultBrowserCommand, type LabelOps, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
 import { LabelError } from "../src/store/store.ts";
 import { logger } from "../src/logger.ts";
 import type { LabelRecord, LabelTarget, TaskFact } from "../src/store/store-contract.ts";
@@ -89,6 +89,16 @@ function fixtureSession(sessionId: string): SessionRow {
 }
 
 describe("serve API", () => {
+  test("selects the default-browser command for each supported platform", () => {
+    const url = "http://localhost:4242?firstRun=1";
+    expect(defaultBrowserCommand(url, "win32")).toEqual({
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", "start", "", url],
+    });
+    expect(defaultBrowserCommand(url, "darwin")).toEqual({ command: "open", args: [url] });
+    expect(defaultBrowserCommand(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
+  });
+
   test("GET /healthz answers without touching the store", async () => {
     const app = createApp(null);
     const res = await app.request("/healthz");
