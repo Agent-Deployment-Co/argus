@@ -33,6 +33,7 @@ on:
 permissions:
   id-token: write # required for OIDC
   contents: write # create the GitHub Release and upload assets
+  actions: write # dispatch the docs changelog refresh after publishing a release
 
 jobs:
   build-desktop:
@@ -147,6 +148,13 @@ jobs:
           tauriScript: ${{ runner.os == 'Windows' && 'bunx tauri' || format('{0}/node_modules/.bin/tauri', github.workspace) }}
           includeUpdaterJson: true
           args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
+
+      # Releases created with GITHUB_TOKEN do not reliably emit a release event that can
+      # trigger another workflow. Dispatch docs explicitly after the release exists.
+      - name: Refresh docs changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --repo "${GITHUB_REPOSITORY}" --ref main
 
       - name: Verify updater artifacts
         if: ${{ env.TAURI_UPDATER_ARGS != '' }}
