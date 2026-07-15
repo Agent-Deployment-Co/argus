@@ -642,7 +642,7 @@ const serve = defineCommand({
     },
     demo: {
       type: "string",
-      description: "Read-only demo mode: only read routes are mounted and edit affordances are hidden (true/false; env ARGUS_DEMO)",
+      description: "Read-only demo mode: hides editing and disables settings (true/false; env ARGUS_DEMO)",
       valueHint: "true|false",
     },
   },
