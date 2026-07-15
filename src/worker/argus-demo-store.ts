@@ -85,6 +85,10 @@ export class ArgusDemoStore {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // Answered directly, without ensureOpen(): a liveness check must stay cheap on a cold/hibernated
+    // instance, not pay for a full store open (matches createApp's own unconditionally-mounted
+    // /healthz — same response shape, {ok, demo: true} — which needs no store access either).
+    if (url.pathname === "/healthz") return Response.json({ ok: true, demo: true });
     if (url.pathname === "/admin/seed" && request.method === "POST") return this.handleSeed(request);
     await this.ensureOpen();
     return this.app!.fetch(request);

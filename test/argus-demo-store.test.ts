@@ -95,6 +95,24 @@ describe("ArgusDemoStore.ensureOpen recovery (#281 Part 7)", () => {
   });
 });
 
+describe("ArgusDemoStore /healthz (#281 Part 7)", () => {
+  test("answers without opening the store", async () => {
+    // sql.exec always throws — if fetch() called ensureOpen() for /healthz, this would surface as a
+    // thrown error instead of a clean 200, proving /healthz never touches the store.
+    const alwaysThrowingSql = {
+      exec() {
+        throw new Error("the store should never be touched for /healthz");
+      },
+    };
+    const ctx = { ...fakeDoTransactionCtx(), storage: { ...fakeDoTransactionCtx().storage, sql: alwaysThrowingSql } };
+    const demoStore = new ArgusDemoStore(ctx as never, {});
+
+    const res = await demoStore.fetch(new Request("https://argus-demo.example/healthz"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, demo: true });
+  });
+});
+
 describe("ArgusDemoStore.handleSeed atomicity (#281 Part 7)", () => {
   test("a failure partway through a reseed clears the store rather than leaving it half-seeded", async () => {
     const raw = new Database(tmpDbPath(), { create: true });
