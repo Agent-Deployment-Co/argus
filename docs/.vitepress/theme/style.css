@@ -186,6 +186,10 @@ body {
   backdrop-filter: blur(14px);
 }
 
+#app .VPNavBar > .wrapper > .container > .title {
+  transition: none;
+}
+
 /* The expanded "On this page" dropdown (VPLocalNavOutlineDropdown) sits over
  * page content; the default theme paints its sections with the translucent
  * --vp-c-bg-soft, letting text bleed through. Force them opaque (the 1px gaps
