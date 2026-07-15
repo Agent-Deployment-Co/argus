@@ -55,14 +55,21 @@ export class ArgusDemoStore {
 
   // Opened lazily (memoized on the promise, so concurrent first-requests share one open) rather than
   // in the constructor — DO constructors can't await, and every request after the first is instant
-  // since the object stays alive across requests on the same instance.
+  // since the object stays alive across requests on the same instance. On failure (e.g. a transient
+  // DO storage error), the memoized promise is cleared so the next request gets a fresh open attempt
+  // instead of permanently re-awaiting the same rejection for the rest of this instance's lifetime.
   private async ensureOpen(): Promise<void> {
     if (this.app) return;
     this.openingPromise ??= (async () => {
       this.driver = new DoSqliteDriver(this.ctx.storage.sql, this.ctx);
       this.store = await openStoreWithDriver(this.driver, "do:demo");
       await this.rebuildApp();
-    })();
+    })().catch((error) => {
+      this.driver = undefined;
+      this.store = undefined;
+      this.openingPromise = undefined;
+      throw error;
+    });
     await this.openingPromise;
   }
 
