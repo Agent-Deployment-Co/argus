@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { INTERPRETER_VERSION } from "./../src/indexing/interpret/index.ts";
 import { openStore } from "./../src/store/store.ts";
+import { toDemoSnapshot } from "./../src/worker/demo-snapshot.ts";
 import { generateDemoData } from "./demo/generate.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,10 +27,20 @@ interface Args {
   seed: number;
   serve: boolean;
   port?: number;
+  /** Also write the generated corpus as a `/admin/seed`-ready JSON snapshot (#281 Part B.3) — the
+   *  nightly Action's other half (POSTing it to the live demo) isn't wired up yet. */
+  snapshotOut?: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const out = { dir: join(REPO_ROOT, ".demo"), asOf: "", seed: 42, serve: true, port: undefined as number | undefined };
+  const out = {
+    dir: join(REPO_ROOT, ".demo"),
+    asOf: "",
+    seed: 42,
+    serve: true,
+    port: undefined as number | undefined,
+    snapshotOut: undefined as string | undefined,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const next = () => argv[++i] ?? "";
@@ -39,9 +50,10 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--serve") out.serve = true;
     else if (a === "--no-serve") out.serve = false;
     else if (a === "--port" || a === "-p") out.port = Number(next());
+    else if (a === "--snapshot-out") out.snapshotOut = next();
     else if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun run scripts/demo.ts [--out <dir>] [--as-of YYYY-MM-DD] [--seed <n>] [--no-serve] [--port <n>]",
+        "Usage: bun run scripts/demo.ts [--out <dir>] [--as-of YYYY-MM-DD] [--seed <n>] [--no-serve] [--port <n>] [--snapshot-out <path>]",
       );
       process.exit(0);
     } else throw new Error(`Unknown argument: ${a}`);
@@ -70,7 +82,15 @@ function parseArgs(argv: string[]): Args {
     asOfMs = Date.now();
     asOfLabel = "today";
   }
-  return { out: out.dir, asOfMs, asOfLabel, seed: out.seed, serve: out.serve, port: out.port };
+  return {
+    out: out.dir,
+    asOfMs,
+    asOfLabel,
+    seed: out.seed,
+    serve: out.serve,
+    port: out.port,
+    snapshotOut: out.snapshotOut,
+  };
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -126,6 +146,11 @@ async function main(): Promise<void> {
   writeJson(join(claudeDir, "settings.json"), demo.settingsJson);
   writeJson(join(claudeDir, "plugins", "installed_plugins.json"), demo.installedPluginsJson);
   writeJson(join(configDir, "argus.json"), { taskExtraction: { enabled: true } });
+
+  if (args.snapshotOut) {
+    writeJson(args.snapshotOut, toDemoSnapshot(demo));
+    console.log(`Wrote a /admin/seed-ready snapshot to ${args.snapshotOut}`);
+  }
 
   const bySource = Object.entries(demo.stats.bySource)
     .sort((a, b) => a[0].localeCompare(b[0]))

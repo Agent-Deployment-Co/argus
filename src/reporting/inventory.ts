@@ -13,20 +13,22 @@ function readJson(path: string): any {
 /**
  * Build the plugin inventory from settings.json (`enabledPlugins`, keyed "plugin@marketplace")
  * and plugins/installed_plugins.json (versions + install dates). Returns a map keyed by plugin
- * *name* (the part before "@"), which is what skill namespaces resolve to.
+ * *name* (the part before "@"), which is what skill namespaces resolve to. Pure — takes the
+ * already-parsed JSON rather than reading disk itself, so a caller with no filesystem of its own
+ * (#281's Cloudflare demo, which reads the same two blobs back out of `Store.getPluginInventoryJson`
+ * instead) can build the identical inventory. `loadPlugins()` below is the CLI's thin disk-reading
+ * wrapper over this.
  */
-export function loadPlugins(): Map<string, PluginInfo> {
+export function buildPluginInventory(settingsJson: unknown, installedPluginsJson: unknown): Map<string, PluginInfo> {
   const out = new Map<string, PluginInfo>();
-  const settings = readJson(SETTINGS_FILE);
-  const enabled: Record<string, boolean> = settings?.enabledPlugins ?? {};
+  const enabled: Record<string, boolean> = (settingsJson as any)?.enabledPlugins ?? {};
   for (const [key, on] of Object.entries(enabled)) {
     const [name, marketplace = ""] = key.split("@");
     if (!name) continue;
     out.set(name, { name, marketplace, enabled: !!on });
   }
 
-  const installed = readJson(INSTALLED_PLUGINS_FILE);
-  const plugins: Record<string, any[]> = installed?.plugins ?? {};
+  const plugins: Record<string, any[]> = (installedPluginsJson as any)?.plugins ?? {};
   for (const [key, versions] of Object.entries(plugins)) {
     const [name, marketplace = ""] = key.split("@");
     if (!name || !Array.isArray(versions) || versions.length === 0) continue;
@@ -38,6 +40,12 @@ export function loadPlugins(): Map<string, PluginInfo> {
     out.set(name, info);
   }
   return out;
+}
+
+/** The CLI's disk-reading entry point — reads `SETTINGS_FILE`/`INSTALLED_PLUGINS_FILE` and delegates
+ *  to the pure `buildPluginInventory`. */
+export function loadPlugins(): Map<string, PluginInfo> {
+  return buildPluginInventory(readJson(SETTINGS_FILE), readJson(INSTALLED_PLUGINS_FILE));
 }
 
 /**

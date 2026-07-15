@@ -43,3 +43,7 @@ docs/.vitepress/cache/
 
 # per-machine Tauri config overrides (e.g. signing identity), merged via `tauri build -c`
 desktop/src-tauri/tauri.conf.json.local
+
+# wrangler's local Miniflare state (`wrangler dev --local`) — #281's demo Worker
+.wrangler/
+.dev.vars

@@ -16,13 +16,13 @@ import { Database } from "bun:sqlite";
 // rather than depending on `@cloudflare/workers-types` (a CLI-only package has no business pulling in
 // a Workers-runtime type package). Real `SqlStorage`/`DurableObjectState` values satisfy these
 // structurally, so a Worker constructing `DoSqliteDriver` with its actual `ctx` still type-checks.
-interface DoSqlCursor<T> {
+export interface DoSqlCursor<T> {
   toArray(): T[];
 }
-interface DoSqlStorage {
+export interface DoSqlStorage {
   exec<T = unknown>(query: string, ...bindings: unknown[]): DoSqlCursor<T>;
 }
-interface DoTransactionCtx {
+export interface DoTransactionCtx {
   storage: {
     transaction<T>(closure: () => Promise<T>): Promise<T>;
   };

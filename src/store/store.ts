@@ -4464,6 +4464,40 @@ export class SqliteStore implements Store {
     });
   }
 
+  getPluginInventoryJson(): Promise<{ settingsJson: unknown; installedPluginsJson: unknown } | undefined> {
+    return this.schedule(async () => {
+      const rows = await all<{ key: string; value: string }>(
+        this.db,
+        "SELECT key, value FROM store_metadata WHERE key IN ('plugin_settings_json', 'plugin_installed_json')",
+      );
+      if (!rows.length) return undefined;
+      const byKey = new Map(rows.map((row) => [row.key, row.value]));
+      const settings = byKey.get("plugin_settings_json");
+      const installed = byKey.get("plugin_installed_json");
+      return {
+        settingsJson: settings === undefined ? undefined : JSON.parse(settings),
+        installedPluginsJson: installed === undefined ? undefined : JSON.parse(installed),
+      };
+    });
+  }
+
+  setPluginInventoryJson(settingsJson: unknown, installedPluginsJson: unknown): Promise<void> {
+    return this.schedule(async () => {
+      await transaction(this.db, async () => {
+        await run(
+          this.db,
+          "INSERT OR REPLACE INTO store_metadata (key, value) VALUES ('plugin_settings_json', ?)",
+          [JSON.stringify(settingsJson)],
+        );
+        await run(
+          this.db,
+          "INSERT OR REPLACE INTO store_metadata (key, value) VALUES ('plugin_installed_json', ?)",
+          [JSON.stringify(installedPluginsJson)],
+        );
+      });
+    });
+  }
+
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closePromise = this.queue

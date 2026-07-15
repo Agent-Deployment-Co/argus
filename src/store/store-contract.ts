@@ -748,6 +748,15 @@ export interface StructuralIndexStore {
   clearIndex(): Promise<void>;
   getCoverage(source: string): Promise<SourceCoverageRow | undefined>;
   setCoverage(source: string, filesDigest: string | null, sessionCount: number): Promise<void>;
+  /** The raw plugin-inventory side-files (`claude/settings.json`'s `enabledPlugins`,
+   *  `plugins/installed_plugins.json`) as JSON, for a store that has no filesystem of its own to read
+   *  them from live (#281's Cloudflare demo, seeded via `/admin/seed`). `reporting/inventory.ts`'s
+   *  `loadPlugins()` reads these two files directly for the CLI; a caller with no filesystem builds
+   *  the same `Map<string, PluginInfo>` from `buildPluginInventory(settingsJson, installedPluginsJson)`
+   *  fed by this pair instead. `undefined` fields (not just an absent row) mean "never seeded" —
+   *  distinct from an empty-but-present `{}`. */
+  getPluginInventoryJson(): Promise<{ settingsJson: unknown; installedPluginsJson: unknown } | undefined>;
+  setPluginInventoryJson(settingsJson: unknown, installedPluginsJson: unknown): Promise<void>;
   close(): Promise<void>;
 }
 

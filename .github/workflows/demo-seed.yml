@@ -1,0 +1,65 @@
+name: Seed public demo
+
+# Regenerates the deterministic demo corpus and pushes it to the live read-only demo's DO (#281 Part
+# B.3/B.4) via POST /admin/seed. DO storage persists across `wrangler deploy`, so this never needs to
+# redeploy the Worker — it only ever talks to the already-running one.
+#
+# The schedule trigger is commented out for now: the demo Worker isn't deployed to a real Cloudflare
+# account yet (no custom domain, no ARGUS_DEMO_URL/ARGUS_DEMO_SEED_TOKEN configured), so a cron firing
+# today would just fail every night for no reason. workflow_dispatch stays enabled so this can be
+# exercised manually once the deploy exists. Uncomment the schedule below once it does.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   # Nightly, once the demo is actually deployed. Anchored off `github.event.repository.updated_at`
+  #   is not a thing — just pick a quiet UTC hour.
+  #   - cron: "17 6 * * *"
+
+jobs:
+  seed:
+    name: Generate + push demo corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+
+      - name: Check the demo is actually deployed
+        id: gate
+        run: |
+          if [ -z "${{ vars.ARGUS_DEMO_URL }}" ] || [ -z "${{ secrets.ARGUS_DEMO_SEED_TOKEN }}" ]; then
+            echo "ARGUS_DEMO_URL (repo variable) and/or ARGUS_DEMO_SEED_TOKEN (repo secret) aren't set — the demo isn't deployed yet. Skipping." >&2
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate the deterministic corpus
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          bun run scripts/demo.ts --no-serve \
+            --as-of "$(date -u +%F)" \
+            --seed 42 \
+            --out /tmp/argus-demo-seed \
+            --snapshot-out /tmp/argus-demo-snapshot.json
+
+      - name: Push the snapshot to /admin/seed
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          ARGUS_DEMO_URL: ${{ vars.ARGUS_DEMO_URL }}
+          ARGUS_DEMO_SEED_TOKEN: ${{ secrets.ARGUS_DEMO_SEED_TOKEN }}
+        run: |
+          set -euo pipefail
+          status="$(curl -sS -o /tmp/seed-response.txt -w '%{http_code}' \
+            -X POST "${ARGUS_DEMO_URL%/}/admin/seed" \
+            -H "Authorization: Bearer ${ARGUS_DEMO_SEED_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/argus-demo-snapshot.json)"
+          echo "Response ($status):"
+          cat /tmp/seed-response.txt
+          if [ "$status" != "200" ]; then
+            echo "Seed request failed with status $status" >&2
+            exit 1
+          fi

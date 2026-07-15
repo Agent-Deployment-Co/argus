@@ -1,0 +1,3 @@
+# Local-only secrets for `wrangler dev --local` (#281's demo Worker). Copy to `.dev.vars` (gitignored)
+# and fill in a throwaway value — never the real production SEED_TOKEN.
+SEED_TOKEN=dev-seed-token-change-me
