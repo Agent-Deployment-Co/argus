@@ -713,9 +713,6 @@ function closeDatabase(db: SqlDriver): void {
   db.close();
 }
 
-/** Stay well under sqlite3's default bound-parameter limit (999) when batching. */
-const MAX_BOUND_PARAMS = 900;
-
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size)
@@ -879,7 +876,7 @@ async function insertRows(
   const perRowPlaceholder = `(${columns.map(() => "?").join(", ")})`;
   const rowsPerStatement = Math.max(
     1,
-    Math.floor(MAX_BOUND_PARAMS / columns.length),
+    Math.floor(db.maxBoundParams / columns.length),
   );
   for (const part of chunk(rows, rowsPerStatement)) {
     const sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES ${part
@@ -963,6 +960,16 @@ function secureSqliteFiles(path: string): void {
   }
 }
 
+/** `secureSqliteFiles` re-chmods the store file + its `-wal`/`-shm` siblings after every write, to
+ *  close a window where a permissive umask could leave them world-readable between WAL checkpoints.
+ *  That's meaningless (and, on a real Workers runtime with no `node:fs`/`process`, potentially
+ *  crash-prone) for `DoSqliteDriver`, which has no on-disk file for Argus to own permissions on at all
+ *  — the DO platform manages storage security itself (#281 Part B.2). Called on every `SqliteStore`
+ *  write path, so this stays a guarded wrapper rather than 11 inlined `if` checks. */
+function secureSqliteFilesIfLocal(db: SqlDriver, path: string): void {
+  if (db.supportsPragmas) secureSqliteFiles(path);
+}
+
 function openDatabase(path: string, busyTimeoutMs: number): SqlDriver {
   const db = new Database(path, { create: true });
   db.run(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
@@ -1030,7 +1037,36 @@ async function pragmaNumber(
   return row?.[name] ?? 0;
 }
 
+/** Schema version, read from wherever this driver can durably stamp it: `PRAGMA user_version` on
+ *  `bun:sqlite` (unchanged), or a `store_metadata` row on DO SQLite (#281 Part B.2), which doesn't
+ *  reliably support arbitrary pragmas and has no separate "wrong app" case to detect (a Durable
+ *  Object's storage is never shared with another application) — so there's no `application_id`
+ *  equivalent to check, only the version this store itself last wrote. */
+async function readSchemaVersion(db: SqlDriver): Promise<number> {
+  if (db.supportsPragmas) return pragmaNumber(db, "user_version");
+  if (!tableExists(db, "store_metadata")) return 0;
+  const row = await get<{ value: string }>(
+    db,
+    "SELECT value FROM store_metadata WHERE key = 'schema_version'",
+  );
+  return row ? Number(row.value) : 0;
+}
+
+async function writeSchemaVersion(db: SqlDriver, version: number): Promise<void> {
+  if (db.supportsPragmas) {
+    await exec(db, `PRAGMA user_version = ${version}`);
+    return;
+  }
+  await run(
+    db,
+    "INSERT OR REPLACE INTO store_metadata (key, value) VALUES ('schema_version', ?)",
+    [String(version)],
+  );
+}
+
 async function validateOwnership(db: SqlDriver, path: string): Promise<number> {
+  if (!db.supportsPragmas) return readSchemaVersion(db);
+
   const applicationId = await pragmaNumber(db, "application_id");
   const userVersion = await pragmaNumber(db, "user_version");
   const tables = await all<TableNameRow>(
@@ -1059,8 +1095,10 @@ async function validateOwnership(db: SqlDriver, path: string): Promise<number> {
 async function createSchema(db: SqlDriver): Promise<void> {
   await transaction(db, async () => {
     await exec(db, CREATE_SCHEMA_SQL);
-    await exec(db, `PRAGMA application_id = ${STORE_APPLICATION_ID}`);
-    await exec(db, `PRAGMA user_version = ${STORE_SCHEMA_VERSION}`);
+    if (db.supportsPragmas) {
+      await exec(db, `PRAGMA application_id = ${STORE_APPLICATION_ID}`);
+    }
+    await writeSchemaVersion(db, STORE_SCHEMA_VERSION);
   });
 }
 
@@ -1546,7 +1584,7 @@ async function migrateSchema(
     }
     await transaction(db, async () => {
       await exec(db, step.sql);
-      await exec(db, `PRAGMA user_version = ${step.to}`);
+      await writeSchemaVersion(db, step.to);
     });
     version = step.to;
   }
@@ -1571,7 +1609,7 @@ async function repairKnownStampedSchemaGaps(
   path: string,
 ): Promise<void> {
   try {
-    const version = await pragmaNumber(db, "user_version");
+    const version = await readSchemaVersion(db);
     if (version < 21) return;
 
     const hasResolvedSessions = tableExists(db, "resolved_sessions");
@@ -1656,16 +1694,25 @@ async function ensureClientIdRow(db: SqlDriver): Promise<string> {
 }
 
 async function initializeDatabase(db: SqlDriver, path: string): Promise<void> {
-  await exec(db, "PRAGMA foreign_keys = ON");
+  // Everything in this function past the driver's own construction is pragma-driven except the
+  // schema bootstrap/migration itself: FK enforcement, the integrity check, and the WAL/durability
+  // tuning below are all `bun:sqlite`-specific (#281 Part B.2). DO SQLite disallows most of these
+  // pragmas outright and owns its own file/WAL/checkpoint layer, so `DoSqliteDriver` skips them —
+  // acceptable here because the read-only demo's only writes are a full nightly wipe-and-reseed
+  // (never a partial cascading delete that foreign_keys enforcement would matter for) and DO's
+  // storage layer already guarantees durability without `synchronous`/`wal_autocheckpoint` tuning.
+  if (db.supportsPragmas) await exec(db, "PRAGMA foreign_keys = ON");
   const currentVersion = await validateOwnership(db, path);
 
-  const check = await get<QuickCheckRow>(db, "PRAGMA quick_check(1)");
-  if (check?.quick_check !== "ok") {
-    throw new StoreError(
-      "corrupt",
-      path,
-      `The local store failed an integrity check (${check?.quick_check ?? "unknown error"}). ${rebuildHint(path)}`,
-    );
+  if (db.supportsPragmas) {
+    const check = await get<QuickCheckRow>(db, "PRAGMA quick_check(1)");
+    if (check?.quick_check !== "ok") {
+      throw new StoreError(
+        "corrupt",
+        path,
+        `The local store failed an integrity check (${check?.quick_check ?? "unknown error"}). ${rebuildHint(path)}`,
+      );
+    }
   }
 
   // The store is a durable archive: an empty store is created fresh; an older owned schema is
@@ -1679,10 +1726,12 @@ async function initializeDatabase(db: SqlDriver, path: string): Promise<void> {
   }
   await repairKnownStampedSchemaGaps(db, path);
 
-  await exec(db, "PRAGMA journal_mode = WAL");
-  await exec(db, "PRAGMA synchronous = NORMAL");
-  await exec(db, "PRAGMA wal_autocheckpoint = 1000");
-  await exec(db, "PRAGMA trusted_schema = OFF");
+  if (db.supportsPragmas) {
+    await exec(db, "PRAGMA journal_mode = WAL");
+    await exec(db, "PRAGMA synchronous = NORMAL");
+    await exec(db, "PRAGMA wal_autocheckpoint = 1000");
+    await exec(db, "PRAGMA trusted_schema = OFF");
+  }
 
   // Verify the expected schema rather than trusting user_version alone.
   try {
@@ -1758,7 +1807,7 @@ async function initializeDatabase(db: SqlDriver, path: string): Promise<void> {
       { cause: error },
     );
   }
-  secureSqliteFiles(path);
+  secureSqliteFilesIfLocal(db, path);
   // Ensure the per-install client id exists from the first successful open (#141), so callers
   // can rely on getClientId() without worrying about the bootstrap order.
   await ensureClientIdRow(db);
@@ -2101,7 +2150,7 @@ export class SqliteStore implements Store {
         }
         await materializeFactRows(this.db, fragment);
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
     });
   }
 
@@ -2142,7 +2191,7 @@ export class SqliteStore implements Store {
       const now = this.now();
       await transaction(this.db, async () => {
         // Three bound slots are fixed (status, reason, updated_at); the rest are ids.
-        for (const part of chunk(unique, MAX_BOUND_PARAMS - 3)) {
+        for (const part of chunk(unique, this.db.maxBoundParams - 3)) {
           const placeholders = part.map(() => "?").join(", ");
           await run(
             this.db,
@@ -2635,7 +2684,7 @@ export class SqliteStore implements Store {
           );
         }
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
     });
   }
 
@@ -2687,7 +2736,7 @@ export class SqliteStore implements Store {
         );
         created = { id, name, origin, createdAtMs };
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
       return created!;
     });
   }
@@ -2722,7 +2771,7 @@ export class SqliteStore implements Store {
         ]);
         updated = labelRecordFromRow({ ...existing, name: trimmed });
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
       return updated!;
     });
   }
@@ -2736,7 +2785,7 @@ export class SqliteStore implements Store {
         "UPDATE labels SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
         [Date.now(), id],
       );
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
     });
   }
 
@@ -2772,7 +2821,7 @@ export class SqliteStore implements Store {
           ],
         );
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
     });
   }
 
@@ -2784,7 +2833,7 @@ export class SqliteStore implements Store {
         "DELETE FROM label_assignments WHERE label_id = ? AND session_id = ? AND COALESCE(task_seq, -1) = COALESCE(?, -1)",
         [labelId, target.sessionId, taskSeq],
       );
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
     });
   }
 
@@ -2807,7 +2856,7 @@ export class SqliteStore implements Store {
         if (applied) {
           const now = Date.now();
           // Three bound params per row (labelId, sessionId, now); 'session' and NULL are inlined.
-          for (const part of chunk(ids, Math.floor(MAX_BOUND_PARAMS / 3))) {
+          for (const part of chunk(ids, Math.floor(this.db.maxBoundParams / 3))) {
             const valuesSql = part.map(() => "(?, 'session', ?, NULL, 'user', ?)").join(", ");
             const params = part.flatMap((sessionId) => [labelId, sessionId, now]);
             // ON CONFLICT over label_assignments_unique makes re-applying a no-op that preserves the
@@ -2822,7 +2871,7 @@ export class SqliteStore implements Store {
           }
         } else {
           // One bound slot is taken by `labelId`, so leave room for it in each chunk of ids.
-          for (const part of chunk(ids, MAX_BOUND_PARAMS - 1)) {
+          for (const part of chunk(ids, this.db.maxBoundParams - 1)) {
             const placeholders = part.map(() => "?").join(", ");
             await run(
               this.db,
@@ -2832,7 +2881,7 @@ export class SqliteStore implements Store {
           }
         }
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
     });
   }
 
@@ -2876,7 +2925,7 @@ export class SqliteStore implements Store {
       const out = new Map<string, AppliedLabel[]>();
       const ids = [...new Set(sessionIds)];
       if (!ids.length) return out;
-      for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+      for (const part of chunk(ids, this.db.maxBoundParams)) {
         const placeholders = part.map(() => "?").join(", ");
         const rows = await all<
           LabelDbRow & {
@@ -2915,7 +2964,7 @@ export class SqliteStore implements Store {
       const ids = [...new Set(labelIds)];
       if (!ids.length) return out;
       if (mode === "any") {
-        for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+        for (const part of chunk(ids, this.db.maxBoundParams)) {
           const placeholders = part.map(() => "?").join(", ");
           const rows = await all<{ session_id: string }>(
             this.db,
@@ -4160,7 +4209,7 @@ export class SqliteStore implements Store {
           );
         }
       });
-      secureSqliteFiles(this.path);
+      secureSqliteFilesIfLocal(this.db, this.path);
       return keptFuller;
     });
   }
@@ -4170,7 +4219,7 @@ export class SqliteStore implements Store {
       const ids = [...new Set(sessionIds)];
       if (!ids.length) return;
       await transaction(this.db, async () => {
-        for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+        for (const part of chunk(ids, this.db.maxBoundParams)) {
           const placeholders = part.map(() => "?").join(", ");
           await run(
             this.db,
@@ -4201,7 +4250,7 @@ export class SqliteStore implements Store {
       const value = archived ? 1 : 0;
       await transaction(this.db, async () => {
         // One bound slot is taken by `value`, so leave room for it in each chunk of ids.
-        for (const part of chunk(ids, MAX_BOUND_PARAMS - 1)) {
+        for (const part of chunk(ids, this.db.maxBoundParams - 1)) {
           const placeholders = part.map(() => "?").join(", ");
           await run(
             this.db,
@@ -4220,7 +4269,7 @@ export class SqliteStore implements Store {
       const value = hidden ? 1 : 0;
       await transaction(this.db, async () => {
         // One bound slot is taken by `value`, so leave room for it in each chunk of ids.
-        for (const part of chunk(ids, MAX_BOUND_PARAMS - 1)) {
+        for (const part of chunk(ids, this.db.maxBoundParams - 1)) {
           const placeholders = part.map(() => "?").join(", ");
           await run(
             this.db,
@@ -4420,7 +4469,7 @@ export class SqliteStore implements Store {
     this.closePromise = this.queue
       .then(async () => {
         await closeDatabase(this.db);
-        secureSqliteFiles(this.path);
+        secureSqliteFilesIfLocal(this.db, this.path);
       })
       .catch((error) => {
         throw asStoreError(error, this.path, this.busyTimeoutMs);

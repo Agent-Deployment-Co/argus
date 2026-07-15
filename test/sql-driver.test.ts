@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunSqliteDriver, DoSqliteDriver } from "../src/store/sql-driver.ts";
-import { openStoreWithDriver } from "../src/store/store.ts";
+import { openStoreWithDriver, STORE_SCHEMA_VERSION } from "../src/store/store.ts";
 
 /** Naive multi-statement detector: strips a trailing `;`, splits on `;`, counts non-blank parts.
  *  Good enough for store.ts's actual SQL text (CREATE_SCHEMA_SQL's many `CREATE TABLE`/`CREATE INDEX`
@@ -57,6 +57,20 @@ afterEach(() => {
       rmSync(tmpDirs.pop()!, { recursive: true, force: true });
     } catch {}
   }
+});
+
+describe("driver capability flags (#281 Part B.2)", () => {
+  test("BunSqliteDriver: pragmas supported, bound-param limit tuned for sqlite3's ~999 default", () => {
+    const driver = new BunSqliteDriver(new Database(":memory:"));
+    expect(driver.supportsPragmas).toBe(true);
+    expect(driver.maxBoundParams).toBe(900);
+  });
+
+  test("DoSqliteDriver: no pragma support, bound-param limit under DO's real 100-per-query cap", () => {
+    const driver = new DoSqliteDriver(fakeDoSqlStorage(new Database(":memory:")), fakeDoTransactionCtx());
+    expect(driver.supportsPragmas).toBe(false);
+    expect(driver.maxBoundParams).toBeLessThan(100);
+  });
 });
 
 describe("BunSqliteDriver", () => {
@@ -129,6 +143,42 @@ describe("openStoreWithDriver (#281)", () => {
       const coverage = await store.getCoverage("claude");
       expect(coverage?.filesDigest).toBe("digest-1");
       expect(coverage?.sessionCount).toBe(3);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("stamps schema version into store_metadata instead of PRAGMA user_version (#281 Part B.2)", async () => {
+    const raw = new Database(":memory:");
+    const driver = new DoSqliteDriver(fakeDoSqlStorage(raw), fakeDoTransactionCtx());
+    const store = await openStoreWithDriver(driver, "do:test", { now: () => 1000 });
+    try {
+      const row = driver.get<{ value: string }>(
+        "SELECT value FROM store_metadata WHERE key = 'schema_version'",
+      );
+      expect(row?.value).toBe(String(STORE_SCHEMA_VERSION));
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("bulk writes chunk to the driver's own maxBoundParams, not bun:sqlite's larger limit", async () => {
+    const raw = new Database(":memory:");
+    let maxBindingsSeen = 0;
+    const inner = fakeDoSqlStorage(raw);
+    const spied = {
+      exec<T>(sql: string, ...bindings: unknown[]) {
+        maxBindingsSeen = Math.max(maxBindingsSeen, bindings.length);
+        return inner.exec<T>(sql, ...bindings);
+      },
+    };
+    const driver = new DoSqliteDriver(spied, fakeDoTransactionCtx());
+    const store = await openStoreWithDriver(driver, "do:test", { now: () => 1000 });
+    try {
+      const ids = Array.from({ length: 250 }, (_, i) => `session-${i}`);
+      await store.setSessionsHidden(ids, true);
+      expect(maxBindingsSeen).toBeLessThanOrEqual(driver.maxBoundParams);
+      expect(maxBindingsSeen).toBeLessThan(100); // DO's real per-query cap
     } finally {
       await store.close();
     }

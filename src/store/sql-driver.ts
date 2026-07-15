@@ -44,6 +44,19 @@ export interface SqlDriver {
   /** Run `operation` as one atomic unit, rolling back on throw. */
   transaction<T>(operation: () => Promise<T>): Promise<T>;
   close(): void;
+  /** Whether this engine accepts arbitrary `PRAGMA` statements (WAL/synchronous/foreign_keys/
+   *  application_id/user_version/quick_check, …). True for `bun:sqlite`. False for Cloudflare's DO
+   *  SQLite storage (#281 Part B.2) — its `exec()` only understands a small, fixed set of pragmas, and
+   *  the platform owns the file/WAL/checkpoint layer itself, so `store.ts`'s connection/init code must
+   *  skip all of that on this driver rather than sending pragmas DO doesn't support. */
+  readonly supportsPragmas: boolean;
+  /** Safe upper bound on `?` placeholders in one statement, used to size batched INSERT/IN-list
+   *  chunking (`store.ts`'s `insertRows` and the `chunk(ids, MAX_BOUND_PARAMS...)` call sites). Kept on
+   *  the driver (not a shared module constant) because the two engines' real limits differ by 10x —
+   *  sqlite3's compile-time default is 999, so `bun:sqlite` keeps `900` for headroom; Cloudflare's DO
+   *  SQL API caps bound parameters per query at exactly 100 (confirmed against
+   *  developers.cloudflare.com/durable-objects/platform/limits/), so `DoSqliteDriver` uses `90`. */
+  readonly maxBoundParams: number;
 }
 
 /** `bun:sqlite`, unchanged from before the seam existed: raw `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`
@@ -51,6 +64,9 @@ export interface SqlDriver {
  *  (`store.ts`'s `openDatabase`) owns the PRAGMAs, file permissions, and WAL/`-shm` cleanup — none of
  *  that belongs in this driver, which is purely the four query primitives plus transaction/close. */
 export class BunSqliteDriver implements SqlDriver {
+  readonly supportsPragmas = true;
+  readonly maxBoundParams = 900;
+
   constructor(private readonly db: Database) {}
 
   run(sql: string, params: unknown[] = []): void {
@@ -99,6 +115,9 @@ export class BunSqliteDriver implements SqlDriver {
  *  PRAGMAs, ownership stamping, `chmod`/symlink guards — see `openDatabase`/`prepareDatabaseFile`)
  *  never runs on this path — none of it is compiled into a Worker build in the first place. */
 export class DoSqliteDriver implements SqlDriver {
+  readonly supportsPragmas = false;
+  readonly maxBoundParams = 90;
+
   constructor(private readonly sql: DoSqlStorage, private readonly ctx: DoTransactionCtx) {}
 
   run(sql: string, params: unknown[] = []): void {
