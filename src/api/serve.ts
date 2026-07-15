@@ -743,23 +743,25 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
   // Apply / remove a session-level label across many sessions at once (bulk mode). Registered before
   // the single-id route below so the literal "bulk" segment isn't swallowed by that route's ":id" param.
-  app.post("/api/sessions/bulk/labels", async (c) => {
-    const blocked = rejectCrossSite(c);
-    if (blocked) return blocked;
-    if (!labels) return labelsUnavailable(c);
-    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
-    if (!Array.isArray(sessionIds)) return sessionIds;
-    const labelId = await readJsonStringField(c, "labelId");
-    if (typeof labelId !== "string") return labelId;
-    const applied = await readJsonBooleanField(c, "applied");
-    if (typeof applied !== "boolean") return applied;
-    try {
-      await labels.setForSessions(labelId, sessionIds, applied);
-      return c.json({ ok: true });
-    } catch (err) {
-      return labelErrorResponse(c, err);
-    }
-  });
+  if (!opts.demo) {
+    app.post("/api/sessions/bulk/labels", async (c) => {
+      const blocked = rejectCrossSite(c);
+      if (blocked) return blocked;
+      if (!labels) return labelsUnavailable(c);
+      const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+      if (!Array.isArray(sessionIds)) return sessionIds;
+      const labelId = await readJsonStringField(c, "labelId");
+      if (typeof labelId !== "string") return labelId;
+      const applied = await readJsonBooleanField(c, "applied");
+      if (typeof applied !== "boolean") return applied;
+      try {
+        await labels.setForSessions(labelId, sessionIds, applied);
+        return c.json({ ok: true });
+      } catch (err) {
+        return labelErrorResponse(c, err);
+      }
+    });
+  }
 
   // Apply / remove a label on a session. The applier is a person using the web app, so applied_by is
   // "user" — combined with a system-origin label, that's the "user-applied system label" case.

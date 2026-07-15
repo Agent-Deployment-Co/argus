@@ -1,0 +1,45 @@
+# Read-only public demo (#281) — Cloudflare Worker + Durable Object SQLite. Not wired to a real
+# Cloudflare account yet (no account was available while building this); `custom_domain`/routes and
+# the deployed name are placeholders until that's set up. `wrangler dev --local` (Miniflare) is the
+# only environment this has actually been run against so far.
+name = "argus-demo"
+main = "src/worker/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# store.ts imports `bun:sqlite` unconditionally for the CLI's BunSqliteDriver/error-mapping path,
+# which the Worker never exercises (it only ever opens a DoSqliteDriver) but which esbuild still needs
+# to resolve at bundle time — there is no Workers equivalent to alias it to for real, so this points at
+# a throwing stub (src/worker/stubs/bun-sqlite-stub.ts). See that file's header for the full reasoning.
+[alias]
+"bun:sqlite" = "./src/worker/stubs/bun-sqlite-stub.ts"
+
+[[durable_objects.bindings]]
+name = "DEMO_STORE"
+class_name = "ArgusDemoStore"
+
+# Edge rate limiting on the Worker's own fetch handler (#281 Part 7 — the demo is anonymous/public,
+# so a per-IP cap protects the shared DO instance from being hammered). Cloudflare's Rate Limiting
+# binding isn't in the stable [ratelimiting] table shape yet; `unsafe.bindings` is the documented way
+# to declare it until it graduates. 60 requests / 60s per client IP, applied only to /api/* in
+# src/worker/index.ts (not /healthz or the token-guarded /admin/seed).
+[[unsafe.bindings]]
+name = "API_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1"
+simple = { limit = 60, period = 60 }
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ArgusDemoStore"]
+
+[assets]
+directory = "./dist/web"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/healthz", "/admin/seed"]
+
+# SEED_TOKEN (the /admin/seed bearer token the nightly Action authenticates with — #281 Part B.3) is
+# a real secret, never a [vars] entry here: `wrangler secret put SEED_TOKEN` sets it out of band. Local
+# `wrangler dev --local` reads it from a gitignored `.dev.vars` file instead (same convention as any
+# other Workers secret) — see .dev.vars.example.
