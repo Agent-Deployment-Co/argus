@@ -131,6 +131,9 @@ export interface ArgusConfig {
    *  transcripts from disk (#120). Stored text is local-only — never uploaded by `sync`. On by
    *  default; set to false to keep session text out of `argus.db` entirely. */
   retainText?: boolean;
+  /** Read-only demo mode (#281): `serve` mounts only the read routes and the SPA hides edit
+   *  affordances. A deployment switch, not a user preference — off by default. */
+  demoMode?: boolean;
   /** App-persisted state: things Argus itself records about what's already happened (a completion
    *  marker, a dismissed prompt), as opposed to a user-editable preference. Never shown in the
    *  settings surface — there's no `ui` on these, so they never land in `EDITABLE`/`LAYOUT`. */
@@ -425,6 +428,19 @@ const RETENTION_SETTINGS = {
     env: "ARGUS_RETAIN_TEXT",
     flag: "retain-text",
     default: true,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+};
+
+/** Read-only "demo mode" (#281): mounts only the read routes in `createApp` and tells the SPA to
+ *  hide edit affordances. No `ui` — it's a deployment switch (`argus serve --demo`, the hosted
+ *  Cloudflare demo), not something to flip from the Settings screen. */
+const DEMO_SETTINGS = {
+  enabled: {
+    path: "demoMode",
+    env: "ARGUS_DEMO",
+    flag: "demo",
+    default: false,
     parse: parseBool,
   } satisfies Setting<boolean>,
 };
@@ -1145,6 +1161,15 @@ export function resolveRetainText(
   file: ArgusConfig = loadConfig(),
 ): boolean {
   return resolveSetting(RETENTION_SETTINGS.retainText, flags, file);
+}
+
+/** Whether `serve` should run in read-only demo mode (#281): `--demo` flag > `ARGUS_DEMO` env >
+ *  `argus.json` `demoMode` > default off. */
+export function resolveDemoMode(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(DEMO_SETTINGS.enabled, flags, file);
 }
 
 // Resolving the Hub connection needs the secret store (the Hub key lives in the OS keychain, like the

@@ -103,7 +103,63 @@ describe("serve API", () => {
     const app = createApp(null);
     const res = await app.request("/healthz");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, demo: false });
+  });
+
+  test("GET /healthz reports demo mode when the server is in read-only demo mode (#281)", async () => {
+    const app = createApp(null, { demo: true });
+    const res = await app.request("/healthz");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, demo: true });
+  });
+
+  test("demo mode drops write and settings/debug routes entirely (404, not 503) (#281)", async () => {
+    const app = createApp(null, {
+      demo: true,
+      views: {} as never,
+      reindex: async () => ({ ok: true, tasks: [] }) as never,
+      setSessionHidden: async () => {},
+      setSessionsHidden: async () => {},
+      labels: {
+        list: async () => [],
+        readForSession: async () => ({ session: [], tasks: {} }) as never,
+        readForSessions: async () => new Map(),
+        create: async () => ({}) as never,
+        rename: async () => ({}) as never,
+        remove: async () => {},
+        assign: async () => {},
+        unassign: async () => {},
+        setForSessions: async () => {},
+      } as never,
+      debugInfo: async () => ({}) as never,
+    });
+
+    // POST/PUT to a dropped route has no SPA catch-all to fall back to, so Hono's own 404 shows
+    // through directly.
+    for (const req of [
+      { method: "POST", path: "/api/sessions/s1/hidden" },
+      { method: "POST", path: "/api/sessions/bulk/hidden" },
+      { method: "POST", path: "/api/sessions/s1/reindex" },
+      { method: "POST", path: "/api/labels" },
+      { method: "POST", path: "/api/sessions/s1/labels" },
+      { method: "PUT", path: "/api/onboarding" },
+    ]) {
+      const res = await app.request(req.path, { method: req.method });
+      expect(res.status).toBe(404);
+    }
+
+    // A dropped GET route falls through to the SPA catch-all (matching real browser navigation), so
+    // it answers 200 with the placeholder page rather than the JSON payload — confirm it's not JSON.
+    for (const path of ["/api/debug", "/api/settings", "/api/settings/secrets/hubKey"]) {
+      const res = await app.request(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    }
+
+    // Reads stay mounted: the label list/read routes are open even in demo mode.
+    const labelsRes = await app.request("/api/labels");
+    expect(labelsRes.status).toBe(200);
+    expect(labelsRes.headers.get("content-type")).toMatch(/application\/json/);
   });
 
   test("view endpoints return the reader payload and pass filters through", async () => {

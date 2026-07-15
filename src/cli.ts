@@ -27,6 +27,7 @@ import { CliUsageError, syncOptions, toSource } from "./cli-options.ts";
 import {
   loadConfig,
   managedSettingValue,
+  resolveDemoMode,
   resolveLogLevel,
   resolveSessionInterpretation,
   getPath,
@@ -48,6 +49,7 @@ const DEFAULT_SYNC_INTERVAL_MIN = 5;
 interface ServeOptions {
   port: number;
   open: boolean;
+  demo: boolean;
 }
 
 function configureLog(args: Record<string, unknown> = {}): void {
@@ -260,6 +262,7 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
       // Per-session reindex (POST /api/sessions/:id/reindex) honors the argus.json task-extraction
       // setting (flag > env > argus.json > default), resolved here from config rather than a CLI flag.
       taskExtraction: taskExtractionOptions({}),
+      demo: opts.demo,
     },
     log,
   );
@@ -637,12 +640,18 @@ const serve = defineCommand({
       default: false,
       description: "Open the dashboard in your browser once it's ready (macOS)",
     },
+    demo: {
+      type: "string",
+      description: "Read-only demo mode: only read routes are mounted and edit affordances are hidden (true/false; env ARGUS_DEMO)",
+      valueHint: "true|false",
+    },
   },
   run: handler((args) =>
     runServe(
       {
         port: Number(args.port) || DEFAULT_PORT,
         open: args.open,
+        demo: resolveDemoMode({ demo: toBoolOverride(args.demo, "demo") }, loadConfig()),
       },
       log,
     ),
