@@ -9,6 +9,8 @@
 #                arch-specific binary, and lipo them into argus-universal-apple-darwin.
 #                All three are required for `tauri build --target universal-apple-darwin`.
 #                Implies --build.
+#   --target <triple>  Compile and stage a sidecar for the given Rust target.
+#                      Supports x86_64-pc-windows-msvc and aarch64-pc-windows-msvc.
 #
 # Without --universal the host triple is used (local dev default).
 set -euo pipefail
@@ -18,12 +20,32 @@ cd "$root"
 
 build=false
 universal=false
-for arg in "$@"; do
-  case "$arg" in
-    --build)     build=true ;;
-    --universal) universal=true; build=true ;;
+target=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --build)     build=true; shift ;;
+    --universal) universal=true; build=true; shift ;;
+    --target)
+      target="${2:-}"
+      build=true
+      shift 2
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      exit 1
+      ;;
   esac
 done
+
+if [ -n "$target" ] && [ "$target" != "x86_64-pc-windows-msvc" ] && [ "$target" != "aarch64-pc-windows-msvc" ]; then
+  echo "unsupported desktop sidecar target: $target" >&2
+  exit 1
+fi
+
+if $universal && [ -n "$target" ]; then
+  echo "--universal and --target cannot be used together" >&2
+  exit 1
+fi
 
 mkdir -p desktop/src-tauri/binaries
 
@@ -41,27 +63,52 @@ if $universal; then
   echo "Staged sidecars -> desktop/src-tauri/binaries/argus-{aarch64,x86_64,universal}-apple-darwin"
 else
   if $build; then
-    bun run build:compile
+    if [ -n "$target" ]; then
+      bun run build:web
+    else
+      bun run build:compile
+    fi
   fi
 
   binsrc="dist/argus"
-  [ -f "dist/argus.exe" ] && binsrc="dist/argus.exe"
+  if [ -n "$target" ]; then
+    case "$target" in
+      x86_64-pc-windows-msvc)
+        bun_target="bun-windows-x64"
+        binsrc="desktop/src-tauri/binaries/argus-${target}.exe"
+        ;;
+      aarch64-pc-windows-msvc)
+        bun_target="bun-windows-arm64"
+        binsrc="desktop/src-tauri/binaries/argus-${target}.exe"
+        ;;
+    esac
+    echo "Cross-compiling sidecar for ${target}…"
+    bun build --compile --target="$bun_target" src/cli.ts --outfile "$binsrc"
+  fi
+
+  if [ -z "$target" ] && [ -f "dist/argus.exe" ]; then
+    binsrc="dist/argus.exe"
+  fi
   if [ ! -f "$binsrc" ]; then
     echo "$binsrc not found — run 'bun run build:compile' first (or pass --build)." >&2
     exit 1
   fi
 
-  triple="$(rustc -vV | sed -n 's/host: //p')"
-  if [ -z "$triple" ]; then
-    echo "could not determine the Rust host target triple (is rustc installed?)." >&2
-    exit 1
+  if [ -z "$target" ]; then
+    triple="$(rustc -vV | sed -n 's/host: //p')"
+    if [ -z "$triple" ]; then
+      echo "could not determine the Rust host target triple (is rustc installed?)." >&2
+      exit 1
+    fi
+
+    ext=""
+    case "$triple" in *windows*) ext=".exe" ;; esac
+
+    cp "$binsrc" "desktop/src-tauri/binaries/argus-${triple}${ext}"
+    echo "Staged sidecar -> desktop/src-tauri/binaries/argus-${triple}${ext}"
+  else
+    echo "Staged sidecar -> $binsrc"
   fi
-
-  ext=""
-  case "$triple" in *windows*) ext=".exe" ;; esac
-
-  cp "$binsrc" "desktop/src-tauri/binaries/argus-${triple}${ext}"
-  echo "Staged sidecar -> desktop/src-tauri/binaries/argus-${triple}${ext}"
 fi
 
 rm -rf desktop/src-tauri/web

@@ -3,7 +3,13 @@ name: Release
 # Builds and (when the signing secrets are configured) signs the distributable artifacts:
 #   - npm: per-OS prebuilt binaries published under @agentdeploymentco/argus*
 #   - macOS: a signed + notarized Argus.app / .dmg
-#   - Windows: an Authenticode-signed .msi / .exe
+#   - Windows: NSIS installers (.exe) for x64 and ARM64 (Authenticode signing not wired up yet)
+#
+# Two modes, decided by what triggered the run:
+#   - Tag push: build everything, upload to a DRAFT GitHub Release, and publish it only after
+#     every platform leg has succeeded (the publish-release job below).
+#   - workflow_dispatch (any branch): build-only dry run — no tag, no release; the bundles are
+#     uploaded as workflow artifacts so they can be downloaded and tested on real machines.
 # All signing is gated on secrets being present, so this workflow runs end-to-end (producing
 # UNSIGNED artifacts) before any certificate exists, and starts signing the moment the secrets are
 # added. No secret value ever lives in this file — only references to `secrets.*`.
@@ -14,7 +20,8 @@ name: Release
 #   APPLE_CERTIFICATE_PASSWORD             its export password
 #   APPLE_SIGNING_IDENTITY                 e.g. "Developer ID Application: … (TEAMID)"
 #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
-#   WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD   Authenticode signing cert (base64 + pwd)
+#   WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD   Authenticode signing cert (base64 + pwd;
+#                                            reserved — the Windows jobs don't sign yet)
 #   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #                                            updater signing key (separate from OS certs)
 
@@ -28,15 +35,36 @@ permissions:
   contents: write # create the GitHub Release and upload assets
 
 jobs:
-  build-macos:
+  build-desktop:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # for Universal macOS builds (arm64 and x86_64)
-          - platform: "macos-latest"
+          # Universal macOS build (arm64 + x86_64)
+          - name: macOS universal
+            slug: macos-universal
+            platform: "macos-latest"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            stage-args: "--universal"
             args: "--target universal-apple-darwin"
-    runs-on: macos-latest
+          # Windows x64, built natively on the x64 runner.
+          - name: Windows x64
+            slug: windows-x64
+            platform: "windows-latest"
+            rust-targets: ""
+            stage-args: "--build"
+            args: "--bundles nsis"
+          # Windows ARM64, cross-compiled on the x64 runner: the runner's MSVC toolchain
+          # ships the ARM64 build tools, and the sidecar cross-compiles via
+          # `bun build --compile --target=bun-windows-arm64` (stage-desktop-sidecar.sh --target).
+          - name: Windows ARM64
+            slug: windows-arm64
+            platform: "windows-latest"
+            rust-targets: "aarch64-pc-windows-msvc"
+            stage-args: "--target aarch64-pc-windows-msvc"
+            args: "--target aarch64-pc-windows-msvc --bundles nsis"
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
     env:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -48,19 +76,24 @@ jobs:
           bun-version: latest
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # Extra targets beyond the host: both macOS arches for the universal build,
+          # aarch64-pc-windows-msvc for the Windows ARM64 cross-build.
+          targets: ${{ matrix.rust-targets }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+          # Keep the two windows-latest legs (host x64 vs ARM64 cross) from sharing a cache.
+          key: ${{ matrix.rust-targets || 'host' }}
       - run: bun install --frozen-lockfile
-      # Cross-compile the CLI for both macOS arches and stage them (+ the web app) for Tauri.
-      # --universal produces argus-aarch64-apple-darwin and argus-x86_64-apple-darwin, both
-      # required when Tauri builds a universal-apple-darwin bundle.
+      # Compile the CLI sidecar(s) and stage them (+ the web app) for Tauri:
+      #   --universal                       both macOS arches + a lipo'd universal binary
+      #   --build                           the host triple (Windows x64 leg)
+      #   --target aarch64-pc-windows-msvc  cross-compiled Windows ARM64 sidecar
       - name: Stage sidecar + web
-        run: bash scripts/stage-desktop-sidecar.sh --universal
+        run: bash scripts/stage-desktop-sidecar.sh ${{ matrix.stage-args }}
 
       - name: import Apple Developer Certificate
+        if: runner.os == 'macOS'
         # Prevents keychain from locking automatically for 3600 seconds.
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -77,6 +110,7 @@ jobs:
           security find-identity -v -p codesigning build.keychain
 
       - name: verify certificate
+        if: runner.os == 'macOS'
         run: |
           CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application")
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
@@ -99,27 +133,84 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: argus-v__VERSION__
-          releaseName: Argus v__VERSION__
-          releaseDraft: false
+          # An empty tagName makes tauri-action build without touching releases at all —
+          # that's the workflow_dispatch dry-run mode. On tag pushes the release is created
+          # as a draft and published by the publish-release job once every leg succeeds.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && 'argus-v__VERSION__' || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && 'Argus v__VERSION__' || '' }}
+          releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
           projectPath: desktop
-          tauriScript: ${{ github.workspace }}/node_modules/.bin/tauri
+          # bun's Windows bin shims aren't directly spawnable by path; bunx resolves the
+          # locally installed @tauri-apps/cli either way.
+          tauriScript: ${{ runner.os == 'Windows' && 'bunx tauri' || format('{0}/node_modules/.bin/tauri', github.workspace) }}
           includeUpdaterJson: true
           args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
 
       - name: Verify updater artifacts
         if: ${{ env.TAURI_UPDATER_ARGS != '' }}
+        shell: bash
         run: |
           set -euo pipefail
-          archive_count="$(find desktop/src-tauri/target -path '*/bundle/macos/*.app.tar.gz' -type f | wc -l | tr -d '[:space:]')"
-          signature_count="$(find desktop/src-tauri/target -path '*/bundle/macos/*.app.tar.gz.sig' -type f | wc -l | tr -d '[:space:]')"
+          # macOS updater artifacts are the .app archive + .sig; on Windows (NSIS with
+          # createUpdaterArtifacts) they're the -setup.exe installer + .sig.
+          case "$RUNNER_OS" in
+            macOS)   pattern='*/bundle/macos/*.app.tar.gz' ;;
+            Windows) pattern='*/bundle/nsis/*-setup.exe' ;;
+            *)       echo "Unexpected runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          archive_count="$(find desktop/src-tauri/target -path "$pattern" -type f | wc -l | tr -d '[:space:]')"
+          signature_count="$(find desktop/src-tauri/target -path "${pattern}.sig" -type f | wc -l | tr -d '[:space:]')"
           if [ "$archive_count" -eq 0 ]; then
-            echo "No macOS updater archive (*.app.tar.gz) was produced." >&2
+            echo "No updater archive ($pattern) was produced." >&2
             exit 1
           fi
           if [ "$signature_count" -eq 0 ]; then
-            echo "No macOS updater signature (*.app.tar.gz.sig) was produced." >&2
+            echo "No updater signature (${pattern}.sig) was produced." >&2
             exit 1
           fi
+
+      # Dry-run mode only: expose the bundles on the workflow run so they can be
+      # downloaded and installed on real machines before any tag exists.
+      - name: Upload bundles as workflow artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-${{ matrix.slug }}
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/**/bundle/macos/*.app.tar.gz*
+            desktop/src-tauri/target/**/bundle/dmg/*.dmg
+            desktop/src-tauri/target/**/bundle/nsis/*-setup.exe*
+
+  # Tag pushes create the release as a draft; flip it public only when every platform leg
+  # succeeded, so a failed leg can never leave a half-populated public release (and the
+  # updater's `releases/latest/download/latest.json` endpoint never resolves to one).
+  publish-release:
+    needs: build-desktop
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Publish the draft release
+        run: |
+          set -euo pipefail
+          # tauri-action names the release tag from the app version, independent of the
+          # pushed ref, so derive it the same way instead of trusting github.ref_name.
+          version="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          tag="argus-v${version}"
+          if [ "$HAS_UPDATER_KEY" = "true" ]; then
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+                --jq '.assets[].name' | grep -qx 'latest.json'; then
+              echo "The draft release $tag has no latest.json updater manifest." >&2
+              exit 1
+            fi
+          fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "Published release $tag"

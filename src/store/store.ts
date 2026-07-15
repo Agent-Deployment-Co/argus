@@ -946,7 +946,8 @@ function prepareDatabaseFile(path: string): void {
       );
     }
   } else {
-    const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+    const noFollow =
+      process.platform !== "win32" && "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
     const descriptor = openSync(
       path,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,

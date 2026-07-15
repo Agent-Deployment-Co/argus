@@ -28,6 +28,7 @@ interface Target {
 const ALL_TARGETS: Target[] = [
   { os: "darwin", cpu: "arm64", bunTarget: "bun-darwin-arm64", exe: "argus" },
   { os: "darwin", cpu: "x64", bunTarget: "bun-darwin-x64", exe: "argus" },
+  { os: "win32", cpu: "arm64", bunTarget: "bun-windows-arm64", exe: "argus.exe" },
   { os: "win32", cpu: "x64", bunTarget: "bun-windows-x64", exe: "argus.exe" },
 ];
 
