@@ -10,6 +10,7 @@ import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSes
 import type { LabelRecord } from "../types";
 import { LabelPopover, type TriState } from "../components/LabelBar";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
+import { useDemoMode } from "../lib/demo";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
 import type { SessionListItem, SessionSort } from "../types";
@@ -372,6 +373,10 @@ function NoSessionsSelected() {
  *  clear the selection, and the bulk actions themselves (labels, hide) — mirrors `SessionsEmpty`'s
  *  pane-swap pattern as a third detail-pane state. */
 function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
+  // Demo mode (#281): label/hide writes are dropped entirely on the server, so the bulk actions
+  // (which only exist to drive those writes) are hidden — selecting sessions still works, there's
+  // just nothing to do with the selection.
+  const demo = useDemoMode();
   const ids = useMemo(() => [...selection.ids], [selection.ids]);
   const catalog = useLabelsQuery();
   const sessionsLabels = useSessionsLabelsQuery(ids);
@@ -417,38 +422,40 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
         </button>
       </div>
 
-      <div className="bulk-overlay-section">
-        <h3 className="bulk-overlay-heading">Actions</h3>
-        <div className="bulk-actions-row">
-          <BulkLabelButton
-            labels={catalog.data ?? []}
-            loading={catalog.isPending}
-            stateFor={stateFor}
-            busy={setForSessions.isPending || create.isPending}
-            error={
-              [create.error, setForSessions.error, rename.error, remove.error].find(
-                (e): e is Error => e instanceof Error,
-              )?.message ?? null
-            }
-            onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
-            onCreate={async (name) => {
-              const res = await create.mutateAsync(name);
-              setLabel(res.label.id, true);
-            }}
-            onRename={(id, name) => rename.mutate({ id, name })}
-            onDelete={(id) => remove.mutate(id)}
-          />
-          <button type="button" className="bulk-action-neutral" onClick={() => hide.mutate()} disabled={hide.isPending}>
-            <EyeOff size={14} strokeWidth={1.75} aria-hidden />
-            <span>Hide {ids.length} sessions</span>
-          </button>
+      {!demo && (
+        <div className="bulk-overlay-section">
+          <h3 className="bulk-overlay-heading">Actions</h3>
+          <div className="bulk-actions-row">
+            <BulkLabelButton
+              labels={catalog.data ?? []}
+              loading={catalog.isPending}
+              stateFor={stateFor}
+              busy={setForSessions.isPending || create.isPending}
+              error={
+                [create.error, setForSessions.error, rename.error, remove.error].find(
+                  (e): e is Error => e instanceof Error,
+                )?.message ?? null
+              }
+              onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
+              onCreate={async (name) => {
+                const res = await create.mutateAsync(name);
+                setLabel(res.label.id, true);
+              }}
+              onRename={(id, name) => rename.mutate({ id, name })}
+              onDelete={(id) => remove.mutate(id)}
+            />
+            <button type="button" className="bulk-action-neutral" onClick={() => hide.mutate()} disabled={hide.isPending}>
+              <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+              <span>Hide {ids.length} sessions</span>
+            </button>
+          </div>
+          {hide.isError && (
+            <p className="label-popover-error" role="alert">
+              {hide.error instanceof Error ? hide.error.message : "Failed to hide sessions."}
+            </p>
+          )}
         </div>
-        {hide.isError && (
-          <p className="label-popover-error" role="alert">
-            {hide.error instanceof Error ? hide.error.message : "Failed to hide sessions."}
-          </p>
-        )}
-      </div>
+      )}
     </div>
   );
 }

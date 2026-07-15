@@ -10,6 +10,7 @@ import {
   migrateTaskExtractionToSessionInterpretation,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
+  resolveDemoMode,
   resolveDesktopStartAtLogin,
   resolveLogLevel,
   resolveRetainText,
@@ -38,6 +39,7 @@ const CONFIG_ENV = [
   "ARGUS_TASK_COMMAND",
   "ARGUS_RETAIN_TEXT",
   "ARGUS_LOG_LEVEL",
+  "ARGUS_DEMO",
 ];
 
 afterEach(() => {
@@ -431,6 +433,31 @@ describe("resolveRetainText", () => {
   test("empty env value falls through to the default", () => {
     process.env.ARGUS_RETAIN_TEXT = "";
     expect(resolveRetainText({}, {})).toBe(true);
+  });
+});
+
+describe("resolveDemoMode (#281)", () => {
+  test("defaults to off", () => {
+    expect(resolveDemoMode({}, {})).toBe(false);
+  });
+
+  test("argus.json can turn it on", () => {
+    expect(resolveDemoMode({}, { demoMode: true })).toBe(true);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_DEMO = "true";
+    expect(resolveDemoMode({}, { demoMode: false })).toBe(true);
+  });
+
+  test("flag overrides env and file", () => {
+    process.env.ARGUS_DEMO = "true";
+    expect(resolveDemoMode({ demo: false }, { demoMode: true })).toBe(false);
+  });
+
+  test("empty env value falls through to the default", () => {
+    process.env.ARGUS_DEMO = "";
+    expect(resolveDemoMode({}, {})).toBe(false);
   });
 });
 
