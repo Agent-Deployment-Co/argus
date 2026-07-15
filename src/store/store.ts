@@ -4238,6 +4238,30 @@ export class SqliteStore implements Store {
             `DELETE FROM label_assignments WHERE session_id IN (${placeholders})`,
             part,
           );
+          // The three FTS5 tables aren't FK-linked either (plain virtual tables, never auto-synced by
+          // SQLite) — without this, a retracted session's prose stays permanently searchable via
+          // /api/sessions's full-text search even though the session itself is gone. Same
+          // `session_id = ?`-predicated DELETE already used elsewhere against these tables (e.g. the
+          // wholesale-replace path in writeSessionTasks above) — FTS5 supports it for a plain,
+          // non-external-content table like these. Keep this list in sync with
+          // `src/worker/argus-demo-store.ts`'s `SESSION_SCOPED_TABLES` (a full unconditional wipe for
+          // the demo's nightly reseed, rather than this method's id-scoped delete) if a new
+          // session-scoped table is ever added.
+          await run(
+            this.db,
+            `DELETE FROM resolved_sessions_fts WHERE session_id IN (${placeholders})`,
+            part,
+          );
+          await run(
+            this.db,
+            `DELETE FROM resolved_tasks_fts WHERE session_id IN (${placeholders})`,
+            part,
+          );
+          await run(
+            this.db,
+            `DELETE FROM resolved_interaction_text_fts WHERE session_id IN (${placeholders})`,
+            part,
+          );
         }
       });
     });

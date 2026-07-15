@@ -32,7 +32,9 @@ export interface DemoEnv {
  *  statement ever sent: DO SQLite reports `foreign_keys = 1` from a fresh connection and rejects
  *  attempts to change it, unlike bun:sqlite/plain SQLite's OFF-by-default. The three FTS tables below
  *  are plain (non-external-content) virtual tables the app writes to explicitly alongside their
- *  source row — SQLite doesn't sync them automatically, so cascade never reaches them. */
+ *  source row — SQLite doesn't sync them automatically, so cascade never reaches them. Keep this list
+ *  in sync with `store.ts`'s `retractSessions` (an id-scoped delete for the CLI, rather than this
+ *  unconditional full-table wipe) if a new session-scoped table is ever added. */
 const SESSION_SCOPED_TABLES = [
   "resolved_sessions",
   "session_ownership",
