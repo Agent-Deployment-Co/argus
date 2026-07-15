@@ -465,13 +465,9 @@ async fn wait_for_proxy_ready(app: &AppHandle) -> bool {
 /// (`state.onboardingCompleted` in `argus.json`). Tolerant: a missing/malformed config reads as
 /// "not completed", so a fresh install shows the welcome overlay.
 ///
-/// The onboarding flow is macOS-only for now: Windows never reads or writes
-/// `state.onboardingCompleted`, so this always reads as "completed" there, which means
-/// `open_dashboard` never appends `?firstRun=1` and `maybe_open_on_first_run` never auto-opens.
+/// A missing or malformed value means onboarding is incomplete, so a fresh install opens the
+/// welcome overlay. The web app writes this marker through `/api/onboarding` after it opens.
 fn onboarding_completed() -> bool {
-    if !cfg!(target_os = "macos") {
-        return true;
-    }
     read_argus_config_json()
         .and_then(|json| {
             json_bool_setting(json.get("state").and_then(|v| v.get("onboardingCompleted")))
