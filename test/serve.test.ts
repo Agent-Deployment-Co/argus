@@ -163,6 +163,39 @@ describe("serve API", () => {
     expect(labelsRes.headers.get("content-type")).toMatch(/application\/json/);
   });
 
+  // A structural backstop for the enumerated test above (#281): that test only checks the specific
+  // paths it names, so a new write route added to createApp without an `if (!opts.demo)` wrapper would
+  // ship silently unless someone also remembers to add it to that list — exactly how
+  // `/api/sessions/bulk/labels` shipped ungated in an earlier commit on this branch. This test instead
+  // introspects Hono's own route table (`app.routes`) for every mutating-method route (anything but
+  // GET) and fails if one exists in the demo build that isn't the one documented exception below — no
+  // enumeration to keep in sync as new routes are added.
+  test("every mutating-method route is dropped in demo mode, except the documented bulk-lookup read (#281)", () => {
+    // POST rather than GET only because its id list can be large — a read, not a write (see its own
+    // comment in serve.ts). The only mutating-method route deliberately left mounted in demo mode.
+    const ALLOWED_IN_DEMO = new Set(["POST /api/sessions/bulk/labels-lookup"]);
+
+    const full = createApp(null, { demo: false });
+    const demo = createApp(null, { demo: true });
+    const mutatingRoutes = (app: typeof full) =>
+      new Set(
+        app.routes
+          .filter((r) => r.method !== "GET" && r.method !== "ALL")
+          .map((r) => `${r.method} ${r.path}`),
+      );
+
+    const fullRoutes = mutatingRoutes(full);
+    const demoRoutes = mutatingRoutes(demo);
+
+    // Sanity check: the full (non-demo) build actually has write routes to test against, so this test
+    // can't pass vacuously if createApp's route table changes shape entirely.
+    expect(fullRoutes.size).toBeGreaterThan(ALLOWED_IN_DEMO.size);
+
+    for (const route of demoRoutes) {
+      expect(ALLOWED_IN_DEMO.has(route)).toBe(true);
+    }
+  });
+
   test("view endpoints return the reader payload and pass filters through", async () => {
     let seen: SnapshotFilters | undefined;
     const app = createApp(null, { views: makeViews((f) => { seen = f; }) });
