@@ -10,7 +10,7 @@ import {
 import type { TranscriptSource } from "../types.ts";
 import type { ParserDiagnostic } from "./store-contract.ts";
 import type { AgentSource, ParseResult } from "../types.ts";
-import type { ResolvedTaskExtraction } from "../config.ts";
+import type { ResolvedSessionInterpretation } from "../config.ts";
 
 /** Filters applied to the materialized read model at read time (SQL pushdown). */
 export interface SessionQuery {
@@ -31,7 +31,7 @@ export interface SessionStoreOptions {
   /** Override the store path. */
   storePath?: string;
   /** Opt-in index-time task extraction (#91). Used by index(); off/unset → no extraction. */
-  taskExtraction?: ResolvedTaskExtraction;
+  taskExtraction?: ResolvedSessionInterpretation;
   /** Keep prompt/response text in the local store (#120). Default-on; unset → retained. Local-only. */
   retainText?: boolean;
   /** Optional progress sink for long-running work (task extraction), wired to the command's logger. */

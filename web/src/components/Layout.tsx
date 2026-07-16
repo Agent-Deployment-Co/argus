@@ -1,6 +1,6 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useIsFetching } from "@tanstack/react-query";
-import { Activity, Folder, HeartPulse, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Folder, HeartPulse, Inbox, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
 import { VIEW_QUERY_KEY } from "../lib/views";
@@ -49,7 +49,7 @@ function readCollapsed(): boolean {
 // carry friction data (native Claude transcripts), so it needs no cross-cutting pre-fetch here.
 const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/", label: "Activity", icon: Activity },
-  { to: "/sessions", label: "Sessions", icon: MessagesSquare },
+  { to: "/sessions", label: "Sessions", icon: Inbox },
   { to: "/projects", label: "Projects", icon: Folder },
   { to: "/tools", label: "Tools", icon: Wrench },
   { to: "/health", label: "Health", icon: HeartPulse },
@@ -59,6 +59,9 @@ export function Layout() {
   // The settings surface (incl. the Debug tab) takes over the whole view and reads its own data, so
   // it bypasses the snapshot gate (and we skip the snapshot fetch while it's open).
   const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
+  // /sessions has its own search-first toolbar, not the shared date/source FilterBar — it still
+  // gets the rail + app shell, just no FilterBar in .content.
+  const isSessions = useRouterState({ select: (s) => s.location.pathname.startsWith("/sessions") });
   // Remember the last screen the user was actually on (not a settings sub-route) so "Back to app"
   // closes settings and returns there — including when they navigated between settings categories or
   // deep-linked straight into /settings. We keep the pathname + its validated search so "Back to app"
@@ -139,7 +142,7 @@ export function Layout() {
         </div>
       </aside>
       <div className="content">
-        <FilterBar refreshing={fetching} />
+        {!isSessions && <FilterBar refreshing={fetching} />}
         <main>
           <Outlet />
         </main>

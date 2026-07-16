@@ -20,11 +20,13 @@ characteristics.
 Every setting resolves through one uniform chain:
 
 ```
-CLI flag  >  env var  >  argus.json  >  built-in default
+managed (MDM)  >  CLI flag  >  env var  >  argus.json  >  built-in default
 ```
 
 Each layer is consulted in order; the first one that's *present* wins. An exported-but-empty value
-(e.g. `ARGUS_TASK_PROVIDER=""`) counts as **absent** and falls through to the next layer.
+(e.g. `ARGUS_TASK_PROVIDER=""`) counts as **absent** and falls through to the next layer. The managed
+layer is the settings file an organization delivers through device management (see
+[Managed settings](#managed-settings-mdm) below); on unmanaged machines it is simply absent.
 
 The three layers don't share a spelling — flags are kebab-case, env vars `SCREAMING_SNAKE`, and
 `argus.json` keys camelCase — and the names aren't mechanical transforms of each other (the enable
@@ -58,10 +60,15 @@ note and the running level stays at the env value.
 }
 ```
 
-### Desktop updates
+### Desktop app
 
-The desktop tray app checks for signed updates on an interval. Automatic installs are enabled by
-default; set `autoUpdate.enabled` to `false` to leave available updates waiting behind the tray
+Start-at-login is temporarily disabled: the desktop tray app does not register itself to open when
+you sign in, and there is no setting to turn it on. It stays off until the app is signed with an
+organization Developer ID certificate (a personal certificate makes the OS attribute the login item
+to an individual's name rather than the org's).
+
+The desktop tray app checks for signed updates on an interval. Automatic installs are enabled
+by default; set `autoUpdate.enabled` to `false` to leave available updates waiting behind the tray
 menu's `Install Update` item.
 
 | Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
@@ -75,6 +82,23 @@ menu's `Install Update` item.
     "enabled": false,
     "checkIntervalMinutes": 60
   }
+}
+```
+
+The desktop tray app can also run in silent mode: the tray icon is hidden, no notifications are
+shown, and no browser tab opens on a fresh install. Everything else keeps working in the
+background, including indexing, the local dashboard, and update installs. Silent mode is set only
+through the config file or `argus config set desktop.silent true`; it never appears in the web
+Settings surface. Changing it takes effect immediately, so the tray icon hides or returns without
+a restart.
+
+| Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
+|---|---|---|---|
+| silent mode (run the desktop app invisibly) | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | — |
+
+```json
+{
+  "desktop": { "silent": true }
 }
 ```
 
@@ -138,7 +162,7 @@ Example `argus.json`:
 ## The `llm` block (shared LLM access)
 
 LLM access is a top-level `llm` block, shared by any model-driven feature (today: task
-interpretation). It resolves through the same flag > env > file > default chain.
+interpretation). It resolves through the same managed > flag > env > file > default chain.
 
 | Setting | `argus.json` | env | CLI flag |
 |---|---|---|---|
@@ -170,7 +194,59 @@ OpenRouter example (one key reaches many backends; model ids are namespaced):
 
 **Per-consumer overrides (deprecated).** `taskExtraction.provider` / `taskExtraction.model` /
 `taskExtraction.command` still work as a per-consumer override of the shared `llm.*` values, for
-back-compat — prefer the `llm` block. Resolution is **consumer override > shared `llm.*` > default**.
+back-compat. Prefer the `llm` block. On unmanaged machines, resolution is **consumer override >
+shared `llm.*` > default**. Managed shared `llm.*` values still win over user-controlled
+per-consumer overrides.
+
+## Managed settings (MDM)
+
+Organizations that manage machines with an MDM (Jamf, Kandji, Mosyle, and similar) can force Argus
+settings for their users. A managed settings file is the **highest-precedence** source: its values win
+over CLI flags, environment variables, and `argus.json`, matching the platform convention that
+managed preferences can't be overridden locally.
+
+Argus looks for the file in the standard macOS managed-preference locations, in this order, and the
+first one that exists and parses wins:
+
+1. `/Library/Managed Preferences/<user>/co.agentdeployment.argus.plist`
+2. `/Library/Managed Preferences/<user>/co.agentdeployment.argus.json`
+3. `/Library/Managed Preferences/co.agentdeployment.argus.plist`
+4. `/Library/Managed Preferences/co.agentdeployment.argus.json`
+
+Per-user managed preferences beat machine-wide ones, and the plist (what an MDM custom-settings
+payload actually writes) is checked before a JSON sibling (for orgs that push a file by script).
+The domain is the desktop app's bundle identifier, `co.agentdeployment.argus`. macOS is the only
+platform with standard locations today. `ARGUS_MANAGED_CONFIG_FILE` points Argus at an additional
+managed file: it is checked after the standard macOS locations, and is the whole list on platforms
+without a standard managed location.
+
+The file carries the same camelCase shape as `argus.json`, as JSON or as a plist (XML or binary,
+converted with the system `plutil`). For example, this payload forces interpretation off and caps
+logging:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>sessionInterpretation</key>
+  <dict><key>enabled</key><false/></dict>
+  <key>log</key>
+  <dict><key>level</key><string>warn</string></dict>
+</dict>
+</plist>
+```
+
+Managed loading is tolerant, like the rest of config reading: a candidate that exists but can't be
+read or parsed logs a warning and the next candidate is tried, and a single invalid managed value
+warns and falls through to the user-controlled layers. A broken push never crashes a command. The
+file is read once per process; a restart picks up changes.
+
+A managed value is visible where you'd look for it: the web Settings surface labels the field
+"Managed by your organization" and names the file, and `argus config set` on a managed key saves the
+value but notes that the managed one takes precedence. The implementation lives in
+`src/managed-config.ts` (discovery, parsing, cache) and `src/paths.ts` (the candidate locations);
+the resolvers in `src/config.ts` consult it as their first layer.
 
 ## Secrets (BYO API keys)
 

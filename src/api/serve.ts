@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { ALL_SOURCES, sourcesFor, type BuildDashboardOptions } from "../reporting/dashboard-builder.ts";
 import { loadPlugins } from "../reporting/inventory.ts";
 import { unpricedModels } from "../pricing.ts";
-import type { ResolvedQuery, Store } from "../store/store-contract.ts";
+import type { ResolvedQuery, SessionSearchMatch, Store } from "../store/store-contract.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
   buildUsageByModel,
@@ -49,23 +49,33 @@ import type { PluginRow, SessionRow } from "../types.ts";
 import { computeRecommendations, type Recommendation } from "./recommendations.ts";
 import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.ts";
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
+import { buildSessionInteractions, type SessionInteractionsResponse } from "./session-interactions.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
-import { loadConfig, migrateLlmFlatToProviderConfigs, resolveRetainText, type ResolvedTaskExtraction } from "../config.ts";
-import { openStore } from "../store/store.ts";
+import { CONFIG_FILE } from "../paths.ts";
+import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
+import { LabelError, openStore } from "../store/store.ts";
+import type {
+  AppliedLabel,
+  LabelAppliedBy,
+  LabelFilterMode,
+  LabelRecord,
+  LabelTarget,
+  SessionLabels,
+} from "../store/store-contract.ts";
 import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
-import type { ParserDiagnostic, TaskFact } from "../store/store-contract.ts";
+import type { ParserDiagnostic, SessionProvenance, TaskFact } from "../store/store-contract.ts";
 import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "../logger.ts";
 
 export interface ServeOptions {
   port: number;
-  /** Open the dashboard in the default browser once it's ready (macOS `open`). */
+  /** Open the dashboard in the default browser once it's ready. */
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
   /** Provider settings used when the session-detail Refresh action re-indexes a single session. */
-  taskExtraction: ResolvedTaskExtraction;
+  taskExtraction: ResolvedSessionInterpretation;
   /** Install SIGINT/SIGTERM handlers and block until one fires (the standalone `argus serve`
    *  behavior). When false, the caller owns shutdown via `signal` and the returned handle. Default true. */
   installSignalHandlers?: boolean;
@@ -80,6 +90,22 @@ export interface ServeOptions {
 export interface ServeHandle {
   closed: Promise<void>;
   close(): Promise<void>;
+}
+
+/** Return the platform command used to open a URL in the user's default browser. Kept pure so the
+ * command selection is testable without launching a browser. Windows' `start` is a cmd.exe builtin,
+ * and the empty title argument is required so the URL isn't treated as the console window title. */
+export function defaultBrowserCommand(
+  url: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === "win32") {
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", "start", "", url] };
+  }
+  if (platform === "darwin") {
+    return { command: "open", args: [url] };
+  }
+  return { command: "xdg-open", args: [url] };
 }
 
 /** GET /api/recommendations payload. */
@@ -97,14 +123,20 @@ export interface SessionTaskMetricsResponse {
   metrics: Record<string, TaskMetrics>;
 }
 
-/** Parsed query for the paginated session list. Date/source narrow the store read; project/q/
- *  includeGenerated refine the human-facing list; sort/limit/offset paginate. */
+/** Parsed query for the paginated session list. Date/source narrow the store read; project/q/file/
+ *  includeGenerated refine the human-facing list; sort/limit/offset paginate. `q`/`file` (#155) run a
+ *  store-side search (conversation/task text FTS, file-path substring) before the aggregate read. */
 export interface SessionListQuery {
   since?: string;
   until?: string;
   source?: "all" | TranscriptSource;
   project?: string;
   q?: string;
+  file?: string;
+  /** Restrict to sessions carrying these label ids. */
+  label?: string[];
+  /** How `label` narrows when it has more than one id: "any" (union, default) or "all" (intersection). */
+  labelMode?: LabelFilterMode;
   includeGenerated: boolean;
   sort: SessionSort;
   limit: number;
@@ -113,6 +145,24 @@ export interface SessionListQuery {
 
 export interface SessionDetailResponse {
   session: SessionRow;
+}
+
+/** GET /api/labels — every active label definition. */
+export interface LabelsResponse {
+  labels: LabelRecord[];
+}
+/** Response for a single label create/rename. */
+export interface LabelResponse {
+  label: LabelRecord;
+}
+/** GET /api/sessions/:id/labels — a session's labels plus its per-task labels. */
+export interface SessionLabelsResponse {
+  labels: SessionLabels;
+}
+/** POST /api/sessions/bulk/labels-lookup — active session-level labels for many sessions at once,
+ *  keyed by session id (sessions with no labels are omitted). */
+export interface BulkSessionLabelsResponse {
+  labels: Record<string, AppliedLabel[]>;
 }
 
 /** Server-side filters parsed from a dashboard view's query string. Each narrows the store read
@@ -145,14 +195,41 @@ export interface ViewReaders {
   recommendations: ViewReader<RecommendationsResponse>;
 }
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
+/** Flag/unflag a session as hidden (local-only UI state). */
+export type SessionHiddenSetter = (sessionId: string, hidden: boolean) => Promise<void>;
+/** Flag/unflag many sessions as hidden at once (bulk mode). */
+export type SessionsHiddenSetter = (sessionIds: string[], hidden: boolean) => Promise<void>;
 /** Roll up every task's metrics for a session on demand (one store pass), keyed by task id. */
 export type SessionTaskMetricsReader = (sessionId: string) => Promise<Record<string, TaskMetrics>>;
 /** A filtered/sorted/paginated page of session list rows, backed by the store's session aggregates. */
 export type SessionListReader = (query: SessionListQuery) => Promise<SessionListResponse>;
 /** Full detail for one session (built on demand), or null if it has no messages / doesn't exist. */
 export type SessionDetailReader = (sessionId: string) => Promise<SessionRow | null>;
+/** The interaction timeline for one session (prompt -> loop summary -> response), or null if the
+ *  session has no interactions. */
+export type SessionInteractionsReader = (sessionId: string) => Promise<SessionInteractionsResponse | null>;
+/** Structural-index provenance for one session (transcript files + lineage), or null if unknown (#124). */
+export type SessionProvenanceReader = (sessionId: string) => Promise<SessionProvenance | null>;
 /** Gather the /debug payload (settings, env, paths, store/index status). */
 export type DebugInfoReader = () => Promise<DebugInfo>;
+
+/** The label operations serve wires into the label endpoints (session-and-task-labels). Reads use the
+ *  shared read connection; writes open a short-lived writable store (like reindex), keeping the reader
+ *  read-only. Writes may reject with a LabelError (bad name / duplicate / missing) the routes map to a
+ *  4xx. Labels are local-only — nothing here touches the sync path. */
+export interface LabelOps {
+  list(): Promise<LabelRecord[]>;
+  create(name: string): Promise<LabelRecord>;
+  rename(id: string, name: string): Promise<LabelRecord>;
+  remove(id: string): Promise<void>;
+  readForSession(sessionId: string): Promise<SessionLabels>;
+  /** Active session-level labels for many sessions at once (bulk mode's label picker). */
+  readForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
+  assign(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
+  unassign(labelId: string, target: LabelTarget): Promise<void>;
+  /** Apply/remove a session-level label across many sessions at once (bulk mode). */
+  setForSessions(labelId: string, sessionIds: string[], applied: boolean): Promise<void>;
+}
 
 interface AppOptions {
   /** The per-view dashboard readers. Omitted in processes that don't read the store (the routes then
@@ -164,6 +241,14 @@ interface AppOptions {
   sessionTaskMetrics?: SessionTaskMetricsReader;
   sessionList?: SessionListReader;
   sessionDetail?: SessionDetailReader;
+  sessionInteractions?: SessionInteractionsReader;
+  sessionProvenance?: SessionProvenanceReader;
+  /** Flag/unflag a session as hidden. Omitted in processes without a store (503). */
+  setSessionHidden?: SessionHiddenSetter;
+  /** Flag/unflag many sessions as hidden at once (bulk mode). Omitted in processes without a store (503). */
+  setSessionsHidden?: SessionsHiddenSetter;
+  /** Session/task label read + write operations. Omitted in processes without a store (503). */
+  labels?: LabelOps;
   debugInfo?: DebugInfoReader;
   /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
   secrets?: SecretStore;
@@ -358,17 +443,85 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
   const source = c.req.query("source");
   if (source && !SNAPSHOT_SOURCES.has(source)) return `Unknown source "${source}".`;
   const includeGenerated = c.req.query("includeGenerated") === "true" || c.req.query("includeGenerated") === "1";
+  const label = c.req.query("label");
+  const labelMode = c.req.query("labelMode");
+  if (labelMode && labelMode !== "any" && labelMode !== "all") return `Unknown labelMode "${labelMode}".`;
   return {
     since: c.req.query("since") || undefined,
     until: c.req.query("until") || undefined,
     source: source ? (source as "all" | TranscriptSource) : undefined,
     project: c.req.query("project") || undefined,
     q: c.req.query("q") || undefined,
+    file: c.req.query("file") || undefined,
+    label: label ? label.split(",").filter(Boolean) : undefined,
+    labelMode: labelMode as LabelFilterMode | undefined,
     includeGenerated,
     sort: sort as SessionSort,
     limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
     offset: Math.max(0, parseIntOr(c.req.query("offset"), 0)),
   };
+}
+
+/** Map a LabelError to its HTTP status (name conflict → 409, missing → 404, else 400); anything else
+ *  rethrows and becomes a 500. */
+function labelErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof LabelError) {
+    const status = err.code === "name_conflict" ? 409 : err.code === "not_found" ? 404 : 400;
+    return c.json({ error: err.message }, status);
+  }
+  throw err;
+}
+
+/** Read a required non-empty string field from a JSON body, or return a 400 Response. */
+async function readJsonStringField(c: Context, field: string): Promise<string | Response> {
+  let value: unknown;
+  try {
+    value = (await c.req.json())?.[field];
+  } catch {
+    return c.json({ error: `Expected a JSON body with a "${field}".` }, 400);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return c.json({ error: `Missing "${field}".` }, 400);
+  }
+  return value.trim();
+}
+
+/** Read a required non-empty array of non-empty strings from a JSON body, or return a 400 Response. */
+async function readJsonStringArrayField(c: Context, field: string): Promise<string[] | Response> {
+  let value: unknown;
+  try {
+    value = (await c.req.json())?.[field];
+  } catch {
+    return c.json({ error: `Expected a JSON body with a "${field}".` }, 400);
+  }
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    !value.every((v) => typeof v === "string" && v.trim())
+  ) {
+    return c.json({ error: `Missing or empty "${field}".` }, 400);
+  }
+  return value.map((v) => v.trim());
+}
+
+/** Read a required boolean field from a JSON body, or return a 400 Response. */
+async function readJsonBooleanField(c: Context, field: string): Promise<boolean | Response> {
+  let value: unknown;
+  try {
+    value = (await c.req.json())?.[field];
+  } catch {
+    return c.json({ error: `Expected a JSON body with a "${field}".` }, 400);
+  }
+  if (typeof value !== "boolean") {
+    return c.json({ error: `Missing "${field}".` }, 400);
+  }
+  return value;
+}
+
+/** Parse a non-negative integer task position from a route param, or null if malformed. */
+function parseTaskSeq(raw: string): number | null {
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 /** Build the Hono app: the JSON API plus static serving of the SPA. Pure wiring — no listening,
@@ -426,6 +579,64 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ session } satisfies SessionDetailResponse);
   });
 
+  // The interaction timeline for one session (prompt -> loop summary -> response), built on demand and
+  // fetched only when the detail view's Timeline tab is opened.
+  app.get("/api/session/:id/interactions", async (c) => {
+    if (!opts.sessionInteractions) return c.json({ error: "Session interactions are unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const timeline = await opts.sessionInteractions(sessionId);
+    if (!timeline) return c.json({ error: "Session not found." }, 404);
+    return c.json(timeline satisfies SessionInteractionsResponse);
+  });
+
+  // Structural-index provenance for one session (transcript files + subagent/resumed lineage), built on
+  // demand for the detail view's "Session Data" card. Local-only (index_* is never synced).
+  app.get("/api/session/:id/provenance", async (c) => {
+    if (!opts.sessionProvenance) return c.json({ error: "Session provenance is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const provenance = await opts.sessionProvenance(sessionId);
+    if (!provenance) return c.json({ error: "Session not found." }, 404);
+    return c.json(provenance satisfies SessionProvenance);
+  });
+
+  // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
+  // the literal "bulk" segment isn't swallowed by that route's ":id" param.
+  app.post("/api/sessions/bulk/hidden", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!opts.setSessionsHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
+
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const hidden = await readJsonBooleanField(c, "hidden");
+    if (typeof hidden !== "boolean") return hidden;
+
+    await opts.setSessionsHidden(sessionIds, hidden);
+    opts.onStoreChanged?.();
+    return c.json({ hidden });
+  });
+
+  // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
+  // hidden, but its usage still counts in aggregate rollups. No feature-gate beyond store availability
+  // — unlike reindex, this is a pure store write.
+  app.post("/api/sessions/:id/hidden", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.setSessionHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
+
+    const hidden = await readJsonBooleanField(c, "hidden");
+    if (typeof hidden !== "boolean") return hidden;
+
+    await opts.setSessionHidden(sessionId, hidden);
+    opts.onStoreChanged?.();
+    return c.json({ hidden });
+  });
+
   // Re-index a single session: re-read its transcript from disk and refresh it in the store
   // (sessions/messages/invocations/tasks), with task processing always on. 404 if the session is
   // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
@@ -462,6 +673,154 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
     const metrics = await opts.sessionTaskMetrics(sessionId);
     return c.json({ metrics } satisfies SessionTaskMetricsResponse);
+  });
+
+  // Session/task labels (session-and-task-labels). Reads are open (like the other view endpoints);
+  // every write gets the same CSRF guard as reindex. Labels are local-only and never leave the machine.
+  const labels = opts.labels;
+  const labelsUnavailable = (c: Context) => c.json({ error: "Labels are unavailable in this process." }, 503);
+
+  app.get("/api/labels", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    return c.json({ labels: await labels.list() } satisfies LabelsResponse);
+  });
+
+  app.post("/api/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const name = await readJsonStringField(c, "name");
+    if (typeof name !== "string") return name;
+    try {
+      return c.json({ label: await labels.create(name) } satisfies LabelResponse);
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.patch("/api/labels/:id", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const id = c.req.param("id").trim();
+    if (!id) return c.json({ error: "Missing label id." }, 400);
+    const name = await readJsonStringField(c, "name");
+    if (typeof name !== "string") return name;
+    try {
+      return c.json({ label: await labels.rename(id, name) } satisfies LabelResponse);
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.delete("/api/labels/:id", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const id = c.req.param("id").trim();
+    if (!id) return c.json({ error: "Missing label id." }, 400);
+    await labels.remove(id);
+    return c.json({ ok: true });
+  });
+
+  // A session's labels + its per-task labels. Read path, so no CSRF guard.
+  app.get("/api/sessions/:id/labels", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    return c.json({ labels: await labels.readForSession(sessionId) } satisfies SessionLabelsResponse);
+  });
+
+  // Active session-level labels for many sessions at once (bulk mode's tri-state label picker) — a
+  // POST rather than GET since the id list can be large. Read path, so no CSRF guard. Registered
+  // before the single-id route below so the literal "bulk" segment isn't swallowed by ":id".
+  app.post("/api/sessions/bulk/labels-lookup", async (c) => {
+    if (!labels) return labelsUnavailable(c);
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const bySession = await labels.readForSessions(sessionIds);
+    return c.json({ labels: Object.fromEntries(bySession) } satisfies BulkSessionLabelsResponse);
+  });
+
+  // Apply / remove a session-level label across many sessions at once (bulk mode). Registered before
+  // the single-id route below so the literal "bulk" segment isn't swallowed by that route's ":id" param.
+  app.post("/api/sessions/bulk/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    const applied = await readJsonBooleanField(c, "applied");
+    if (typeof applied !== "boolean") return applied;
+    try {
+      await labels.setForSessions(labelId, sessionIds, applied);
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  // Apply / remove a label on a session. The applier is a person using the web app, so applied_by is
+  // "user" — combined with a system-origin label, that's the "user-applied system label" case.
+  app.post("/api/sessions/:id/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    try {
+      await labels.assign(labelId, { sessionId }, "user");
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.delete("/api/sessions/:id/labels/:labelId", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    const labelId = c.req.param("labelId").trim();
+    if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
+    await labels.unassign(labelId, { sessionId });
+    return c.json({ ok: true });
+  });
+
+  // Apply / remove a label on a task, addressed by its position within the session.
+  app.post("/api/sessions/:id/tasks/:taskSeq/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
+    if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    try {
+      await labels.assign(labelId, { sessionId, taskSeq }, "user");
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  app.delete("/api/sessions/:id/tasks/:taskSeq/labels/:labelId", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    const labelId = c.req.param("labelId").trim();
+    if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
+    const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
+    if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
+    await labels.unassign(labelId, { sessionId, taskSeq });
+    return c.json({ ok: true });
   });
 
   // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
@@ -610,13 +969,23 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   // shows it as stored and the file no longer holds it. Idempotent; a no-op once migrated. Never throws
   // (the migration guards its own keychain/file writes), so a locked keychain can't block startup.
   await migrateHubKeyToSecretStore({ log });
-  // Fold any legacy flat `llm.*` values under the provider they were written for, so switching the
-  // active provider in the settings UI no longer inherits the old provider's model/key-env (#154
-  // review). Idempotent; a no-op once migrated. Guarded so a write failure can't block startup.
+  // Run the two idempotent argus.json migrations off ONE disk read (each mutates this shared object and
+  // writes the cumulative state, so order can't clobber). Both are guarded so a write failure can't
+  // block startup. (1) Fold any legacy flat `llm.*` values under the provider they were written for (#154).
+  // (2) Rename any legacy `taskExtraction.*` block to `sessionInterpretation.*` (#234) — resolution still
+  // reads the legacy keys via each setting's legacy fallback, so this only makes the new key canonical.
+  const startupConfig = loadConfig() as ArgusConfig & Record<string, unknown>;
   try {
-    if (migrateLlmFlatToProviderConfigs()) log("Organized LLM settings by provider in argus.json.");
+    if (migrateLlmFlatToProviderConfigs(CONFIG_FILE, startupConfig))
+      log("Organized LLM settings by provider in argus.json.");
   } catch (err) {
     log(`Couldn't reorganize LLM settings by provider: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    if (migrateTaskExtractionToSessionInterpretation(CONFIG_FILE, startupConfig))
+      log("Renamed task-extraction settings to session interpretation in argus.json.");
+  } catch (err) {
+    log(`Couldn't update session-interpretation settings: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // Resolve the `claude` CLI path once, here at startup — never on a request. The resolver may spawn a
@@ -650,6 +1019,18 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     filters: SnapshotFilters,
     fn: (store: Store, query: ResolvedQuery) => Promise<T>,
   ): Promise<T> => fn(await readStore(), queryFor(filters));
+
+  // Label writes are tiny but they mutate the store, so — like reindex — they run on a short-lived
+  // writable connection rather than the long-lived read connection, keeping the reader read-only.
+  // SQLite (WAL) serializes the write against the `index` leg via the busy timeout.
+  const withWriteStore = async <T>(fn: (store: Store) => Promise<T>): Promise<T> => {
+    const store = await openStore();
+    try {
+      return await fn(store);
+    } finally {
+      await store.close();
+    }
+  };
 
   // Assemble the per-plugin rows for a query — shared by the /api/plugins view and the unused-plugins
   // recommendation so the two can't drift for the same filters. Folding bySkill here also prices every
@@ -751,7 +1132,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     // to the config opt-in), keeping the configured provider/model — but only when we're retaining
     // text: with retention off we neither store the conversation nor run the model over it. A provider
     // explicitly set to "off" stays off.
-    const reindexTaskExtraction: ResolvedTaskExtraction = { ...opts.taskExtraction, enabled: retainText };
+    const reindexTaskExtraction: ResolvedSessionInterpretation = { ...opts.taskExtraction, enabled: retainText };
     const store = await openStore();
     try {
       return await reindexSession(sessionId, { store, taskExtraction: reindexTaskExtraction, retainText });
@@ -762,35 +1143,112 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
 
   const sessionTaskMetrics: SessionTaskMetricsReader = async (sessionId) => {
     const store = await readStore();
-    const byTask = await store.readSessionTaskMessages(sessionId);
+    const [byTask, interactionCounts] = await Promise.all([
+      store.readSessionTaskMessages(sessionId),
+      store.readSessionTaskInteractionCounts(sessionId),
+    ]);
     const out: Record<string, TaskMetrics> = {};
     for (const [taskId, messages] of byTask) out[taskId] = computeTaskMetrics(messages);
+    // The interaction count comes from the spine (matches the timeline): it also covers interactions
+    // with no usage rows, which the message-derived distinct-interactionSeq undercounts. A task with
+    // interactions but no attributed messages still gets an entry (zeroed metrics + its count).
+    for (const [taskId, n] of interactionCounts) {
+      const m = out[taskId] ?? (out[taskId] = computeTaskMetrics([]));
+      m.interactions = n;
+    }
     return out;
   };
 
   const sessionList: SessionListReader = async (query) => {
     const store = await readStore();
-    const aggregates = await store.readSessionAggregates({
-      sources: sourcesFor(query.source ?? opts.build.source),
-      since: query.since ?? opts.build.since,
-      until: query.until ?? opts.build.until,
-    });
-    return buildSessionList(aggregates, {
+    const sources = sourcesFor(query.source ?? opts.build.source);
+    const since = query.since ?? opts.build.since;
+    const until = query.until ?? opts.build.until;
+    // A `q` or `file:` term (#155) runs a store-side search first: it resolves the candidate session
+    // ids (+ per-session snippet/count) that then restrict the aggregate read, honoring the same
+    // source/date narrowing. When neither is present, skip the search entirely — an unrestricted read.
+    let sessionIds: string[] | undefined;
+    let matches: Map<string, SessionSearchMatch> | undefined;
+    if (query.q || query.file) {
+      const search = await store.searchSessions({ sources, since, until, text: query.q, file: query.file });
+      sessionIds = [...search.ids];
+      matches = search.matches;
+    }
+    // A `label` filter (session-and-task-labels) intersects with any search-derived candidate set —
+    // both narrow the same `sessionIds` restriction `readSessionAggregates` already honors.
+    if (query.label?.length) {
+      const labeled = await store.readSessionIdsForLabels(query.label, query.labelMode ?? "any");
+      sessionIds = sessionIds ? sessionIds.filter((id) => labeled.has(id)) : [...labeled];
+    }
+    const aggregates = await store.readSessionAggregates({ sources, since, until, sessionIds });
+    const list = buildSessionList(aggregates, {
       sort: query.sort,
       limit: query.limit,
       offset: query.offset,
       project: query.project,
-      q: query.q,
+      // The store already applied the metadata-OR-FTS `q` logic above; re-running the plain metadata
+      // substring check here would wrongly drop a session that matched only via conversation/task FTS.
+      q: matches ? undefined : query.q,
       includeGenerated: query.includeGenerated,
+      matches,
     });
+    // Attach session-level label chips — only for the paginated page, in one batched read.
+    const labelsBySession = await store.readSessionLabelsForSessions(list.rows.map((r) => r.sessionId));
+    if (labelsBySession.size) {
+      list.rows = list.rows.map((r) => {
+        const labels = labelsBySession.get(r.sessionId);
+        return labels && labels.length ? { ...r, labels } : r;
+      });
+    }
+    return list;
   };
 
   const sessionDetail: SessionDetailReader = async (sessionId) => {
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks] = await Promise.all([store.readSessionMeta(sessionId), store.readSessionTasks(sessionId)]);
-    return buildSessionDetail(sessionId, messages, meta, tasks);
+    const [meta, tasks, interpretation, isHidden, interactions] = await Promise.all([
+      store.readSessionMeta(sessionId),
+      store.readSessionTasks(sessionId),
+      store.readSessionInterpretation(sessionId),
+      store.readSessionHidden(sessionId),
+      store.readSessionInteractionCount(sessionId),
+    ]);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden, interactions);
+  };
+
+  const sessionInteractions: SessionInteractionsReader = async (sessionId) => {
+    const store = await readStore();
+    const [interactions, invocations, messages, tasks] = await Promise.all([
+      store.readSessionInteractions(sessionId),
+      store.readSessionInvocations(sessionId),
+      store.readSessionMessages(sessionId),
+      store.readSessionTasks(sessionId),
+    ]);
+    if (!interactions.length) return null;
+    return buildSessionInteractions(interactions, invocations, messages, tasks);
+  };
+
+  const sessionProvenance: SessionProvenanceReader = async (sessionId) =>
+    (await readStore()).readSessionProvenance(sessionId);
+
+  const setSessionHidden: SessionHiddenSetter = (sessionId, hidden) =>
+    withWriteStore((store) => store.setSessionsHidden([sessionId], hidden));
+
+  const setSessionsHidden: SessionsHiddenSetter = (sessionIds, hidden) =>
+    withWriteStore((store) => store.setSessionsHidden(sessionIds, hidden));
+
+  const labels: LabelOps = {
+    list: async () => (await readStore()).listLabels(),
+    readForSession: async (sessionId) => (await readStore()).readSessionLabels(sessionId),
+    readForSessions: async (sessionIds) => (await readStore()).readSessionLabelsForSessions(sessionIds),
+    create: (name) => withWriteStore((store) => store.createLabel({ name })),
+    rename: (id, name) => withWriteStore((store) => store.renameLabel(id, name)),
+    remove: (id) => withWriteStore((store) => store.deleteLabel(id)),
+    assign: (labelId, target, appliedBy) => withWriteStore((store) => store.assignLabel(labelId, target, appliedBy)),
+    unassign: (labelId, target) => withWriteStore((store) => store.unassignLabel(labelId, target)),
+    setForSessions: (labelId, sessionIds, applied) =>
+      withWriteStore((store) => store.setLabelForSessions(labelId, sessionIds, applied)),
   };
 
   const app = createApp(webRoot, {
@@ -799,6 +1257,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     sessionTaskMetrics,
     sessionList,
     sessionDetail,
+    sessionInteractions,
+    sessionProvenance,
+    setSessionHidden,
+    setSessionsHidden,
+    labels,
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
     claudeBinary,
@@ -838,13 +1301,14 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     if (opts.open) {
       // Fresh install (or the welcome modal hasn't been dismissed yet): land on the welcome
       // overlay instead of the bare dashboard. `state.onboardingCompleted` is the same flag the
-      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding. Onboarding is
-      // macOS-only (mirrors `onboarding_completed()` in desktop/src-tauri/src/lib.rs): other
-      // platforms never read `state.onboardingCompleted` and always land on the bare dashboard.
-      const onboardingCompleted =
-        process.platform !== "darwin" ||
-        (loadConfig(opts.configPath).state?.onboardingCompleted ?? false);
-      spawnSync("open", [onboardingCompleted ? url : `${url}?firstRun=1`]);
+      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding.
+      const onboardingCompleted = loadConfig(opts.configPath).state?.onboardingCompleted ?? false;
+      const browserUrl = onboardingCompleted ? url : `${url}?firstRun=1`;
+      const { command, args } = defaultBrowserCommand(browserUrl);
+      const result = spawnSync(command, args, { stdio: "ignore", windowsHide: true });
+      if (result.error) {
+        logWarn(log, `Couldn't open the dashboard in your browser: ${result.error.message}`);
+      }
     }
     resolveListening();
   });

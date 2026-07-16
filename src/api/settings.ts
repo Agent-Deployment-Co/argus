@@ -11,13 +11,15 @@ import {
   loadConfig,
   LLM_SETTINGS,
   LOG_SETTINGS,
+  managedProviderScopedSettingValue,
+  managedSettingValue,
   present,
   resolveActiveProvider,
   resolveSetting,
-  resolveTaskExtraction,
+  resolveSessionInterpretation,
   setPath,
   STATE_SETTINGS,
-  TASK_SETTINGS,
+  SESSION_INTERPRETATION_SETTINGS,
   writeConfigAtomic,
   type ArgusConfig,
   type SelectOption,
@@ -28,14 +30,17 @@ import { complete, getProvider, providersForConfigField } from "../llm/index.ts"
 import type { ResolvedLlmConfig } from "../llm/types.ts";
 import { claudeProviderArgs } from "../llm/providers/local.ts";
 import { resolveApiKey, type SecretStore } from "../secrets.ts";
+import { managedConfig, managedConfigSource } from "../managed-config.ts";
 import { CONFIG_FILE } from "../paths.ts";
 import { logAt, logDebug, type Log } from "../logger.ts";
 
 /** Where an effective value is coming from when it isn't the `argus.json` layer the UI edits — so the
- *  surface can warn that a file edit won't take effect (an env var/flag is winning). */
+ *  surface can warn that a file edit won't take effect (a managed setting or an env var/flag is
+ *  winning). */
 export interface SettingOverride {
-  layer: "env" | "flag";
-  /** The overriding name, e.g. the env var "ARGUS_LLM_PROVIDER". */
+  layer: "env" | "flag" | "managed";
+  /** The overriding name — the env var (e.g. "ARGUS_LLM_PROVIDER"), or for the managed layer the
+   *  managed settings file the value comes from. */
   name: string;
 }
 
@@ -128,7 +133,7 @@ const API_KEY_FIELD: SecretFieldDescriptor = {
   key: "llm.apiKey",
   label: "API key",
   description: "Stored securely on this machine (OS keychain).",
-  activeWhen: { path: "taskExtraction.enabled" },
+  activeWhen: { path: "sessionInterpretation.enabled" },
   providerPath: "llm.provider",
   secretNames: Object.fromEntries(
     providersForConfigField("apiKeyEnv").map((p) => [p, getProvider(p)!.apiKeyEnv!]),
@@ -169,6 +174,10 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     id: "general",
     label: "General",
     sections: [
+      // The "Startup" (desktop.startAtLogin) toggle is temporarily removed: start-at-login is
+      // hard-disabled in the desktop shell until the app is signed with an org Developer ID cert
+      // (see `desktop_start_at_login_enabled` in desktop/src-tauri/src/lib.rs). Re-add this section
+      // to restore the toggle: { label: "Startup", settings: [DESKTOP_SETTINGS.startAtLogin] }.
       { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled] },
       { label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] },
       // Terminal verbosity for this `argus serve` process. A change here applies to the running
@@ -177,25 +186,28 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     ],
   },
   {
-    // Sessions = task extraction + the LLM that powers it (its only consumer today). One group: the
-    // Extract-tasks toggle, the hourly cap, then the LLM provider + its provider-specific fields, the
-    // API key, and the Test-connection action. (Custom prompt / prompt file aren't exposed yet; advanced
-    // / CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers the key itself via API_KEY_FIELD —
-    // `llm.baseUrl`, and `llm.maxTokens`. `claudeCliPath` shows only for claude-cli, per its configFields.)
+    // Sessions = session interpretation + the LLM that powers it (its only consumer today). One group:
+    // the Interpret-sessions toggle, the hourly cap, then the LLM provider + its provider-specific fields
+    // (model, reasoning effort), the API key, and the Test-connection action. (Custom prompt / prompt
+    // file aren't exposed yet; advanced / CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers the
+    // key itself via API_KEY_FIELD — `llm.baseUrl`, `llm.maxTokens`, and the title/summary length limits
+    // (`sessionInterpretation.titleMaxChars`/`summaryMaxChars`). `claudeCliPath`/`effort` show only for
+    // the providers that use them, per their configFields.)
     id: "sessions",
     label: "Sessions",
     sections: [
       {
         settings: [
-          TASK_SETTINGS.enabled,
-          TASK_SETTINGS.maxSessionsPerHour,
+          SESSION_INTERPRETATION_SETTINGS.enabled,
+          SESSION_INTERPRETATION_SETTINGS.maxSessionsPerHour,
           LLM_SETTINGS.provider,
           LLM_SETTINGS.model,
+          LLM_SETTINGS.effort,
           LLM_SETTINGS.claudeCliPath,
           LLM_SETTINGS.command,
         ],
         secrets: [API_KEY_FIELD],
-        connectionTest: { activeWhen: { path: "taskExtraction.enabled" } },
+        connectionTest: { activeWhen: { path: "sessionInterpretation.enabled" } },
       },
     ],
   },
@@ -218,10 +230,15 @@ const PROVIDER_CONFIG_PATH = /^llm\.providerConfigs\.([^.]+)\.([^.]+)$/;
 
 /** Build the JSON-safe descriptor for one setting. A provider-scoped field carries only its identity
  *  (`field`) — its per-provider values travel in the response's `providerConfigs` map (keyed by the
- *  selected provider), so the descriptor doesn't pin a single (active-provider-only) value. `claudeBinary`
+ *  selected provider), so the descriptor doesn't pin a single (active-provider-only) value. `activeProvider`
+ *  is still needed to mark whether the currently visible provider's field is managed. `claudeBinary`
  *  (the auto-resolved `claude` path) is threaded in only by the serve route, so the resolution (which may
  *  spawn a login shell) is an explicit caller concern, not a side effect of describing. */
-function describe(setting: Setting<unknown>, file: ArgusConfig, opts: { claudeBinary?: string } = {}): SettingDescriptor {
+function describe(
+  setting: Setting<unknown>,
+  file: ArgusConfig,
+  opts: { activeProvider: string; claudeBinary?: string },
+): SettingDescriptor {
   const scoped = setting.providerScoped === true;
   // Resolve with no flags — the serve process carries none, so only an env var can override the file.
   const descriptor: SettingDescriptor = {
@@ -235,7 +252,13 @@ function describe(setting: Setting<unknown>, file: ArgusConfig, opts: { claudeBi
     descriptor.providerScoped = true;
     descriptor.field = llmFieldName(setting);
   }
-  if (setting.env && present(process.env[setting.env])) {
+  // Managed (MDM) beats env, mirroring the resolver: report the layer that's actually winning.
+  const managedValue = scoped
+    ? managedProviderScopedSettingValue(setting, opts.activeProvider)
+    : managedSettingValue(setting);
+  if (managedValue !== undefined) {
+    descriptor.override = { layer: "managed", name: managedConfigSource()?.path ?? "managed settings" };
+  } else if (setting.env && present(process.env[setting.env])) {
     descriptor.override = { layer: "env", name: setting.env };
   }
   // A setting can declare a server-computed placeholder source (ui.placeholderFrom). Today the only one
@@ -247,20 +270,34 @@ function describe(setting: Setting<unknown>, file: ArgusConfig, opts: { claudeBi
 /** The stored per-provider LLM config, folded with any legacy flat values for the active provider, so
  *  the UI can seed provider-scoped fields per provider (and a pre-`providerConfigs` flat value still
  *  shows under the provider it applies to). */
-function buildProviderConfigs(file: ArgusConfig): Record<string, Record<string, unknown>> {
+function buildProviderConfigs(file: ArgusConfig, activeProvider: string): Record<string, Record<string, unknown>> {
   const stored = (file.llm?.providerConfigs ?? {}) as Record<string, Record<string, unknown>>;
   const out: Record<string, Record<string, unknown>> = {};
   for (const [prov, cfg] of Object.entries(stored)) out[prov] = { ...cfg };
   // Fold legacy flat fields into the active provider (scoped values win), so an old `llm.model` etc.
   // still pre-populates its field instead of looking unset.
-  const prov = resolveActiveProvider(file);
   const legacy: Record<string, unknown> = {};
   for (const s of EDITABLE.values()) {
     if (!s.providerScoped) continue;
     const v = getPath(file, s.path);
     if (present(v)) legacy[llmFieldName(s)] = v;
   }
-  if (Object.keys(legacy).length) out[prov] = { ...legacy, ...(out[prov] ?? {}) };
+  if (Object.keys(legacy).length) out[activeProvider] = { ...legacy, ...(out[activeProvider] ?? {}) };
+
+  // Overlay managed provider-scoped values using the same lookup as runtime resolution. Include both
+  // explicitly managed provider blocks and the active provider, so a flat managed `llm.model` is visible.
+  const managedProviders = new Set([
+    activeProvider,
+    ...Object.keys((managedConfig().llm?.providerConfigs ?? {}) as Record<string, unknown>),
+  ]);
+  for (const provider of managedProviders) {
+    for (const s of EDITABLE.values()) {
+      if (!s.providerScoped) continue;
+      const value = managedProviderScopedSettingValue(s, provider);
+      if (value === undefined) continue;
+      out[provider] = { ...(out[provider] ?? {}), [llmFieldName(s)]: value };
+    }
+  }
   return out;
 }
 
@@ -268,18 +305,19 @@ function buildProviderConfigs(file: ArgusConfig): Record<string, Record<string, 
  *  is the auto-resolved `claude` path used as the Claude CLI path placeholder; the serve route passes
  *  it (via `resolveClaudeBinary()`) and other callers can omit it. */
 export function describeSettings(file: ArgusConfig = loadConfig(), claudeBinary?: string): SettingsResponse {
+  const activeProvider = resolveActiveProvider(file);
   return {
     categories: LAYOUT.map((cat) => ({
       id: cat.id,
       label: cat.label,
       sections: cat.sections.map((sec) => ({
         label: sec.label,
-        settings: sec.settings.filter((s) => s.ui).map((s) => describe(s, file, { claudeBinary })),
+        settings: sec.settings.filter((s) => s.ui).map((s) => describe(s, file, { activeProvider, claudeBinary })),
         ...(sec.secrets ? { secretFields: sec.secrets } : {}),
         ...(sec.connectionTest ? { connectionTest: sec.connectionTest } : {}),
       })),
     })),
-    providerConfigs: buildProviderConfigs(file),
+    providerConfigs: buildProviderConfigs(file, activeProvider),
   };
 }
 
@@ -339,7 +377,7 @@ export function applySetting(path: string, raw: unknown, configPath: string = CO
   // the setting falls back through the resolver chain on next load.
   setPath(file as Record<string, unknown>, path, value);
   writeConfigAtomic(file, configPath);
-  return { ok: true, setting: describe(setting, file) };
+  return { ok: true, setting: describe(setting, file, { activeProvider: resolveActiveProvider(file) }) };
 }
 
 /**
@@ -418,7 +456,7 @@ export async function testLlmConnection(opts: {
   log?: Log;
 }): Promise<ConnectionTestResult> {
   const file = loadConfig(opts.configPath ?? CONFIG_FILE);
-  const { llm } = resolveTaskExtraction({}, file);
+  const { llm } = resolveSessionInterpretation({}, file);
   const apiKey = await resolveApiKey(llm.apiKeyEnv, opts.secrets);
 
   const log = opts.log;

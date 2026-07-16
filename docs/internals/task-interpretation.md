@@ -15,7 +15,19 @@ Discover → Parse → Reconcile → Interpret (opt-in) → Materialize
 The first three stages are deterministic, cheap, and have one right answer. Interpret is model-driven,
 non-deterministic, prompt/model-versioned, and expensive — which is why it's separate and opt-in.
 
+> **Session interpretation 2.0 (#234).** The stage was renamed from "task extraction" to **session
+> interpretation**: alongside the tasks it now also produces a per-session **title** and **summary**.
+> The config namespace is `sessionInterpretation.*` (the old `taskExtraction.*` keys are still read and
+> migrated in place on serve start), and the CLI override is `--interpret <true|false>` (`--extract-tasks`
+> stays a deprecated alias). The shared LLM layer gained JSON-schema structured output and an opaque
+> `effort` passthrough, which both passes now use.
+
 ## What it produces
+
+Per session, pass 1 emits a **title** and **summary** (stored on `resolved_sessions.title`/`.summary`,
+local-only, clamped to `sessionInterpretation.titleMaxChars`/`summaryMaxChars` — 100/500 by default)
+plus the task list. The read paths surface them with a first-prompt / heuristic-summary fallback, so an
+un-interpreted session doesn't regress.
 
 A task is no longer just `{description, messageIndexes}`; it's a set of the session's **interactions**
 (its "chapter"), plus the judged outcome:
@@ -29,7 +41,7 @@ A task is no longer just `{description, messageIndexes}`; it's a set of the sess
 - **`outcomeReason`** — a one-line rationale.
 
 `TaskFact` (in `src/store/store-contract.ts`) carries these. It is **local-only** — not part of the
-pushed wire contract (`@agentdeploymentco/argus-schema`) — so these fields don't affect `argus sync`.
+pushed wire contract — so these fields don't affect `argus sync`.
 
 ### Interaction → task attribution (#122)
 
@@ -43,12 +55,18 @@ calls / skills are queryable per task by joining `usage`/`invocation → interac
 ## The two passes
 
 1. **Segment (pass 1).** Runs over the filtered user messages (the existing `TaskCandidateFact`s) to
-   produce the task list.
+   produce the **title**, **summary**, and task list in one call — same cognitive act (understand the
+   session). Each filtered user message also carries its assistant response as *grounding context* (so
+   title/summary reflect what actually happened), but `messageIndexes` still anchors only to the user
+   messages. Enforced by the pass-1 JSON schema where the provider supports structured output.
 2. **Judge (pass 2).** For each task, feeds the **whole** human↔assistant dialogue projected over the
    task's **interactions** (slice `[first owned interaction's ts, the next task's first interaction's
    ts)`, so boundaries align to interaction openings) to the model and records outcome + frustration +
    signals. The final message alone is a weak signal (users rage-quit; agents over-claim), so pass 2
-   reads the entire exchange.
+   reads the entire exchange — plus a **mechanical tool-usage summary** ("18 tool calls: 6× Edit, 5×
+   Bash…; 4 files edited"), derived deterministically from the task's owned interactions' invocations
+   (read from `resolved_invocations` by `interaction_seq`, not `task_seq` — that isn't written until
+   interpretation completes), so the judge has evidence beyond the tidy final message.
 
 Both passes run for every native source (claude, codex, gemini, cowork) — they judge from the
 reconstructed dialogue, not the Claude-only friction signals.
@@ -67,30 +85,35 @@ producer concern). The dialogue is an in-memory intermediate, consumed by the pa
 Task interpretation is the first **consumer of the shared LLM layer** (`src/llm/`, see
 [llm-providers.md](./llm-providers.md)). It owns its prompt and output parsing; which model runs and
 how comes from the shared `llm` block in `argus.json`. The opt-in toggle and the consumer-specific
-prompt stay under `taskExtraction`:
+prompt stay under `sessionInterpretation` (legacy `taskExtraction.*` keys are read and migrated in place):
 
 ```jsonc
 {
   "llm": {
     "provider": "claude-cli", // off | claude-cli | command | claude-api | openai | gemini | openrouter | hub
-    "model": "..."           // optional; the claude-cli provider defaults to haiku
+    "model": "...",          // optional; the claude-cli provider defaults to haiku
+    "effort": "..."          // optional; provider-native reasoning effort, omitted when unset (#234)
   },
-  "taskExtraction": {
-    "enabled": false,        // opt-in index-time extraction
+  "sessionInterpretation": {
+    "enabled": false,        // opt-in index-time interpretation
+    "titleMaxChars": 100,    // clamp on the generated title (#234)
+    "summaryMaxChars": 500,  // clamp on the generated summary (#234)
     "prompt": "...",         // optional inline prompt override
     "promptFile": "..."      // optional path; precedence over prompt
   }
 }
 ```
 
-For back-compat, the older `taskExtraction.provider` / `taskExtraction.model` / `taskExtraction.command`
-keys still work as a per-consumer override of the shared `llm.*` values (deprecated — prefer `llm`).
+For back-compat, the older `sessionInterpretation.provider` / `.model` / `.command` keys (and their
+legacy `taskExtraction.*` spellings) still work as a per-consumer override of the shared `llm.*` values
+(deprecated — prefer `llm`). A stronger `llm.model` (e.g. Claude Sonnet or Opus) noticeably improves
+title/summary/outcome quality over the cheap default; pair it with `llm.effort` where the model supports it.
 
-The **claude-cli provider** invokes `claude -p --no-session-persistence --model haiku -`:
-`--no-session-persistence` keeps each interpret call from leaving its own transcript on disk (which
-indexing would otherwise pick up as a bogus session), and haiku keeps the per-session calls cheap. A
-configured `model` overrides the default. (`--bare` is intentionally not used — in `-p` mode it fails
-"Not logged in".)
+The **claude-cli provider** invokes `claude -p --no-session-persistence --model haiku -` (plus
+`--effort <level>` when set): `--no-session-persistence` keeps each interpret call from leaving its own
+transcript on disk (which indexing would otherwise pick up as a bogus session), and haiku keeps the
+per-session calls cheap. A configured `model` overrides the default. (`--bare` is intentionally not
+used — in `-p` mode it fails "Not logged in".)
 
 On macOS, the provider first tries to run that command through `sandbox-exec`. The sandbox denies
 filesystem access by default, then allows Claude's executable files, macOS keychain access needed for

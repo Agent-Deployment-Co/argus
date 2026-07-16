@@ -6,19 +6,21 @@ import {
   judgeTaskOutcome,
   parseTaskExtractionOutput,
   parseTaskOutcomeOutput,
+  summarizeToolUsage,
   taskFactsFromSpecs,
 } from "../src/indexing/interpret/task-extraction.ts";
+import type { SessionInvocation } from "../src/store/store-contract.ts";
 import { claudeProviderArgs, splitCommand } from "../src/llm/providers/local.ts";
-import type { ResolvedTaskExtraction } from "../src/config.ts";
+import type { ResolvedSessionInterpretation } from "../src/config.ts";
 import {
   assignInteractionTaskSeqs,
   type InteractionFact,
   type TaskFact,
 } from "../src/store/store-contract.ts";
 
-/** Build a ResolvedTaskExtraction for a test, defaulting `enabled` on. */
-function te(over: Partial<ResolvedTaskExtraction> & { llm: ResolvedTaskExtraction["llm"] }): ResolvedTaskExtraction {
-  return { enabled: true, maxSessionsPerHour: 30, ...over };
+/** Build a ResolvedSessionInterpretation for a test, defaulting `enabled` on. */
+function te(over: Partial<ResolvedSessionInterpretation> & { llm: ResolvedSessionInterpretation["llm"] }): ResolvedSessionInterpretation {
+  return { enabled: true, maxSessionsPerHour: 30, titleMaxChars: 100, summaryMaxChars: 500, ...over };
 }
 
 // Pass-1 input is the session's human interaction openings (#122) — each carrying its prompt text.
@@ -52,15 +54,69 @@ describe("task extraction", () => {
     expect(prompt).toContain('"text": "add a facts command"');
   });
 
-  test("parses JSON task output and markdown-fenced JSON", () => {
+  test("includes assistant responses as grounding and states the title/summary limits (#234)", () => {
+    const withResponse = [candidate(0, "add a facts command", undefined, "shipped the facts command")];
+    const prompt = buildTaskExtractionPrompt("codex:one", withResponse, "Return JSON.", {
+      titleMaxChars: 80,
+      summaryMaxChars: 400,
+    });
+    expect(prompt).toContain('"response": "shipped the facts command"');
+    expect(prompt).toContain("at most 80 characters");
+    expect(prompt).toContain("at most 400 characters");
+  });
+
+  test("truncates a huge response head+tail so it can't blow the prompt (#234)", () => {
+    const huge = "A".repeat(25_000) + "B".repeat(25_000);
+    const prompt = buildTaskExtractionPrompt("codex:one", [candidate(0, "do it", undefined, huge)], "Return JSON.");
+    expect(prompt).toContain("chars elided"); // head+tail elision marker
+    expect(prompt).not.toContain("A".repeat(2000)); // the full 50KB response is not embedded
+    expect(prompt).toContain("B"); // the tail (conclusion) survives, not just the head
+    expect(prompt).toContain('"text": "do it"'); // the user prompt is intact
+  });
+
+  test("hard-bounds the whole prompt for a many-message session without dropping any message (#234)", () => {
+    // 1000 messages, each with a large prompt + response (~6MB of raw content). The budget is shared
+    // equally with NO per-message floor, so the total can't balloon with message count — a per-message
+    // floor (the earlier bug) would have yielded ~200+ chars/msg ≈ 250KB+ here.
+    const many = Array.from({ length: 1000 }, (_, i) =>
+      candidate(i, `task ${i}: ` + "p".repeat(3000), undefined, "r".repeat(3000)),
+    );
+    const prompt = buildTaskExtractionPrompt("codex:one", many, "Return JSON.");
+    // Comfortably bounded (budget 60KB text + JSON scaffolding), not the ~250KB a floor would produce.
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(180_000);
+    // Every message keeps its index slot — an interior pivot is never dropped, however many there are.
+    expect(prompt).toContain('"index": 0');
+    expect(prompt).toContain('"index": 999');
+    expect(prompt).toContain("task 999:");
+  });
+
+  test("drops a field to empty rather than a content-free marker when its cap is tiny (#234)", () => {
+    // A cap in (0, ELISION_MARKER_CHARS] can't hold head+tail+marker; the field must be "" (no overshoot).
+    // 300 messages → perMsg = 200; a ~198-char prompt leaves the response only ~2 chars of budget.
+    const many = Array.from({ length: 300 }, (_, i) =>
+      candidate(i, "p".repeat(500), undefined, "r".repeat(500)),
+    );
+    const prompt = buildTaskExtractionPrompt("codex:one", many, "Return JSON.");
+    // No message emits a response that is only an elision marker with empty content.
+    expect(prompt).not.toMatch(/"response":\s*"\s*…\[\d+ chars elided\]"/);
+  });
+
+  test("parses title/summary/tasks JSON and markdown-fenced JSON (#234)", () => {
     expect(
       parseTaskExtractionOutput(
-        '```json\n{"tasks":[{"description":"Add task extraction","messageIndexes":[0,"1",-1]}]}\n```',
+        '```json\n{"title":"Add a facts command","summary":"The user asked for X and got it.","tasks":[{"description":"Add task extraction","messageIndexes":[0,"1",-1]}]}\n```',
       ),
-    ).toEqual([{ description: "Add task extraction", messageIndexes: [0, 1] }]);
-    expect(parseTaskExtractionOutput('[{"description":"Fix tests","message_indices":[0]}]')).toEqual([
-      { description: "Fix tests", messageIndexes: [0] },
-    ]);
+    ).toEqual({
+      title: "Add a facts command",
+      summary: "The user asked for X and got it.",
+      tasks: [{ description: "Add task extraction", messageIndexes: [0, 1] }],
+    });
+    // A bare array is the legacy tasks-only shape: title/summary come back empty.
+    expect(parseTaskExtractionOutput('[{"description":"Fix tests","message_indices":[0]}]')).toEqual({
+      title: "",
+      summary: "",
+      tasks: [{ description: "Fix tests", messageIndexes: [0] }],
+    });
   });
 
   test("turns extracted specs into derived task facts anchored to interactions", () => {
@@ -92,10 +148,10 @@ describe("task extraction", () => {
   test("emits debug logs through the configured sink", async () => {
     const logs: string[] = [];
     const result = await extractTasksForSession("codex:one", candidates, te({ llm: { provider: "off" }, log: (message) => logs.push(message) }));
-    expect(result).toEqual({ tasks: [], diagnostics: [] });
-    expect(logs.join("\n")).toContain("[task extraction] starting extraction for codex:one");
+    expect(result).toEqual({ title: "", summary: "", tasks: [], diagnostics: [] });
+    expect(logs.join("\n")).toContain("[task extraction] starting interpretation for codex:one");
     expect(logs.join("\n")).toContain("provider=off");
-    expect(logs.join("\n")).toContain("task extraction is off");
+    expect(logs.join("\n")).toContain("session interpretation is off");
   });
 
   test("claude provider runs without session persistence, on haiku by default", () => {
@@ -113,6 +169,16 @@ describe("task extraction", () => {
       "--no-session-persistence",
       "--model",
       "opus",
+      "-",
+    ]);
+    // Effort is passed through as --effort only when set (#234).
+    expect(claudeProviderArgs("opus", "high")).toEqual([
+      "-p",
+      "--no-session-persistence",
+      "--model",
+      "opus",
+      "--effort",
+      "high",
       "-",
     ]);
   });
@@ -142,6 +208,39 @@ describe("task outcome (pass 2)", () => {
     expect(prompt).toContain("Task: Add a facts command");
     expect(prompt).toContain('"role": "user"');
     expect(prompt).toContain('"text": "done"');
+  });
+
+  test("includes the mechanical tool-usage summary when provided (#234)", () => {
+    const prompt = buildTaskOutcomePrompt(
+      "Add a facts command",
+      [candidate(0, "add it", undefined, "done")],
+      undefined,
+      "18 tool calls: 6× Edit, 5× Bash; 4 files edited.",
+    );
+    expect(prompt).toContain("Tool usage (mechanical summary, not narration):");
+    expect(prompt).toContain("18 tool calls: 6× Edit, 5× Bash; 4 files edited.");
+  });
+
+  test("summarizeToolUsage formats a deterministic one-liner (#234)", () => {
+    const inv = (tool: string, filePath?: string): SessionInvocation => ({
+      interactionSeq: 0,
+      tool,
+      category: "file-io",
+      ...(filePath ? { filePath } : {}),
+    });
+    const invocations: SessionInvocation[] = [
+      inv("Edit", "a.ts"),
+      inv("Edit", "a.ts"),
+      inv("Edit", "b.ts"),
+      inv("Bash"),
+      inv("Bash"),
+      inv("Read"),
+    ];
+    // Ranked by count desc; distinct edited files counted; trailing period.
+    expect(summarizeToolUsage(invocations)).toBe(
+      "6 tool calls: 3× Edit, 2× Bash, 1× Read; 2 files edited.",
+    );
+    expect(summarizeToolUsage([])).toBe("");
   });
 
   test("judgeTaskOutcome short-circuits with no provider or no dialogue", async () => {

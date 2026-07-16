@@ -40,7 +40,7 @@ function tmpConfig(contents = "{}"): string {
   return path;
 }
 
-const TOUCHED_ENV = ["ARGUS_LLM_PROVIDER", "ARGUS_TASK_ENABLED", "ARGUS_LOG_LEVEL"];
+const TOUCHED_ENV = ["ARGUS_DESKTOP_START_AT_LOGIN", "ARGUS_LLM_PROVIDER", "ARGUS_TASK_ENABLED", "ARGUS_LOG_LEVEL"];
 afterEach(() => {
   for (const key of TOUCHED_ENV) delete process.env[key];
 });
@@ -63,6 +63,11 @@ describe("describeSettings", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
     expect(paths).toEqual(["autoUpdate.enabled", "hub.url", "log.level"]);
+    // The desktop start-at-login toggle is temporarily removed from the UI: start-at-login is
+    // hard-disabled in the desktop shell until the app is signed with an org Developer ID cert.
+    expect(paths).not.toContain("desktop.startAtLogin");
+    // Silent mode (#255) is config-only by design — never in the UI, even when set.
+    expect(paths).not.toContain("desktop.silent");
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
     expect(paths).not.toContain("hub.key");
     const hubKey = general.sections.flatMap((s) => s.secretFields ?? []).find((f) => f.key === "hub.key")!;
@@ -100,12 +105,12 @@ describe("describeSettings", () => {
   test("LLM fields are gated on task extraction and shown per selected provider", () => {
     const provider = findSetting({}, "llm.provider");
     expect(provider.ui.label).toBe("LLM Provider");
-    expect(provider.ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    expect(provider.ui.activeWhen).toEqual({ path: "sessionInterpretation.enabled" });
     expect(provider.ui.effectiveDefault).toBe("claude-cli");
 
     // Every llm.* field shown in the UI is inactive until task extraction is on.
     for (const path of ["llm.model", "llm.command", "llm.claudeCliPath"]) {
-      expect(findSetting({}, path).ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+      expect(findSetting({}, path).ui.activeWhen).toEqual({ path: "sessionInterpretation.enabled" });
     }
 
     // Field relevance comes from the provider registry: command is the command provider only, the
@@ -143,15 +148,15 @@ describe("describeSettings", () => {
   });
 
   test("the hourly interpretation cap is a number field gated on task extraction, min 1", () => {
-    const s = findSetting({}, "taskExtraction.maxSessionsPerHour");
+    const s = findSetting({}, "sessionInterpretation.maxSessionsPerHour");
     expect(s.ui.control).toBe("number");
-    expect(s.ui.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    expect(s.ui.activeWhen).toEqual({ path: "sessionInterpretation.enabled" });
     expect(s.ui.min).toBe(1);
     // It's editable through the API (in the layout), unlike the advanced CLI-only settings.
-    expect(applySetting("taskExtraction.maxSessionsPerHour", "10", tmpConfig()).ok).toBe(true);
+    expect(applySetting("sessionInterpretation.maxSessionsPerHour", "10", tmpConfig()).ok).toBe(true);
     // 0 (and negatives) are rejected — 0 would silently disable the drain.
     const path = tmpConfig();
-    const zero = applySetting("taskExtraction.maxSessionsPerHour", "0", path);
+    const zero = applySetting("sessionInterpretation.maxSessionsPerHour", "0", path);
     expect(zero.ok).toBe(false);
     if (!zero.ok) expect(zero.status).toBe(400);
     expect(loadConfig(path)).toEqual({}); // not written
@@ -181,7 +186,7 @@ describe("describeSettings", () => {
       .sections.find((s) => (s.secretFields?.length ?? 0) > 0)!;
     const apiKey = section.secretFields![0]!;
     expect(apiKey.providerPath).toBe("llm.provider");
-    expect(apiKey.activeWhen).toEqual({ path: "taskExtraction.enabled" });
+    expect(apiKey.activeWhen).toEqual({ path: "sessionInterpretation.enabled" });
     // Each BYO provider maps to its standard key env var; the local/off providers are absent.
     expect(apiKey.secretNames).toEqual({
       "claude-api": "ANTHROPIC_API_KEY",
@@ -297,8 +302,8 @@ describe("applySetting", () => {
 
   test("coerces a toggle value", () => {
     const path = tmpConfig();
-    applySetting("taskExtraction.enabled", true, path);
-    expect(loadConfig(path).taskExtraction?.enabled).toBe(true);
+    applySetting("sessionInterpretation.enabled", true, path);
+    expect(loadConfig(path).sessionInterpretation?.enabled).toBe(true);
   });
 
   test("rejects a setting that isn't in the UI (e.g. max tokens) with a 404", () => {

@@ -47,7 +47,7 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
       first_prompt TEXT, archived INTEGER NOT NULL DEFAULT 0,
       friction_interruptions INTEGER, friction_rejections INTEGER,
       friction_compactions INTEGER, friction_turns INTEGER,
-      last_interruption_ms INTEGER, meta_json TEXT NOT NULL
+      last_interruption_ms INTEGER, title TEXT, summary TEXT, meta_json TEXT NOT NULL
     )
   `);
   db.run(`
@@ -63,6 +63,8 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
   db.run("CREATE TABLE resolved_tasks (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, task_json TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_interactions (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, initiator TEXT, disposition TEXT, compaction_count INTEGER, task_seq INTEGER, interaction_json TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_invocations (session_id TEXT, seq INTEGER, source TEXT, interaction_seq INTEGER, tool TEXT, category TEXT, mcp_server TEXT, mcp_tool TEXT, skill TEXT, file_path TEXT, date TEXT, cwd TEXT, args TEXT, approx_result_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_id, seq))");
+  db.run("CREATE TABLE labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT NOT NULL, created_at_ms INTEGER NOT NULL, deleted_at_ms INTEGER)");
+  db.run("CREATE TABLE label_assignments (label_id TEXT NOT NULL, target_kind TEXT NOT NULL, session_id TEXT NOT NULL, task_seq INTEGER, applied_by TEXT NOT NULL, applied_at_ms INTEGER NOT NULL)");
   db.query(
     `INSERT INTO resolved_sessions(session_id, source, project, cwd, first_ts, last_ts, message_count, meta_json)
      VALUES (?, 'claude', '/p', '/p', 1000000, ?, 1, ?)`,
@@ -107,6 +109,37 @@ describe("readHubUploadPayload", () => {
   test("throws on a non-argus database", () => {
     const path = buildArgusDb({ appId: 0 });
     expect(() => readHubUploadPayload(path)).toThrow(/not an Argus store/);
+  });
+
+  test("carries model-generated title/summary and applied labels", () => {
+    const path = buildArgusDb({ sessionId: "sess-l" });
+    const db = new Database(path);
+    db.query("UPDATE resolved_sessions SET title = ?, summary = ? WHERE session_id = ?")
+      .run("A concise title", "A few sentences of summary.", "sess-l");
+    db.query("INSERT INTO labels(id, name, origin, created_at_ms) VALUES ('lab-1', 'bug', 'user', 1)").run();
+    db.query("INSERT INTO labels(id, name, origin, created_at_ms) VALUES ('lab-2', 'auto', 'system', 1)").run();
+    // one session-level label, one task-level label
+    db.query("INSERT INTO label_assignments(label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms) VALUES ('lab-1', 'session', 'sess-l', NULL, 'user', 10)").run();
+    db.query("INSERT INTO label_assignments(label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms) VALUES ('lab-2', 'task', 'sess-l', 0, 'system', 11)").run();
+    db.close();
+
+    const payload = readHubUploadPayload(path);
+    expect(payload.rows.sessions[0]!.title).toBe("A concise title");
+    expect(payload.rows.sessions[0]!.summary).toBe("A few sentences of summary.");
+    expect(payload.rows.labels).toHaveLength(2);
+    const session = payload.rows.labels.find((l) => l.target_kind === "session")!;
+    expect(session).toMatchObject({ name: "bug", origin: "user", applied_by: "user", task_seq: null, source: "claude" });
+    const task = payload.rows.labels.find((l) => l.target_kind === "task")!;
+    expect(task).toMatchObject({ name: "auto", origin: "system", applied_by: "system", task_seq: 0 });
+  });
+
+  test("excludes soft-deleted labels", () => {
+    const path = buildArgusDb({ sessionId: "sess-d" });
+    const db = new Database(path);
+    db.query("INSERT INTO labels(id, name, origin, created_at_ms, deleted_at_ms) VALUES ('lab-x', 'gone', 'user', 1, 99)").run();
+    db.query("INSERT INTO label_assignments(label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms) VALUES ('lab-x', 'session', 'sess-d', NULL, 'user', 10)").run();
+    db.close();
+    expect(readHubUploadPayload(path).rows.labels).toEqual([]);
   });
 
   test("never carries retained prompt/response text, even with retention on (#120)", async () => {
@@ -702,6 +735,70 @@ describe("pushHubJson digest-based cursor invalidation", () => {
       const res = await pushHubJson("http://hub.test", "k", path);
       expect(res.ok).toBe(true);
       expect(c2[0]!.body.rows.sessions).toHaveLength(1); // archived flag change triggers re-upload
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("title/summary appearing (interpretation) without last_ts bump triggers re-upload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-sum", lastTs: 7_500_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true); }
+    finally { globalThis.fetch = originalFetch; }
+
+    // Interpretation writes title/summary without touching last_ts
+    const db = new Database(path);
+    db.query("UPDATE resolved_sessions SET title = ?, summary = ? WHERE session_id = ?")
+      .run("t", "s", "sess-sum");
+    db.close();
+
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1);
+      expect(c2[0]!.body.rows.sessions[0]!.summary).toBe("s");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("adding/removing a label without last_ts bump triggers re-upload", async () => {
+    const path = buildArgusDb({ sessionId: "sess-lab", lastTs: 7_600_000 });
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { await pushHubJson("http://hub.test", "k", path); }
+    finally { globalThis.fetch = originalFetch; }
+
+    // Apply a label without changing last_ts
+    let db = new Database(path);
+    db.query("INSERT INTO labels(id, name, origin, created_at_ms) VALUES ('lab-1', 'bug', 'user', 1)").run();
+    db.query("INSERT INTO label_assignments(label_id, target_kind, session_id, task_seq, applied_by, applied_at_ms) VALUES ('lab-1', 'session', 'sess-lab', NULL, 'user', 10)").run();
+    db.close();
+
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1);
+      expect(c2[0]!.body.rows.labels).toHaveLength(1);
+    } finally { globalThis.fetch = originalFetch; }
+
+    // Soft-delete the label — the session re-uploads again, now with no labels
+    db = new Database(path);
+    db.query("UPDATE labels SET deleted_at_ms = 20 WHERE id = 'lab-1'").run();
+    db.close();
+
+    const { fetch: f3, calls: c3 } = routedFetch();
+    globalThis.fetch = f3;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c3[0]!.body.rows.sessions).toHaveLength(1);
+      expect(c3[0]!.body.rows.labels).toEqual([]);
     } finally { globalThis.fetch = originalFetch; }
   });
 

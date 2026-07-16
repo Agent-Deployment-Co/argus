@@ -2,12 +2,6 @@ import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { STORE_APPLICATION_ID, STORE_SCHEMA_VERSION } from "./store/store.ts";
 import { PARSED_FRAGMENT_CONTRACT_VERSION } from "./store/store-contract.ts";
-// Wire contract from the shared schema package (single source of truth). SCHEMA_VERSION comes
-// from the zod-free entry so the CLI doesn't pull zod into its runtime.
-import { SCHEMA_VERSION } from "@agentdeploymentco/argus-schema/version";
-import type { PushPayload } from "@agentdeploymentco/argus-schema";
-export { SCHEMA_VERSION };
-export type { PushPayload };
 
 /** Pull the human-readable message out of a Hub/Worker JSON error body (`{ "error": "..." }`),
  *  falling back to the raw text when it isn't that shape. The Hub's 422 body states the actual
@@ -49,6 +43,8 @@ export interface HubUploadSession {
   friction_compactions: number | null;
   friction_turns: number | null;
   last_interruption_ms: number | null;
+  title: string | null;
+  summary: string | null;
   meta_json: string;
 }
 
@@ -109,12 +105,27 @@ export interface HubUploadInvocation {
   approx_result_tokens: number;
 }
 
+/** One label applied to a session or one of its tasks, denormalized: the label's `name`/`origin`
+ *  are carried inline so the Hub needs no separate label-definition sync. Session-scoped — rides
+ *  the same keep-set and cursor as tasks/interactions. Soft-deleted labels are excluded at read time. */
+export interface HubUploadLabel {
+  session_id: string;
+  source: string;
+  name: string;
+  origin: string;
+  applied_by: string;
+  target_kind: string;
+  task_seq: number | null;
+  applied_at_ms: number;
+}
+
 export interface HubUploadRows {
   sessions: HubUploadSession[];
   usage: HubUploadUsage[];
   tasks: HubUploadTask[];
   interactions: HubUploadInteraction[];
   invocations: HubUploadInvocation[];
+  labels: HubUploadLabel[];
 }
 
 export interface HubFingerprintEntry {
@@ -240,7 +251,8 @@ export function readHubUploadPayload(
       .query<HubUploadSession, any[]>(
         `SELECT s.session_id, s.source, s.project, s.cwd, s.first_ts, s.last_ts, s.message_count,
                 s.first_prompt, s.archived, s.friction_interruptions, s.friction_rejections,
-                s.friction_compactions, s.friction_turns, s.last_interruption_ms, s.meta_json
+                s.friction_compactions, s.friction_turns, s.last_interruption_ms,
+                s.title, s.summary, s.meta_json
          FROM resolved_sessions s${sessionWhere}`,
       )
       .all(...sessionParams);
@@ -263,7 +275,7 @@ export function readHubUploadPayload(
     if (keep.size === 0) {
       return {
         schemaVersion,
-        rows: { sessions: [], usage: [], tasks: [], interactions: [], invocations: [] },
+        rows: { sessions: [], usage: [], tasks: [], interactions: [], invocations: [], labels: [] },
         fingerprint,
       };
     }
@@ -303,6 +315,8 @@ export function readHubUploadPayload(
       )
       .all();
 
+    const allLabels = readLabelRows(db);
+
     return {
       schemaVersion,
       rows: {
@@ -311,6 +325,7 @@ export function readHubUploadPayload(
         tasks: allTasks.filter((t) => keepFn(t.session_id)),
         interactions: allInteractions.filter((i) => keepFn(i.session_id)),
         invocations: allInvocations.filter((v) => keepFn(v.session_id)),
+        labels: allLabels.filter((l) => keepFn(l.session_id)),
       },
       fingerprint,
     };
@@ -334,17 +349,55 @@ export function readSessionIds(dbPath: string, filters: HubUploadFilters = {}): 
   }
 }
 
+/** Read all applied labels (active definitions only), denormalized with the label name/origin and
+ *  the owning session's source, for the Hub upload. Shared by the payload read and the cursor scan
+ *  so both see the same label state. */
+function readLabelRows(db: Database): HubUploadLabel[] {
+  return db
+    .query<HubUploadLabel, []>(
+      `SELECT la.session_id AS session_id, s.source AS source, l.name AS name, l.origin AS origin,
+              la.applied_by AS applied_by, la.target_kind AS target_kind,
+              la.task_seq AS task_seq, la.applied_at_ms AS applied_at_ms
+       FROM label_assignments la
+       JOIN labels l ON l.id = la.label_id
+       JOIN resolved_sessions s ON s.session_id = la.session_id
+       WHERE l.deleted_at_ms IS NULL`,
+    )
+    .all();
+}
+
+/** Stable fingerprint of a session's applied labels — sorted so order doesn't matter, keyed by
+ *  name (so a global rename/delete propagates to the digest) plus origin/appliedBy/target. */
+function labelFingerprint(
+  labels: { name: string; origin: string; applied_by: string; target_kind: string; task_seq: number | null }[],
+): string {
+  return JSON.stringify(
+    labels
+      // JSON-encode each field as a tuple so a name containing the old ":"/"|" delimiters can't
+      // collide two distinct label states onto the same fingerprint (missed re-sync).
+      .map((l) => [l.target_kind, l.task_seq, l.name, l.origin, l.applied_by])
+      .sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)),
+  );
+}
+
 /** Compute a stable digest from session fields that can change without advancing last_ts:
- *  archive state, message count, task count, and first_prompt. */
+ *  archive state, message count, task count, first_prompt, the model-generated title/summary
+ *  (#234), and the applied-label fingerprint. */
 function computeSessionDigest(
   sessionId: string,
   archived: number,
   messageCount: number,
   taskCount: number,
   firstPrompt: string | null,
+  title: string | null,
+  summary: string | null,
+  labelFp: string,
 ): string {
   return createHash("sha256")
-    .update(`${sessionId}|${archived}|${messageCount}|${taskCount}|${firstPrompt ?? ""}`)
+    .update(
+      `${sessionId}|${archived}|${messageCount}|${taskCount}|${firstPrompt ?? ""}` +
+        `|${title ?? ""}|${summary ?? ""}|${labelFp}`,
+    )
     .digest("hex");
 }
 
@@ -388,6 +441,8 @@ export function readChangedHubSessionIds(
         archived: number;
         message_count: number;
         first_prompt: string | null;
+        title: string | null;
+        summary: string | null;
         task_count: number;
         cursor_session_id: string | null;
         cursor_last_ts: number | null;
@@ -395,6 +450,7 @@ export function readChangedHubSessionIds(
         cursor_parser_version: number | null;
       }, any[]>(
         `SELECT s.session_id, s.last_ts, s.archived, s.message_count, s.first_prompt,
+                s.title, s.summary,
                 COUNT(t.seq) AS task_count,
                 c.session_id AS cursor_session_id,
                 c.last_ts AS cursor_last_ts,
@@ -411,6 +467,15 @@ export function readChangedHubSessionIds(
       )
       .all(hubUrl, clientId, ...filterParams);
 
+    // Group applied labels by session so each session's digest reflects its label state (labels
+    // are edited independently of session activity, so they must feed the content digest).
+    const labelsBySession = new Map<string, HubUploadLabel[]>();
+    for (const label of readLabelRows(db)) {
+      const list = labelsBySession.get(label.session_id);
+      if (list) list.push(label);
+      else labelsBySession.set(label.session_id, [label]);
+    }
+
     const allSessionData = new Map<string, HubSessionCursorRow>();
     const changed: HubSessionCursorRow[] = [];
     for (const row of rows) {
@@ -420,6 +485,9 @@ export function readChangedHubSessionIds(
         row.message_count,
         row.task_count,
         row.first_prompt,
+        row.title,
+        row.summary,
+        labelFingerprint(labelsBySession.get(row.session_id) ?? []),
       );
       const cursorRow: HubSessionCursorRow = {
         sessionId: row.session_id,
@@ -577,7 +645,11 @@ export async function pushHubJson(
       return {
         sessionId: session.session_id,
         lastTs: session.last_ts,
-        contentDigest: cursor?.contentDigest ?? computeSessionDigest(session.session_id, session.archived, session.message_count, 0, session.first_prompt),
+        contentDigest: cursor?.contentDigest ?? computeSessionDigest(
+          session.session_id, session.archived, session.message_count, 0, session.first_prompt,
+          session.title, session.summary,
+          labelFingerprint(payload.rows.labels.filter((l) => l.session_id === session.session_id)),
+        ),
         parserVersion: cursor?.parserVersion ?? PARSED_FRAGMENT_CONTRACT_VERSION,
       };
     });

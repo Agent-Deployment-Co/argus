@@ -23,7 +23,7 @@ export const claudeApiProvider: ProviderDescriptor = {
   apiKeyEnv: "ANTHROPIC_API_KEY",
   defaultModel: DEFAULT_ANTHROPIC_MODEL,
   requiresApiKey: true,
-  configFields: ["model", "apiKeyEnv", "maxTokens"],
+  configFields: ["model", "apiKeyEnv", "maxTokens", "effort"],
   complete(call: ProviderCall) {
     return httpComplete(
       () => ({
@@ -39,6 +39,18 @@ export const claudeApiProvider: ProviderDescriptor = {
             model: call.model,
             max_tokens: call.maxTokens,
             ...(call.system ? { system: call.system } : {}),
+            // Structured output + reasoning effort both live under `output_config` (GA, no beta
+            // header). `format` constrains the response to the JSON schema; `effort` is passed
+            // through untranslated. Omitted entirely when unset — the default haiku model rejects an
+            // effort parameter, and an absent schema keeps the plain-text path.
+            ...(call.schema || call.effort
+              ? {
+                  output_config: {
+                    ...(call.schema ? { format: { type: "json_schema", schema: call.schema } } : {}),
+                    ...(call.effort ? { effort: call.effort } : {}),
+                  },
+                }
+              : {}),
             messages: [{ role: "user", content: call.prompt }],
           }),
         },

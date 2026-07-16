@@ -42,6 +42,12 @@ like) and saves them so the app is fast and your sessions are ready to
 explore. The index lives on your own computer. Nothing is uploaded unless you
 choose to sync.
 
+## Interaction
+
+One back-and-forth with an agent: a prompt you send and the reply it works out,
+including any tools it uses along the way. Argus counts interactions per session and
+per task as a measure of how much work each one took.
+
 ## MCP server
 
 A connector that gives an agent extra abilities, like access to a database, a

@@ -22,7 +22,14 @@ export type LlmProvider =
 
 /** The `llm.*` config fields a provider can meaningfully use. Drives which fields the settings UI
  *  shows for a selected provider (e.g. an API provider needs a key env var; the local CLI doesn't). */
-export type LlmConfigField = "model" | "baseUrl" | "apiKeyEnv" | "maxTokens" | "command" | "claudeCliPath";
+export type LlmConfigField =
+  | "model"
+  | "baseUrl"
+  | "apiKeyEnv"
+  | "maxTokens"
+  | "effort"
+  | "command"
+  | "claudeCliPath";
 
 /** Optional transient diagnostic sink for provider-level warnings. */
 export type ProviderLog = (message: string) => void;
@@ -36,6 +43,15 @@ export interface LlmRequest {
   model?: string;
   /** Overrides `config.maxTokens` for this call. */
   maxTokens?: number;
+  /** A JSON schema constraining the completion (#234). Providers that support structured output
+   *  natively enforce it and return validated JSON; providers that don't (claude-cli/command) ignore
+   *  it and fall back to the caller's prompt instructions + tolerant parsing. */
+  schema?: unknown;
+  /** Opaque, provider-native reasoning-effort passthrough (#234). Placed verbatim in each provider's
+   *  own parameter (Anthropic `output_config.effort`, OpenAI `reasoning_effort`, `claude --effort`, …);
+   *  the layer never translates it. Overrides `config.effort`. Omitted downstream when unset — the
+   *  cheap default models reject an effort parameter. */
+  effort?: string;
   /** Aborts the in-flight request (and kills a local subprocess). */
   signal?: AbortSignal;
 }
@@ -60,6 +76,9 @@ export interface ResolvedLlmConfig {
   baseUrl?: string;
   /** Per-request output cap for the HTTP providers. */
   maxTokens?: number;
+  /** Opaque provider-native reasoning-effort value (#234); passed through untranslated, omitted when
+   *  unset. Resolved like `model`. A per-request `LlmRequest.effort` overrides it. */
+  effort?: string;
   /** Command line for the `command` provider. */
   command?: string;
   /** Explicit path to the `claude` CLI (claude-cli provider); auto-resolved when unset. */
@@ -82,6 +101,10 @@ export interface ProviderCall {
   prompt: string;
   model: string;
   maxTokens: number;
+  /** JSON schema for structured output (#234); native-capable providers enforce it, others ignore it. */
+  schema?: unknown;
+  /** Opaque reasoning-effort value (#234); each provider places it in its own parameter when set. */
+  effort?: string;
   baseUrl?: string;
   apiKey?: string;
   command?: string;
@@ -122,6 +145,8 @@ export interface LocalProviderContext {
   prompt: string;
   /** Model passed to the `claude` CLI's `--model`. */
   model?: string;
+  /** Opaque effort value passed to the `claude` CLI's `--effort` when set (#234). */
+  effort?: string;
   /** Command line for the `command` provider. */
   command?: string;
   /** Explicit path to the `claude` CLI; auto-resolved when unset. */

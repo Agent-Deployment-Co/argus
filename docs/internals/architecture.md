@@ -223,7 +223,8 @@ dashboard tab keeps working across sidecar restarts. The app auto-updates from G
 ## Configuration
 
 User settings live in `argus.json` under `$ARGUS_CONFIG_DIR` (the config peer of `argus.db`), resolved
-through a uniform `flag > env > argus.json > default` chain. It's the home for the task-interpretation
+through a uniform `managed > flag > env > argus.json > default` chain (`managed` = org MDM settings;
+see `managed-config.ts`). It's the home for the task-interpretation
 toggle and provider settings. See [configuration.md](./configuration.md).
 
 ## Adding a source

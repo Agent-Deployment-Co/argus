@@ -1,8 +1,9 @@
 import DefaultTheme from 'vitepress/theme'
 import { useData, useRoute } from 'vitepress'
-import { h, nextTick, watch } from 'vue'
+import { h, nextTick, onMounted, watch } from 'vue'
 import GithubStars from './GithubStars.vue'
 import DownloadButtons from './DownloadButtons.vue'
+import { initPostHog } from './posthog'
 import './style.css'
 
 // Lazily loaded once: mermaid is large, so only pull it in when a page that
@@ -109,6 +110,10 @@ export default {
   setup() {
     const route = useRoute()
     const { isDark } = useData()
+    // Start PostHog once the app is mounted in the browser. It's a no-op unless
+    // PUBLIC_POSTHOG_PROJECT_TOKEN was set at build time; pageviews (including
+    // client-side navigations) and delegated CTA clicks are handled from there.
+    onMounted(() => initPostHog())
     // Re-render on navigation and theme change. nextTick lets the new page DOM
     // mount before we look for diagram placeholders.
     watch(

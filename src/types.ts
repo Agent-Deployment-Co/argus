@@ -1,22 +1,92 @@
-// Data model for argus. The stable wire-contract types come from the shared schema package.
-// Local dashboard types extend that contract with fields this CLI can emit ahead of a schema
-// package release.
+// Data model for argus. The base Dashboard/SessionRow shapes below mirror what was formerly the
+// shared `@agentdeploymentco/argus-schema` wire contract (retired in #235); CLI-only fields extend
+// them from there.
 // CLI-internal parsing types (MessageRecord, ParseResult, …) are defined locally below.
-import type {
-  Dashboard as SchemaDashboard,
-  NamedUsage,
-  SessionRow as SchemaSessionRow,
-  Usage,
-} from "@agentdeploymentco/argus-schema";
 import type { TaskFact } from "./store/store-contract.ts";
 import type { ToolCategory } from "./tool-categories.ts";
-export type {
-  DayBucket,
-  NamedUsage,
-  PluginRow,
-  Usage,
-} from "@agentdeploymentco/argus-schema";
 export type { ToolCategory } from "./tool-categories.ts";
+
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+}
+
+export interface DayBucket {
+  date: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  cost: number;
+}
+
+export interface NamedUsage {
+  name: string;
+  messages: number;
+  total: number;
+  cost: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface PluginRow {
+  name: string;
+  marketplace: string;
+  enabled: boolean;
+  used: boolean;
+  version?: string;
+  installedAt?: string;
+  skills: string[];
+  skillMessages: number;
+  skillTokens: number;
+  skillCost: number;
+  mcpCalls: number;
+}
+
+interface SchemaSessionRow {
+  source: "claude" | "codex" | "gemini";
+  sessionId: string;
+  project: string;
+  start: number;
+  end: number;
+  durationMs: number;
+  messages: number;
+  models: string[];
+  topSkills: string[];
+  toolCounts: Record<string, number>;
+  filesTouched: string[];
+  total: number;
+  cost: number;
+  firstPrompt: string;
+  summary: string;
+  user?: string;
+}
+
+interface SchemaDashboard {
+  generatedAtMs: number;
+  range: { start: string; end: string };
+  totals: { sessions: number; messages: number; usage: Usage; total: number; cost: number };
+  unpriced: string[];
+  daily: DayBucket[];
+  byModel: NamedUsage[];
+  bySource: NamedUsage[];
+  bySkill: NamedUsage[];
+  skillInvocations: { name: string; count: number; plugin: string | null; sampleArgs: string }[];
+  byMcpServer: {
+    server: string;
+    calls: number;
+    approxResultTokens: number;
+    topTools: { tool: string; count: number }[];
+  }[];
+  heaviestToolResults: { tool: string; count: number; approxTokens: number }[];
+  byPlugin: PluginRow[];
+  byProject: NamedUsage[];
+  sessions: SessionRow[];
+  byUser?: NamedUsage[];
+}
 
 export type AgentSource = "claude" | "codex" | "gemini" | "cowork" | "claude-chat";
 
@@ -32,10 +102,29 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   agentMessages: number | null;
   /** CLI-only: raw turn count when the source exposes it. */
   rawTurns: number | null;
+  /** CLI-only (#124): number of interactions (prompt→loop→response units) in the session. */
+  interactions?: number;
+  /** CLI-only (#124): count of distinct skills used in the session (topSkills is only the top 3). */
+  skillsUsed?: number;
+  /** CLI-only (#124): every distinct skill used in the session, most-used first (topSkills is capped
+   *  at 3; this is the full list for the detail sidebar). */
+  skills?: string[];
+  /** CLI-only (#124): per-tool usage breakdown for the session (name/category/interactions/calls/
+   *  result tokens), for the session-detail tool table. */
+  toolBreakdown?: SessionToolStat[];
   /** CLI-only (#38): per-session health, stripped by the server until the contract adopts it. */
   health: SessionHealth;
-  /** CLI-only: tasks generated for this session via session task extraction. */
+  /** CLI-only: tasks generated for this session via session interpretation. */
   tasks?: TaskFact[];
+  /** CLI-only (#234): the model-generated session title, when interpreted; null otherwise. Not on the
+   *  sync wire (`summary` already is; `title` stays local), stripped on push like `tasks`/`health`. */
+  title?: string | null;
+  /** CLI-only (#234): whether session interpretation has run for this session. Lets the UI show "No
+   *  tasks found." (ran, produced none) vs "Interpretation pending." (not yet run). */
+  interpreted?: boolean;
+  /** CLI-only: local-only UI state (never pushed by sync). Hidden sessions are excluded from the
+   *  sessions list and search, but their usage still counts in aggregate rollups. */
+  isHidden: boolean;
 };
 
 /**
@@ -81,6 +170,19 @@ export interface ToolStat {
   approxResultTokens: number;
 }
 
+/** Per-tool usage within a single session (#124): like ToolStat but scoped to one session, so the
+ *  cross-session `sessions` count is replaced by `interactions` (distinct interactions that used it). */
+export interface SessionToolStat {
+  name: string;
+  category: ToolCategory;
+  /** Display label — `server · tool` for MCP tools, else the raw name. */
+  display: string;
+  /** Distinct interactions that invoked this tool. */
+  interactions: number;
+  calls: number;
+  approxResultTokens: number;
+}
+
 /** Tool calls folded by category. */
 export interface ToolCategoryStat {
   category: ToolCategory;
@@ -94,8 +196,8 @@ export interface ToolCategoryStat {
 export type Dashboard = Omit<SchemaDashboard, "sessions"> & {
   bySource: NamedUsage[];
   sessions: SessionRow[];
-  // CLI-only fields emitted ahead of a schema-package release (stripped on push until the
-  // wire contract adopts them).
+  // CLI-only fields, not (yet) part of the sync wire contract (stripped on push until it
+  // adopts them).
   byTool: ToolStat[];
   byToolCategory: ToolCategoryStat[];
   frictionTotals: FrictionTotals;

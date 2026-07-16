@@ -1,14 +1,26 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { APP_HEADER, fetchOrOffline, jsonOrThrow } from "./http";
 import { KNOWN_SOURCES, type SnapshotFilters } from "./filters";
-import type { SessionListResponse, SessionRow, SessionSort, TaskMetrics } from "../types";
+import type {
+  SessionInteractionsResponse,
+  SessionListResponse,
+  SessionProvenance,
+  SessionRow,
+  SessionSort,
+  TaskMetrics,
+} from "../types";
 
 /** Everything that narrows the paginated session list: the global snapshot filters (date/source)
- *  plus the Sessions-local refinements (project label, free text, generated toggle) and the sort. */
+ *  plus the Sessions-local refinements (project label, free text, file path) and the sort. `q`/`file`
+ *  (#155) run a store-side search (conversation/task text, file-path substring). */
 export interface SessionListFilters extends SnapshotFilters {
   project?: string;
   q?: string;
-  includeGenerated?: boolean;
+  file?: string;
+  /** Restrict to sessions carrying these label ids. */
+  label?: string[];
+  /** How `label` narrows when it has more than one id: "any" (union, default) or "all" (intersection). */
+  labelMode?: "any" | "all";
   sort: SessionSort;
 }
 
@@ -27,13 +39,32 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
   }
   if (filters.project) params.set("project", filters.project);
   if (filters.q) params.set("q", filters.q);
-  if (filters.includeGenerated) params.set("includeGenerated", "1");
+  if (filters.file) params.set("file", filters.file);
+  if (filters.label?.length) {
+    params.set("label", filters.label.join(","));
+    if (filters.labelMode === "all") params.set("labelMode", "all");
+  }
   return `/api/sessions?${params}`;
 }
 
 export async function fetchSessions(filters: SessionListFilters, offset: number): Promise<SessionListResponse> {
   const res = await fetchOrOffline(sessionsUrl(filters, offset));
   return jsonOrThrow<SessionListResponse>(res, "Failed to load sessions");
+}
+
+/** Page through every session matching `filters` (beyond what's loaded in the list), returning just
+ *  the ids — backs "Select all N matching sessions" in bulk mode. Reuses the same filter/pagination
+ *  contract as the list itself rather than a dedicated "resolve filter to ids" endpoint. */
+export async function fetchAllSessionIds(filters: SessionListFilters): Promise<string[]> {
+  const ids: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchSessions(filters, offset);
+    ids.push(...page.rows.map((r) => r.sessionId));
+    offset += page.rows.length;
+    if (offset >= page.total || page.rows.length === 0) break;
+  }
+  return ids;
 }
 
 /** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery so "Load more"
@@ -82,6 +113,27 @@ export async function reindexSession(sessionId: string): Promise<ReindexResponse
   return jsonOrThrow<ReindexResponse>(res, "Failed to refresh");
 }
 
+/** Flag/unflag a session as hidden (local-only UI state): hidden sessions drop out of the sessions
+ *  list and search, but their usage still counts in aggregate rollups. */
+export async function setSessionHidden(sessionId: string, hidden: boolean): Promise<{ hidden: boolean }> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/hidden`, {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ hidden }),
+  });
+  return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide session" : "Failed to unhide session");
+}
+
+/** Flag/unflag many sessions as hidden at once (bulk mode). */
+export async function setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<{ hidden: boolean }> {
+  const res = await fetchOrOffline("/api/sessions/bulk/hidden", {
+    method: "POST",
+    headers: { ...APP_HEADER, "content-type": "application/json" },
+    body: JSON.stringify({ sessionIds, hidden }),
+  });
+  return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide sessions" : "Failed to unhide sessions");
+}
+
 /** Fetch every task's metrics for a session on demand (one request, keyed by task id) — computed
  *  server-side from the messages attributed to each task. Backs both the task list (tokens per row)
  *  and the detail drawer. */
@@ -96,5 +148,35 @@ export function useSessionTaskMetrics(sessionId: string) {
   return useQuery({
     queryKey: ["session-task-metrics", sessionId],
     queryFn: () => fetchSessionTaskMetrics(sessionId),
+  });
+}
+
+/** A session's interaction timeline (prompt -> loop summary -> response), fetched on demand. */
+export async function fetchSessionInteractions(sessionId: string): Promise<SessionInteractionsResponse> {
+  const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}/interactions`);
+  return jsonOrThrow<SessionInteractionsResponse>(res, "Failed to load the session timeline");
+}
+
+/** The interaction timeline, fetched only when `enabled` (i.e. the Timeline tab is open). */
+export function useSessionInteractionsQuery(sessionId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["session-interactions", sessionId],
+    queryFn: () => fetchSessionInteractions(sessionId!),
+    enabled: enabled && Boolean(sessionId),
+  });
+}
+
+/** A session's structural-index provenance (transcript files + lineage), fetched on demand. */
+export async function fetchSessionProvenance(sessionId: string): Promise<SessionProvenance> {
+  const res = await fetchOrOffline(`/api/session/${encodeURIComponent(sessionId)}/provenance`);
+  return jsonOrThrow<SessionProvenance>(res, "Failed to load session data");
+}
+
+/** Session provenance, fetched only when `enabled` (i.e. the Details tab is open). */
+export function useSessionProvenanceQuery(sessionId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["session-provenance", sessionId],
+    queryFn: () => fetchSessionProvenance(sessionId!),
+    enabled: enabled && Boolean(sessionId),
   });
 }

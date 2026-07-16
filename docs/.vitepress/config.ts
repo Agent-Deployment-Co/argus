@@ -7,6 +7,13 @@ export default defineConfig({
     "Argus is free, open source software that analyzes AI agent usage to help everyone be more productive with AI. It supports Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI.",
   cleanUrls: true,
   lastUpdated: true,
+  vite: {
+    // Expose PUBLIC_*-prefixed env vars to the client build (in addition to
+    // Vite's default VITE_*), so the PostHog config in theme/posthog.ts can read
+    // PUBLIC_POSTHOG_PROJECT_TOKEN / PUBLIC_POSTHOG_HOST. Same var names as the
+    // adc.co site, so the same GitHub Actions repo variable feeds both builds.
+    envPrefix: ['VITE_', 'PUBLIC_']
+  },
   // Contributor/agent material kept in the repo but excluded from the published
   // site: authoring guides (docs/contributing/) and the internal/architecture
   // reference (docs/internals/).
@@ -106,6 +113,8 @@ export default defineConfig({
         text: 'Reference',
         items: [
           { text: 'CLI Reference', link: '/cli-reference' },
+          { text: 'Settings Reference', link: '/settings-reference' },
+          { text: 'Changelog', link: '/changelog' },
           { text: 'Terminology', link: '/terminology' },
           { text: 'Privacy and Security', link: '/privacy' },
           { text: 'About', link: '/about' }

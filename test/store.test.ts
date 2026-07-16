@@ -15,6 +15,7 @@ import { Database } from "bun:sqlite";
 import {
   STORE_APPLICATION_ID,
   STORE_SCHEMA_VERSION,
+  LabelError,
   StoreError,
   openStore,
   rebuildStore,
@@ -199,14 +200,23 @@ function rawExec(db: Database, sql: string): void {
   db.run(sql);
 }
 
-/** Strip the v19 interpretation columns + partial index (#153) so a test that degrades a current-schema
- *  store to a pre-19 version can re-run the 18 -> 19 migration without colliding with columns the
- *  current CREATE_SCHEMA_SQL already created. Mirrors how these tests strip every other post-version add. */
-function dropInterpretationColumns(db: Database): void {
+/** Strip the v19 interpretation columns + partial index (#153), the v20 search FTS tables + file_path
+ *  index (#155), and the v21 title/summary columns (#234) so a test that degrades a current-schema store
+ *  to a pre-19/20/21 version can re-run the migration chain without colliding with things the current
+ *  CREATE_SCHEMA_SQL already created. Mirrors how these tests strip every other post-version add. */
+function dropPostV18Schema(db: Database): void {
   rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_interpret_pending");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN content_indexed_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpreted_at_ms");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN interpretation_version");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_interaction_text_fts");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_tasks_fts");
+  rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
+  rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
+  rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
 }
 
 function rawGet<T>(db: Database, sql: string): T | undefined {
@@ -472,7 +482,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 4");
     });
 
@@ -515,7 +525,7 @@ describe("SQLite store", () => {
     // A store upgraded by that build reaches v16 without the table. Drop it and stamp v16.
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP TABLE IF EXISTS hub_session_cursors");
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 16");
     });
 
@@ -536,6 +546,109 @@ describe("SQLite store", () => {
       await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     ]);
     expect(tableBack?.name).toBe("hub_session_cursors");
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("repairs an early v22 store stamped before label tables existed", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:v22-label-repair",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+      },
+    ]);
+    await initial.close();
+
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS label_assignments");
+      await rawExec(db, "DROP TABLE IF EXISTS labels");
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      await rawExec(db, "PRAGMA user_version = 22");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:v22-label-repair")).toBe(true);
+      expect(await migrated.listLabels()).toEqual([]);
+    } finally {
+      await migrated.close();
+    }
+
+    const [labels, assignments, version] = await withRawDatabase(path, async (db) => [
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'labels'",
+      ),
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'label_assignments'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(labels?.name).toBe("labels");
+    expect(assignments?.name).toBe("label_assignments");
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("repairs a store stamped past the session title migration without title artifacts", async () => {
+    const path = storePath();
+    const initial = await openStore({ path });
+    await initial.materializeSessions("codex", [
+      {
+        meta: {
+          source: "codex",
+          sessionId: "codex:title-repair",
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: "/tmp/p/rollout.jsonl",
+        },
+        messages: [],
+      },
+    ]);
+    await initial.close();
+
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
+      await rawExec(db, `PRAGMA user_version = ${STORE_SCHEMA_VERSION}`);
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:title-repair")).toBe(true);
+      expect(await migrated.searchSessions({ text: "anything" })).toEqual({
+        ids: new Set(),
+        matches: new Map(),
+      });
+    } finally {
+      await migrated.close();
+    }
+
+    const [title, summary, fts, version] = await withRawDatabase(path, async (db) => [
+      rawAll<{ name: string }>(db, "PRAGMA table_info(resolved_sessions)")
+        .map((row) => row.name)
+        .includes("title"),
+      rawAll<{ name: string }>(db, "PRAGMA table_info(resolved_sessions)")
+        .map((row) => row.name)
+        .includes("summary"),
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resolved_sessions_fts'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(title).toBe(true);
+    expect(summary).toBe(true);
+    expect(fts?.name).toBe("resolved_sessions_fts");
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 
@@ -1011,6 +1124,131 @@ describe("SQLite store", () => {
     }
   });
 
+  test("setSessionsHidden excludes hidden sessions from the list/search, not their usage", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const msg = (sid: string) => ({
+        source: "codex" as const,
+        sessionId: sid,
+        project: "p",
+        cwd: "/tmp/proj-a",
+        gitBranch: "",
+        ts: Date.parse("2026-06-01T00:00:00Z"),
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 10, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: "codex:visible", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/a.jsonl" },
+          messages: [msg("codex:visible")],
+        },
+        {
+          meta: { source: "codex", sessionId: "codex:hideme", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/b.jsonl" },
+          messages: [msg("codex:hideme")],
+        },
+      ]);
+
+      await store.setSessionsHidden(["codex:hideme"], true);
+
+      // Excluded from the default (list) read...
+      const visible = await store.readSessionAggregates();
+      expect(visible.map((s) => s.meta.sessionId).sort()).toEqual(["codex:visible"]);
+      // ...but included when a caller explicitly opts in...
+      const withHidden = await store.readSessionAggregates({ includeHidden: true });
+      expect(withHidden.map((s) => s.meta.sessionId).sort()).toEqual(["codex:hideme", "codex:visible"]);
+      // ...and excluded from search too.
+      const search = await store.searchSessions({ text: "" });
+      expect(search.ids).toEqual(new Set(["codex:visible"]));
+
+      // Unhiding restores default visibility.
+      await store.setSessionsHidden(["codex:hideme"], false);
+      const restored = await store.readSessionAggregates();
+      expect(restored.map((s) => s.meta.sessionId).sort()).toEqual(["codex:hideme", "codex:visible"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("setSessionsHidden survives a re-materialize (reindex must not silently unhide)", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      const msg = (sid: string) => ({
+        source: "codex" as const,
+        sessionId: sid,
+        project: "p",
+        cwd: "/tmp/proj-a",
+        gitBranch: "",
+        ts: Date.parse("2026-06-01T00:00:00Z"),
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: { input: 10, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      });
+      const session = (extraMessage: boolean) => ({
+        meta: { source: "codex" as const, sessionId: "codex:hideme", project: "p", cwd: "/tmp/proj-a", filePath: "/tmp/proj-a/a.jsonl" },
+        messages: extraMessage ? [msg("codex:hideme"), msg("codex:hideme")] : [msg("codex:hideme")],
+      });
+
+      await store.materializeSessions("codex", [session(false)]);
+      await store.setSessionsHidden(["codex:hideme"], true);
+      expect(await store.readSessionHidden("codex:hideme")).toBe(true);
+
+      // An unchanged re-materialize (e.g. a bare `index refresh` or `index --watch` no-op pass) must
+      // not reset is_hidden back to its default.
+      await store.materializeSessions("codex", [session(false)]);
+      expect(await store.readSessionHidden("codex:hideme")).toBe(true);
+
+      // Neither must a re-materialize that changes real content (a genuine reindex).
+      await store.materializeSessions("codex", [session(true)]);
+      expect(await store.readSessionHidden("codex:hideme")).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("v22 -> v23 migration adds is_hidden and preserves existing data", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: "codex:v22-hidden", project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+          messages: [],
+        },
+      ]);
+    } finally {
+      await store.close();
+    }
+    // Degrade to v22: drop the is_hidden column/index and set the version back, simulating a store
+    // that predates this migration.
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      await rawExec(db, "PRAGMA user_version = 22");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      expect((await migrated.readResolved()).sessions.has("codex:v22-hidden")).toBe(true);
+      // The backfilled column defaults to visible (not hidden), and setSessionsHidden works post-migration.
+      expect((await migrated.readSessionAggregates()).map((s) => s.meta.sessionId)).toEqual(["codex:v22-hidden"]);
+      await migrated.setSessionsHidden(["codex:v22-hidden"], true);
+      expect(await migrated.readSessionAggregates()).toEqual([]);
+    } finally {
+      await migrated.close();
+    }
+    const version = await withRawDatabase(path, (db) =>
+      rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
   test("migrates a v8 store to v9, backfilling usage columns from record_json", async () => {
     const path = storePath();
     const sid = "codex:backfill";
@@ -1072,7 +1310,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 8");
     });
 
@@ -1229,7 +1467,7 @@ describe("SQLite store", () => {
         db,
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 10");
     });
 
@@ -1313,7 +1551,7 @@ describe("SQLite store", () => {
         "CREATE TABLE resolved_tool_results (session_id TEXT NOT NULL, name TEXT NOT NULL, count INTEGER NOT NULL, approx_tokens INTEGER NOT NULL, PRIMARY KEY (session_id, name))",
       );
       await rawExec(db, `INSERT INTO resolved_tool_results VALUES ('${sid}', 'Bash', 2, 100), ('${sid}', 'Read', 1, 30)`);
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 11");
     });
 
@@ -1382,7 +1620,7 @@ describe("SQLite store", () => {
       await rawExec(db, "ALTER TABLE resolved_usage ADD COLUMN task_seq INTEGER");
       await rawExec(db, "CREATE INDEX resolved_usage_task ON resolved_usage(session_id, task_seq)");
       await rawExec(db, `UPDATE resolved_usage SET task_seq = 0 WHERE session_id = '${sid}'`);
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       await rawExec(db, "PRAGMA user_version = 12");
     });
 
@@ -1628,7 +1866,7 @@ describe("conversation text retention (#120)", () => {
     // Degrade to v17: drop the v18 table and set the version back, simulating an older store.
     await withRawDatabase(path, async (db) => {
       rawExec(db, "DROP TABLE resolved_interaction_text");
-      dropInterpretationColumns(db);
+      dropPostV18Schema(db);
       rawExec(db, "PRAGMA user_version = 17");
     });
 
@@ -1644,5 +1882,522 @@ describe("conversation text retention (#120)", () => {
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+});
+
+describe("session search (#155)", () => {
+  const sid = "claude:search";
+  const pos = (i: number) => ({ originKey: "f", recordIndex: i, itemIndex: 0 });
+  const sessionFixture = () => ({
+    meta: { source: "claude" as const, sessionId: sid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+    messages: [
+      {
+        source: "claude" as const, sessionId: sid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 1000,
+        date: "2026-06-01", model: "claude-opus-4",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null, interactionSeq: 0,
+        toolUses: [{ name: "Edit", category: "file-io" as const, filePath: "src/pricing.ts" }],
+      },
+    ],
+    interactions: [
+      {
+        id: "i0", source: "claude" as const, sourceSessionId: sid, seq: 0, initiator: "human" as const,
+        disposition: "completed" as const, compactionCount: 0, timestampMs: 1000,
+        promptPosition: pos(0), position: pos(0),
+        promptText: "let's discuss the flibbertigibbet outage", responseText: "fixed the flibbertigibbet outage",
+      },
+    ],
+  });
+  const otherSid = "claude:search-other";
+  const otherSessionFixture = () => ({
+    meta: { source: "claude" as const, sessionId: otherSid, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r2.jsonl" },
+    messages: [
+      {
+        source: "claude" as const, sessionId: otherSid, project: "p", cwd: "/tmp/p", gitBranch: "", ts: 2000,
+        date: "2026-06-02", model: "claude-opus-4",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null, interactionSeq: 0, toolUses: [],
+      },
+    ],
+    interactions: [
+      {
+        id: "j0", source: "claude" as const, sourceSessionId: otherSid, seq: 0, initiator: "human" as const,
+        disposition: "completed" as const, compactionCount: 0, timestampMs: 2000,
+        promptPosition: pos(0), position: pos(0),
+        promptText: "totally unrelated small talk", responseText: "sure thing",
+      },
+    ],
+  });
+
+  test("finds a session by a word in retained conversation text, with a snippet", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      const result = await store.searchSessions({ text: "flibbertigibbet" });
+      expect(result.ids).toEqual(new Set([sid]));
+      const match = result.matches.get(sid);
+      expect(match?.sources).toEqual(["conversation"]);
+      expect(match?.count).toBeGreaterThan(0);
+      expect(match?.snippet).toContain("flibbertigibbet");
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("finds a session by file: substring, independent of text search", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      const result = await store.searchSessions({ file: "pricing" });
+      expect(result.ids).toEqual(new Set([sid]));
+      expect(result.matches.size).toBe(0); // file: is metadata-only, no FTS snippet
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a non-matching term returns nothing", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      const result = await store.searchSessions({ text: "nonexistentxyz" });
+      expect(result.ids.size).toBe(0);
+      expect(result.matches.size).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("finds a session via task text (description/outcomeReason/signals), tagged source: task", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:search",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "Investigate the quuxwidget regression",
+        outcomeReason: "Resolved after a config change",
+        signals: ["frustration:low"],
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+
+      const result = await store.searchSessions({ text: "quuxwidget" });
+      expect(result.ids).toEqual(new Set([sid]));
+      expect(result.matches.get(sid)?.sources).toEqual(["task"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("finds a session via the model title/summary, tagged source: summary (#234)", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture(), otherSessionFixture()], { retainText: true });
+      // No tasks — only the model title/summary, which the #234 FTS index must make searchable.
+      await store.writeSessionTasks(sid, [], "v2", "Zephyrmodule refactor", "Reworked the glorbfunction loader and its tests.");
+
+      const byTitle = await store.searchSessions({ text: "Zephyrmodule" });
+      expect(byTitle.ids).toEqual(new Set([sid]));
+      expect(byTitle.matches.get(sid)?.sources).toEqual(["summary"]); // distinct summary source (#234), not "task"
+      // A term appearing only in the summary matches too.
+      expect((await store.searchSessions({ text: "glorbfunction" })).ids).toEqual(new Set([sid]));
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a word appearing only in .evidence does not match (evidence is deliberately excluded)", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:evidence-only",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "Look into the reported slowdown",
+        evidence: "interactions: 0, 1",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+
+      const result = await store.searchSessions({ text: "interactions" });
+      expect(result.ids.size).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a session matching conversation + task lists both sources and sums the counts", async () => {
+    const store = await openStore({ path: storePath() });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:both",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "The flibbertigibbet outage, summarized",
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+
+      const result = await store.searchSessions({ text: "flibbertigibbet" });
+      expect(result.ids).toEqual(new Set([sid]));
+      const match = result.matches.get(sid);
+      expect(match?.sources).toEqual(["task", "conversation"]); // ordered most-distilled-first
+      expect(match?.count).toBe(3); // 2 conversation chunks (prompt+response) + 1 task
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("v19 -> v20 migration backfills both FTS indexes from existing data", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:migrate",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "The flibbertigibbet outage, summarized",
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1");
+    } finally {
+      await store.close();
+    }
+    // Degrade to v19: drop the additions of every migration that will re-run from here — v20's search
+    // FTS/file_path index, v21's title/summary columns (#234), and v23's is_hidden column (v22's label
+    // tables are created with IF NOT EXISTS, so they don't need dropping) — and set the version back,
+    // simulating an older store that already has interaction text + task data on disk but no search
+    // index yet.
+    await withRawDatabase(path, (db) => {
+      rawExec(db, "DROP TABLE resolved_interaction_text_fts");
+      rawExec(db, "DROP TABLE resolved_tasks_fts");
+      rawExec(db, "DROP TABLE IF EXISTS resolved_sessions_fts");
+      rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN title");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
+      rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      rawExec(db, "PRAGMA user_version = 19");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      const result = await migrated.searchSessions({ text: "flibbertigibbet" });
+      expect(result.ids).toEqual(new Set([sid]));
+      expect(result.matches.get(sid)?.sources).toEqual(["task", "conversation"]);
+    } finally {
+      await migrated.close();
+    }
+    const version = await withRawDatabase(path, (db) =>
+      rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+});
+
+describe("session/task labels", () => {
+  async function open() {
+    const cache = await openStore({ path: storePath() });
+    return cache;
+  }
+
+  // Materialize a bare session so label_assignments has a real session to point at (though there is
+  // no FK). A re-materialize (even empty -> empty, which is not "fewer" messages, so the don't-regress
+  // guard doesn't skip it) rewrites the session via DELETE + CASCADE — the case labels must survive.
+  async function materialize(
+    cache: Awaited<ReturnType<typeof openStore>>,
+    sessionId: string,
+  ): Promise<void> {
+    await cache.materializeSessions("claude", [
+      {
+        meta: {
+          source: "claude",
+          sessionId,
+          project: "p",
+          cwd: "/tmp/p",
+          filePath: `/tmp/p/${sessionId}.jsonl`,
+        },
+        messages: [],
+      },
+    ]);
+  }
+
+  test("creates, lists (name-sorted), and enforces case-insensitive uniqueness among active labels", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      expect(bug.id).toStartWith("label:");
+      expect(bug.origin).toBe("user");
+      expect(bug.deletedAtMs).toBeUndefined();
+      await cache.createLabel({ name: "  urgent  " }); // trimmed
+      await cache.createLabel({ name: "Alpha", origin: "system" });
+
+      const labels = await cache.listLabels();
+      expect(labels.map((l) => l.name)).toEqual(["Alpha", "bug", "urgent"]);
+      expect(labels.find((l) => l.name === "Alpha")?.origin).toBe("system");
+
+      // Case-insensitive duplicate is rejected.
+      await expect(cache.createLabel({ name: "BUG" })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "name_conflict",
+      });
+      // Empty / whitespace name is rejected.
+      await expect(cache.createLabel({ name: "   " })).rejects.toBeInstanceOf(LabelError);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("renames a label and blocks a rename that collides with another active label", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await cache.createLabel({ name: "feature" });
+
+      const renamed = await cache.renameLabel(bug.id, "defect");
+      expect(renamed.name).toBe("defect");
+      expect((await cache.listLabels()).map((l) => l.name)).toEqual(["defect", "feature"]);
+
+      await expect(cache.renameLabel(bug.id, "FEATURE")).rejects.toMatchObject({
+        code: "name_conflict",
+      });
+      await expect(cache.renameLabel("label:missing", "whatever")).rejects.toMatchObject({
+        code: "not_found",
+      });
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("soft-deletes: drops from the active list, frees the name for reuse, hides from reads", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+
+      await cache.deleteLabel(bug.id);
+      expect(await cache.listLabels()).toEqual([]);
+      expect((await cache.listLabels({ includeDeleted: true })).length).toBe(1);
+      // A deleted label's application no longer surfaces.
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+
+      // The freed name can be created again (a fresh, distinct label).
+      const reborn = await cache.createLabel({ name: "bug" });
+      expect(reborn.id).not.toBe(bug.id);
+      expect((await cache.listLabels()).map((l) => l.name)).toEqual(["bug"]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("assigns/unassigns to sessions and tasks, dedups re-application, and folds reads by target", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      const urgent = await cache.createLabel({ name: "urgent", origin: "system" });
+      await materialize(cache, "s1");
+
+      // Session-level: bug (user), urgent (system-applied).
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(urgent.id, { sessionId: "s1" }, "system");
+      // Re-applying is a no-op (no duplicate row, original provenance kept).
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+
+      // Task-level: bug on task 0, urgent on task 2.
+      await cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: 0 });
+      await cache.assignLabel(urgent.id, { sessionId: "s1", taskSeq: 2 });
+
+      const labels = await cache.readSessionLabels("s1");
+      expect(labels.session.map((l) => l.name)).toEqual(["bug", "urgent"]);
+      expect(labels.session.find((l) => l.name === "bug")?.appliedBy).toBe("user");
+      expect(labels.session.find((l) => l.name === "urgent")?.appliedBy).toBe("system");
+      expect(Object.keys(labels.tasks).sort()).toEqual(["0", "2"]);
+      expect(labels.tasks[0]?.map((l) => l.name)).toEqual(["bug"]);
+      expect(labels.tasks[2]?.map((l) => l.name)).toEqual(["urgent"]);
+
+      // Unassign the session-level bug; the task-level bug is untouched.
+      await cache.unassignLabel(bug.id, { sessionId: "s1" });
+      const after = await cache.readSessionLabels("s1");
+      expect(after.session.map((l) => l.name)).toEqual(["urgent"]);
+      expect(after.tasks[0]?.map((l) => l.name)).toEqual(["bug"]);
+
+      // Unassigning something not applied is a no-op.
+      await cache.unassignLabel(bug.id, { sessionId: "s1", taskSeq: 99 });
+      expect((await cache.readSessionLabels("s1")).tasks[0]?.length).toBe(1);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("setLabelForSessions applies/removes a label across many sessions in one call", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await materialize(cache, "s2");
+      await materialize(cache, "s3");
+
+      // s2 already has it; applying to all three should be idempotent for s2 and new for s1/s3.
+      await cache.assignLabel(bug.id, { sessionId: "s2" });
+      await cache.setLabelForSessions(bug.id, ["s1", "s2", "s3"], true);
+
+      for (const id of ["s1", "s2", "s3"]) {
+        expect((await cache.readSessionLabels(id)).session.map((l) => l.name)).toEqual(["bug"]);
+      }
+
+      // Removing from a subset leaves the rest untouched.
+      await cache.setLabelForSessions(bug.id, ["s1", "s3"], false);
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+      expect((await cache.readSessionLabels("s2")).session.map((l) => l.name)).toEqual(["bug"]);
+      expect((await cache.readSessionLabels("s3")).session).toEqual([]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("setLabelForSessions rejects a missing or deleted label, and no-ops on an empty id list", async () => {
+    const cache = await open();
+    try {
+      await materialize(cache, "s1");
+      await expect(
+        cache.setLabelForSessions("label:missing", ["s1"], true),
+      ).rejects.toMatchObject({ name: "LabelError", code: "not_found" });
+
+      const bug = await cache.createLabel({ name: "bug" });
+      await cache.deleteLabel(bug.id);
+      await expect(cache.setLabelForSessions(bug.id, ["s1"], true)).rejects.toMatchObject({
+        name: "LabelError",
+        code: "not_found",
+      });
+
+      const feature = await cache.createLabel({ name: "feature" });
+      await cache.setLabelForSessions(feature.id, [], true);
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("assigning a missing or deleted label rejects as a caller-fixable not_found error", async () => {
+    const cache = await open();
+    try {
+      await materialize(cache, "s1");
+      await expect(cache.assignLabel("label:missing", { sessionId: "s1" })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "not_found",
+      });
+
+      const bug = await cache.createLabel({ name: "bug" });
+      await cache.deleteLabel(bug.id);
+      await expect(cache.assignLabel(bug.id, { sessionId: "s1" })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "not_found",
+      });
+      expect(await cache.readSessionLabels("s1")).toEqual({ session: [], tasks: {} });
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("rejects invalid task positions before they can collide with session-level assignments", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+
+      await expect(cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: -1 })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "invalid_target",
+      });
+      await expect(cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: 1.5 })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "invalid_target",
+      });
+      await expect(cache.unassignLabel(bug.id, { sessionId: "s1", taskSeq: -1 })).rejects.toMatchObject({
+        name: "LabelError",
+        code: "invalid_target",
+      });
+
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      const labels = await cache.readSessionLabels("s1");
+      expect(labels.session.map((l) => l.name)).toEqual(["bug"]);
+      expect(labels.tasks).toEqual({});
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("labels survive re-materialize of their session (they are not FK-CASCADEd)", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(bug.id, { sessionId: "s1", taskSeq: 0 });
+
+      // Re-materialize with more messages so the write path rewrites the session (DELETE + CASCADE).
+      await materialize(cache, "s1");
+      expect((await cache.readResolved()).sessions.has("s1")).toBe(true);
+
+      const labels = await cache.readSessionLabels("s1");
+      expect(labels.session.map((l) => l.name)).toEqual(["bug"]);
+      expect(labels.tasks[0]?.map((l) => l.name)).toEqual(["bug"]);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("readSessionLabelsForSessions batches session-level labels and excludes task labels", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      const vip = await cache.createLabel({ name: "vip" });
+      await materialize(cache, "s1");
+      await materialize(cache, "s2");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(vip.id, { sessionId: "s1" });
+      await cache.assignLabel(bug.id, { sessionId: "s2" });
+      // A task-level label must NOT appear in the session-list batch read.
+      await cache.assignLabel(vip.id, { sessionId: "s2", taskSeq: 0 });
+
+      const byId = await cache.readSessionLabelsForSessions(["s1", "s2", "s3"]);
+      expect(byId.get("s1")?.map((l) => l.name)).toEqual(["bug", "vip"]);
+      expect(byId.get("s2")?.map((l) => l.name)).toEqual(["bug"]); // task-level vip excluded
+      expect(byId.has("s3")).toBe(false); // no labels → absent
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test("retractSessions removes a deleted session's label applications", async () => {
+    const cache = await open();
+    try {
+      const bug = await cache.createLabel({ name: "bug" });
+      await materialize(cache, "s1");
+      await materialize(cache, "s2");
+      await cache.assignLabel(bug.id, { sessionId: "s1" });
+      await cache.assignLabel(bug.id, { sessionId: "s2" });
+
+      await cache.retractSessions(["s1"]);
+      // s1's application is gone; the label definition and s2's application remain.
+      expect((await cache.readSessionLabels("s1")).session).toEqual([]);
+      expect((await cache.readSessionLabels("s2")).session.map((l) => l.name)).toEqual(["bug"]);
+      expect((await cache.listLabels()).map((l) => l.name)).toEqual(["bug"]);
+    } finally {
+      await cache.close();
+    }
   });
 });

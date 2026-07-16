@@ -13,7 +13,7 @@ export const openaiProvider: ProviderDescriptor = {
   apiKeyEnv: "OPENAI_API_KEY",
   defaultModel: DEFAULT_OPENAI_MODEL,
   requiresApiKey: true,
-  configFields: ["model", "baseUrl", "apiKeyEnv", "maxTokens"],
+  configFields: ["model", "baseUrl", "apiKeyEnv", "maxTokens", "effort"],
   complete: (call: ProviderCall) =>
     openaiCompatibleComplete(call, {
       baseUrl: call.baseUrl || DEFAULT_OPENAI_BASE_URL,

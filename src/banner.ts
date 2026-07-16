@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import pkg from "../package.json" with { type: "json" };
 
 const ORANGE = "\x1b[38;5;208m";
 const BOLD = "\x1b[1m";
@@ -52,7 +53,7 @@ function archRow(row: number): string {
 export function bannerText(): string {
   const lines = [""];
   for (let row = 0; row < 5; row++) lines.push("  " + archRow(row) + wordRow(row));
-  lines.push("", `  ${BOLD}${ORANGE}Argus by ADC${RESET}`, "");
+  lines.push("", `  ${BOLD}${ORANGE}Argus by ADC - version ${pkg.version}${RESET}`, "");
   return lines.join("\n") + "\n";
 }
 

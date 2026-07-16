@@ -95,7 +95,7 @@ describe("banner", () => {
   test("`run` prints the banner", () => {
     const { status, stdout, stderr } = runCli(["run", "--help"]);
     expect(status).toBe(0);
-    expect(stdout + stderr).toContain("Argus by ADC");
+    expect(stdout + stderr).toContain(`Argus by ADC - version ${pkg.version}`);
   });
 });
 

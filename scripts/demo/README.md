@@ -56,8 +56,10 @@ commit a prebuilt `.db`.
 
 - **Add a project:** append a `ProjectScenario` to `PROJECTS` (slug, `source`, `model`, optional
   `secondaryModel`, `persona`, and `sessions`).
-- **Add a session:** add a `SessionTemplate` (opening `title`, `tools`, `skills`, `files`, `turns`,
-  `friction`, `tasks`, optional `instances` to repeat it across dates).
+- **Add a session:** add a `SessionTemplate` (opening `title`, one-to-two sentence `summary`, `tools`,
+  `skills`, `files`, `turns`, `friction`, `tasks`, optional `instances` to repeat it across dates). The
+  `title` is stored as the session's first prompt and reused as its interpreted title; the `summary`
+  is the interpreted session summary (the demo has no live model to generate them).
 - **Add tasks:** each template's `tasks` is a **pool**; the generator takes 1-3 from it by session
   size (see below). Author the pool oldest-first; put the messiest/least-resolved task last.
 
@@ -73,10 +75,14 @@ check them):
   sonnet / haiku / gpt-5.x / codex-mini). No unpriced models (cost must be fully accounted).
 - **Session ids** are `<source>:<uuid>`, except Claude Code, which is a **bare `<uuid>`** for legacy
   parity. Ids are derived deterministically from a stable per-session key, so they're reproducible.
-- **Tasks tie to interactions.** Each session gets one interaction per task over a contiguous slice
-  of its messages, messages carry their `interactionSeq`, and each task's timestamp matches its
-  interaction's first message. This is what makes per-task token/tool metrics work (usage attributes
-  to a task through its interaction). Without it, tasks show 0 tokens and no tools.
+- **Tasks tie to interactions.** Each task spans one to three interactions (a dedicated PRNG picks the
+  count, so it doesn't disturb the token/task-count distributions); the session's messages are sliced
+  evenly across the resulting interactions, each message carries its `interactionSeq`, and each task's
+  timestamp matches its *first* interaction's first message. This is what makes per-task token/tool
+  metrics work (usage attributes to a task through its interaction) and gives the interaction-centric
+  UI more than one interaction to group under a task. Without it, tasks show 0 tokens and no tools.
+- **Titles and summaries.** Every session is written with an interpreted title (its opening prompt) and
+  a `summary`, via `writeSessionTasks`, so the session-title/summary and search views aren't blank.
 - **Task count scales with size:** 1-3 tasks per session, more for larger (higher-token) sessions,
   capped by the authored pool (`targetTaskCount`).
 - **Message counts are set:** `agentMessages` = assistant turns, `userMessages` = turns plus tool

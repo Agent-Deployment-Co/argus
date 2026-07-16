@@ -1,50 +1,90 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { compactProject, dayStamp, fmt, usd } from "../lib/format";
-import { useSessionsQuery, type SessionListFilters } from "../lib/sessions";
-import { Select } from "../components/Select";
+import { Calendar, EyeOff, FilterX, Layers, Search, Tag, X } from "lucide-react";
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { compactProject, dayStamp, fmt, pluralize } from "../lib/format";
+import { TasksIcon, TokensIcon } from "../lib/icons";
+import { IconStat, InteractionCount } from "../components/pills";
+import { fetchAllSessionIds, setSessionsHidden, useSessionsQuery, type SessionListFilters } from "../lib/sessions";
+import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSessionsLabelsQuery } from "../lib/labels";
+import type { LabelRecord } from "../types";
+import { LabelPopover, type TriState } from "../components/LabelBar";
+import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
+import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
+import { daysAgo } from "../router";
 import type { SessionListItem, SessionSort } from "../types";
 
-type FilterKey = "project" | "source";
-
-/** Sessions-local search params (the global date range + source live on the root route). */
+/** Sessions-local search params (the date range lives on this route too — see sessionsRoute in
+ *  router.tsx — since /sessions owns its own search-first toolbar rather than the shared FilterBar). */
 export interface SessionsSearch {
-  project?: string;
+  since?: string;
+  until?: string;
   source?: string;
-  showGenerated?: boolean;
+  project?: string;
+  file?: string;
   sort?: SessionSort;
   q?: string;
+  /** Comma-separated label ids (union filter). */
+  label?: string;
 }
 
-const SORT_LABELS: Record<SessionSort, string> = {
-  recent: "Most recent",
-  tokens: "Most tokens",
-  cost: "Highest cost",
-};
-
-/**
- * Pull a `project:value` / `source:value` token out of the raw search text. While typing we only
- * commit a token terminated by whitespace (so "project:a" mid-type stays as text); on Enter we
- * commit it bare.
- */
-function extractFilterToken(raw: string, requireTerminator: boolean): { key: FilterKey; value: string; rest: string } | null {
-  const m = raw.match(requireTerminator ? /(^|\s)(project|source):(\S+)\s/i : /(^|\s)(project|source):(\S+)/i);
-  if (!m) return null;
-  const rest = (raw.slice(0, m.index) + raw.slice(m.index! + m[0].length)).replace(/\s+/g, " ").trim();
-  return { key: m[2]!.toLowerCase() as FilterKey, value: m[3]!, rest };
+/** Parse the comma-separated `?label=` search param into an array of label ids. */
+function labelIdsFromSearch(search: Record<string, unknown>): string[] {
+  const raw = search.label;
+  return typeof raw === "string" && raw ? raw.split(",").filter(Boolean) : [];
 }
 
-/** A human-facing title for a session: its opening prompt, else the heuristic summary (detail only),
- *  else a placeholder. Accepts both the list-lite item and the full row. */
-export function sessionTitle(s: { firstPrompt?: string | null; summary?: string }): string {
+/** A human-facing title for a session: the model-generated title when the session has been interpreted
+ *  (#234), else its opening prompt, else a placeholder. The summary is never used as a title fallback.
+ *  Accepts both the list-lite item and the full row. */
+export function sessionTitle(s: { title?: string | null; firstPrompt?: string | null }): string {
+  const title = s.title?.trim();
+  if (title) return title;
   const prompt = s.firstPrompt?.trim();
   if (prompt) return prompt.length > 90 ? prompt.slice(0, 90) + "…" : prompt;
-  const summary = s.summary?.trim().replace(/^"|"$/g, "");
-  if (summary) return summary;
   return "(untitled session)";
 }
 
-/** Build the server-side query from the merged (global + Sessions-local) search params. */
+// The store wraps matched spans in these sentinel delimiters (char(1)/char(2)), not HTML, so we
+// split-and-wrap here instead of dangerouslySetInnerHTML (#155).
+const SNIPPET_MATCH_START = "";
+const SNIPPET_MATCH_END = "";
+
+/** Human label for a distilled (non-conversation) match source (#234): names where the snippet came
+ *  from so a title/summary hit reads "session summary", not "task summary". */
+const DISTILLED_SOURCE_LABEL: Record<"task" | "summary", string> = {
+  summary: "session summary",
+  task: "task summary",
+};
+
+/** Render a search-match snippet under a session row: the matched spans wrapped in <mark>, plus a
+ *  match count and — when the match came from distilled interpretation text (task and/or session
+ *  summary) — a label clarifying that's a restatement rather than raw dialogue. */
+function SearchSnippet({ match }: { match: SessionListItem["match"] }) {
+  if (!match) return null;
+  const segments = match.snippet.split(SNIPPET_MATCH_START);
+  const nodes: ReactNode[] = [segments[0]];
+  for (let i = 1; i < segments.length; i++) {
+    const [hit, ...rest] = segments[i]!.split(SNIPPET_MATCH_END);
+    nodes.push(<mark key={i}>{hit}</mark>, rest.join(SNIPPET_MATCH_END));
+  }
+  // Name each distilled source that matched (raw `conversation` needs no label — it's the dialogue).
+  const distilledLabel = match.sources
+    .filter((s): s is "task" | "summary" => s !== "conversation")
+    .map((s) => DISTILLED_SOURCE_LABEL[s])
+    .join(" & ");
+  return (
+    <div className="session-item-snippet">
+      <span className="session-item-snippet-text">{nodes}</span>
+      <span className="session-item-snippet-meta">
+        {match.count} match{match.count === 1 ? "" : "es"}
+        {distilledLabel && <> · in {distilledLabel}</>}
+      </span>
+    </div>
+  );
+}
+
+/** Build the server-side query from the route's search params. */
 function filtersFromSearch(search: Record<string, unknown>): SessionListFilters {
   return {
     since: typeof search.since === "string" ? search.since : undefined,
@@ -52,122 +92,208 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
     source: typeof search.source === "string" ? search.source : undefined,
     project: typeof search.project === "string" ? search.project : undefined,
     q: typeof search.q === "string" && search.q ? search.q : undefined,
-    includeGenerated: search.showGenerated === true,
+    file: typeof search.file === "string" && search.file ? search.file : undefined,
+    label: labelIdsFromSearch(search),
+    labelMode: search.labelMode === "all" ? "all" : "any",
     sort: (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent",
   };
 }
 
-function SessionList() {
+/** Multi-select state for bulk mode, lifted above `SessionList` (into `Sessions`) so the detail pane
+ *  can react to it too — not persisted across reload, and deliberately not part of the URL. */
+export interface SessionSelection {
+  ids: Set<string>;
+  setIds: (ids: Set<string>) => void;
+  /** The row last clicked without a modifier, or toggled via cmd/ctrl-click — the anchor a shift-click
+   *  range extends from. */
+  lastClickedId: string | null;
+  setLastClickedId: (id: string | null) => void;
+  /** True right after cmd/ctrl-clicking the sole selected session off the selection when it was also
+   *  the one open in the detail pane — tells the detail pane to swap in "No sessions selected"
+   *  instead of continuing to show that session's detail. Cleared by any other selection change or
+   *  by normal single-session navigation. */
+  noneSelectedActive: boolean;
+  setNoneSelectedActive: (v: boolean) => void;
+}
+
+/** The session list pane: a plain "Showing X-Y of N sessions" head (the search/filter controls live
+ *  in the toolbar above, rendered by `Sessions`) plus the scrollable row list. */
+export function SessionList({ selection }: { selection: SessionSelection }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
   const activeRef = useRef<HTMLAnchorElement | null>(null);
 
-  const project = typeof search.project === "string" ? search.project : undefined;
-  const source = typeof search.source === "string" ? search.source : undefined;
-  const showGenerated = search.showGenerated === true;
-  const sort: SessionSort = (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent";
-  const committedQ = typeof search.q === "string" ? search.q : "";
-
-  // Local text mirrors the committed `q`; we debounce edits into the URL so we don't refetch per keystroke.
-  const [text, setText] = useState(committedQ);
-  useEffect(() => setText(committedQ), [committedQ]);
-
-  const setSearch = (patch: Partial<SessionsSearch>) =>
-    navigate({ to: ".", search: (prev: SessionsSearch) => ({ ...prev, ...patch }) });
-  const setFilter = (key: FilterKey, value: string | undefined) => setSearch({ [key]: value || undefined });
-
-  // Debounce free text → `q`.
-  useEffect(() => {
-    const trimmed = text.trim();
-    if (trimmed === committedQ) return;
-    const t = setTimeout(() => setSearch({ q: trimmed || undefined }), 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text]);
-
-  const onQueryChange = (raw: string) => {
-    const token = extractFilterToken(raw, true);
-    if (token) {
-      setFilter(token.key, token.value);
-      setText(token.rest);
-    } else {
-      setText(raw);
-    }
-  };
-  const onQueryKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== "Enter") return;
-    const token = extractFilterToken(text, false);
-    if (token) {
-      e.preventDefault();
-      setFilter(token.key, token.value);
-      setText(token.rest);
-    }
-  };
-
   const filters = useMemo(() => filtersFromSearch(search), [search]);
   const query = useSessionsQuery(filters);
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
+  const [selectingAllMatching, setSelectingAllMatching] = useState(false);
+  // Tracks the current `filters` identity so an in-flight "select all matching" fetch can tell,
+  // once it resolves, whether the filter it was scoped to is still the one in effect.
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
 
-  const activeFilters = ([["project", project], ["source", source]] as const).filter(([, v]) => Boolean(v));
+  // Clear a stale selection when the filters change so the bulk overlay / row highlighting can't
+  // keep pointing at ids from a since-changed view. Skipped on mount so navigating straight to a
+  // filtered URL doesn't wipe a selection that was never made.
+  const isFirstFiltersRender = useRef(true);
+  useEffect(() => {
+    if (isFirstFiltersRender.current) {
+      isFirstFiltersRender.current = false;
+      return;
+    }
+    selection.setIds(new Set());
+    selection.setLastClickedId(null);
+    selection.setNoneSelectedActive(false);
+  }, [filters]);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedId, rows]);
 
+  // j/k step the selection to the next/previous row, but only once a row is already selected —
+  // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move. They
+  // also always clear any multi-selection first: keyboard stepping and bulk-select never coexist
+  // mid-navigation.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "j" && e.key !== "k") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      if (!selectedId) return;
+      const idx = rows.findIndex((r) => r.sessionId === selectedId);
+      if (idx === -1) return;
+      const next = rows[e.key === "j" ? idx + 1 : idx - 1];
+      if (!next) return;
+      e.preventDefault();
+      if (selection.ids.size > 0) selection.setIds(new Set());
+      selection.setLastClickedId(null);
+      selection.setNoneSelectedActive(false);
+      navigate({ to: "/sessions/$sessionId", params: { sessionId: next.sessionId }, search: (prev: SessionsSearch) => prev });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows, selectedId, navigate, selection]);
+
+  // Cmd/Ctrl-click toggles a row into/out of the selection; shift-click selects the contiguous range
+  // from the last-clicked row to this one; a plain click clears any selection and navigates normally
+  // (the default `Link` behavior, left untouched below). Both modifiers preventDefault so they override
+  // the browser's native cmd/ctrl-click-opens-a-new-tab and shift-click-selects-text behavior.
+  const handleRowClick = (e: MouseEvent, sessionId: string, index: number) => {
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      const next = new Set(selection.ids);
+      // The currently-viewed session (from the route) isn't in `selection.ids` until now — a plain
+      // click just navigates without touching the selection. Seed it in first so cmd-clicking a
+      // second session, right after normally opening a first, starts a two-session bulk selection
+      // instead of a one-session one that can't trigger the overlay (which needs >= 2).
+      if (selection.ids.size === 0 && selectedId && selectedId !== sessionId) next.add(selectedId);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      selection.setIds(next);
+      selection.setLastClickedId(sessionId);
+      if (next.size === 0) {
+        // Deselecting the sole selected session, when it's also the one open in the detail pane,
+        // swaps the detail pane to "No sessions selected" rather than leaving that session's detail
+        // on screen with nothing actually selected underneath it.
+        selection.setNoneSelectedActive(sessionId === selectedId);
+      } else if (next.size === 1) {
+        // Dropping to exactly one remaining id no longer qualifies for the bulk overlay (>= 2), so
+        // treat it like a normal single selection: navigate the detail pane to match, in case the
+        // sole remaining id isn't the one currently routed to.
+        selection.setNoneSelectedActive(false);
+        const [soleId] = next;
+        if (soleId !== selectedId) {
+          navigate({ to: "/sessions/$sessionId", params: { sessionId: soleId! }, search: (prev: SessionsSearch) => prev });
+        }
+      } else {
+        selection.setNoneSelectedActive(false);
+      }
+      return;
+    }
+    if (e.shiftKey) {
+      e.preventDefault();
+      const anchorIdx = selection.lastClickedId ? rows.findIndex((r) => r.sessionId === selection.lastClickedId) : -1;
+      if (anchorIdx === -1) {
+        selection.setIds(new Set([sessionId]));
+        selection.setLastClickedId(sessionId);
+        selection.setNoneSelectedActive(false);
+        return;
+      }
+      const [start, end] = anchorIdx < index ? [anchorIdx, index] : [index, anchorIdx];
+      selection.setIds(new Set(rows.slice(start, end + 1).map((r) => r.sessionId)));
+      selection.setNoneSelectedActive(false);
+      return;
+    }
+    if (selection.ids.size > 0) selection.setIds(new Set());
+    selection.setLastClickedId(sessionId);
+    selection.setNoneSelectedActive(false);
+  };
+
+  // "Select all" first scopes to what's loaded/in view; toggles back to deselect once every loaded
+  // row is already selected. Once all loaded rows are selected and more match the filter but aren't
+  // loaded yet (`query.hasNextPage`), a follow-up link extends the selection to every matching
+  // session by paging through `/api/sessions` itself (`fetchAllSessionIds`) rather than a dedicated
+  // server-side "resolve filter to ids" endpoint.
+  const allLoadedSelected = rows.length > 0 && rows.every((r) => selection.ids.has(r.sessionId));
+  const allMatchingSelected = allLoadedSelected && selection.ids.size === total;
+  const handleSelectAllLoaded = () => {
+    selection.setNoneSelectedActive(false);
+    if (allLoadedSelected) {
+      selection.setIds(new Set());
+      return;
+    }
+    selection.setIds(new Set(rows.map((r) => r.sessionId)));
+    selection.setLastClickedId(rows[rows.length - 1]?.sessionId ?? null);
+  };
+  const handleSelectAllMatching = async () => {
+    selection.setNoneSelectedActive(false);
+    setSelectingAllMatching(true);
+    const requestedFilters = filters;
+    try {
+      const ids = await fetchAllSessionIds(requestedFilters);
+      // Discard the result if the filters changed while the (possibly multi-page) fetch was in
+      // flight — the ids we just resolved no longer describe what's on screen.
+      if (filtersRef.current !== requestedFilters) return;
+      selection.setIds(new Set(ids));
+    } finally {
+      setSelectingAllMatching(false);
+    }
+  };
+
   return (
     <aside className="session-list" aria-label="Sessions">
-      <div className="session-list-head">
-        <div className="session-search-row">
-          <input
-            className="session-search"
-            type="search"
-            placeholder="Filter sessions…"
-            value={text}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onKeyDown={onQueryKeyDown}
-          />
-          <span className="session-count">{rows.length === total ? total : `${rows.length} / ${total}`}</span>
-        </div>
-        <div className="session-filters">
-          <Select
-            variant="pill"
-            value={sort}
-            onChange={(e) => setSearch({ sort: e.target.value as SessionSort })}
-            aria-label="Sort sessions"
-          >
-            {(Object.keys(SORT_LABELS) as SessionSort[]).map((s) => (
-              <option key={s} value={s}>{SORT_LABELS[s]}</option>
-            ))}
-          </Select>
-          {activeFilters.map(([key, value]) => (
-            <button key={key} type="button" className="filter-pill" onClick={() => setFilter(key, undefined)} title="Remove filter">
-              {key}: {value}
-              <span className="filter-pill-x" aria-hidden>×</span>
-            </button>
-          ))}
-          <label className="filter-toggle">
-            <input
-              type="checkbox"
-              checked={showGenerated}
-              onChange={(event) => setSearch({ showGenerated: event.target.checked || undefined })}
-            />
-            <span>Argus sessions</span>
-          </label>
-        </div>
+      <div className="session-list-head session-list-head-count">
+        <span>{total === 0 ? "0 sessions" : `Showing 1-${rows.length} of ${total} sessions`}</span>
+        {rows.length > 0 && (
+          <button type="button" className="session-select-all" onClick={handleSelectAllLoaded}>
+            {allLoadedSelected ? "Deselect all" : "Select all"}
+          </button>
+        )}
       </div>
+      {allLoadedSelected && query.hasNextPage && !allMatchingSelected && (
+        <div className="session-list-select-matching">
+          <button type="button" className="session-select-all" onClick={handleSelectAllMatching} disabled={selectingAllMatching}>
+            {selectingAllMatching ? "Selecting…" : `Select all ${total} matching sessions?`}
+          </button>
+        </div>
+      )}
       <ul className="session-items">
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
-        {rows.map((s) => (
+        {rows.map((s, index) => (
           <li key={`${s.source}:${s.sessionId}`}>
             <Link
               to="/sessions/$sessionId"
               params={{ sessionId: s.sessionId }}
               search={(prev: SessionsSearch) => prev}
-              className="session-item"
+              className={`session-item${selection.ids.has(s.sessionId) ? " selected" : ""}`}
               activeProps={{ className: "active" }}
               ref={s.sessionId === selectedId ? activeRef : undefined}
+              onClick={(e) => handleRowClick(e, s.sessionId, index)}
             >
               <div className="session-item-title">{sessionTitle(s)}</div>
               <div className="session-item-meta">
@@ -176,11 +302,25 @@ function SessionList() {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
-                {s.userMessages != null && <span>{fmt(s.userMessages)} user</span>}
-                {s.agentMessages != null && <span>{fmt(s.agentMessages)} agent</span>}
-                <span>{fmt(s.total)} tok</span>
-                <span>{usd(s.cost)}</span>
+                <IconStat value={fmt(s.total)} title={`${fmt(s.total)} tokens`} icon={TokensIcon} size={12} iconFirst />
+                <InteractionCount n={s.interactions} size={12} iconFirst />
+                {s.tasks > 0 && (
+                  <IconStat value={s.tasks} title={`${s.tasks} ${pluralize(s.tasks, "task")}`} icon={TasksIcon} size={12} iconFirst />
+                )}
               </div>
+              {s.labels && s.labels.length > 0 && (
+                <div className="session-item-labels">
+                  {s.labels.map((l) => (
+                    <span
+                      key={l.id}
+                      className={`label-chip label-chip--readonly${l.origin === "system" ? " label-chip--system" : ""}`}
+                    >
+                      {l.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <SearchSnippet match={s.match} />
             </Link>
           </li>
         ))}
@@ -203,17 +343,6 @@ function SessionList() {
   );
 }
 
-export function Sessions() {
-  return (
-    <div className="sessions-split">
-      <SessionList />
-      <div className="session-detail">
-        <Outlet />
-      </div>
-    </div>
-  );
-}
-
 /** Landing pane at /sessions (no session selected): jump to the first match, else show a hint. */
 export function SessionsEmpty() {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -225,6 +354,454 @@ export function SessionsEmpty() {
   }
   if (query.isPending) return <div className="session-empty">Loading sessions…</div>;
   if (query.isError) return <div className="session-empty">{(query.error as Error).message}</div>;
-  const filtered = Boolean(filters.project || filters.q || filters.source || filters.since || filters.until);
+  const filtered = Boolean(
+    filters.project || filters.q || filters.file || filters.source || filters.since || filters.until || filters.label?.length,
+  );
   return <div className="session-empty">No sessions {filtered ? "match this filter" : "yet"}.</div>;
+}
+
+/** Swapped in for the detail pane's `<Outlet />` (in `Sessions`) after cmd/ctrl-clicking the sole
+ *  selected — and currently open — session off the selection (`noneSelectedActive`). Mirrors
+ *  `SessionsEmpty`'s pane-swap pattern, but doesn't auto-navigate to another session: the point is
+ *  to stop showing the deselected session's detail, not to pick a new one for the user. */
+function NoSessionsSelected() {
+  return <div className="session-empty">No sessions selected.</div>;
+}
+
+/** Swapped in for the detail pane's `<Outlet />` once 2+ sessions are selected: a count, a way to
+ *  clear the selection, and the bulk actions themselves (labels, hide) — mirrors `SessionsEmpty`'s
+ *  pane-swap pattern as a third detail-pane state. */
+function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
+  const ids = useMemo(() => [...selection.ids], [selection.ids]);
+  const catalog = useLabelsQuery();
+  const sessionsLabels = useSessionsLabelsQuery(ids);
+  const { setForSessions } = useBulkLabelMutations();
+  const { create, rename, remove } = useLabelCatalogMutations();
+
+  const clear = () => {
+    selection.setIds(new Set());
+    selection.setLastClickedId(null);
+    selection.setNoneSelectedActive(false);
+  };
+
+  const stateFor = (label: LabelRecord): TriState => {
+    const labelsBySession = sessionsLabels.data;
+    if (!labelsBySession) return "unchecked";
+    const appliedCount = ids.filter((id) => (labelsBySession.get(id) ?? []).some((l) => l.id === label.id)).length;
+    if (appliedCount === 0) return "unchecked";
+    if (appliedCount === ids.length) return "checked";
+    return "mixed";
+  };
+
+  const setLabel = (labelId: string, applied: boolean) => setForSessions.mutate({ labelId, sessionIds: ids, applied });
+
+  const qc = useQueryClient();
+  const hide = useMutation({
+    mutationFn: () => setSessionsHidden(ids, true),
+    onSuccess: () => {
+      for (const id of ids) {
+        void qc.invalidateQueries({ queryKey: ["session", id] });
+      }
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+      clear();
+    },
+  });
+
+  return (
+    <div className="bulk-overlay">
+      <div className="bulk-overlay-head">
+        <span className="bulk-overlay-count">{ids.length} sessions selected</span>
+        <button type="button" className="bulk-overlay-clear" onClick={clear}>
+          <X size={13} strokeWidth={2} aria-hidden />
+          <span>Clear selection</span>
+        </button>
+      </div>
+
+      <div className="bulk-overlay-section">
+        <h3 className="bulk-overlay-heading">Actions</h3>
+        <div className="bulk-actions-row">
+          <BulkLabelButton
+            labels={catalog.data ?? []}
+            loading={catalog.isPending}
+            stateFor={stateFor}
+            busy={setForSessions.isPending || create.isPending}
+            error={
+              [create.error, setForSessions.error, rename.error, remove.error].find(
+                (e): e is Error => e instanceof Error,
+              )?.message ?? null
+            }
+            onToggle={(label) => setLabel(label.id, stateFor(label) !== "checked")}
+            onCreate={async (name) => {
+              const res = await create.mutateAsync(name);
+              setLabel(res.label.id, true);
+            }}
+            onRename={(id, name) => rename.mutate({ id, name })}
+            onDelete={(id) => remove.mutate(id)}
+          />
+          <button type="button" className="bulk-action-neutral" onClick={() => hide.mutate()} disabled={hide.isPending}>
+            <EyeOff size={14} strokeWidth={1.75} aria-hidden />
+            <span>Hide {ids.length} sessions</span>
+          </button>
+        </div>
+        {hide.isError && (
+          <p className="label-popover-error" role="alert">
+            {hide.error instanceof Error ? hide.error.message : "Failed to hide sessions."}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The bulk-mode label entry point: a `Tag`-icon button (before the "Hide N sessions" action) that
+ *  pops up the same shared `LabelPopover` ({@link LabelPopover} in `components/LabelBar.tsx`) used
+ *  by the per-session/task label bar. Bulk mode has no inline applied-label chip row (that's the
+ *  per-session `LabelBar`'s job) — the popover's pick list itself shows applied/mixed state via
+ *  `stateFor`, so this button is the only bulk-labels UI surface. */
+function BulkLabelButton({
+  labels,
+  loading,
+  stateFor,
+  busy,
+  error,
+  onToggle,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  labels: LabelRecord[];
+  loading: boolean;
+  stateFor: (label: LabelRecord) => TriState;
+  busy: boolean;
+  error: string | null;
+  onToggle: (label: LabelRecord) => void;
+  onCreate: (name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="bulk-label-anchor" ref={rootRef}>
+      <button
+        type="button"
+        className="bulk-action-neutral"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Tag size={14} strokeWidth={1.75} aria-hidden />
+        <span>Edit Labels</span>
+      </button>
+
+      {open && (
+        <LabelPopover
+          labels={labels}
+          loading={loading}
+          stateFor={stateFor}
+          busy={busy}
+          error={error}
+          onToggle={onToggle}
+          onCreate={onCreate}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      )}
+    </div>
+  );
+}
+
+const DEFAULT_SINCE = daysAgo(30);
+const DEFAULT_UNTIL = daysAgo(0);
+
+function toggle<T>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+/** /sessions: the rail + app shell, with a search-first toolbar (search box + labels/date/sources
+ *  dropdowns) instead of the shared date/source FilterBar — see Layout's isSessions check for how
+ *  the global FilterBar is suppressed for this route. The date range, search text, source, and labels
+ *  are URL search params (?since=&until=&q=&source=&label=) so a shared link carries its state and the
+ *  default range (last 30 days) is always loaded up front — see sessionsRoute's validateSearch in
+ *  router.tsx. `source` is single-valued (not multi-select) because /api/sessions only ever filters
+ *  by one source at a time; `label` is multi-valued (comma-separated ids, union match). */
+export function Sessions() {
+  const [labelSearch, setLabelSearch] = useState("");
+  const labelCatalog = useLabelsQuery();
+
+  // Bulk-select state (cmd/ctrl-click toggle, shift-click range) lives here, above `SessionList`, so
+  // it can also drive the detail-pane overlay once 2+ sessions are selected.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
+  const [noneSelectedActive, setNoneSelectedActive] = useState(false);
+  const selection: SessionSelection = useMemo(
+    () => ({
+      ids: selectedIds,
+      setIds: setSelectedIds,
+      lastClickedId,
+      setLastClickedId,
+      noneSelectedActive,
+      setNoneSelectedActive,
+    }),
+    [selectedIds, lastClickedId, noneSelectedActive],
+  );
+
+  const navigate = useNavigate();
+  const { since, until, committedQ, source, labelIds, labelMode } = useSearch({
+    strict: false,
+    select: (s) => ({
+      since: s.since ?? DEFAULT_SINCE,
+      until: s.until ?? DEFAULT_UNTIL,
+      committedQ: s.q ?? "",
+      source: s.source,
+      labelIds: labelIdsFromSearch(s as Record<string, unknown>),
+      labelMode: s.labelMode === "all" ? "all" : "any",
+    }),
+  });
+  const setRange = (patch: Record<string, string | undefined>) =>
+    navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
+  const today = daysAgo(0);
+  const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
+  const setUntil = (v: string) => setRange({ until: v > today ? today : v < since ? since : v });
+  const setLabelIds = (ids: string[]) => setRange({ label: ids.length ? ids.join(",") : undefined });
+  const setLabelMode = (mode: "any" | "all") => setRange({ labelMode: mode === "all" ? "all" : undefined });
+
+  // Local text mirrors the committed `q`; debounce edits into the URL so we don't refetch per keystroke.
+  const [query, setQuery] = useState(committedQ);
+  useEffect(() => setQuery(committedQ), [committedQ]);
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed === committedQ) return;
+    const t = setTimeout(() => setRange({ q: trimmed || undefined }), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  const dateIsDefault = since === DEFAULT_SINCE && until === DEFAULT_UNTIL;
+  const dateSummary = `${formatDateShort(since)} → ${formatDateShort(until)}`;
+  const labelNameById = useMemo(() => new Map((labelCatalog.data ?? []).map((l) => [l.id, l.name])), [labelCatalog.data]);
+  const labelsSummary =
+    labelIds.length === 0
+      ? "Labels"
+      : labelIds.length === 1
+        ? (labelNameById.get(labelIds[0]!) ?? "1 label")
+        : `${labelIds.length} labels`;
+  const sourcesSummary = source ? sourceLabel(source) : "All sources";
+
+  // Reset mirrors the shared FilterBar's reset (source + date range), plus the toolbar's own search
+  // box and label selection — enabled only when one of those is off its default.
+  const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0;
+  const resetFilters = () => {
+    setQuery("");
+    setRange({ since: undefined, until: undefined, source: undefined, q: undefined, label: undefined, labelMode: undefined });
+  };
+
+  const filteredLabels = (labelCatalog.data ?? []).filter((l) => l.name.toLowerCase().includes(labelSearch.toLowerCase()));
+
+  // Cmd/Ctrl+K (or "/", the common search-focus shortcut) jumps focus to the search box and
+  // selects its text, so typing replaces rather than appends, from anywhere on the page. "/" is
+  // only honored outside text fields so it doesn't hijack normal typing (e.g. the labels search).
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+      const target = e.target as HTMLElement | null;
+      const inTextField = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      const isSlash = e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !inTextField;
+      if (!isCmdK && !isSlash) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  return (
+    <div className="inbox-page">
+      <div className="inbox-toolbar" role="group" aria-label="Session filters">
+        <span className="inbox-search">
+          <Search className="inbox-search-icon" size={16} strokeWidth={1.75} aria-hidden />
+          <input
+            ref={searchInputRef}
+            type="search"
+            className="inbox-search-input"
+            placeholder="Search sessions…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            aria-label="Search sessions"
+          />
+        </span>
+
+        <div className="inbox-toolbar-filters">
+          <FilterDropdown
+            icon={<Tag size={14} strokeWidth={2} aria-hidden />}
+            label="Labels"
+            summary={labelsSummary}
+            active={labelIds.length > 0}
+            onClear={labelIds.length > 0 ? () => setLabelIds([]) : undefined}
+            align="right"
+          >
+            <input
+              type="search"
+              className="filter-dropdown-search"
+              placeholder="Search labels"
+              value={labelSearch}
+              onChange={(e) => setLabelSearch(e.target.value)}
+              aria-label="Search labels"
+            />
+            <div className="filter-dropdown-list" role="listbox" aria-label="Labels">
+              {filteredLabels.map((l) => (
+                <FilterDropdownOption
+                  key={l.id}
+                  label={l.name}
+                  selected={labelIds.includes(l.id)}
+                  onToggle={() => setLabelIds(toggle(labelIds, l.id))}
+                />
+              ))}
+              {filteredLabels.length === 0 && (
+                <p className="filter-dropdown-empty">
+                  {(labelCatalog.data ?? []).length === 0 ? "No labels yet." : "No labels match."}
+                </p>
+              )}
+            </div>
+            <div className="filter-dropdown-mode" role="radiogroup" aria-label="How to combine selected labels">
+              <button
+                type="button"
+                className={`filter-dropdown-mode-btn${labelMode === "any" ? " active" : ""}`}
+                role="radio"
+                aria-checked={labelMode === "any"}
+                onClick={() => setLabelMode("any")}
+              >
+                Match any
+              </button>
+              <button
+                type="button"
+                className={`filter-dropdown-mode-btn${labelMode === "all" ? " active" : ""}`}
+                role="radio"
+                aria-checked={labelMode === "all"}
+                onClick={() => setLabelMode("all")}
+              >
+                Match all
+              </button>
+            </div>
+          </FilterDropdown>
+
+          <FilterDropdown
+            icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
+            label="Date"
+            summary={dateSummary}
+            active={!dateIsDefault}
+            onClear={dateIsDefault ? undefined : () => setRange({ since: undefined, until: undefined })}
+            clearLabel="Reset"
+            align="right"
+          >
+            {(close) => (
+              <>
+                <div className="filter-dropdown-presets">
+                  {DATE_PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`filter-dropdown-preset${since === daysAgo(p.days) && until === daysAgo(0) ? " active" : ""}`}
+                      onClick={() => {
+                        setRange({ since: daysAgo(p.days), until: daysAgo(0) });
+                        close();
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="filter-dropdown-dates">
+                  <input
+                    type="date"
+                    className="filter-input"
+                    aria-label="From date"
+                    value={since}
+                    max={until}
+                    onChange={(e) => e.target.value && setSince(e.target.value)}
+                  />
+                  <span className="filter-dash" aria-hidden>
+                    –
+                  </span>
+                  <input
+                    type="date"
+                    className="filter-input"
+                    aria-label="To date"
+                    value={until}
+                    min={since}
+                    max={today}
+                    onChange={(e) => e.target.value && setUntil(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+          </FilterDropdown>
+
+          <FilterDropdown
+            icon={<Layers size={14} strokeWidth={2} aria-hidden />}
+            label="Sources"
+            summary={sourcesSummary}
+            active={Boolean(source)}
+            onClear={source ? () => setRange({ source: undefined }) : undefined}
+            align="right"
+          >
+            <div className="filter-dropdown-list" role="listbox" aria-label="Sources">
+              {SORTED_SOURCES.map((s) => (
+                <FilterDropdownOption
+                  key={s}
+                  label={sourceLabel(s)}
+                  selected={source === s}
+                  onToggle={() => setRange({ source: source === s ? undefined : s })}
+                />
+              ))}
+            </div>
+          </FilterDropdown>
+
+          <button
+            type="button"
+            className="inbox-filter-reset"
+            disabled={!hasActiveFilters}
+            onClick={resetFilters}
+            title="Reset filters to the last 30 days, all sources"
+            aria-label="Reset filters"
+          >
+            <FilterX size={16} strokeWidth={1.75} aria-hidden />
+          </button>
+        </div>
+      </div>
+
+      <div className="sessions-split">
+        <SessionList selection={selection} />
+        <div className="session-detail">
+          {selection.ids.size >= 2 ? (
+            <BulkSelectionOverlay selection={selection} />
+          ) : selection.ids.size === 0 && selection.noneSelectedActive ? (
+            <NoSessionsSelected />
+          ) : (
+            <Outlet />
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

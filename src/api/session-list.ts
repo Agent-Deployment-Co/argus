@@ -5,8 +5,7 @@
 // demand from one session's messages. These response shapes are local-only (not on the sync wire).
 import { buildSessionRow } from "../reporting/aggregate.ts";
 import { cost } from "../pricing.ts";
-import type { SessionAggregate, TaskFact } from "../store/store-contract.ts";
-import { heuristicSummary, summaryFactsFromMessages } from "../indexing/interpret/summarize.ts";
+import type { AppliedLabel, SessionAggregate, SessionSearchMatch, TaskFact } from "../store/store-contract.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
 export type SessionSort = "recent" | "tokens" | "cost";
@@ -18,12 +17,29 @@ export interface SessionListItem {
   source: AgentSource;
   project: string;
   firstPrompt: string | null;
+  /** The model-generated title when the session has been interpreted (#234), else null — the UI falls
+   *  back to `firstPrompt`. */
+  title: string | null;
+  /** The model-generated one-line summary when interpreted (#234), else null. */
+  summary: string | null;
   start: number;
   end: number;
   userMessages: number | null;
   agentMessages: number | null;
   total: number;
   cost: number;
+  /** Interaction count for the session (#124). */
+  interactions: number;
+  /** Task count for the session; 0 when it has no tasks / isn't interpreted. The list shows it only
+   *  when > 0. */
+  tasks: number;
+  /** Present when a store-side search ran (#155) and this session matched an FTS table — the
+   *  conversation/task-text snippet + count the UI highlights. Absent for a metadata-only match
+   *  (title/project/source substring, or a bare `file:` search). Local-only, not on the sync wire. */
+  match?: SessionSearchMatch;
+  /** Active session-level labels (session-and-task-labels), attached to the page rows by the serve
+   *  reader. Task labels are not included here. Local-only, not on the sync wire. */
+  labels?: AppliedLabel[];
 }
 
 export interface SessionListResponse {
@@ -40,10 +56,15 @@ export interface SessionListParams {
   offset: number;
   /** Substring match on the human project label (not the cwd the store filters on). */
   project?: string;
-  /** Free-text over the session title / project / source. */
+  /** Free-text over the session title / project / source. Omit when the caller already ran a
+   *  store-side search (`matches` is set) — the store's metadata-OR-FTS logic already applied it,
+   *  and re-running this plain substring check would wrongly drop an FTS-only match. */
   q?: string;
   /** Include Argus's own task-extraction/analysis sessions (hidden by default). */
   includeGenerated?: boolean;
+  /** Per-session search match (#155), when the caller ran `store.searchSessions` first. Attached onto
+   *  the matching rows; sessions with no entry here had a metadata-only match (or no search ran). */
+  matches?: Map<string, SessionSearchMatch>;
 }
 
 /** Argus's own `claude -p` runs surface as sessions; recognize them by their canned first prompts so
@@ -71,12 +92,16 @@ function listItem(agg: SessionAggregate): SessionListItem {
     source: meta.source,
     project: meta.project,
     firstPrompt: meta.firstPrompt ?? null,
+    title: agg.title ?? null,
+    summary: agg.summary ?? null,
     start: agg.firstTs ?? 0,
     end: agg.lastTs ?? 0,
     userMessages: meta.userMessages ?? null,
     agentMessages: meta.agentMessages ?? null,
     total,
     cost: c,
+    interactions: agg.interactions,
+    tasks: agg.tasks,
   };
 }
 
@@ -93,11 +118,18 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
   const project = params.project?.toLowerCase();
   const term = params.q?.trim().toLowerCase();
   let items = aggregates.map(listItem);
+  if (params.matches) {
+    items = items.map((it) => {
+      const match = params.matches!.get(it.sessionId);
+      return match ? { ...it, match } : it;
+    });
+  }
   items = items.filter((it) => {
     if (!params.includeGenerated && isArgusGeneratedSession(it.firstPrompt)) return false;
     if (project && !it.project.toLowerCase().includes(project)) return false;
     if (term) {
-      const title = (it.firstPrompt ?? "").toLowerCase();
+      // Match the model title (when present), the first prompt, the project, and the source.
+      const title = `${it.title ?? ""} ${it.firstPrompt ?? ""}`.toLowerCase();
       if (!title.includes(term) && !it.project.toLowerCase().includes(term) && !it.source.toLowerCase().includes(term)) {
         return false;
       }
@@ -113,13 +145,31 @@ export function buildSessionList(aggregates: SessionAggregate[], params: Session
 
 /** Build the full detail row for one session from its messages (oldest first) — the same SessionRow
  *  the dashboard would produce, computed on demand so heavy per-session content never rides the bulk
- *  payload. The summary uses the shared `summaryFactsFromMessages` so it matches the dashboard exactly. */
+ *  payload. `title`/`summary` are the model-generated interpretation fields verbatim (title null,
+ *  summary "" until interpretation runs); the UI falls back to the opening prompt for a display title
+ *  and shows the summary only when it's non-empty. */
 export function buildSessionDetail(
   sessionId: string,
   messages: MessageRecord[],
   meta: SessionMeta | undefined,
   tasks: TaskFact[],
+  interpretation?: { title: string | null; summary: string | null; interpreted: boolean },
+  isHidden = false,
+  interactions = 0,
 ): SessionRow {
-  const summary = heuristicSummary(summaryFactsFromMessages(messages, meta?.firstPrompt || ""));
-  return buildSessionRow(sessionId, messages, meta, summary, tasks);
+  // The session summary is the stored resolved_sessions.summary verbatim — no heuristic fallback. It's
+  // empty until interpretation produces one; the UI shows the Summary section only when it's non-empty.
+  const summary = interpretation?.summary ?? "";
+  const title = interpretation?.title || null;
+  return buildSessionRow(
+    sessionId,
+    messages,
+    meta,
+    summary,
+    tasks,
+    title,
+    interpretation?.interpreted ?? false,
+    isHidden,
+    interactions,
+  );
 }

@@ -1,6 +1,6 @@
 [package]
 name = "argus-desktop"
-version = "0.1.19"
+version = "0.1.21"
 description = "Audit your Claude Code, Codex, and Gemini CLI usage: tokens over time, skill/plugin/MCP-server attribution, and per-session summaries. Reads local transcripts; emits a self-contained HTML dashboard."
 authors = ["hayes.davis@agentdeployment.co", "jerry@agentdeployment.co", "mando@agentdeployment.co"]
 license = ""
@@ -27,5 +27,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2.5.1"
+notify = "8"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros", "time"] }

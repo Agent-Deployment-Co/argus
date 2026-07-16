@@ -7,12 +7,14 @@ import {
   getPath,
   loadConfig,
   migrateLlmFlatToProviderConfigs,
+  migrateTaskExtractionToSessionInterpretation,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
+  resolveDesktopStartAtLogin,
   resolveLogLevel,
   resolveRetainText,
   resolveSetting,
-  resolveTaskExtraction,
+  resolveSessionInterpretation,
   type Setting,
 } from "../src/config.ts";
 import { logger } from "../src/logger.ts";
@@ -27,6 +29,7 @@ function tmpConfig(contents: string): string {
 const CONFIG_ENV = [
   "ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES",
   "ARGUS_AUTO_UPDATE_ENABLED",
+  "ARGUS_DESKTOP_START_AT_LOGIN",
   "ARGUS_TASK_ENABLED",
   "ARGUS_TASK_PROVIDER",
   "ARGUS_TASK_MODEL",
@@ -111,16 +114,16 @@ describe("resolveSetting precedence", () => {
   });
 });
 
-describe("resolveTaskExtraction", () => {
+describe("resolveSessionInterpretation", () => {
   test("acceptance #89: file enables extraction with no flags", () => {
     const file = { taskExtraction: { enabled: true, provider: "claude-cli" as const } };
-    const resolved = resolveTaskExtraction({}, file);
+    const resolved = resolveSessionInterpretation({}, file);
     expect(resolved.enabled).toBe(true);
     expect(resolved.llm.provider).toBe("claude-cli");
   });
 
   test("empty config → today's defaults (enabled, provider claude-cli, no extras)", () => {
-    const resolved = resolveTaskExtraction({}, {});
+    const resolved = resolveSessionInterpretation({}, {});
     expect(resolved.enabled).toBe(true);
     expect(resolved.llm.provider).toBe("claude-cli");
     expect(resolved.llm.model).toBeUndefined();
@@ -128,20 +131,20 @@ describe("resolveTaskExtraction", () => {
   });
 
   test("taskExtraction.enabled: false in config stays false", () => {
-    expect(resolveTaskExtraction({}, { taskExtraction: { enabled: false } }).enabled).toBe(false);
+    expect(resolveSessionInterpretation({}, { taskExtraction: { enabled: false } }).enabled).toBe(false);
   });
 
   test("taskExtraction.enabled: true in config stays true", () => {
-    expect(resolveTaskExtraction({}, { taskExtraction: { enabled: true } }).enabled).toBe(true);
+    expect(resolveSessionInterpretation({}, { taskExtraction: { enabled: true } }).enabled).toBe(true);
   });
 
   test("no taskExtraction.enabled in config defaults to true", () => {
-    expect(resolveTaskExtraction({}, {}).enabled).toBe(true);
-    expect(resolveTaskExtraction({}, { taskExtraction: {} }).enabled).toBe(true);
+    expect(resolveSessionInterpretation({}, {}).enabled).toBe(true);
+    expect(resolveSessionInterpretation({}, { taskExtraction: {} }).enabled).toBe(true);
   });
 
   test("resolves llm.claudeCliPath from the file (advanced override for the claude-cli binary)", () => {
-    const resolved = resolveTaskExtraction({}, { llm: { claudeCliPath: "/opt/claude/bin/claude" } });
+    const resolved = resolveSessionInterpretation({}, { llm: { claudeCliPath: "/opt/claude/bin/claude" } });
     expect(resolved.llm.claudeCliPath).toBe("/opt/claude/bin/claude");
   });
 
@@ -149,22 +152,22 @@ describe("resolveTaskExtraction", () => {
     process.env.ARGUS_TASK_ENABLED = "true";
     process.env.ARGUS_TASK_PROVIDER = "command";
     const file = { taskExtraction: { enabled: false, provider: "claude-cli" as const } };
-    const resolved = resolveTaskExtraction({}, file);
+    const resolved = resolveSessionInterpretation({}, file);
     expect(resolved.enabled).toBe(true);
     expect(resolved.llm.provider).toBe("command");
   });
 
   test("#93: --extract-tasks false forces off even when the file enables it", () => {
     const file = { taskExtraction: { enabled: true } };
-    expect(resolveTaskExtraction({ "extract-tasks": false }, file).enabled).toBe(false);
-    expect(resolveTaskExtraction({ "extract-tasks": true }, { taskExtraction: { enabled: false } }).enabled).toBe(true);
+    expect(resolveSessionInterpretation({ "extract-tasks": false }, file).enabled).toBe(false);
+    expect(resolveSessionInterpretation({ "extract-tasks": true }, { taskExtraction: { enabled: false } }).enabled).toBe(true);
     // Unset (omitted) defers to the file.
-    expect(resolveTaskExtraction({}, file).enabled).toBe(true);
+    expect(resolveSessionInterpretation({}, file).enabled).toBe(true);
   });
 
-  test("flag overrides env and file", () => {
+  test("flag overrides env and file (deprecated --task-* aliases still resolve)", () => {
     process.env.ARGUS_TASK_PROVIDER = "command";
-    const resolved = resolveTaskExtraction(
+    const resolved = resolveSessionInterpretation(
       { "task-provider": "off", "task-model": "haiku" },
       { taskExtraction: { provider: "claude-cli" } },
     );
@@ -172,10 +175,19 @@ describe("resolveTaskExtraction", () => {
     expect(resolved.llm.model).toBe("haiku");
   });
 
+  test("#234: the canonical --interpret-* override flags resolve", () => {
+    const resolved = resolveSessionInterpretation(
+      { "interpret-provider": "off", "interpret-model": "haiku" },
+      {},
+    );
+    expect(resolved.llm.provider).toBe("off");
+    expect(resolved.llm.model).toBe("haiku");
+  });
+
   test("boolean coercion of string env/file values", () => {
-    expect(resolveTaskExtraction({}, { taskExtraction: { enabled: true } }).enabled).toBe(true);
+    expect(resolveSessionInterpretation({}, { taskExtraction: { enabled: true } }).enabled).toBe(true);
     process.env.ARGUS_TASK_ENABLED = "0";
-    expect(resolveTaskExtraction({}, {}).enabled).toBe(false);
+    expect(resolveSessionInterpretation({}, {}).enabled).toBe(false);
   });
 
   test("an invalid provider warns and falls back instead of hard-exiting (#89 tolerant)", () => {
@@ -184,7 +196,7 @@ describe("resolveTaskExtraction", () => {
     logger.warn = (m?: unknown) => warnings.push(String(m));
     try {
       // A typo in argus.json must not kill an unrelated `index`/`serve`/`run`.
-      const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "cluade" as never } });
+      const resolved = resolveSessionInterpretation({}, { taskExtraction: { provider: "cluade" as never } });
       expect(resolved.llm.provider).toBe("claude-cli");
       expect(warnings.join("\n")).toContain("Ignoring invalid LLM provider");
     } finally {
@@ -197,7 +209,7 @@ describe("resolveTaskExtraction", () => {
     const original = logger.warn;
     logger.warn = (m?: unknown) => warnings.push(String(m));
     try {
-      const resolved = resolveTaskExtraction({}, { taskExtraction: { provider: "claude" as never } });
+      const resolved = resolveSessionInterpretation({}, { taskExtraction: { provider: "claude" as never } });
       expect(resolved.llm.provider).toBe("claude-cli");
       expect(warnings).toHaveLength(0);
     } finally {
@@ -208,12 +220,66 @@ describe("resolveTaskExtraction", () => {
   test("an exported-but-empty env var is treated as unset, not a value", () => {
     process.env.ARGUS_TASK_PROVIDER = "";
     // "" must fall through to the file rather than route through provider validation.
-    expect(resolveTaskExtraction({}, { taskExtraction: { provider: "command" } }).llm.provider).toBe("command");
+    expect(resolveSessionInterpretation({}, { taskExtraction: { provider: "command" } }).llm.provider).toBe("command");
   });
 
   test("reattaches log (not a persisted setting)", () => {
     const sink = () => {};
-    expect(resolveTaskExtraction({}, {}, sink).log).toBe(sink);
+    expect(resolveSessionInterpretation({}, {}, sink).log).toBe(sink);
+  });
+
+  test("#234: title/summary char limits default to 100/500 and resolve from the file", () => {
+    const d = resolveSessionInterpretation({}, {});
+    expect(d.titleMaxChars).toBe(100);
+    expect(d.summaryMaxChars).toBe(500);
+    const overridden = resolveSessionInterpretation(
+      {},
+      { sessionInterpretation: { titleMaxChars: 60, summaryMaxChars: 300 } },
+    );
+    expect(overridden.titleMaxChars).toBe(60);
+    expect(overridden.summaryMaxChars).toBe(300);
+  });
+
+  test("#234: effort is omitted when unset and passed through untranslated when set", () => {
+    expect(resolveSessionInterpretation({}, {}).llm.effort).toBeUndefined();
+    const withEffort = resolveSessionInterpretation(
+      {},
+      { llm: { provider: "claude-cli", providerConfigs: { "claude-cli": { effort: "high" } } } },
+    );
+    expect(withEffort.llm.effort).toBe("high");
+  });
+});
+
+describe("migrateTaskExtractionToSessionInterpretation (#234)", () => {
+  test("migrates a legacy taskExtraction block in place and resolves identically", () => {
+    const path = tmpConfig(
+      JSON.stringify({ taskExtraction: { enabled: false, maxSessionsPerHour: 12, provider: "command" } }),
+    );
+    expect(migrateTaskExtractionToSessionInterpretation(path)).toBe(true);
+    const file = loadConfig(path);
+    expect(file.taskExtraction).toBeUndefined();
+    expect(file.sessionInterpretation).toEqual({ enabled: false, maxSessionsPerHour: 12, provider: "command" });
+    // Resolution is unchanged by the migration.
+    const resolved = resolveSessionInterpretation({}, file);
+    expect(resolved.enabled).toBe(false);
+    expect(resolved.maxSessionsPerHour).toBe(12);
+    expect(resolved.llm.provider).toBe("command");
+  });
+
+  test("is a no-op with no legacy block, and new-key values win on conflict", () => {
+    const empty = tmpConfig(JSON.stringify({ log: { level: "info" } }));
+    expect(migrateTaskExtractionToSessionInterpretation(empty)).toBe(false);
+    const both = tmpConfig(
+      JSON.stringify({
+        taskExtraction: { enabled: false, maxSessionsPerHour: 12 },
+        sessionInterpretation: { enabled: true },
+      }),
+    );
+    expect(migrateTaskExtractionToSessionInterpretation(both)).toBe(true);
+    const file = loadConfig(both);
+    expect(file.taskExtraction).toBeUndefined();
+    // New-key `enabled: true` wins; the legacy-only `maxSessionsPerHour` is carried over.
+    expect(file.sessionInterpretation).toEqual({ enabled: true, maxSessionsPerHour: 12 });
   });
 });
 
@@ -241,6 +307,11 @@ describe("resolveLogLevel", () => {
 });
 
 describe("Setting secret flag", () => {
+  test("desktop settings are known and not secret", () => {
+    expect(ALL_SETTINGS["desktop.startAtLogin"]?.secret).toBeFalsy();
+    expect(ALL_SETTINGS["desktop.silent"]?.secret).toBeFalsy();
+  });
+
   test("auto-update settings are known and not secret", () => {
     expect(ALL_SETTINGS["autoUpdate.enabled"]?.secret).toBeFalsy();
     expect(ALL_SETTINGS["autoUpdate.checkIntervalMinutes"]?.secret).toBeFalsy();
@@ -258,6 +329,43 @@ describe("Setting secret flag", () => {
     for (const key of ["taskExtraction.enabled", "taskExtraction.provider", "taskExtraction.model"]) {
       expect(ALL_SETTINGS[key]?.secret).toBeFalsy();
     }
+  });
+});
+
+// `desktop.silent` (#255) is an operator-level switch: `argus config get/set` must know it, but the
+// Settings screen must never show it (no `ui` metadata — the layout in src/api/settings.ts only
+// surfaces settings it lists explicitly).
+describe("desktop.silent", () => {
+  test("is registered for `argus config get/set` with a false default", () => {
+    const setting = ALL_SETTINGS["desktop.silent"]!;
+    expect(setting).toBeDefined();
+    expect(setting.default).toBe(false);
+    expect(setting.env).toBe("ARGUS_DESKTOP_SILENT");
+    expect(setting.parse("true")).toBe(true);
+    expect(setting.parse("off")).toBe(false);
+  });
+
+  test("carries no UI metadata, keeping it out of the Settings screen", () => {
+    expect(ALL_SETTINGS["desktop.silent"]!.ui).toBeUndefined();
+  });
+});
+
+// `resolveDesktopStartAtLogin` is currently latent restore-plumbing: start-at-login is
+// hard-disabled in the desktop shell (see `desktop_start_at_login_enabled` in lib.rs), which ignores
+// this resolver entirely, and the Settings toggle is removed from the UI. These tests keep the
+// resolver mechanics honest for when the feature is re-enabled.
+describe("resolveDesktopStartAtLogin", () => {
+  test("defaults to disabled", () => {
+    expect(resolveDesktopStartAtLogin({}, {})).toBe(false);
+  });
+
+  test("resolver returns true when argus.json sets it (shell ignores it while disabled)", () => {
+    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: true } })).toBe(true);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_DESKTOP_START_AT_LOGIN = "no";
+    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: true } })).toBe(false);
   });
 });
 
@@ -338,7 +446,7 @@ describe("llm block (#132)", () => {
       taskExtraction: { enabled: true },
       llm: { provider: "claude-api" as const, model: "claude-haiku-4-5", maxTokens: 4096, baseUrl: "http://x" },
     };
-    const resolved = resolveTaskExtraction({}, file);
+    const resolved = resolveSessionInterpretation({}, file);
     expect(resolved.llm).toMatchObject({
       provider: "claude-api",
       model: "claude-haiku-4-5",
@@ -353,46 +461,46 @@ describe("llm block (#132)", () => {
       openai: { model: "gpt-5.4-mini" },
       "claude-api": { model: "claude-sonnet-4-6" },
     };
-    expect(resolveTaskExtraction({}, { llm: { provider: "openai", providerConfigs } }).llm.model).toBe("gpt-5.4-mini");
-    expect(resolveTaskExtraction({}, { llm: { provider: "claude-api", providerConfigs } }).llm.model).toBe(
+    expect(resolveSessionInterpretation({}, { llm: { provider: "openai", providerConfigs } }).llm.model).toBe("gpt-5.4-mini");
+    expect(resolveSessionInterpretation({}, { llm: { provider: "claude-api", providerConfigs } }).llm.model).toBe(
       "claude-sonnet-4-6",
     );
   });
 
   test("provider-scoped: a provider's own config wins over the legacy flat value", () => {
     const file = { llm: { provider: "openai" as const, model: "flat-legacy", providerConfigs: { openai: { model: "scoped" } } } };
-    expect(resolveTaskExtraction({}, file).llm.model).toBe("scoped");
+    expect(resolveSessionInterpretation({}, file).llm.model).toBe("scoped");
   });
 
   test("provider-scoped: legacy flat llm.model still resolves as a fallback", () => {
-    expect(resolveTaskExtraction({}, { llm: { provider: "openai", model: "flat-legacy" } }).llm.model).toBe("flat-legacy");
+    expect(resolveSessionInterpretation({}, { llm: { provider: "openai", model: "flat-legacy" } }).llm.model).toBe("flat-legacy");
   });
 
   test("provider-scoped: env (ARGUS_LLM_MODEL) overrides the active provider's stored model", () => {
     process.env.ARGUS_LLM_MODEL = "env-model";
     const file = { llm: { provider: "openai" as const, providerConfigs: { openai: { model: "scoped" } } } };
-    expect(resolveTaskExtraction({}, file).llm.model).toBe("env-model");
+    expect(resolveSessionInterpretation({}, file).llm.model).toBe("env-model");
   });
 
   test("apiKeyEnv defaults per provider but an explicit value wins", () => {
-    expect(resolveTaskExtraction({}, { llm: { provider: "openai" } }).llm.apiKeyEnv).toBe("OPENAI_API_KEY");
-    expect(resolveTaskExtraction({}, { llm: { provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
+    expect(resolveSessionInterpretation({}, { llm: { provider: "openai" } }).llm.apiKeyEnv).toBe("OPENAI_API_KEY");
+    expect(resolveSessionInterpretation({}, { llm: { provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
     expect(
-      resolveTaskExtraction({}, { llm: { provider: "openai", apiKeyEnv: "MY_KEY" } }).llm.apiKeyEnv,
+      resolveSessionInterpretation({}, { llm: { provider: "openai", apiKeyEnv: "MY_KEY" } }).llm.apiKeyEnv,
     ).toBe("MY_KEY");
   });
 
   test("the deprecated taskExtraction.provider overrides the shared llm.provider", () => {
     const file = { llm: { provider: "claude-api" as const }, taskExtraction: { provider: "claude-cli" as const } };
-    expect(resolveTaskExtraction({}, file).llm.provider).toBe("claude-cli");
+    expect(resolveSessionInterpretation({}, file).llm.provider).toBe("claude-cli");
   });
 
   test("local providers carry no apiKeyEnv", () => {
-    expect(resolveTaskExtraction({}, { llm: { provider: "claude-cli" } }).llm.apiKeyEnv).toBeUndefined();
+    expect(resolveSessionInterpretation({}, { llm: { provider: "claude-cli" } }).llm.apiKeyEnv).toBeUndefined();
   });
 
   test("openrouter is a first-class provider with its own key env", () => {
-    const resolved = resolveTaskExtraction({}, { llm: { provider: "openrouter" } });
+    const resolved = resolveSessionInterpretation({}, { llm: { provider: "openrouter" } });
     expect(resolved.llm.provider).toBe("openrouter");
     expect(resolved.llm.apiKeyEnv).toBe("OPENROUTER_API_KEY");
   });
@@ -415,9 +523,9 @@ describe("migrateLlmFlatToProviderConfigs (#154 review)", () => {
     migrateLlmFlatToProviderConfigs(path);
     const file = loadConfig(path);
     // The original provider keeps its values…
-    expect(resolveTaskExtraction({}, file).llm).toMatchObject({ provider: "claude-api", apiKeyEnv: "ANTHROPIC_API_KEY", model: "claude-x" });
+    expect(resolveSessionInterpretation({}, file).llm).toMatchObject({ provider: "claude-api", apiKeyEnv: "ANTHROPIC_API_KEY", model: "claude-x" });
     // …but gemini now resolves its own default, not the stale flat ANTHROPIC_API_KEY.
-    expect(resolveTaskExtraction({}, { ...file, llm: { ...file.llm!, provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
+    expect(resolveSessionInterpretation({}, { ...file, llm: { ...file.llm!, provider: "gemini" } }).llm.apiKeyEnv).toBe("GEMINI_API_KEY");
   });
 
   test("targets the file's persisted provider, not an env override", () => {

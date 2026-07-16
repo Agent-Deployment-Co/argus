@@ -43,13 +43,13 @@ engine underneath.
 That engine is a Bun + TypeScript CLI, and the more technical end of the audience can run it
 directly. `serve` runs the local **web app** — a React SPA (see `docs/internals/web-app.md`) that is
 the dashboard the desktop app opens. `index` reads transcripts into the local store (`argus.db`).
-`sync` (formerly `push`) uploads per-(org, user) usage data to a private Cloudflare Worker backend.
+`sync` (formerly `push`) uploads per-(org, user) usage data to a private Hub backend.
 `run` ties the long-running pieces together (`index --watch` + `serve`, plus `sync --watch` when a
 Hub is configured) in one supervised process — this is what the desktop app runs. Nothing is
 uploaded during `serve`/`index`; the only data that ever leaves the machine is what `sync` sends.
 
 This repo is the public CLI, its web app (`web/`), and the desktop tray shell (`desktop/`). The
-Worker + D1 backend that `sync` uploads to lives in a **separate public repo**,
+Hub backend that `sync` uploads to lives in a **separate public repo**,
 `agentdeploymentco/argus-hub`.
 
 ## Commands
@@ -163,8 +163,8 @@ you'd cause a bug by not knowing:
   payload and the UI can't drift.
 - **Local-only, never on the sync wire:** `TaskFact` + the task-interpretation fields (outcome,
   frustration, chapter span), the retained prompt/response text (`resolved_interaction_text`,
-  default-on and toggleable via `retainText`), and BYO API keys (`secrets.ts`). Adding or changing a
-  local-only type needs no schema-package bump.
+  default-on and toggleable via `retainText`), and BYO API keys (`secrets.ts`) — none of it is ever
+  pushed by `sync`.
 - **Canonical tool/MCP parsing lives in `tool-categories.ts`** (`categorizeTool`, `parseMcpTool` — the
   `mcp__server__tool` split). Route through it so categorization and MCP naming stay consistent.
 - **All LLM access goes through `src/llm/`.** `registry.ts` is the single source of truth (adding a
@@ -172,10 +172,11 @@ you'd cause a bug by not knowing:
   (off/no-key/network/bad-shape → `ok:false`), so consumers branch on `ok`, not exceptions.
 - **Friction signals are Claude-only** (interruptions, permission rejections, compactions, turn
   durations). Codex/Gemini sessions leave friction **undefined** (unknown), not zero.
-- **Settings live in `config.ts` / `argus.json`,** resolved through one chain: `flag > env >
-  argus.json > default`. The CLI (`cli.ts`, on citty) exposes `serve`, `index`
-  (+ `rebuild`/`refresh`/`delete`), `sync`, `run`, `status`, `config`, `secret`; `run` supervises
-  `index --watch` + `serve` (+ `sync --watch`) in one process.
+- **Settings live in `config.ts` / `argus.json`,** resolved through one chain: `managed > flag > env
+  > argus.json > default` (the top `managed` layer is org-managed MDM settings, `managed-config.ts`).
+  The CLI (`cli.ts`, on citty) exposes `serve`, `index` (+ `rebuild`/`refresh`/`delete`), `sync`,
+  `run`, `status`, `config`, `secret`; `run` supervises `index --watch` + `serve` (+ `sync --watch`)
+  in one process.
 - **The desktop app (`desktop/`) is a Tauri tray shell around the CLI** — how most users run Argus. It
   spawns `argus run` as a bundled sidecar and proxies a fixed front-door port (default `4242`) so the
   browser dashboard survives sidecar restarts; it auto-updates. Native code is `desktop/src-tauri/`
@@ -183,18 +184,17 @@ you'd cause a bug by not knowing:
 
 ## The wire contract (important)
 
-Stable types come from the external package `@agentdeploymentco/argus-schema` (pinned to a git tag in
-`package.json`). `types.ts` re-exports them and extends `Dashboard`/`SessionRow` with CLI-only fields
-(e.g. `bySource`, `source`). The schema package is the single source of truth shared with `argus-hub`.
+`Dashboard`/`SessionRow` (and the usage/day/plugin row types) are plain local types in `types.ts`,
+extended there with CLI-only fields (e.g. `bySource`, `source`). They used to come from an external
+`@agentdeploymentco/argus-schema` package; that dependency was retired once it was down to type-only
+imports (the Hub backend had inlined its own copies and dropped it too).
 
 `sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads raw `resolved_*` rows and the
-Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check is gone. The
-`@agentdeploymentco/argus-schema` `Dashboard` type still backs the web app's
-per-view response types (imported type-only by `web/src/types.ts`); the wire contract itself is being
-reworked separately.
+Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check is gone. `Dashboard` still
+backs the web app's per-view response types (imported type-only by `web/src/types.ts` from
+`src/types.ts`); the wire contract itself is being reworked separately.
 
 Not everything is on the wire: `TaskFact` and the task-interpretation fields (chapter span, outcome,
-frustration) live in `store/store-contract.ts` and are **local-only** — they are not pushed by `sync`,
-so adding/changing them needs no schema-package bump. `store/store-contract.ts` (the parse→store fact
-contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`) is separate from the
-`@agentdeploymentco/argus-schema` wire contract.
+frustration) live in `store/store-contract.ts` and are **local-only** — never pushed by `sync`.
+`store/store-contract.ts` (the parse→store fact contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`)
+is a separate contract from the `Dashboard`/`SessionRow` types above.

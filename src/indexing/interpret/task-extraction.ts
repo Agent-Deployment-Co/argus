@@ -4,6 +4,7 @@ import {
   createFactId,
   type InteractionFact,
   type ParserDiagnostic,
+  type SessionInvocation,
   type SourcePosition,
   type TaskFact,
   type TaskFrustration,
@@ -11,7 +12,12 @@ import {
 } from "../../store/store-contract.ts";
 import { complete } from "../../llm/index.ts";
 import type { LlmResult } from "../../llm/types.ts";
-import type { ResolvedTaskExtraction } from "../../config.ts";
+import {
+  DEFAULT_SUMMARY_MAX_CHARS,
+  DEFAULT_TITLE_MAX_CHARS,
+  type ResolvedSessionInterpretation,
+} from "../../config.ts";
+import { toolDisplayName } from "../../tool-categories.ts";
 import { logAt } from "../../logger.ts";
 
 /** The pass-2 dialogue: the prompt (user) then response (assistant) text of each of the task's
@@ -30,25 +36,58 @@ function interactionTurns(
   return turns;
 }
 
-export const DEFAULT_TASK_EXTRACTION_PROMPT = `You identify the actual tasks a user was trying to accomplish in an agent session.
+export const DEFAULT_TASK_EXTRACTION_PROMPT = `You interpret an agent session: what the user was working on, how it went, and the concrete tasks they wanted done.
 
 Return JSON only. Use this exact shape:
-{"tasks":[{"description":"short task description","messageIndexes":[0]}]}
+{"title":"short session title","summary":"what happened in the session","tasks":[{"description":"short task description","messageIndexes":[0]}]}
 
 Rules:
+- title: a concise, specific label for the whole session — what it was about. No trailing punctuation.
+- summary: a few sentences describing what the user set out to do and what actually happened, grounded in both the user messages and the assistant's responses.
 - A task is concrete work the user wanted the agent to do.
 - Exclude setup/context instructions, AGENTS.md instructions, aborted or cancelled turns, status messages, and messages that do not ask the agent to accomplish work.
 - Combine multiple messages into one task when they are clearly part of the same user goal.
-- Keep descriptions concise and specific.
-- messageIndexes must refer to the filtered user message indexes provided below.`;
+- Keep task descriptions concise and specific.
+- messageIndexes must refer to the filtered user message indexes provided below (each message's assistant response, when present, is included only as context — never index it).`;
+
+/** JSON schema for the pass-1 output (#234), enforced by providers that support structured output.
+ *  Character limits are stated in the prompt and clamped on write (JSON Schema can't express them). */
+export const TASK_EXTRACTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: { type: "string" },
+    summary: { type: "string" },
+    tasks: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          description: { type: "string" },
+          messageIndexes: { type: "array", items: { type: "integer" } },
+        },
+        required: ["description", "messageIndexes"],
+      },
+    },
+  },
+  required: ["title", "summary", "tasks"],
+} as const;
 
 export interface ExtractedTaskSpec {
   description: string;
   messageIndexes: number[];
 }
 
+/** Pass-1 output: the session title + summary and the segmented tasks (#234). */
+export interface SessionInterpretation1 {
+  title: string;
+  summary: string;
+  tasks: ExtractedTaskSpec[];
+}
+
 export function logTaskExtractionDebug(
-  options: ResolvedTaskExtraction | undefined,
+  options: ResolvedSessionInterpretation | undefined,
   message: string,
 ): void {
   if (!options?.log) return;
@@ -56,7 +95,7 @@ export function logTaskExtractionDebug(
 }
 
 function logTaskExtractionBlock(
-  options: ResolvedTaskExtraction | undefined,
+  options: ResolvedSessionInterpretation | undefined,
   label: string,
   body: string,
 ): void {
@@ -86,14 +125,14 @@ function diagnostic(
 
 /** The configured provider for this run (`off` when no extraction options are present). */
 export function taskExtractionProvider(
-  options: ResolvedTaskExtraction | undefined,
+  options: ResolvedSessionInterpretation | undefined,
 ): string {
   return options?.llm.provider ?? "off";
 }
 
 /** A one-line summary of the resolved LLM configuration for debug output. Never includes the key
  *  value — only the env-var name it resolves from and whether a value was found. */
-function llmConfigSummary(options: ResolvedTaskExtraction | undefined): string {
+function llmConfigSummary(options: ResolvedSessionInterpretation | undefined): string {
   const llm = options?.llm;
   if (!llm) return "llm config: provider=off";
   const parts = [
@@ -112,8 +151,8 @@ function llmConfigSummary(options: ResolvedTaskExtraction | undefined): string {
 }
 
 function llmWithProviderLog(
-  options: ResolvedTaskExtraction,
-): ResolvedTaskExtraction["llm"] {
+  options: ResolvedSessionInterpretation,
+): ResolvedSessionInterpretation["llm"] {
   if (!options.log) return options.llm;
   return {
     ...options.llm,
@@ -123,7 +162,7 @@ function llmWithProviderLog(
 }
 
 function resolveInstructions(
-  options: ResolvedTaskExtraction | undefined,
+  options: ResolvedSessionInterpretation | undefined,
   diagnostics: ParserDiagnostic[],
 ): string | undefined {
   if (options?.promptFile) {
@@ -152,19 +191,73 @@ function resolveInstructions(
   return options?.prompt?.trim() || DEFAULT_TASK_EXTRACTION_PROMPT;
 }
 
+// Pass-1 prompt bounds (#234). A long agentic session's full text runs to hundreds of KB / megabytes,
+// which blows haiku's context (fast failure) or just makes each call slow — defeating the "lightweight,
+// cheap" design (haiku is the fast tier; the point is to keep its input small so it stays fast). We
+// bound the WHOLE prompt to a fixed character budget and truncate every message as hard as needed to
+// fit — never dropping a message, because an interior interaction can be a task pivot / new chapter
+// that segmentation must see. The budget is shared equally across messages; within a message the user
+// prompt (which anchors segmentation) gets priority and the assistant response takes what's left. Each
+// field is truncated head+tail, so both the setup and the outcome of a long message survive.
+export const PROMPT_CHAR_LIMIT = 4000;
+export const RESPONSE_GROUNDING_CHAR_LIMIT = 1000;
+/** Total character budget for the assembled per-message text (~4 chars/token, so ~15k tokens). It is a
+ *  HARD cap: each message's share is `budget / n` with no per-message floor, so the summed text can
+ *  never exceed the budget regardless of message count. On a pathological many-message session each
+ *  share shrinks toward zero — a message's text may reduce to just its index slot (preserving
+ *  messageIndexes) — rather than the total growing. */
+export const PASS1_TOTAL_CHAR_BUDGET = 60_000;
+/** The elision marker overhead reserved inside a truncated field; a cap this small can't hold head +
+ *  tail + marker, so the field is dropped to "" instead of emitting a content-free marker. */
+const ELISION_MARKER_CHARS = 24;
+
+/** Truncate to `maxChars` keeping the head and the tail (the setup and the conclusion), with an
+ *  elision marker naming how much was cut. Returns "" when `maxChars` is too small to hold any content
+ *  alongside the marker (≤ ELISION_MARKER_CHARS, incl. non-positive), rather than a marker-only string
+ *  that would overshoot the cap and carry no grounding. */
+function truncateHeadTail(text: string, maxChars: number): string {
+  const t = text.trim();
+  if (t.length <= maxChars) return t;
+  const usable = maxChars - ELISION_MARKER_CHARS;
+  if (usable <= 0) return "";
+  const headLen = Math.ceil(usable * 0.65);
+  const tailLen = Math.floor(usable * 0.35);
+  const head = t.slice(0, headLen).trimEnd();
+  const tail = tailLen > 0 ? t.slice(t.length - tailLen).trimStart() : "";
+  const elided = t.length - head.length - tail.length;
+  return tail ? `${head} …[${elided} chars elided]… ${tail}` : `${head} …[${elided} chars elided]`;
+}
+
 export function buildTaskExtractionPrompt(
   sessionId: string,
   candidates: InteractionFact[],
   instructions = DEFAULT_TASK_EXTRACTION_PROMPT,
+  limits?: { titleMaxChars: number; summaryMaxChars: number },
 ): string {
-  const messages = candidates.map((candidate, index) => ({
-    index,
-    ...(candidate.timestampMs != null
-      ? { timestamp: new Date(candidate.timestampMs).toISOString() }
-      : {}),
-    text: candidate.promptText ?? "",
-  }));
-  return `${instructions.trim()}\n\nFiltered user messages:\n${JSON.stringify(
+  // Equal, HARD share of the budget per message (no floor, so the total can't exceed the budget however
+  // many messages there are): the prompt takes up to its own cap and the share, the response takes
+  // whatever share is left (up to its cap). No message is dropped — every index slot is kept so
+  // messageIndexes stays meaningful — but on a huge session a message's text truncates toward "".
+  const n = Math.max(1, candidates.length);
+  const perMsg = Math.floor(PASS1_TOTAL_CHAR_BUDGET / n);
+  const messages = candidates.map((candidate, index) => {
+    const promptCap = Math.min(PROMPT_CHAR_LIMIT, perMsg);
+    const text = truncateHeadTail(candidate.promptText ?? "", promptCap);
+    const responseCap = Math.min(RESPONSE_GROUNDING_CHAR_LIMIT, Math.max(0, perMsg - text.length));
+    const response = candidate.responseText ? truncateHeadTail(candidate.responseText, responseCap) : "";
+    return {
+      index,
+      ...(candidate.timestampMs != null
+        ? { timestamp: new Date(candidate.timestampMs).toISOString() }
+        : {}),
+      text,
+      ...(response ? { response } : {}),
+    };
+  });
+  const constraints = limits
+    ? `\n\nConstraints:\n- title: at most ${limits.titleMaxChars} characters.\n- summary: at most ${limits.summaryMaxChars} characters.`
+    : "";
+  return `${instructions.trim()}${constraints}\n\nFiltered user messages (with assistant responses as context):\n${JSON.stringify(
     { sessionId, messages },
     null,
     2,
@@ -186,12 +279,12 @@ function stripJsonFence(raw: string): string {
   return end >= start ? trimmed.slice(start, end + 1).trim() : trimmed;
 }
 
-export function parseTaskExtractionOutput(raw: string): ExtractedTaskSpec[] {
+export function parseTaskExtractionOutput(raw: string): SessionInterpretation1 {
   const parsed = JSON.parse(stripJsonFence(raw)) as unknown;
-  const payload =
-    parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>).tasks
-      : parsed;
+  const isObject = parsed && typeof parsed === "object" && !Array.isArray(parsed);
+  const root = isObject ? (parsed as Record<string, unknown>) : {};
+  // Accept a bare array as the legacy tasks-only shape (title/summary empty).
+  const payload = isObject ? root.tasks : parsed;
   if (!Array.isArray(payload)) {
     throw new Error("expected a JSON object with a tasks array");
   }
@@ -213,18 +306,22 @@ export function parseTaskExtractionOutput(raw: string): ExtractedTaskSpec[] {
       .filter((value) => Number.isInteger(value) && value >= 0);
     tasks.push({ description, messageIndexes });
   }
-  return tasks;
+  const title = typeof root.title === "string" ? root.title.trim() : "";
+  const summary = typeof root.summary === "string" ? root.summary.trim() : "";
+  return { title, summary, tasks };
 }
 
 /** Run the shared LLM client for a task-extraction prompt. `off` is the consumer's "no LLM" signal:
- *  it returns an empty-tasks result rather than calling the layer (which would just report ok:false). */
+ *  it returns an empty result rather than calling the layer (which would just report ok:false). The
+ *  pass-1 JSON schema is enforced by providers that support structured output; others fall back to the
+ *  prompt instructions + tolerant parsing. Effort (when set) rides on the resolved llm config. */
 async function runExtraction(
   prompt: string,
-  options: ResolvedTaskExtraction | undefined,
+  options: ResolvedSessionInterpretation | undefined,
 ): Promise<LlmResult> {
   if (taskExtractionProvider(options) === "off")
-    return { ok: true, text: '{"tasks":[]}' };
-  return complete({ prompt }, llmWithProviderLog(options!));
+    return { ok: true, text: '{"title":"","summary":"","tasks":[]}' };
+  return complete({ prompt, schema: TASK_EXTRACTION_SCHEMA }, llmWithProviderLog(options!));
 }
 
 function uniqueValidIndexes(indexes: number[], count: number): number[] {
@@ -274,39 +371,45 @@ export function taskFactsFromSpecs(
     .filter((fact): fact is TaskFact => fact !== null);
 }
 
+/** Clamp a model string to a character budget (defensive — the limit is also stated in the prompt). */
+function clamp(text: string, maxChars: number): string {
+  const trimmed = text.trim();
+  return trimmed.length <= maxChars ? trimmed : trimmed.slice(0, maxChars).trimEnd();
+}
+
+export interface SessionInterpretationResult {
+  title: string;
+  summary: string;
+  tasks: TaskFact[];
+  diagnostics: ParserDiagnostic[];
+}
+
 export async function extractTasksForSession(
   sessionId: string,
   candidates: InteractionFact[],
-  options: ResolvedTaskExtraction | undefined,
-): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
+  options: ResolvedSessionInterpretation | undefined,
+): Promise<SessionInterpretationResult> {
   const provider = taskExtractionProvider(options);
   const diagnostics: ParserDiagnostic[] = [];
+  const titleMax = options?.titleMaxChars ?? DEFAULT_TITLE_MAX_CHARS;
+  const summaryMax = options?.summaryMaxChars ?? DEFAULT_SUMMARY_MAX_CHARS;
   logTaskExtractionDebug(
     options,
-    `starting extraction for ${sessionId}: provider=${provider}, task-start interactions=${candidates.length}`,
+    `starting interpretation for ${sessionId}: provider=${provider}, task-start interactions=${candidates.length}`,
   );
   if (provider === "off") {
-    logTaskExtractionDebug(
-      options,
-      `skipping ${sessionId}: task extraction is off`,
-    );
-    return { tasks: [], diagnostics };
+    logTaskExtractionDebug(options, `skipping ${sessionId}: session interpretation is off`);
+    return { title: "", summary: "", tasks: [], diagnostics };
   }
   if (candidates.length === 0) {
-    logTaskExtractionDebug(
-      options,
-      `skipping ${sessionId}: no task-start interactions`,
-    );
-    return { tasks: [], diagnostics };
+    logTaskExtractionDebug(options, `skipping ${sessionId}: no task-start interactions`);
+    return { title: "", summary: "", tasks: [], diagnostics };
   }
 
   const instructions = resolveInstructions(options, diagnostics);
   if (!instructions) {
-    logTaskExtractionDebug(
-      options,
-      `skipping ${sessionId}: no task extraction prompt available`,
-    );
-    return { tasks: [], diagnostics };
+    logTaskExtractionDebug(options, `skipping ${sessionId}: no interpretation prompt available`);
+    return { title: "", summary: "", tasks: [], diagnostics };
   }
 
   const promptSource = options?.promptFile
@@ -315,11 +418,11 @@ export async function extractTasksForSession(
       ? "custom prompt"
       : "default prompt";
   logTaskExtractionDebug(options, `using ${promptSource}`);
-  const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions);
-  logTaskExtractionDebug(
-    options,
-    `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`,
-  );
+  const prompt = buildTaskExtractionPrompt(sessionId, candidates, instructions, {
+    titleMaxChars: titleMax,
+    summaryMaxChars: summaryMax,
+  });
+  logTaskExtractionDebug(options, `prompt bytes=${Buffer.byteLength(prompt, "utf8")}`);
   logTaskExtractionBlock(options, "prompt", prompt);
   logTaskExtractionDebug(options, llmConfigSummary(options));
   const result = await runExtraction(prompt, options);
@@ -334,20 +437,25 @@ export async function extractTasksForSession(
     diagnostics.push(
       diagnostic(
         "task_extraction_failed",
-        `Couldn't extract tasks for ${sessionId}: ${result.error ?? "no output"}`,
+        `Couldn't interpret ${sessionId}: ${result.error ?? "no output"}`,
         "warning",
         candidates[0]?.promptPosition,
       ),
     );
-    return { tasks: [], diagnostics };
+    return { title: "", summary: "", tasks: [], diagnostics };
   }
 
   try {
-    const specs = parseTaskExtractionOutput(result.text);
-    logTaskExtractionDebug(options, `parsed tasks=${specs.length}`);
-    const tasks = taskFactsFromSpecs(sessionId, candidates, specs);
+    const parsed = parseTaskExtractionOutput(result.text);
+    logTaskExtractionDebug(options, `parsed tasks=${parsed.tasks.length}`);
+    const tasks = taskFactsFromSpecs(sessionId, candidates, parsed.tasks);
     logTaskExtractionDebug(options, `created tasks=${tasks.length}`);
-    return { tasks, diagnostics };
+    return {
+      title: clamp(parsed.title, titleMax),
+      summary: clamp(parsed.summary, summaryMax),
+      tasks,
+      diagnostics,
+    };
   } catch (error) {
     logTaskExtractionDebug(
       options,
@@ -356,14 +464,14 @@ export async function extractTasksForSession(
     diagnostics.push(
       diagnostic(
         "task_extraction_bad_response",
-        `Couldn't read task extractor output for ${sessionId}: ${
+        `Couldn't read interpretation output for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
         "warning",
         candidates[0]?.promptPosition,
       ),
     );
-    return { tasks: [], diagnostics };
+    return { title: "", summary: "", tasks: [], diagnostics };
   }
 }
 
@@ -371,8 +479,10 @@ export async function extractTasksForSession(
 
 export const DEFAULT_TASK_OUTCOME_PROMPT = `
 You judge how a single task in an agent session turned out, from the interaction dialogue between the user and the
-assistant. Note that this dialogue does not include the assistant's narration messages or specific tool invocations.
-It has been reduced to user prompts and the assistant's final message at the end of a completed interaction.
+assistant. Note that this dialogue does not include the assistant's narration messages. It has been reduced to user
+prompts and the assistant's final message at the end of a completed interaction. Where present, a mechanical summary of
+the tool activity during the task is also included — this is a deterministic count of tool calls (not model narration),
+useful when the tidy final message understates or overstates what actually happened.
 
 Return JSON only. Use this exact shape:
 {"outcome":"success","frustration":"none","signals":["short tag"],"reason":"one sentence"}
@@ -386,6 +496,43 @@ Rules:
 - signals: a few short evidence tags, e.g. "repeated re-asks", "no access", "assistant over-claimed". Omit or use [] if there are none.
 - reason: one concise sentence explaining the call.`;
 
+/** JSON schema for the pass-2 outcome verdict (#234), enforced by structured-output providers. */
+export const TASK_OUTCOME_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    outcome: { type: "string", enum: ["success", "failure", "unclear"] },
+    frustration: { type: "string", enum: ["none", "moderate", "high"] },
+    signals: { type: "array", items: { type: "string" } },
+    reason: { type: "string" },
+  },
+  required: ["outcome", "frustration", "signals", "reason"],
+} as const;
+
+/** Tools that mutate a file — used to count "files edited" in the deterministic tool-usage summary. */
+const EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "write_file", "replace"]);
+
+/** A compact, deterministic one-line summary of tool activity across a task's interactions (#234), e.g.
+ *  "18 tool calls: 6× Edit, 5× Bash, 4× Read, 3× Grep; 4 files edited." Mechanical, not model narration:
+ *  it gives the pass-2 judge evidence beyond the prompt + final-response text. Returns "" when empty. */
+export function summarizeToolUsage(invocations: SessionInvocation[]): string {
+  if (!invocations.length) return "";
+  const counts = new Map<string, number>();
+  const editedFiles = new Set<string>();
+  for (const inv of invocations) {
+    const label = toolDisplayName(inv.tool);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+    if (inv.filePath && EDIT_TOOLS.has(inv.tool)) editedFiles.add(inv.filePath);
+  }
+  const total = invocations.length;
+  // Rank by count desc, then label asc for a stable, deterministic order.
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const top = ranked.slice(0, 6).map(([label, n]) => `${n}× ${label}`);
+  const parts = [`${total} tool call${total === 1 ? "" : "s"}: ${top.join(", ")}`];
+  if (editedFiles.size) parts.push(`${editedFiles.size} file${editedFiles.size === 1 ? "" : "s"} edited`);
+  return `${parts.join("; ")}.`;
+}
+
 export interface TaskOutcomeJudgment {
   outcome: TaskOutcome;
   frustration: TaskFrustration;
@@ -397,9 +544,13 @@ export function buildTaskOutcomePrompt(
   description: string,
   interactions: InteractionFact[],
   instructions = DEFAULT_TASK_OUTCOME_PROMPT,
+  toolSummary = "",
 ): string {
   const turns = interactionTurns(interactions);
-  return `${instructions.trim()}\n\nTask: ${description}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
+  const toolLine = toolSummary
+    ? `\n\nTool usage (mechanical summary, not narration):\n${toolSummary}`
+    : "";
+  return `${instructions.trim()}\n\nTask: ${description}${toolLine}\n\nDialogue:\n${JSON.stringify(turns, null, 2)}`;
 }
 
 function toOutcome(value: unknown): TaskOutcome {
@@ -436,7 +587,8 @@ export function parseTaskOutcomeOutput(raw: string): TaskOutcomeJudgment {
 export async function judgeTaskOutcome(
   description: string,
   interactions: InteractionFact[],
-  options: ResolvedTaskExtraction | undefined,
+  options: ResolvedSessionInterpretation | undefined,
+  toolSummary = "",
 ): Promise<{
   judgment?: TaskOutcomeJudgment;
   diagnostics: ParserDiagnostic[];
@@ -446,14 +598,14 @@ export async function judgeTaskOutcome(
   if (taskExtractionProvider(options) === "off" || !hasText)
     return { diagnostics };
 
-  const prompt = buildTaskOutcomePrompt(description, interactions);
+  const prompt = buildTaskOutcomePrompt(description, interactions, DEFAULT_TASK_OUTCOME_PROMPT, toolSummary);
   logTaskExtractionDebug(
     options,
     `outcome prompt bytes=${Buffer.byteLength(prompt, "utf8")}`,
   );
   logTaskExtractionBlock(options, "outcome prompt", prompt);
   logTaskExtractionDebug(options, llmConfigSummary(options));
-  const result = await complete({ prompt }, llmWithProviderLog(options!));
+  const result = await complete({ prompt, schema: TASK_OUTCOME_SCHEMA }, llmWithProviderLog(options!));
   if (!result.ok) {
     diagnostics.push(
       diagnostic(
@@ -497,6 +649,14 @@ async function mapWithLimit<T, R>(
   return results;
 }
 
+/** Append `value` to the array at `key`, creating it on first use. Avoids the allocate-a-throwaway-`[]`
+ *  + re-probe idiom; number-keyed, unlike the string-keyed `groupBy` in pipeline.ts. */
+function pushGroup<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  let list = map.get(key);
+  if (!list) map.set(key, (list = []));
+  list.push(value);
+}
+
 /**
  * The full two-pass extraction (#91/#122): pass 1 segments the session's human interaction openings
  * (the only task candidates) into tasks; pass 2 judges each task's outcome from the dialogue projected
@@ -508,8 +668,11 @@ async function mapWithLimit<T, R>(
 export async function extractTasksWithOutcome(
   sessionId: string,
   interactions: InteractionFact[],
-  options: ResolvedTaskExtraction | undefined,
-): Promise<{ tasks: TaskFact[]; diagnostics: ParserDiagnostic[] }> {
+  options: ResolvedSessionInterpretation | undefined,
+  // Loaded lazily so a no-task session (common in the drain) never pays for the invocations query —
+  // it's only needed for the pass-2 tool-usage summary, past the tasks-length guard below.
+  loadInvocations?: () => Promise<SessionInvocation[]>,
+): Promise<SessionInterpretationResult> {
   // Task candidates are the human interaction openings that carry task text (#122).
   const candidates = interactions.filter(
     (interaction): interaction is InteractionFact & { promptText: string } =>
@@ -517,13 +680,22 @@ export async function extractTasksWithOutcome(
   );
   const pass1 = await extractTasksForSession(sessionId, candidates, options);
   const diagnostics = [...pass1.diagnostics];
-  if (!pass1.tasks.length) return { tasks: pass1.tasks, diagnostics };
+  if (!pass1.tasks.length)
+    return { title: pass1.title, summary: pass1.summary, tasks: pass1.tasks, diagnostics };
 
   // Chronological order so resolved_tasks.seq (and thus the interaction→task assignment) increases
   // along the timeline.
   const tasks = [...pass1.tasks].sort(
     (a, b) => (a.timestampMs ?? Infinity) - (b.timestampMs ?? Infinity),
   );
+
+  // Group invocations by their owning interaction seq (#234) — read only now that pass 1 produced tasks.
+  // Keyed by interaction_seq, NOT task_seq (which writeSessionTasks assigns only after this pass runs).
+  const invocations = loadInvocations ? await loadInvocations() : [];
+  const invocationsByInteraction = new Map<number, SessionInvocation[]>();
+  for (const inv of invocations) {
+    if (inv.interactionSeq != null) pushGroup(invocationsByInteraction, inv.interactionSeq, inv);
+  }
 
   // Group each task's owned interactions via the same bookmark the materializer stamps onto
   // resolved_interactions.task_seq, so the judged dialogue matches the stored membership exactly. A
@@ -532,11 +704,7 @@ export async function extractTasksWithOutcome(
   const interactionsByTask = new Map<number, InteractionFact[]>();
   for (const interaction of interactions) {
     const taskIndex = taskSeqByInteraction.get(interaction.seq);
-    if (taskIndex == null) continue;
-    const list = interactionsByTask.get(taskIndex) ?? [];
-    if (!interactionsByTask.has(taskIndex))
-      interactionsByTask.set(taskIndex, list);
-    list.push(interaction);
+    if (taskIndex != null) pushGroup(interactionsByTask, taskIndex, interaction);
   }
   logTaskExtractionDebug(
     options,
@@ -547,8 +715,11 @@ export async function extractTasksWithOutcome(
     4,
     async ([taskIndex, owned]) => {
       const task = tasks[taskIndex]!;
+      // Deterministic tool-usage summary over this task's owned interactions' invocations.
+      const taskInvocations = owned.flatMap((i) => invocationsByInteraction.get(i.seq) ?? []);
+      const toolSummary = summarizeToolUsage(taskInvocations);
       const { judgment, diagnostics: outcomeDiagnostics } =
-        await judgeTaskOutcome(task.description, owned, options);
+        await judgeTaskOutcome(task.description, owned, options, toolSummary);
       diagnostics.push(...outcomeDiagnostics);
       if (judgment) {
         task.outcome = judgment.outcome;
@@ -559,5 +730,5 @@ export async function extractTasksWithOutcome(
     },
   );
 
-  return { tasks, diagnostics };
+  return { title: pass1.title, summary: pass1.summary, tasks, diagnostics };
 }

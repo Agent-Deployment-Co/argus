@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildSessionDetail, buildSessionList } from "../src/api/session-list.ts";
-import type { SessionAggregate } from "../src/store/store-contract.ts";
+import type { SessionAggregate, SessionSearchMatch } from "../src/store/store-contract.ts";
 import type { MessageRecord, SessionMeta, Usage } from "../src/types.ts";
 
 function usage(input: number): Usage {
@@ -23,6 +23,10 @@ function agg(sessionId: string, over: Partial<SessionMeta> & { input: number; st
     firstTs: start,
     lastTs: start,
     messageCount: 1,
+    interactions: 1,
+    tasks: 0,
+    title: null,
+    summary: null,
   };
 }
 
@@ -70,6 +74,27 @@ describe("buildSessionList", () => {
     expect(buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, project: "web" }).rows.map((r) => r.sessionId)).toEqual(["a"]);
     expect(buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, q: "flag" }).rows.map((r) => r.sessionId)).toEqual(["b"]);
   });
+
+  test("attaches a search match onto its row without touching non-matching rows (#155)", () => {
+    const mixed = [
+      agg("a", { input: 1, start: 1, project: "web/app", firstPrompt: "totally unrelated" }),
+      agg("b", { input: 1, start: 2, project: "cli/tool", firstPrompt: "totally unrelated too" }),
+    ];
+    const matches = new Map<string, SessionSearchMatch>([["b", { count: 2, snippet: "the pricing bug", sources: ["conversation"] }]]);
+    const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
+    expect(page.rows.find((r) => r.sessionId === "a")?.match).toBeUndefined();
+    expect(page.rows.find((r) => r.sessionId === "b")?.match).toEqual(matches.get("b"));
+  });
+
+  test("omitting q when matches is set doesn't re-apply the plain metadata substring filter", () => {
+    // Simulates the serve-side wiring: a session that matched ONLY via FTS (title/project/source
+    // don't contain the search term) must survive here — the caller passes q: undefined once a
+    // store-side search already ran, so this plain metadata check must not re-exclude it.
+    const mixed = [agg("a", { input: 1, start: 1, project: "p", firstPrompt: "no keyword here" })];
+    const matches = new Map<string, SessionSearchMatch>([["a", { count: 1, snippet: "s", sources: ["task"] }]]);
+    const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
+    expect(page.rows.map((r) => r.sessionId)).toEqual(["a"]);
+  });
 });
 
 describe("buildSessionDetail", () => {
@@ -104,8 +129,43 @@ describe("buildSessionDetail", () => {
     expect(row.toolCounts).toEqual({ Edit: 1 });
     expect(row.filesTouched).toEqual(["a.ts"]);
     expect(row.firstPrompt).toBe("do the thing");
-    // Summary comes from the shared summaryFactsFromMessages derivation (matches the dashboard path).
-    expect(row.summary).toContain("do the thing");
-    expect(row.summary).toContain("Edit");
+    // Summary is the stored interpretation summary verbatim — empty when interpretation hasn't run
+    // (no heuristic fallback), and null title until it has.
+    expect(row.summary).toBe("");
+    expect(row.title).toBeNull();
+  });
+
+  test("carries the interpreted title and summary verbatim when interpreted", () => {
+    const meta: SessionMeta = {
+      source: "codex",
+      sessionId: "codex:e",
+      project: "p",
+      cwd: "/tmp/p",
+      filePath: "/tmp/p/r.jsonl",
+      firstPrompt: "do the thing",
+    };
+    const messages: MessageRecord[] = [
+      {
+        source: "codex",
+        sessionId: "codex:e",
+        project: "p",
+        cwd: "/tmp/p",
+        gitBranch: "",
+        ts: 1000,
+        date: "2026-06-01",
+        model: "gpt-5",
+        usage: usage(50),
+        attributionSkill: null,
+        toolUses: [],
+      },
+    ];
+    const row = buildSessionDetail("codex:e", messages, meta, [], {
+      title: "Do the thing",
+      summary: "Did the thing across two steps.",
+      interpreted: true,
+    });
+    expect(row.title).toBe("Do the thing");
+    expect(row.summary).toBe("Did the thing across two steps.");
+    expect(row.interpreted).toBe(true);
   });
 });

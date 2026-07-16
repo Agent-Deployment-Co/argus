@@ -296,6 +296,57 @@ export interface InvocationFact {
   position: SourcePosition;
 }
 
+/** A tool invocation projected for the interpret stage's pass-2 tool-usage summary (#234): just enough
+ *  to count and label calls, grouped by their owning interaction. Read straight from
+ *  resolved_invocations, so `interactionSeq` is the leaf soft-link (not the task, which isn't assigned
+ *  until interpretation writes it). */
+export interface SessionInvocation {
+  interactionSeq: number | null;
+  tool: string;
+  category: string;
+  mcpServer?: string;
+  mcpTool?: string;
+  filePath?: string;
+}
+
+/** One transcript file that a session was parsed from (#124 detail "Session Data" card). Joined from
+ *  index_sessions -> index_files, so it carries the structural-index provenance the resolved_* tables
+ *  don't: the on-disk path, size/mtime, and the parse outcome. Local-only (index_* is never synced). */
+export interface SessionProvenanceFile {
+  /** The transcript path as recorded on the session record (index_sessions.transcript_path). */
+  transcriptPath: string | null;
+  /** The path the indexer observed the file at (index_files.observed_path). */
+  observedPath: string | null;
+  /** Path relative to its root, when known. */
+  relativePath: string | null;
+  /** File classification: transcript / auxiliary / external. */
+  kind: string;
+  /** This session's role within the file (index_sessions.kind — e.g. main / subagent), when known. */
+  sessionKind: string | null;
+  /** File size in bytes (stored as TEXT in the index; parsed to a number, null if absent/unparseable). */
+  sizeBytes: number | null;
+  /** File mtime in epoch milliseconds (index stores nanoseconds; converted, null if absent). */
+  mtimeMs: number | null;
+  /** Parse outcome: success / failed / unstable. */
+  status: string;
+  /** Why the file was invalidated, when status isn't success. */
+  invalidationReason: string | null;
+  parserName: string | null;
+  parserVersion: string | null;
+}
+
+/** Structural-index provenance for one session (#124): the transcript file(s) it was parsed from plus
+ *  its subagent/resumed-session lineage. Read from the index_* tables (never synced). Null when the
+ *  session id isn't in the store. */
+export interface SessionProvenance {
+  source: AgentSource;
+  files: SessionProvenanceFile[];
+  /** Parent sessions (this session is a subagent/child of these), source session ids, sorted. */
+  parents: string[];
+  /** Child sessions (subagents spawned by this session), source session ids, sorted. */
+  children: string[];
+}
+
 export interface ToolResultFact {
   id: string;
   source: AgentSource;
@@ -331,6 +382,44 @@ export interface TaskFact {
   /** One-line rationale for the outcome judgement. */
   outcomeReason?: string;
   position: SourcePosition;
+}
+
+/** Who created a label definition (user vs Argus). Combined with a label application's `appliedBy`,
+ *  this distinguishes the three product cases: user-generated, system-generated, and user-applied
+ *  system labels. Labels are local-only — never on the sync wire. */
+export type LabelOrigin = "user" | "system";
+/** Who applied a label to a given session/task. */
+export type LabelAppliedBy = "user" | "system";
+/** What a label application targets. */
+export type LabelTargetKind = "session" | "task";
+
+/** How a multi-label filter narrows a session list: "any" (union, the default) matches a session
+ *  carrying at least one of the given labels; "all" (intersection) requires every one of them. */
+export type LabelFilterMode = "any" | "all";
+
+/** A label definition. `deletedAtMs` set means the label was soft-deleted (its name can be reused). */
+export interface LabelRecord {
+  id: string;
+  name: string;
+  origin: LabelOrigin;
+  createdAtMs: number;
+  deletedAtMs?: number;
+}
+/** A label as applied to a target, carrying the application's provenance. */
+export interface AppliedLabel extends LabelRecord {
+  appliedBy: LabelAppliedBy;
+  appliedAtMs: number;
+}
+/** Identifies what a label application points at: a session, or a task by its position within one. */
+export interface LabelTarget {
+  sessionId: string;
+  /** The task's position (resolved_tasks.seq). Omit for a session-level label. */
+  taskSeq?: number;
+}
+/** Active labels resolved for one session and each of its tasks (keyed by task position). */
+export interface SessionLabels {
+  session: AppliedLabel[];
+  tasks: Record<number, AppliedLabel[]>;
 }
 
 export interface SessionRelationshipFact {
@@ -496,6 +585,48 @@ export interface ResolvedQuery {
   since?: string;
   until?: string;
   projectSubstring?: string;
+  /** Restrict to exactly these session ids (#155): how `searchSessions`'s candidate set threads into
+   *  `readSessionAggregates`. An empty array means "no matches" (returns no rows), distinct from
+   *  omitting the field (no restriction) — a caller that ran a search and got zero hits must not fall
+   *  back to an unfiltered read. */
+  sessionIds?: string[];
+  /** Include hidden sessions (local-only UI state) that `buildSessionFilterConds` otherwise excludes
+   *  by default. No caller opts in yet — there is no "show hidden" UI surface. */
+  includeHidden?: boolean;
+}
+
+/** Search input for `searchSessions` (#155): the same source/date/project narrowing as `ResolvedQuery`,
+ *  plus the two search dimensions the `/sessions` box adds. `text` freeform-matches title/project/
+ *  source AND conversation text AND task text; `file` substring-matches a touched file's path. */
+export interface SessionSearchQuery extends ResolvedQuery {
+  text?: string;
+  file?: string;
+}
+
+/** A text source a session's match can come from: raw `conversation` (transcript) vs the distilled
+ *  model restatements `task` (per-task text, #155) and `summary` (session title/summary, #234). The
+ *  web UI labels the distilled ones distinctly, since that text isn't verbatim dialogue. */
+export type SessionSearchTextSource = "conversation" | "task" | "summary";
+
+export interface SessionSearchMatch {
+  /** Combined match count across whichever FTS table(s) hit (summed across all matched `sources`). */
+  count: number;
+  /** A snippet with matched spans wrapped in char(1)/char(2) sentinels (not HTML — the web layer
+   *  splits and wraps in <mark> itself, so this is XSS-safe by construction). Drawn from the most
+   *  distilled matched source (summary > task > conversation), i.e. the most readable restatement. */
+  snippet: string;
+  /** Every text source that matched, deduped and ordered most-distilled-first (summary, task,
+   *  conversation) — so `sources[0]` is the snippet's origin. Lets the UI name each precisely and show
+   *  combinations, instead of the old lossy conversation/task/both single value. */
+  sources: SessionSearchTextSource[];
+}
+
+/** Result of `searchSessions`: the matching session ids (already includes any metadata-only matches,
+ *  e.g. a `file:` term or a title/project/source substring hit with no FTS match) plus a snippet/count
+ *  for every session whose match came from an FTS table. Local-only (not on the sync wire). */
+export interface SessionSearchResult {
+  ids: Set<string>;
+  matches: Map<string, SessionSearchMatch>;
 }
 
 /** A cheap per-session rollup for the paginated session list: session columns + per-model token
@@ -510,6 +641,14 @@ export interface SessionAggregate {
   firstTs: number | null;
   lastTs: number | null;
   messageCount: number;
+  /** Interaction count for the session (resolved_interactions), for the list's interaction stat (#124). */
+  interactions: number;
+  /** Task count for the session (resolved_tasks); 0 when the session has no tasks / isn't interpreted. */
+  tasks: number;
+  /** Model-generated title/summary (#234), when the session has been interpreted; null otherwise. The
+   *  list surfaces them with a first-prompt fallback. */
+  title: string | null;
+  summary: string | null;
 }
 
 /** Usage sums + message count for one grouping key crossed with model (cost is priced per-model in JS
@@ -637,6 +776,15 @@ export interface ReadModelStore {
   ): Promise<string[]>;
   /** Metadata for a single resolved session, without loading messages or tasks. */
   readSessionMeta(sessionId: string): Promise<SessionMeta | undefined>;
+  /** The model-generated title/summary for one session (#234), plus whether interpretation has run at
+   *  all (`interpreted`), or undefined if the session doesn't exist; title/summary are null until it's
+   *  interpreted. Backs the detail view's title/summary fallback and its pending-vs-ran distinction. */
+  readSessionInterpretation(
+    sessionId: string,
+  ): Promise<{ title: string | null; summary: string | null; interpreted: boolean } | undefined>;
+  /** Whether a session is currently hidden (local-only UI state) — false if the session doesn't exist.
+   *  Backs the detail view's Hide/Unhide button. */
+  readSessionHidden(sessionId: string): Promise<boolean>;
   /** Opt-in retained conversation text for a session (#120): the session's text chunks in timeline
    *  order (the table's own `seq`), each tagged with its owning `interactionSeq` and `type`. A reader
    *  groups by `interactionSeq` as needed. Empty when retention was off at index time. Local-only —
@@ -649,6 +797,9 @@ export interface ReadModelStore {
    *  interaction_json is text-free (#120); promptText/responseText are merged back from
    *  resolved_interaction_text by interaction_seq. Interactions without retained text have neither. */
   readSessionInteractions(sessionId: string): Promise<InteractionFact[]>;
+  /** Number of interactions (prompt→loop→response units) in a session — a cheap COUNT over
+   *  resolved_interactions, for the session-detail interaction tally (#124) without rehydrating text. */
+  readSessionInteractionCount(sessionId: string): Promise<number>;
   /** Canonical ids of sessions eligible for (re)interpretation, newest-first, capped at `limit` (#153).
    *  Eligible = content_indexed_at_ms > COALESCE(interpreted_at_ms, 0) AND a retained human opening
    *  prompt exists. interpretation_version is intentionally NOT a factor (a version bump must not
@@ -656,9 +807,24 @@ export interface ReadModelStore {
   readPendingInterpretationSessions(limit: number): Promise<string[]>;
   /** Sole writer of resolved_tasks + interpretation state (#153): replace a session's tasks (without
    *  re-materializing messages/interactions/text), re-derive task↔interaction membership, and stamp
-   *  interpreted_at_ms + interpretation_version. Always stamps — even for an empty task list — so a
-   *  session with no extractable tasks de-queues instead of re-running every drain tick. */
-  writeSessionTasks(sessionId: string, tasks: TaskFact[], version: string): Promise<void>;
+   *  interpreted_at_ms + interpretation_version plus the model title/summary (#234). Always stamps —
+   *  even for an empty task list — so a session with no extractable tasks de-queues instead of re-running
+   *  every drain tick. `title`/`summary` default to null; the interpret stage passes what it generated. */
+  writeSessionTasks(
+    sessionId: string,
+    tasks: TaskFact[],
+    version: string,
+    title?: string | null,
+    summary?: string | null,
+  ): Promise<void>;
+  /** All tool invocations for a session with their owning interaction seq (#234) — the deterministic
+   *  input for the pass-2 tool-usage summary. Read straight off resolved_invocations (no task_seq join,
+   *  which isn't written until interpretation completes), ordered by seq. */
+  readSessionInvocations(sessionId: string): Promise<SessionInvocation[]>;
+  /** Structural-index provenance for a session (#124): the transcript file(s) it was parsed from
+   *  (path/size/mtime/parse status) and its subagent/resumed-session lineage, from the index_* tables.
+   *  Null when the session id isn't in the store. Local-only — index_* is never synced. */
+  readSessionProvenance(sessionId: string): Promise<SessionProvenance | null>;
   /** Take up to `want` credits from the persisted Interpret rate limiter (#153) — one credit = one
    *  session's worth of interpretation (unrelated to LLM tokens). Refilled continuously at
    *  `maxPerHour`/hour (capacity `maxPerHour`, fresh bucket full). Returns how many were granted,
@@ -671,6 +837,10 @@ export interface ReadModelStore {
   /** Messages attributed to each task in a session (joined usage → interaction → task, #122), keyed by
    *  task id, oldest first. Tasks with no attributed messages are absent from the map. */
   readSessionTaskMessages(sessionId: string): Promise<Map<string, MessageRecord[]>>;
+  /** Interaction count per task straight off the interaction spine (resolved_interactions grouped by
+   *  task_seq), keyed by task id. Unlike readSessionTaskMessages, this includes interactions with no
+   *  usage rows, so it matches the timeline's chapter grouping (#124). */
+  readSessionTaskInteractionCounts(sessionId: string): Promise<Map<string, number>>;
   /** All messages for one session, oldest first. Backs the on-demand /api/session/:id detail. */
   readSessionMessages(sessionId: string): Promise<MessageRecord[]>;
   /** Per-session token rollups for the paginated session list: one entry per matching session with
@@ -678,6 +848,12 @@ export interface ReadModelStore {
    *  readResolved (sources/since/until/project). The date filter selects which sessions appear (those
    *  with a message in range); each row's token sums are whole-session, not windowed. */
   readSessionAggregates(query?: ResolvedQuery): Promise<SessionAggregate[]>;
+  /** Session search (#155): resolves freeform text + `file:` terms to a candidate session id set plus
+   *  a per-session snippet/count, so the `/sessions` list can filter AND show a highlighted match.
+   *  Honors the same source/date/project narrowing as `readSessionAggregates`. Graceful degradation:
+   *  if retained conversation text or task interpretation was never on, that FTS table is simply empty
+   *  and contributes nothing — `text` still matches metadata and whichever FTS table does have data. */
+  searchSessions(query: SessionSearchQuery): Promise<SessionSearchResult>;
   // ---- Per-view dashboard reads (#217) ----
   // Each serve endpoint reads only the breakdown it needs — no monolithic Dashboard build. All match
   // readResolved's filters (sources/since/until/project), windowed by message date. Usage breakdowns
@@ -706,10 +882,46 @@ export interface ReadModelStore {
   readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>>;
   /** Cross-session + per-project friction and the high-token-growth count. */
   readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups>;
+  // ---- Session/task labels (local-only; never synced) ----
+  /** All label definitions, ordered by name (case-insensitive). Excludes soft-deleted labels unless
+   *  `includeDeleted` is set. */
+  listLabels(opts?: { includeDeleted?: boolean }): Promise<LabelRecord[]>;
+  /** Create a label and return it. `origin` defaults to "user". Rejects (LabelNameConflictError) when
+   *  an active label already has the same name (case-insensitive). */
+  createLabel(input: { name: string; origin?: LabelOrigin }): Promise<LabelRecord>;
+  /** Rename a label, returning the updated record. Rejects when the new name collides with another
+   *  active label, or when the label doesn't exist / was deleted. */
+  renameLabel(id: string, name: string): Promise<LabelRecord>;
+  /** Soft-delete a label (its name becomes reusable). Existing applications are left in place but stop
+   *  surfacing, since label reads filter to active labels. No-op if already deleted/absent. */
+  deleteLabel(id: string): Promise<void>;
+  /** Apply a label to a session or task. Idempotent: re-applying the same (label, target) is a no-op
+   *  that leaves the original application untouched. `appliedBy` defaults to "user". */
+  assignLabel(labelId: string, target: LabelTarget, appliedBy?: LabelAppliedBy): Promise<void>;
+  /** Remove a label application from a session or task. No-op if it wasn't applied. */
+  unassignLabel(labelId: string, target: LabelTarget): Promise<void>;
+  /** Apply or remove a session-level label across many sessions at once (bulk precedent:
+   *  `setSessionsHidden`). `applied: true` assigns to every session missing it (idempotent, `appliedBy`
+   *  "user"); `applied: false` unassigns from every session that has it. Rejects (LabelError) if the
+   *  label doesn't exist or was deleted. */
+  setLabelForSessions(labelId: string, sessionIds: string[], applied: boolean): Promise<void>;
+  /** Active labels for a session and each of its tasks (keyed by task position). */
+  readSessionLabels(sessionId: string): Promise<SessionLabels>;
+  /** Active session-level labels for many sessions at once, keyed by session id — backs the session
+   *  list's label chips. Task-level labels are excluded (the list shows session labels only). Sessions
+   *  with no labels are absent from the map. */
+  readSessionLabelsForSessions(sessionIds: string[]): Promise<Map<string, AppliedLabel[]>>;
+  /** Session ids matching the given labels (session-level only, matching
+   *  `readSessionLabelsForSessions`'s scope) — backs the session list's label filter. `mode` picks
+   *  union ("any", the default) vs intersection ("all") across multiple label ids. */
+  readSessionIdsForLabels(labelIds: string[], mode?: LabelFilterMode): Promise<Set<string>>;
   /** Permanently remove reconciled sessions (the explicit `forget` path — destroys retained data). */
   retractSessions(sessionIds: string[]): Promise<void>;
   /** Flag/unflag sessions as archived (retained but no longer backed by their source on disk). */
   setSessionsArchived(sessionIds: string[], archived: boolean): Promise<void>;
+  /** Flag/unflag sessions as hidden (local-only UI state): excluded from the sessions list and search
+   *  by default, but their usage still counts in aggregate rollups. */
+  setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<void>;
   /** Canonical ids of archived (off-disk, retained) sessions, optionally restricted by source. */
   listArchived(source?: AgentSource): Promise<string[]>;
   /** Count of archived (off-disk, retained) sessions currently owned by `owner`. */

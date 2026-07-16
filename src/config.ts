@@ -6,10 +6,13 @@
 // a typed shape, a tolerant loader, and one uniform resolver so precedence and the three naming
 // conventions live in exactly one place.
 //
-// Every setting resolves through a single chain: CLI flag > env var > argus.json > built-in default.
-// The three layers don't share a spelling — flags are kebab-case, env vars SCREAMING_SNAKE, and
-// argus.json keys camelCase — and the names aren't mechanical transforms of each other. So each
-// setting binds its three names explicitly via a descriptor; a generic case-converter won't do.
+// Every setting resolves through a single chain: managed (MDM) > CLI flag > env var > argus.json >
+// built-in default. The user-controlled layers don't share a spelling — flags are kebab-case, env
+// vars SCREAMING_SNAKE, and argus.json keys camelCase — and the names aren't mechanical transforms
+// of each other. So each setting binds its three names explicitly via a descriptor; a generic
+// case-converter won't do. The managed layer (#257, `managed-config.ts`) shares argus.json's
+// camelCase shape and sits above everything, per the MDM convention that org-forced settings can't
+// be overridden locally.
 //
 // LLM access (#132) is a top-level `llm` block consumed by any model-driven feature. Task extraction
 // is the first consumer: it references `llm.*` and may override `provider`/`model`/`command` under its
@@ -17,6 +20,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILE } from "./paths.ts";
+import { managedConfig } from "./managed-config.ts";
 import {
   defaultModelByProvider,
   getProvider,
@@ -45,12 +49,22 @@ export interface LlmProviderConfig {
   baseUrl?: string;
   apiKeyEnv?: string;
   maxTokens?: number;
+  /** Opaque provider-native reasoning-effort value (#234); passed through untranslated. */
+  effort?: string;
   command?: string;
   claudeCliPath?: string;
 }
 
 /** The typed shape of `argus.json`. Designed to grow; task extraction is the first LLM consumer. */
 export interface ArgusConfig {
+  /** Desktop shell behavior. */
+  desktop?: {
+    /** Start the desktop app automatically when the user signs in. On by default. */
+    startAtLogin?: boolean;
+    /** Run the desktop app invisibly: no tray icon, no notifications, no first-run browser
+     *  auto-open. Off by default. */
+    silent?: boolean;
+  };
   /** Desktop app updates. Enabled by default so signed releases install automatically. */
   autoUpdate?: {
     enabled?: boolean;
@@ -69,19 +83,38 @@ export interface ArgusConfig {
     baseUrl?: string;
     apiKeyEnv?: string;
     maxTokens?: number;
+    effort?: string;
     command?: string;
     claudeCliPath?: string;
   };
-  taskExtraction?: {
-    /** Index-time extraction (#88). On by default. */
+  /** The opt-in interpret stage (#234, formerly `taskExtraction`): title + summary + task segmentation
+   *  + per-task outcome. `enabled` gates the whole stage. */
+  sessionInterpretation?: {
+    /** Index-time interpretation (#88). On by default. */
     enabled?: boolean;
     prompt?: string;
     promptFile?: string;
+    maxSessionsPerHour?: number;
+    /** Character limit for the generated title (#234). */
+    titleMaxChars?: number;
+    /** Character limit for the generated summary (#234). */
+    summaryMaxChars?: number;
     /** @deprecated Per-consumer override of `llm.provider`. Prefer `llm.provider`. */
     provider?: LlmProvider;
     /** @deprecated Per-consumer override of `llm.model`. Prefer `llm.model`. */
     model?: string;
     /** @deprecated Per-consumer override of `llm.command`. Prefer `llm.command`. */
+    command?: string;
+  };
+  /** @deprecated Renamed to `sessionInterpretation` (#234). Still read for one release; `loadConfig`
+   *  callers that write config migrate it in place. */
+  taskExtraction?: {
+    enabled?: boolean;
+    prompt?: string;
+    promptFile?: string;
+    maxSessionsPerHour?: number;
+    provider?: LlmProvider;
+    model?: string;
     command?: string;
   };
   hub?: {
@@ -202,6 +235,13 @@ export interface Setting<T> {
   env?: string;
   /** citty flag, kebab-case — e.g. "llm-provider". */
   flag?: string;
+  /** A former argus.json location, still read (after `path`) for one release after a rename (#234).
+   *  The in-place config migration rewrites the file so `path` becomes canonical. */
+  legacyPath?: string;
+  /** A former env var, still read (after `env`) for one release after a rename (#234). */
+  legacyEnv?: string;
+  /** A former citty flag, still read (after `flag`) for one release after a rename (#234). */
+  legacyFlag?: string;
   default: T;
   /** When true, `argus config list` redacts the value in human output to avoid leaking secrets. */
   secret?: boolean;
@@ -223,20 +263,55 @@ export function present(value: unknown): boolean {
 }
 
 /**
- * Resolve one setting through CLI flag > env var > argus.json > default. Any absent layer yields
- * undefined and falls through, so the same chain works for settings that don't populate every layer.
+ * The managed (MDM) layer of one setting (#257): the parsed value forced by the organization's
+ * managed settings file, or undefined when the setting isn't managed (no managed file, the key is
+ * absent, or its value is invalid — an invalid managed value warns via `parse()` and falls through
+ * to the user-controlled layers rather than bricking the setting).
+ */
+export function managedSettingValue<T>(setting: Setting<T>): T | undefined {
+  const managed = managedConfig();
+  const raw = getPath(managed, setting.path);
+  if (present(raw)) return setting.parse(raw);
+  const legacy = setting.legacyPath ? getPath(managed, setting.legacyPath) : undefined;
+  if (present(legacy)) return setting.parse(legacy);
+  return undefined;
+}
+
+/**
+ * Resolve one setting through managed (MDM) > CLI flag > env var > argus.json > default. Any absent
+ * layer yields undefined and falls through, so the same chain works for settings that don't populate
+ * every layer.
  */
 export function resolveSetting<T>(
   setting: Setting<T>,
   flags: Record<string, unknown>,
   file: ArgusConfig,
 ): T {
+  const fromManaged = managedSettingValue(setting);
+  if (fromManaged !== undefined) return fromManaged;
+  return resolveSettingWithoutManaged(setting, flags, file);
+}
+
+/** Resolve the user-controlled layers of one setting: CLI flag > env var > argus.json > default.
+ *  Used when a related managed setting has already been checked and must block lower-layer
+ *  compatibility overrides from silently winning. */
+function resolveSettingWithoutManaged<T>(
+  setting: Setting<T>,
+  flags: Record<string, unknown>,
+  file: ArgusConfig,
+): T {
   const fromFlag = setting.flag ? flags[setting.flag] : undefined;
   if (present(fromFlag)) return setting.parse(fromFlag);
+  const fromLegacyFlag = setting.legacyFlag ? flags[setting.legacyFlag] : undefined;
+  if (present(fromLegacyFlag)) return setting.parse(fromLegacyFlag);
   const fromEnv = setting.env ? process.env[setting.env] : undefined;
   if (present(fromEnv)) return setting.parse(fromEnv);
+  const fromLegacyEnv = setting.legacyEnv ? process.env[setting.legacyEnv] : undefined;
+  if (present(fromLegacyEnv)) return setting.parse(fromLegacyEnv);
   const fromFile = getPath(file, setting.path);
   if (present(fromFile)) return setting.parse(fromFile);
+  const fromLegacyFile = setting.legacyPath ? getPath(file, setting.legacyPath) : undefined;
+  if (present(fromLegacyFile)) return setting.parse(fromLegacyFile);
   return setting.default;
 }
 
@@ -264,6 +339,38 @@ function parseLogLevel(raw: unknown): ArgusLogLevel | undefined {
 }
 
 const DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_MINUTES = 60;
+
+export const DESKTOP_SETTINGS = {
+  startAtLogin: {
+    path: "desktop.startAtLogin",
+    env: "ARGUS_DESKTOP_START_AT_LOGIN",
+    // Temporarily hard-disabled. The desktop app is signed with a personal Developer ID, so the OS
+    // "runs in the background" notification and the Login Items entry show an individual's name
+    // instead of the org's. Until the app is signed with an org certificate, start-at-login is off
+    // for everyone: the desktop shell ignores this setting (see `desktop_start_at_login_enabled` in
+    // desktop/src-tauri/src/lib.rs) and the Settings toggle is removed from the UI (src/api/settings.ts).
+    // This descriptor is kept as restore-plumbing; re-enable by restoring both, then flipping this
+    // default back to `true`.
+    default: false,
+    ui: {
+      label: "Start when you sign in",
+      description: "Open the desktop app automatically when you sign in to this computer.",
+      control: "toggle",
+    },
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+  // Run the desktop app invisibly: no tray icon, no notifications, no first-run browser auto-open.
+  // Config-file-only (no `ui`): an operator-level switch, deliberately kept out of the Settings
+  // screen — set it with `argus config set desktop.silent true`. The desktop shell reads it
+  // directly and applies changes while running (see `silent_mode_enabled` in
+  // desktop/src-tauri/src/lib.rs).
+  silent: {
+    path: "desktop.silent",
+    env: "ARGUS_DESKTOP_SILENT",
+    default: false,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+};
 
 export const HUB_SETTINGS = {
   url: {
@@ -410,8 +517,9 @@ const PROVIDER_OPTIONS: SelectItem[] = [
     .map((p) => ({ value: p, label: p })),
 ];
 
-/** All `llm.*` settings are inactive until task extraction (their only consumer today) is enabled. */
-const TASK_GATE = { path: "taskExtraction.enabled" } as const;
+/** All `llm.*` settings are inactive until session interpretation (their only consumer today) is
+ *  enabled. */
+const INTERPRETATION_GATE = { path: "sessionInterpretation.enabled" } as const;
 
 /** A provider-specific field is shown only for the providers that actually use it (from the registry),
  *  evaluated against the selected `llm.provider`. */
@@ -432,7 +540,7 @@ export const LLM_SETTINGS = {
       description: "Which model backend Argus's AI features use.",
       control: "select",
       options: PROVIDER_OPTIONS,
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       // An unset provider resolves to the default, so provider-specific fields show for it too.
       effectiveDefault: DEFAULT_TASK_PROVIDER,
     },
@@ -448,7 +556,7 @@ export const LLM_SETTINGS = {
       label: "Model",
       description: "Model name to request. Leave blank to use the provider's default.",
       control: "text",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("model"),
       // Blank → show the selected provider's built-in default model as the placeholder.
       placeholderByValue: { path: "llm.provider", values: defaultModelByProvider() },
@@ -465,7 +573,7 @@ export const LLM_SETTINGS = {
       label: "Base URL",
       description: "OpenAI-compatible API endpoint, for the OpenAI provider or a self-hosted server.",
       control: "text",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("baseUrl"),
     },
     parse: parseString,
@@ -480,7 +588,7 @@ export const LLM_SETTINGS = {
       label: "API key variable",
       description: "Environment variable the API key is read from. Defaults per provider.",
       control: "text",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("apiKeyEnv"),
     },
     parse: parseString,
@@ -495,11 +603,30 @@ export const LLM_SETTINGS = {
       label: "Max output tokens",
       description: "Cap on the number of tokens generated per request.",
       control: "number",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("maxTokens"),
     },
     parse: parseNumber,
   } satisfies Setting<OptionalNumber>,
+  // Opaque, provider-native reasoning-effort passthrough (#234). Not translated — the value is
+  // whatever the configured provider expects (e.g. low/medium/high for claude/OpenAI). Blank →
+  // omitted entirely, which the cheap default models require (haiku rejects an effort parameter).
+  effort: {
+    path: "llm.effort",
+    env: "ARGUS_LLM_EFFORT",
+    flag: "llm-effort",
+    default: undefined as OptionalString,
+    providerScoped: true,
+    ui: {
+      label: "Reasoning effort",
+      description:
+        "Reasoning-effort level passed to the model (provider-specific, not supported by all models). Leave blank for the provider default.",
+      control: "text",
+      activeWhen: INTERPRETATION_GATE,
+      visibleWhen: visibleForField("effort"),
+    },
+    parse: parseString,
+  } satisfies Setting<OptionalString>,
   command: {
     path: "llm.command",
     env: "ARGUS_LLM_COMMAND",
@@ -511,7 +638,7 @@ export const LLM_SETTINGS = {
       description:
         'Command line to run for the "command" provider. The prompt is sent on stdin and the completion read from stdout.',
       control: "textarea",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("command"),
     },
     parse: parseString,
@@ -529,7 +656,7 @@ export const LLM_SETTINGS = {
       label: "Claude CLI path",
       description: "Full path to the claude binary. Leave blank to auto-detect.",
       control: "text",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("claudeCliPath"),
       placeholderFrom: "claudeBinary",
     },
@@ -537,43 +664,60 @@ export const LLM_SETTINGS = {
   } satisfies Setting<OptionalString>,
 };
 
-/** Task-extraction settings: the opt-in toggle, the consumer-specific prompt, and the deprecated
- *  per-consumer overrides of provider/model/command (kept working; prefer `llm.*`). */
+/** Session-interpretation settings (#234, formerly `taskExtraction`): the opt-in toggle, the
+ *  consumer-specific prompt, the title/summary character limits, and the deprecated per-consumer
+ *  overrides of provider/model/command (kept working; prefer `llm.*`). Each setting reads its former
+ *  `taskExtraction.*` path / `ARGUS_TASK_*` env as a legacy fallback for one release. */
 /** Default hourly ceiling for the background interpretation drain (#153). */
 export const DEFAULT_MAX_SESSIONS_PER_HOUR = 30;
+/** Default character limits for the generated title/summary (#234). */
+export const DEFAULT_TITLE_MAX_CHARS = 100;
+export const DEFAULT_SUMMARY_MAX_CHARS = 500;
 
-export const TASK_SETTINGS = {
+export const SESSION_INTERPRETATION_SETTINGS = {
   enabled: {
-    path: "taskExtraction.enabled",
-    env: "ARGUS_TASK_ENABLED",
-    flag: "extract-tasks",
+    path: "sessionInterpretation.enabled",
+    env: "ARGUS_INTERPRET_ENABLED",
+    flag: "interpret",
+    legacyPath: "taskExtraction.enabled",
+    legacyEnv: "ARGUS_TASK_ENABLED",
+    legacyFlag: "extract-tasks",
     default: true,
     ui: {
-      label: "Extract tasks",
+      label: "Interpret sessions",
       description:
-        "Use AI to interpret sessions and identify tasks. This process is relatively lighweight but will consume tokens with the specified LLM provider.",
+        "Use AI to interpret each session — generating a title and summary, segmenting tasks, and judging outcomes. Relatively lightweight, but it consumes tokens with the configured LLM provider.",
       control: "toggle",
     },
     parse: parseBool,
   } satisfies Setting<boolean>,
   provider: {
-    path: "taskExtraction.provider",
-    env: "ARGUS_TASK_PROVIDER",
-    flag: "task-provider",
+    path: "sessionInterpretation.provider",
+    env: "ARGUS_INTERPRET_PROVIDER",
+    flag: "interpret-provider",
+    legacyPath: "taskExtraction.provider",
+    legacyEnv: "ARGUS_TASK_PROVIDER",
+    legacyFlag: "task-provider",
     default: undefined as OptionalProvider,
     parse: parseProvider,
   } satisfies Setting<OptionalProvider>,
   model: {
-    path: "taskExtraction.model",
-    env: "ARGUS_TASK_MODEL",
-    flag: "task-model",
+    path: "sessionInterpretation.model",
+    env: "ARGUS_INTERPRET_MODEL",
+    flag: "interpret-model",
+    legacyPath: "taskExtraction.model",
+    legacyEnv: "ARGUS_TASK_MODEL",
+    legacyFlag: "task-model",
     default: undefined as OptionalString,
     parse: parseString,
   } satisfies Setting<OptionalString>,
   prompt: {
-    path: "taskExtraction.prompt",
-    env: "ARGUS_TASK_PROMPT",
-    flag: "task-prompt",
+    path: "sessionInterpretation.prompt",
+    env: "ARGUS_INTERPRET_PROMPT",
+    flag: "interpret-prompt",
+    legacyPath: "taskExtraction.prompt",
+    legacyEnv: "ARGUS_TASK_PROMPT",
+    legacyFlag: "task-prompt",
     default: undefined as OptionalString,
     ui: {
       label: "Custom prompt",
@@ -583,9 +727,12 @@ export const TASK_SETTINGS = {
     parse: parseString,
   } satisfies Setting<OptionalString>,
   promptFile: {
-    path: "taskExtraction.promptFile",
-    env: "ARGUS_TASK_PROMPT_FILE",
-    flag: "task-prompt-file",
+    path: "sessionInterpretation.promptFile",
+    env: "ARGUS_INTERPRET_PROMPT_FILE",
+    flag: "interpret-prompt-file",
+    legacyPath: "taskExtraction.promptFile",
+    legacyEnv: "ARGUS_TASK_PROMPT_FILE",
+    legacyFlag: "task-prompt-file",
     default: undefined as OptionalString,
     ui: {
       label: "Prompt file",
@@ -595,9 +742,12 @@ export const TASK_SETTINGS = {
     parse: parseString,
   } satisfies Setting<OptionalString>,
   command: {
-    path: "taskExtraction.command",
-    env: "ARGUS_TASK_COMMAND",
-    flag: "task-command",
+    path: "sessionInterpretation.command",
+    env: "ARGUS_INTERPRET_COMMAND",
+    flag: "interpret-command",
+    legacyPath: "taskExtraction.command",
+    legacyEnv: "ARGUS_TASK_COMMAND",
+    legacyFlag: "task-command",
     default: undefined as OptionalString,
     parse: parseString,
   } satisfies Setting<OptionalString>,
@@ -605,18 +755,40 @@ export const TASK_SETTINGS = {
   // are interpreted automatically. The primary spend knob — predictable cost per hour regardless of how
   // often indexing wakes. The inline refresh path is not subject to it.
   maxSessionsPerHour: {
-    path: "taskExtraction.maxSessionsPerHour",
-    env: "ARGUS_TASK_MAX_PER_HOUR",
-    flag: "task-max-per-hour",
+    path: "sessionInterpretation.maxSessionsPerHour",
+    env: "ARGUS_INTERPRET_MAX_PER_HOUR",
+    flag: "interpret-max-per-hour",
+    legacyPath: "taskExtraction.maxSessionsPerHour",
+    legacyEnv: "ARGUS_TASK_MAX_PER_HOUR",
+    legacyFlag: "task-max-per-hour",
     default: DEFAULT_MAX_SESSIONS_PER_HOUR as OptionalNumber,
     ui: {
       label: "Max sessions per hour",
       description:
         "Cap on how many sessions are interpreted automatically each hour. Refreshing a session manually isn't limited.",
       control: "number",
-      activeWhen: TASK_GATE,
+      activeWhen: INTERPRETATION_GATE,
       min: 1,
     },
+    parse: parsePositiveInt,
+  } satisfies Setting<OptionalNumber>,
+  // Character limits for the generated title/summary (#234). Stated in the pass-1 prompt as
+  // constraints and clamped defensively on write in case the model overruns.
+  // Config-file-only (no `ui`): too fiddgy to expose in the settings screen, so these resolve from
+  // argus.json / env / flag only (like `retainText`). They still register in ALL_SETTINGS for
+  // `argus config get/set`.
+  titleMaxChars: {
+    path: "sessionInterpretation.titleMaxChars",
+    env: "ARGUS_INTERPRET_TITLE_MAX_CHARS",
+    flag: "interpret-title-max-chars",
+    default: DEFAULT_TITLE_MAX_CHARS as OptionalNumber,
+    parse: parsePositiveInt,
+  } satisfies Setting<OptionalNumber>,
+  summaryMaxChars: {
+    path: "sessionInterpretation.summaryMaxChars",
+    env: "ARGUS_INTERPRET_SUMMARY_MAX_CHARS",
+    flag: "interpret-summary-max-chars",
+    default: DEFAULT_SUMMARY_MAX_CHARS as OptionalNumber,
     parse: parsePositiveInt,
   } satisfies Setting<OptionalNumber>,
 };
@@ -626,7 +798,8 @@ export const TASK_SETTINGS = {
 export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries(
   [
     ...Object.values(LLM_SETTINGS),
-    ...Object.values(TASK_SETTINGS),
+    ...Object.values(SESSION_INTERPRETATION_SETTINGS),
+    ...Object.values(DESKTOP_SETTINGS),
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
     ...Object.values(RETENTION_SETTINGS),
@@ -695,10 +868,25 @@ export function providerConfigPath(provider: string, field: string): string {
   return `llm.providerConfigs.${provider}.${field}`;
 }
 
+/** The managed layer for one provider-scoped `llm.*` setting, checked exactly like
+ *  `resolveProviderScoped`: provider-specific first, then legacy flat `llm.<field>`. */
+export function managedProviderScopedSettingValue<T>(
+  setting: Setting<T>,
+  provider: string,
+): T | undefined {
+  const managed = managedConfig();
+  const managedScoped = getPath(managed, providerConfigPath(provider, llmFieldName(setting)));
+  if (present(managedScoped)) return setting.parse(managedScoped);
+  const managedFlat = getPath(managed, setting.path);
+  if (present(managedFlat)) return setting.parse(managedFlat);
+  return undefined;
+}
+
 /**
  * Resolve a provider-scoped `llm.*` setting for the active provider:
- *   flag > env > `llm.providerConfigs[provider].<field>` > legacy flat `llm.<field>` > default.
- * The flag/env layers stay global overrides of whichever provider is active; the legacy flat value is
+ *   managed > flag > env > `llm.providerConfigs[provider].<field>` > legacy flat `llm.<field>` > default.
+ * The managed layer honors the same two file locations (scoped, then flat) as argus.json; the
+ * flag/env layers stay global overrides of whichever provider is active; the legacy flat value is
  * the pre-`providerConfigs` location, kept so existing argus.json files keep resolving.
  */
 export function resolveProviderScoped<T>(
@@ -707,6 +895,8 @@ export function resolveProviderScoped<T>(
   file: ArgusConfig,
   provider: string,
 ): T {
+  const fromManaged = managedProviderScopedSettingValue(setting, provider);
+  if (fromManaged !== undefined) return fromManaged;
   const fromFlag = setting.flag ? flags[setting.flag] : undefined;
   if (present(fromFlag)) return setting.parse(fromFlag);
   const fromEnv = setting.env ? process.env[setting.env] : undefined;
@@ -718,7 +908,7 @@ export function resolveProviderScoped<T>(
   return setting.default;
 }
 
-/** The active LLM provider: `llm.provider` (flag > env > file), or the built-in default when unset.
+/** The active LLM provider: `llm.provider` (managed > flag > env > file), or the built-in default when unset.
  *  The one place the "what provider is in effect" question is answered. */
 export function resolveActiveProvider(
   file: ArgusConfig = loadConfig(),
@@ -740,8 +930,12 @@ export function resolveActiveProvider(
  * there are no flat values. An already-scoped value wins (never clobbered). Returns true if it moved
  * anything. Called on serve start, mirroring the Hub-key migration.
  */
-export function migrateLlmFlatToProviderConfigs(configPath: string = CONFIG_FILE): boolean {
-  const file = loadConfig(configPath) as ArgusConfig & Record<string, unknown>;
+export function migrateLlmFlatToProviderConfigs(
+  configPath: string = CONFIG_FILE,
+  // Optional pre-loaded config so the caller can run both startup migrations off a single disk read;
+  // both mutate this same object and each writes the cumulative state, so order can't clobber.
+  file: ArgusConfig & Record<string, unknown> = loadConfig(configPath) as ArgusConfig & Record<string, unknown>,
+): boolean {
   const scoped = Object.values(LLM_SETTINGS).filter((s) => (s as Setting<unknown>).providerScoped) as Setting<unknown>[];
   const flat = scoped.filter((s) => present(getPath(file, s.path)));
   if (!flat.length) return false;
@@ -751,6 +945,33 @@ export function migrateLlmFlatToProviderConfigs(configPath: string = CONFIG_FILE
     if (!present(getPath(file, dest))) setPath(file, dest, getPath(file, s.path)); // scoped value wins
     setPath(file, s.path, undefined); // drop the flat key (JSON.stringify omits undefined)
   }
+  writeConfigAtomic(file, configPath);
+  return true;
+}
+
+/**
+ * One-time, idempotent migration (#234): relocate a legacy `taskExtraction.*` block to
+ * `sessionInterpretation.*`, then drop the legacy block. Fields already present under the new key win
+ * (never clobbered). A no-op (no write) when there's no legacy block. Returns true if it moved
+ * anything. Called on serve start alongside `migrateLlmFlatToProviderConfigs`. Read paths that don't
+ * persist config still resolve the legacy keys via each setting's `legacyPath`/`legacyEnv`, so this is
+ * about making the new key canonical on disk, not about correctness of resolution.
+ */
+export function migrateTaskExtractionToSessionInterpretation(
+  configPath: string = CONFIG_FILE,
+  // Optional pre-loaded config (see migrateLlmFlatToProviderConfigs) so serve start reads argus.json once.
+  file: ArgusConfig & Record<string, unknown> = loadConfig(configPath) as ArgusConfig & Record<string, unknown>,
+): boolean {
+  const legacy = getPath(file, "taskExtraction");
+  if (legacy == null || typeof legacy !== "object" || Array.isArray(legacy)) return false;
+  const current = getPath(file, "sessionInterpretation");
+  const currentObj =
+    current != null && typeof current === "object" && !Array.isArray(current)
+      ? (current as Record<string, unknown>)
+      : {};
+  // New-key values win over legacy ones on conflict.
+  setPath(file, "sessionInterpretation", { ...(legacy as Record<string, unknown>), ...currentObj });
+  setPath(file, "taskExtraction", undefined); // drop the legacy block (JSON.stringify omits undefined)
   writeConfigAtomic(file, configPath);
   return true;
 }
@@ -767,6 +988,7 @@ function resolveLlmConfig(
   const command = overrides.command ?? resolveProviderScoped(LLM_SETTINGS.command, flags, file, provider);
   const baseUrl = resolveProviderScoped(LLM_SETTINGS.baseUrl, flags, file, provider);
   const maxTokens = resolveProviderScoped(LLM_SETTINGS.maxTokens, flags, file, provider);
+  const effort = resolveProviderScoped(LLM_SETTINGS.effort, flags, file, provider);
   const apiKeyEnv = resolveProviderScoped(LLM_SETTINGS.apiKeyEnv, flags, file, provider) ?? defaultApiKeyEnv(provider);
   const claudeCliPath = resolveProviderScoped(LLM_SETTINGS.claudeCliPath, flags, file, provider);
 
@@ -774,53 +996,103 @@ function resolveLlmConfig(
   if (model) llm.model = model;
   if (baseUrl) llm.baseUrl = baseUrl;
   if (maxTokens != null) llm.maxTokens = maxTokens;
+  if (effort) llm.effort = effort;
   if (command) llm.command = command;
   if (apiKeyEnv) llm.apiKeyEnv = apiKeyEnv;
   if (claudeCliPath) llm.claudeCliPath = claudeCliPath;
   return llm;
 }
 
-/** The resolved task-extraction settings: the opt-in toggle, the LLM config it runs through, the
- *  consumer-specific prompt, and a transient debug sink (reattached after resolution). */
-export interface ResolvedTaskExtraction {
+function resolveConsumerOverride<T>(
+  consumer: Setting<T>,
+  shared: Setting<T>,
+  flags: Record<string, unknown>,
+  file: ArgusConfig,
+  provider?: string,
+): T | undefined {
+  const fromManagedConsumer = managedSettingValue(consumer);
+  if (fromManagedConsumer !== undefined) return fromManagedConsumer;
+
+  const fromManagedShared =
+    shared.providerScoped && provider
+      ? managedProviderScopedSettingValue(shared, provider)
+      : managedSettingValue(shared);
+  if (fromManagedShared !== undefined) return undefined;
+
+  return resolveSettingWithoutManaged(consumer, flags, file);
+}
+
+/** The resolved session-interpretation settings: the opt-in toggle, the LLM config it runs through,
+ *  the consumer-specific prompt, the title/summary character limits, and a transient debug sink
+ *  (reattached after resolution). */
+export interface ResolvedSessionInterpretation {
   enabled: boolean;
   llm: ResolvedLlmConfig;
   /** Hourly ceiling for the throttled background drain (#153); always a positive number. */
   maxSessionsPerHour: number;
+  /** Character limit for the generated title (#234); always a positive number. */
+  titleMaxChars: number;
+  /** Character limit for the generated summary (#234); always a positive number. */
+  summaryMaxChars: number;
   /** Custom instruction prompt. The session data is appended after it. */
   prompt?: string;
   /** Read a custom instruction prompt from this file. Takes precedence over `prompt`. */
   promptFile?: string;
-  /** Optional logger for task-extraction debug messages. */
+  /** Optional logger for interpretation debug messages. */
   log?: Log;
 }
 
 /**
- * Resolve the effective task-extraction settings. `flags` is the citty-parsed args object (keys are
- * kebab-case flag names); pass `{}` for commands that don't expose the flags. The deprecated
- * `taskExtraction.provider`/`model`/`command` keys resolve as the per-consumer override layer over the
- * shared `llm.*` block. `log` is reattached after resolution since it isn't a persisted setting.
+ * Resolve the effective session-interpretation settings. `flags` is the citty-parsed args object (keys
+ * are kebab-case flag names); pass `{}` for commands that don't expose the flags. The deprecated
+ * `sessionInterpretation.provider`/`model`/`command` keys (and their legacy `taskExtraction.*`
+ * fallbacks) resolve as user-controlled per-consumer overrides over the shared `llm.*` block, but
+ * managed shared `llm.*` values still win over those compatibility overrides. `log` is reattached
+ * after resolution since it isn't a persisted setting.
  */
-export function resolveTaskExtraction(
+export function resolveSessionInterpretation(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
   log?: Log,
-): ResolvedTaskExtraction {
+): ResolvedSessionInterpretation {
+  const providerOverride = resolveConsumerOverride(
+    SESSION_INTERPRETATION_SETTINGS.provider,
+    LLM_SETTINGS.provider,
+    flags,
+    file,
+  );
+  const provider = providerOverride ?? resolveActiveProvider(file, flags);
   const overrides = {
-    provider: resolveSetting(TASK_SETTINGS.provider, flags, file),
-    model: resolveSetting(TASK_SETTINGS.model, flags, file),
-    command: resolveSetting(TASK_SETTINGS.command, flags, file),
+    provider: providerOverride,
+    model: resolveConsumerOverride(
+      SESSION_INTERPRETATION_SETTINGS.model,
+      LLM_SETTINGS.model,
+      flags,
+      file,
+      provider,
+    ),
+    command: resolveConsumerOverride(
+      SESSION_INTERPRETATION_SETTINGS.command,
+      LLM_SETTINGS.command,
+      flags,
+      file,
+      provider,
+    ),
   };
   const llm = resolveLlmConfig(flags, file, overrides);
 
-  const maxPerHour = resolveSetting(TASK_SETTINGS.maxSessionsPerHour, flags, file);
-  const resolved: ResolvedTaskExtraction = {
-    enabled: resolveSetting(TASK_SETTINGS.enabled, flags, file),
+  const maxPerHour = resolveSetting(SESSION_INTERPRETATION_SETTINGS.maxSessionsPerHour, flags, file);
+  const titleMaxChars = resolveSetting(SESSION_INTERPRETATION_SETTINGS.titleMaxChars, flags, file);
+  const summaryMaxChars = resolveSetting(SESSION_INTERPRETATION_SETTINGS.summaryMaxChars, flags, file);
+  const resolved: ResolvedSessionInterpretation = {
+    enabled: resolveSetting(SESSION_INTERPRETATION_SETTINGS.enabled, flags, file),
     llm,
     maxSessionsPerHour: maxPerHour != null && maxPerHour > 0 ? maxPerHour : DEFAULT_MAX_SESSIONS_PER_HOUR,
+    titleMaxChars: titleMaxChars != null && titleMaxChars > 0 ? titleMaxChars : DEFAULT_TITLE_MAX_CHARS,
+    summaryMaxChars: summaryMaxChars != null && summaryMaxChars > 0 ? summaryMaxChars : DEFAULT_SUMMARY_MAX_CHARS,
   };
-  const prompt = resolveSetting(TASK_SETTINGS.prompt, flags, file);
-  const promptFile = resolveSetting(TASK_SETTINGS.promptFile, flags, file);
+  const prompt = resolveSetting(SESSION_INTERPRETATION_SETTINGS.prompt, flags, file);
+  const promptFile = resolveSetting(SESSION_INTERPRETATION_SETTINGS.promptFile, flags, file);
   if (prompt) resolved.prompt = prompt;
   if (promptFile) resolved.promptFile = promptFile;
   if (log) resolved.log = log;
@@ -828,11 +1100,14 @@ export function resolveTaskExtraction(
 }
 
 /** Resolve terminal log verbosity. `--log-level` is explicit; `--quiet`, `--verbose`, and the legacy
- *  task-extraction `--debug` flag are command-line shorthands above env and file settings. */
+ *  task-extraction `--debug` flag are command-line shorthands above env and file settings. A managed
+ *  (MDM) level is checked first, since the flag shorthands would otherwise bypass the standard chain. */
 export function resolveLogLevel(
   flags: Record<string, unknown> = {},
   file: ArgusConfig = loadConfig(),
 ): ArgusLogLevel {
+  const managed = managedSettingValue(LOG_SETTINGS.level);
+  if (managed !== undefined) return managed;
   if (flags["log-level"] != null && flags["log-level"] !== "")
     return parseLogLevel(flags["log-level"]) ?? DEFAULT_LOG_LEVEL;
   if (flags.quiet === true) return "warn";
@@ -854,6 +1129,14 @@ export function resolveAutoUpdateCheckIntervalMinutes(
   file: ArgusConfig = loadConfig(),
 ): number {
   return resolveSetting(AUTO_UPDATE_SETTINGS.checkIntervalMinutes, flags, file);
+}
+
+/** Whether the desktop app starts when the user signs in. Defaults on. */
+export function resolveDesktopStartAtLogin(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(DESKTOP_SETTINGS.startAtLogin, flags, file);
 }
 
 /** Whether to keep prompt/response text in the local store (#120). Defaults on; local-only. */
