@@ -142,6 +142,7 @@ describe("serve API", () => {
       { method: "POST", path: "/api/sessions/s1/reindex" },
       { method: "POST", path: "/api/labels" },
       { method: "POST", path: "/api/sessions/s1/labels" },
+      { method: "POST", path: "/api/sessions/bulk/labels" },
       { method: "PUT", path: "/api/onboarding" },
     ]) {
       const res = await app.request(req.path, { method: req.method });
