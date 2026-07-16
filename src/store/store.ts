@@ -3502,6 +3502,42 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Per-day session count + total tokens (for the Home daily-activity panel). Interaction counts come
+  // from readInteractionsByDate and are merged in the builder.
+  readDailyActivity(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; sessions: number; tokens: number }>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return (
+        await all<{ date: string; sessions: number; tokens: number | null }>(
+          this.db,
+          `SELECT date, COUNT(DISTINCT session_id) AS sessions, SUM(${USAGE_TOTAL}) AS tokens
+           FROM resolved_usage ${usage.messageWhere} GROUP BY date`,
+          usage.messageParams,
+        )
+      ).map((r) => ({ date: r.date, sessions: r.sessions, tokens: r.tokens ?? 0 }));
+    });
+  }
+
+  // Per-day interaction count for sessions active in range. resolved_interactions has no `date`
+  // column, so bucket its epoch-ms `ts` to the local day the same way resolved_usage.date is derived.
+  readInteractionsByDate(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; interactions: number }>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return all<{ date: string; interactions: number }>(
+        this.db,
+        `SELECT date(ts / 1000, 'unixepoch', 'localtime') AS date, COUNT(*) AS interactions
+         FROM resolved_interactions
+         WHERE session_id IN (SELECT DISTINCT session_id FROM resolved_usage ${usage.messageWhere})
+         GROUP BY date`,
+        usage.messageParams,
+      );
+    });
+  }
+
   readSessionsBySource(
     query?: ResolvedQuery,
   ): Promise<Array<{ source: string; sessions: number }>> {

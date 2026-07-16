@@ -864,6 +864,12 @@ export interface ReadModelStore {
     query?: ResolvedQuery,
   ): Promise<Array<{ date: string; source: string } & UsageGroupRow>>;
   readUsageByProjectModel(query?: ResolvedQuery): Promise<Array<{ project: string } & UsageGroupRow>>;
+  readDailyActivity(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; sessions: number; tokens: number }>>;
+  readInteractionsByDate(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; interactions: number }>>;
   /** skill === "" means unattributed ("(none)"). */
   readUsageBySkillModel(query?: ResolvedQuery): Promise<Array<{ skill: string } & UsageGroupRow>>;
   /** Per (date, skill) total tokens, attributed skills only — backs the skill-over-time chart. */

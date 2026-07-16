@@ -10,6 +10,7 @@ import type {
   ByMcpServerResponse,
   ByToolCategoryResponse,
   ByToolResponse,
+  DailyActivityResponse,
   HealthResponse,
   HeaviestResultsResponse,
   PluginsResponse,
@@ -70,6 +71,7 @@ export const useUsageDailyQuery = makeViewHook<UsageDailyResponse>("/api/usage/d
 export const useUsageByModelQuery = makeViewHook<UsageByModelResponse>("/api/usage/by-model");
 export const useUsageBySourceQuery = makeViewHook<UsageBySourceResponse>("/api/usage/by-source");
 export const useUsageBySourceDailyQuery = makeViewHook<UsageBySourceDailyResponse>("/api/usage/by-source-daily");
+export const useDailyActivityQuery = makeViewHook<DailyActivityResponse>("/api/usage/daily-activity");
 export const useUsageByProjectQuery = makeViewHook<UsageByProjectResponse>("/api/usage/by-project");
 export const useSessionsBySourceQuery = makeViewHook<SessionsBySourceResponse>("/api/usage/sessions-by-source");
 export const useSkillsQuery = makeViewHook<SkillsResponse>("/api/skills");

@@ -46,6 +46,7 @@ import type {
 // Per-view endpoint payloads (#217) — the single source of truth for each view's shape, imported
 // type-only so the server responses and the UI can't drift.
 import type {
+  DailyActivityResponse,
   SessionsBySourceResponse,
   UsageByModelResponse,
   UsageByProjectResponse,
@@ -113,6 +114,7 @@ export type {
   UsageBySourceResponse,
   UsageBySourceDailyResponse,
   UsageByProjectResponse,
+  DailyActivityResponse,
   SessionsBySourceResponse,
   SkillsResponse,
   ByToolResponse,

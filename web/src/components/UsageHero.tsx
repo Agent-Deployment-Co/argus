@@ -1,5 +1,6 @@
 import type { ChartOptions, Plugin, Scale } from "chart.js";
 import { useMemo, useState } from "react";
+import { eachDay } from "../lib/calendar";
 import { fmt, usd } from "../lib/format";
 import { CostIcon, TokensIcon } from "../lib/icons";
 import { sourceColor, sourceLabel } from "../lib/sources";
@@ -45,9 +46,13 @@ function subSurfaceWash(): string {
 export function UsageHero({
   data,
   sessions,
+  rangeStart,
+  rangeEnd,
 }: {
   data: UsageBySourceDailyResponse;
   sessions: SessionsBySourceResponse;
+  rangeStart: string;
+  rangeEnd: string;
 }) {
   const [mode, setMode] = useState<Mode>("tokens");
   const { theme } = useTheme();
@@ -79,10 +84,13 @@ export function UsageHero({
     return mode === "tokens" ? fmt(t?.tokens ?? 0) : usd(t?.cost ?? 0);
   };
 
-  // One canonical day axis for both charts (the usage series' days). Session counts are keyed by day
-  // and read off the same axis — both derive from the same in-range transcripts, so the day sets match.
-  const days = daily.map((d) => d.date);
+  // One canonical day axis for both charts: every calendar day in the range, so blank days aren't
+  // skipped (fall back to the active days if the range is unknown). Token/cost and session values are
+  // keyed by day and read off this axis, defaulting to 0 for days with no activity.
+  const rangeDays = eachDay(rangeStart, rangeEnd);
+  const days = rangeDays.length ? rangeDays : daily.map((d) => d.date);
   const axisLabels = days.map((d) => d.slice(5)); // MM-DD; tooltip title restores the full date
+  const usageByDate = new Map(daily.map((d) => [d.date, d]));
   const sessionsByDate = new Map(sessions.daily.map((d) => [d.date, d.bySource]));
 
   const switcher = (
@@ -110,7 +118,7 @@ export function UsageHero({
 
   return (
     <Panel title={title} actions={switcher} className="usage-hero">
-      {daily.length ? (
+      {days.length ? (
         <>
           <ChartCanvas
             type="bar"
@@ -119,7 +127,10 @@ export function UsageHero({
               labels: axisLabels,
               datasets: sources.map((s) => ({
                 label: `${sourceLabel(s)} (${sumLabel(s)})`,
-                data: daily.map((d) => (mode === "tokens" ? (d.tokens[s] ?? 0) : (d.cost[s] ?? 0))),
+                data: days.map((date) => {
+                  const d = usageByDate.get(date);
+                  return mode === "tokens" ? (d?.tokens[s] ?? 0) : (d?.cost[s] ?? 0);
+                }),
                 backgroundColor: sourceColor(s),
                 stack: "s",
               })),

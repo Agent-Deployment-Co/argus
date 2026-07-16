@@ -50,6 +50,18 @@ export interface UsageBySourceDailyResponse {
   totalCost: number;
 }
 
+export interface DailyActivityDay {
+  date: string;
+  sessions: number;
+  tokens: number;
+  interactions: number;
+}
+
+export interface DailyActivityResponse {
+  /** One entry per active day (ascending) with total sessions/tokens/interactions for that day. */
+  days: DailyActivityDay[];
+}
+
 export interface SessionsBySourceResponse {
   /** Sources present in scope, ordered by total sessions descending — the stack/legend order. */
   sources: string[];
@@ -161,6 +173,23 @@ export function buildUsageByModel(rows: ByDateModel[]): UsageByModelResponse {
     .sort()
     .map((d) => ({ date: d, byModel: Object.fromEntries(modelDayMap.get(d) ?? []) }));
   return { byModel, byModelDaily };
+}
+
+/** GET /api/usage/daily-activity — per-day totals for the Home daily-activity panel. Merges the
+ *  per-day session/token rows (from resolved_usage) with the per-day interaction counts (bucketed
+ *  from resolved_interactions), keyed by date. */
+export function buildDailyActivity(
+  usage: Array<{ date: string; sessions: number; tokens: number }>,
+  interactions: Array<{ date: string; interactions: number }>,
+): DailyActivityResponse {
+  const map = new Map<string, DailyActivityDay>();
+  for (const r of usage) map.set(r.date, { date: r.date, sessions: r.sessions, tokens: r.tokens, interactions: 0 });
+  for (const r of interactions) {
+    const day = map.get(r.date) ?? { date: r.date, sessions: 0, tokens: 0, interactions: 0 };
+    day.interactions = r.interactions;
+    map.set(r.date, day);
+  }
+  return { days: [...map.values()].sort((a, b) => a.date.localeCompare(b.date)) };
 }
 
 /** Fold per-(date, source) session counts into a daily series plus the source list (ordered by total

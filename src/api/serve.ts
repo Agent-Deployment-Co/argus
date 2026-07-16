@@ -15,12 +15,14 @@ import { unpricedModels } from "../pricing.ts";
 import type { ResolvedQuery, SessionSearchMatch, Store } from "../store/store-contract.ts";
 import type { TranscriptSource } from "../types.ts";
 import {
+  buildDailyActivity,
   buildSessionsBySource,
   buildUsageByModel,
   buildUsageByProject,
   buildUsageBySource,
   buildUsageBySourceDaily,
   buildUsageDaily,
+  type DailyActivityResponse,
   type SessionsBySourceResponse,
   type UsageByModelResponse,
   type UsageByProjectResponse,
@@ -173,6 +175,7 @@ export interface ViewReaders {
   usageByModel: ViewReader<UsageByModelResponse>;
   usageBySource: ViewReader<UsageBySourceResponse>;
   usageBySourceDaily: ViewReader<UsageBySourceDailyResponse>;
+  usageDailyActivity: ViewReader<DailyActivityResponse>;
   usageByProject: ViewReader<UsageByProjectResponse>;
   usageSessionsBySource: ViewReader<SessionsBySourceResponse>;
   skills: ViewReader<SkillsResponse>;
@@ -539,6 +542,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   viewRoute("/api/usage/by-model", views?.usageByModel);
   viewRoute("/api/usage/by-source", views?.usageBySource);
   viewRoute("/api/usage/by-source-daily", views?.usageBySourceDaily);
+  viewRoute("/api/usage/daily-activity", views?.usageDailyActivity);
   viewRoute("/api/usage/by-project", views?.usageByProject);
   viewRoute("/api/usage/sessions-by-source", views?.usageSessionsBySource);
   viewRoute("/api/skills", views?.skills);
@@ -1062,6 +1066,14 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       withStore(filters, async (store, query) =>
         buildUsageBySourceDaily(await store.readUsageByDateSourceModel(query)),
       ),
+    usageDailyActivity: (filters) =>
+      withStore(filters, async (store, query) => {
+        const [activity, interactions] = await Promise.all([
+          store.readDailyActivity(query),
+          store.readInteractionsByDate(query),
+        ]);
+        return buildDailyActivity(activity, interactions);
+      }),
     usageByProject: (filters) =>
       withStore(filters, async (store, query) => {
         const [rows, sessions] = await Promise.all([

@@ -3,7 +3,7 @@
 // synthetic store rows (the same shape the store's per-view read methods return), plus buildSessionRow
 // (still shared by the session-detail path) and the narrowed recommendation rules.
 import { describe, expect, test } from "bun:test";
-import { buildSessionsBySource, buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageBySourceDaily, buildUsageDaily } from "../src/api/usage.ts";
+import { buildDailyActivity, buildSessionsBySource, buildUsageByModel, buildUsageByProject, buildUsageBySource, buildUsageBySourceDaily, buildUsageDaily } from "../src/api/usage.ts";
 import {
   buildByMcpServer,
   buildByTool,
@@ -107,6 +107,23 @@ describe("usage builders", () => {
     expect(res.totalsBySource.claude!.tokens).toBe(2000);
     expect(res.totalsBySource.claude!.cost).toBeCloseTo((1000 * 15 + 1000 * 1) / 1e6, 9);
     expect(res.totalCost).toBeCloseTo(res.totalsBySource.claude!.cost + res.totalsBySource.codex!.cost, 9);
+  });
+
+  test("buildDailyActivity merges per-day sessions/tokens with interactions, ascending, filling gaps", () => {
+    const res = buildDailyActivity(
+      [
+        { date: "2026-06-02", sessions: 2, tokens: 500 },
+        { date: "2026-06-01", sessions: 1, tokens: 100 },
+      ],
+      [
+        { date: "2026-06-01", interactions: 7 },
+        { date: "2026-06-03", interactions: 3 }, // interactions on a day with no usage row
+      ],
+    );
+    expect(res.days.map((d) => d.date)).toEqual(["2026-06-01", "2026-06-02", "2026-06-03"]);
+    expect(res.days[0]).toEqual({ date: "2026-06-01", sessions: 1, tokens: 100, interactions: 7 });
+    expect(res.days[1]).toEqual({ date: "2026-06-02", sessions: 2, tokens: 500, interactions: 0 });
+    expect(res.days[2]).toEqual({ date: "2026-06-03", sessions: 0, tokens: 0, interactions: 3 });
   });
 });
 

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { eachDay, parseISO } from "../lib/calendar";
 import { fmt } from "../lib/format";
 import { SourceBadge, sourceColor } from "../lib/sources";
 import { Panel } from "./Panel";
@@ -12,22 +13,6 @@ export interface SourceMetrics {
   tokens: number;
   interactions: number;
   tasks: number;
-}
-
-// Local-date helpers (the store keys days by local YYYY-MM-DD, so parse/format in local time).
-function parseISO(s: string): Date {
-  const [y, m, d] = s.split("-").map(Number);
-  return new Date(y!, m! - 1, d!);
-}
-function toISO(dt: Date): string {
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-}
-/** Every calendar day in [start, end] inclusive, as YYYY-MM-DD. Empty if start is after end. */
-function eachDay(start: string, end: string): string[] {
-  const out: string[] = [];
-  const end_ = parseISO(end);
-  for (let dt = parseISO(start); dt <= end_; dt.setDate(dt.getDate() + 1)) out.push(toISO(dt));
-  return out;
 }
 
 function Metric({ label, value }: { label: string; value: ReactNode }) {

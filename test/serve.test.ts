@@ -25,6 +25,7 @@ function makeViews(capture?: (filters: SnapshotFilters) => void): ViewReaders {
     usageByModel: reader,
     usageBySource: reader,
     usageBySourceDaily: reader,
+    usageDailyActivity: reader,
     usageByProject: reader,
     usageSessionsBySource: reader,
     skills: reader,
