@@ -7,6 +7,8 @@ locally on your computer. Argus is free, [open source](LICENSE) software from [T
 **📖 Full documentation: [argus.agentdeployment.co](https://argus.agentdeployment.co)** — the best
 place to start if you're here to *use* Argus.
 
+![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](docs/images/screenshots/activity@1920x1080@2.webp)
+
 ## Get started
 
 The easiest way to run Argus is the **desktop app** — a native app that lives in your menu bar, keeps
