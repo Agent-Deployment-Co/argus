@@ -1,6 +1,5 @@
 import type { ChartOptions, Plugin, Scale } from "chart.js";
 import { useMemo, useState } from "react";
-import { htmlTooltip } from "../lib/chart-tooltip";
 import { fmt, usd } from "../lib/format";
 import { CostIcon, TokensIcon } from "../lib/icons";
 import { sourceColor, sourceLabel } from "../lib/sources";
@@ -134,8 +133,6 @@ export function UsageHero({
                 // shared x axis, so it can't live at the bottom of the top chart anymore.
                 legend: { position: "top" },
                 tooltip: {
-                  enabled: false,
-                  external: htmlTooltip,
                   callbacks: {
                     title: (items) => days[items[0]!.dataIndex]!,
                     // Drop the period-sum suffix the legend carries; show just this day's value.
@@ -181,8 +178,6 @@ export function UsageHero({
                 plugins: {
                   legend: { display: false },
                   tooltip: {
-                    enabled: false,
-                    external: htmlTooltip,
                     callbacks: {
                       title: (items) => days[items[0]!.dataIndex]!,
                       label: (c) => {

@@ -559,6 +559,7 @@ section { margin: 0 0 42px; }
 .chart-tooltip--below::after { top: -6px; border-bottom: 0; border-right: 0; }
 .chart-tooltip-title { margin-bottom: 4px; font-weight: 600; color: var(--heading); }
 .chart-tooltip-row { display: flex; align-items: center; gap: 6px; line-height: 1.55; }
+.chart-tooltip-sub { padding-left: 16px; color: var(--muted); } /* before/after lines: no swatch, aligned under the label */
 .chart-tooltip-swatch { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 2px; }
 canvas { max-width: 100%; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

@@ -18,6 +18,7 @@ import {
   Tooltip,
 } from "chart.js";
 import type { ChartOptions } from "chart.js";
+import { htmlTooltip } from "./chart-tooltip";
 import type { Theme } from "./theme";
 
 ChartJS.register(
@@ -27,15 +28,15 @@ ChartJS.register(
 );
 
 ChartJS.defaults.font.family = "Aleo, Georgia, serif";
-ChartJS.defaults.plugins.tooltip.borderColor = "#286992";
-ChartJS.defaults.plugins.tooltip.borderWidth = 1;
 
-const CHART_THEMES: Record<Theme, { grid: string; muted: string; panel: string; fg: string }> = {
-  dark: { grid: "rgba(243,215,186,.18)", muted: "#f3d7ba", panel: "#341f09", fg: "#fefaf5" },
-  light: { grid: "rgba(52,31,9,.13)", muted: "#6f5331", panel: "#fefaf5", fg: "#1c1105" },
+const CHART_THEMES: Record<Theme, { grid: string; muted: string }> = {
+  dark: { grid: "rgba(243,215,186,.18)", muted: "#f3d7ba" },
+  light: { grid: "rgba(52,31,9,.13)", muted: "#6f5331" },
 };
 
-/** Theme-dependent chrome merged into every chart's options for the current theme. */
+/** Theme-dependent chrome merged into every chart's options for the current theme. Tooltips render
+ *  as HTML beside the canvas (lib/chart-tooltip) — the native canvas tooltip is disabled app-wide so
+ *  they aren't clipped by short canvases and match the app chrome; charts add their own `callbacks`. */
 export function chartChrome(theme: Theme): ChartOptions {
   const c = CHART_THEMES[theme];
   return {
@@ -45,7 +46,7 @@ export function chartChrome(theme: Theme): ChartOptions {
     borderColor: c.grid,
     plugins: {
       legend: { labels: { color: c.muted } },
-      tooltip: { backgroundColor: c.panel, titleColor: c.fg, bodyColor: c.fg, borderColor: "#286992", borderWidth: 1 },
+      tooltip: { enabled: false, external: htmlTooltip },
     },
     scales: {
       x: { ticks: { color: c.muted }, grid: { color: c.grid } },
