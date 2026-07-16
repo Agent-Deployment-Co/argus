@@ -23,7 +23,7 @@ name: Release
 #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
 #   AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID
 #                                            GitHub OIDC identity used by Azure Artifact Signing
-# Required repository or organization variables:
+# Required repository or organization secrets:
 #   AZURE_ARTIFACT_SIGNING_ENDPOINT          Region-specific codesigning.azure.net endpoint
 #   AZURE_ARTIFACT_SIGNING_ACCOUNT           Artifact Signing account name
 #   AZURE_ARTIFACT_SIGNING_PROFILE           Certificate profile name
@@ -118,9 +118,9 @@ jobs:
         if: runner.os == 'Windows'
         uses: azure/artifact-signing-action@v2
         with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
           files-folder: ${{ github.workspace }}\desktop\src-tauri\binaries
           files-folder-filter: exe
           file-digest: SHA256
@@ -232,9 +232,9 @@ jobs:
         if: runner.os == 'Windows'
         uses: azure/artifact-signing-action@v2
         with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
           files: ${{ steps.windows_installers.outputs.files }}
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
