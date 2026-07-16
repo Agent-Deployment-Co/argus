@@ -122,7 +122,7 @@ export function UsageHero({
         <>
           <ChartCanvas
             type="bar"
-            height={280}
+            height={210}
             data={{
               labels: axisLabels,
               datasets: sources.map((s) => ({
