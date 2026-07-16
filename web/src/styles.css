@@ -253,10 +253,16 @@ main:has(.inbox-page) { padding: 0; }
 }
 
 /* Daily-activity panel (#270 sketch): a clickable sessions-per-day heatmap over a day-detail area. */
-.daily-activity .t-overline { margin-bottom: 8px; }
-.day-activity-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-bottom: 5px; }
-.day-activity-weekdays span { text-align: center; color: var(--muted); font: 600 10px var(--font-ui); }
-.day-activity-heat { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+/* Calendar grid: a week-of-year gutter column + 7 weekday columns. Weekday headers and week labels
+   are clickable (select a whole column / row). */
+.day-activity-cal { display: grid; grid-template-columns: auto repeat(7, 1fr); gap: 5px; }
+.day-activity-corner { }
+.day-activity-wd, .day-activity-week { border: 0; background: none; padding: 0; color: var(--muted); cursor: pointer; }
+.day-activity-wd { display: flex; align-items: center; justify-content: center; font: 600 10px var(--font-ui); }
+.day-activity-week { display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; font: 500 10px var(--font-ui); font-variant-numeric: tabular-nums; }
+.day-activity-wd:hover, .day-activity-week:hover { color: var(--heading); }
+.day-activity-wd--selected, .day-activity-week--selected { color: var(--accent); font-weight: 700; }
+.day-activity-wd:focus-visible, .day-activity-week:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .day-activity-cell { aspect-ratio: 1; display: flex; align-items: flex-start; justify-content: flex-start; padding: 3px 4px; border: 1px solid var(--line); border-radius: 4px; background: transparent; cursor: pointer; }
 .day-activity-num { font: 500 10px var(--font-ui); font-variant-numeric: tabular-nums; line-height: 1; color: var(--muted); }
 .day-activity-cell--empty { background: transparent; }
