@@ -1,14 +1,18 @@
+import type { LucideIcon } from "lucide-react";
 import { Fragment, useState } from "react";
+import { toolDisplayName } from "../../../src/tool-categories";
 import { eachDay, parseISO } from "../lib/calendar";
-import { fmt } from "../lib/format";
+import { fmt, pluralize } from "../lib/format";
+import { SessionIcon, TasksIcon, TokensIcon } from "../lib/icons";
 import type { DailyActivityResponse } from "../types";
 import { Panel } from "./Panel";
 
 // Home daily-activity sketch (#270): a calendar-style total-sessions-per-day heatmap (weekday
 // columns, week-of-year gutter). Selecting a day, a weekday header, or a week label highlights that
-// day / column / row and fills the area below with aggregate sessions / tokens / interactions for
-// the selection. A concept probe — deliberately minimal.
-type Day = DailyActivityResponse["days"][number];
+// day / column / row and fills the area below with aggregate metrics + top skills for the selection.
+// A concept probe — deliberately minimal.
+const MAX_SKILLS = 5;
+const MAX_TOOLS = 5;
 
 // A day cell, a weekday column (S..S), or a week row (index into the week rows).
 type Selection =
@@ -31,24 +35,25 @@ function weekOfYear(d: Date): number {
   return Math.floor((dayOfYear + jan1.getDay()) / 7) + 1;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
   return (
-    <div className="metric">
-      <div className="metric-value">{value}</div>
-      <div className="metric-label t-overline">{label}</div>
+    <div className="day-activity-metric" title={label}>
+      <Icon size={14} aria-label={label} />
+      <span>{value}</span>
     </div>
   );
 }
 
 export function DailyActivityPanel({
-  days,
+  data,
   rangeStart,
   rangeEnd,
 }: {
-  days: Day[];
+  data: DailyActivityResponse;
   rangeStart: string;
   rangeEnd: string;
 }) {
+  const { days, skillDays, toolDays } = data;
   // Default to the current day of the week (its column), so the panel opens with a useful selection.
   const [sel, setSel] = useState<Selection | null>(() => ({ kind: "weekday" as const, dow: new Date().getDay() }));
   const byDate = new Map(days.map((d) => [d.date, d]));
@@ -83,11 +88,36 @@ export function DailyActivityPanel({
       const day = byDate.get(d);
       a.sessions += day?.sessions ?? 0;
       a.tokens += day?.tokens ?? 0;
-      a.interactions += day?.interactions ?? 0;
+      a.tasks += day?.tasks ?? 0;
       return a;
     },
-    { sessions: 0, tokens: 0, interactions: 0 },
+    { sessions: 0, tokens: 0, tasks: 0 },
   );
+
+  // Top skills across the selected days, ranked by the sessions they appear in (summed per day —
+  // consistent with the per-day session aggregate above).
+  const selectedSet = new Set(selectedDates);
+  const skillSessions = new Map<string, number>();
+  for (const r of skillDays) {
+    if (selectedSet.has(r.date)) skillSessions.set(r.skill, (skillSessions.get(r.skill) ?? 0) + r.sessions);
+  }
+  const rankedSkills = [...skillSessions.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const topSkills = rankedSkills.slice(0, MAX_SKILLS);
+  const restSkills = rankedSkills.slice(MAX_SKILLS);
+  const restSkillSessions = restSkills.reduce((sum, [, n]) => sum + n, 0);
+
+  // Top tools across the selected days, ranked by calls (summed per day) — like the session-detail
+  // tools list: display name + ×calls, top 5, then an "N more" row totalling the rest.
+  const toolCalls = new Map<string, number>();
+  for (const r of toolDays) {
+    if (selectedSet.has(r.date)) toolCalls.set(r.tool, (toolCalls.get(r.tool) ?? 0) + r.calls);
+  }
+  const rankedTools = [...toolCalls.entries()]
+    .map(([tool, calls]) => ({ tool, calls, display: toolDisplayName(tool) }))
+    .sort((a, b) => b.calls - a.calls || a.display.localeCompare(b.display));
+  const topTools = rankedTools.slice(0, MAX_TOOLS);
+  const restTools = rankedTools.slice(MAX_TOOLS);
+  const restCalls = restTools.reduce((sum, t) => sum + t.calls, 0);
 
   let title = "";
   if (sel?.kind === "day") {
@@ -162,10 +192,60 @@ export function DailyActivityPanel({
           <>
             <div className="t-subhead">{title}</div>
             <div className="day-activity-metrics">
-              <Metric label="Sessions" value={fmt(totals.sessions)} />
-              <Metric label="Tokens" value={fmt(totals.tokens)} />
-              <Metric label="Interactions" value={fmt(totals.interactions)} />
+              <Metric icon={SessionIcon} label="Sessions" value={fmt(totals.sessions)} />
+              <Metric icon={TokensIcon} label="Tokens" value={fmt(totals.tokens)} />
+              <Metric icon={TasksIcon} label="Tasks" value={fmt(totals.tasks)} />
             </div>
+            {topSkills.length > 0 && (
+              <div className="day-activity-list">
+                <div className="t-overline">Top skills</div>
+                <div className="kv">
+                  {topSkills.map(([skill, n]) => (
+                    <div className="kv-row" key={skill}>
+                      <span className="kv-k" title={skill}>{skill}</span>
+                      <span className="kv-v" title={`${n} ${pluralize(n, "session")}`}>
+                        <span className="calls-x">×</span>
+                        {fmt(n)}
+                      </span>
+                    </div>
+                  ))}
+                  {restSkills.length > 0 && (
+                    <div className="kv-row">
+                      <span className="kv-k">{restSkills.length} more</span>
+                      <span className="kv-v" title={`${restSkillSessions} ${pluralize(restSkillSessions, "session")}`}>
+                        <span className="calls-x">×</span>
+                        {fmt(restSkillSessions)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {topTools.length > 0 && (
+              <div className="day-activity-list">
+                <div className="t-overline">Top tools</div>
+                <div className="kv">
+                  {topTools.map((t) => (
+                    <div className="kv-row" key={t.tool}>
+                      <span className="kv-k" title={t.display}>{t.display}</span>
+                      <span className="kv-v" title={`${t.calls} ${pluralize(t.calls, "call")}`}>
+                        <span className="calls-x">×</span>
+                        {fmt(t.calls)}
+                      </span>
+                    </div>
+                  ))}
+                  {restTools.length > 0 && (
+                    <div className="kv-row">
+                      <span className="kv-k">{restTools.length} more</span>
+                      <span className="kv-v" title={`${restCalls} ${pluralize(restCalls, "call")}`}>
+                        <span className="calls-x">×</span>
+                        {fmt(restCalls)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <p className="note">Select a day, weekday, or week.</p>

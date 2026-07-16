@@ -271,7 +271,13 @@ main:has(.inbox-page) { padding: 0; }
 .day-activity-cell--selected, .day-activity-cell--selected:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .day-activity-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .day-activity-detail { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
-.day-activity-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 22px; margin-top: 12px; }
+.day-activity-metrics { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; }
+.day-activity-metric { display: inline-flex; align-items: center; gap: 6px; color: var(--heading); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.day-activity-metric svg { flex: 0 0 auto; color: var(--muted); }
+/* Top skills / top tools: the same .kv list, minus the trailing row divider. */
+.day-activity-list { margin-top: 18px; }
+.day-activity-list .t-overline { margin-bottom: 8px; }
+.day-activity-list .kv-row:last-child { border-bottom: 0; }
 .filter-dropdown-empty { margin: 4px 0; color: var(--muted); font-size: 12.5px; }
 .filter-dropdown-mode { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .filter-dropdown-mode-btn { flex: 1 1 0; border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: transparent; color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; text-align: center; }

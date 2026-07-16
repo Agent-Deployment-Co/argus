@@ -3520,22 +3520,79 @@ export class SqliteStore implements Store {
     });
   }
 
-  // Per-day interaction count for sessions active in range. resolved_interactions has no `date`
-  // column, so bucket its epoch-ms `ts` to the local day the same way resolved_usage.date is derived.
-  readInteractionsByDate(
+  // Per-(day, skill) distinct-session counts (for the daily-activity panel's top-skills list). The
+  // caller sums across the selected days — consistent with the panel's other per-day aggregates.
+  readSkillSessionsByDate(
     query?: ResolvedQuery,
-  ): Promise<Array<{ date: string; interactions: number }>> {
+  ): Promise<Array<{ date: string; skill: string; sessions: number }>> {
     return this.schedule(async () => {
       const usage = buildResolvedFilters(query);
-      return all<{ date: string; interactions: number }>(
+      const where = usage.messageWhere
+        ? `${usage.messageWhere} AND attribution_skill IS NOT NULL`
+        : "WHERE attribution_skill IS NOT NULL";
+      return all<{ date: string; skill: string; sessions: number }>(
         this.db,
-        `SELECT date(ts / 1000, 'unixepoch', 'localtime') AS date, COUNT(*) AS interactions
-         FROM resolved_interactions
+        `SELECT date, attribution_skill AS skill, COUNT(DISTINCT session_id) AS sessions
+         FROM resolved_usage ${where} GROUP BY date, attribution_skill`,
+        usage.messageParams,
+      );
+    });
+  }
+
+  // Per-(day, tool) call counts (for the daily-activity panel's top-tools list). One
+  // resolved_invocations row is one call, so COUNT(*) per (date, tool) is the call count.
+  readToolCallsByDate(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; tool: string; calls: number }>> {
+    return this.schedule(async () => {
+      const inv = buildResolvedFilters(query, {
+        sourceColumn: "i.source",
+        dateColumn: "i.date",
+        cwdColumn: "i.cwd",
+      });
+      return all<{ date: string; tool: string; calls: number }>(
+        this.db,
+        `SELECT i.date AS date, tool, COUNT(*) AS calls
+         FROM resolved_invocations i ${inv.messageWhere} GROUP BY i.date, tool`,
+        inv.messageParams,
+      );
+    });
+  }
+
+  // Per-day interaction / task counts for sessions active in range. resolved_interactions and
+  // resolved_tasks have no `date` column, so bucket their epoch-ms `ts` to the local day the same way
+  // resolved_usage.date is derived.
+  private countByDateForRangeSessions(
+    table: "resolved_interactions" | "resolved_tasks",
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; n: number }>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return all<{ date: string; n: number }>(
+        this.db,
+        `SELECT date(ts / 1000, 'unixepoch', 'localtime') AS date, COUNT(*) AS n
+         FROM ${table}
          WHERE session_id IN (SELECT DISTINCT session_id FROM resolved_usage ${usage.messageWhere})
          GROUP BY date`,
         usage.messageParams,
       );
     });
+  }
+
+  async readInteractionsByDate(
+    query?: ResolvedQuery,
+  ): Promise<Array<{ date: string; interactions: number }>> {
+    return (await this.countByDateForRangeSessions("resolved_interactions", query)).map((r) => ({
+      date: r.date,
+      interactions: r.n,
+    }));
+  }
+
+  async readTasksByDate(query?: ResolvedQuery): Promise<Array<{ date: string; tasks: number }>> {
+    return (await this.countByDateForRangeSessions("resolved_tasks", query)).map((r) => ({
+      date: r.date,
+      tasks: r.n,
+    }));
   }
 
   readSessionsBySource(

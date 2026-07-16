@@ -1068,11 +1068,14 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       ),
     usageDailyActivity: (filters) =>
       withStore(filters, async (store, query) => {
-        const [activity, interactions] = await Promise.all([
+        const [activity, interactions, tasks, skillDays, toolDays] = await Promise.all([
           store.readDailyActivity(query),
           store.readInteractionsByDate(query),
+          store.readTasksByDate(query),
+          store.readSkillSessionsByDate(query),
+          store.readToolCallsByDate(query),
         ]);
-        return buildDailyActivity(activity, interactions);
+        return buildDailyActivity(activity, interactions, tasks, skillDays, toolDays);
       }),
     usageByProject: (filters) =>
       withStore(filters, async (store, query) => {

@@ -55,11 +55,16 @@ export interface DailyActivityDay {
   sessions: number;
   tokens: number;
   interactions: number;
+  tasks: number;
 }
 
 export interface DailyActivityResponse {
   /** One entry per active day (ascending) with total sessions/tokens/interactions for that day. */
   days: DailyActivityDay[];
+  /** Per-(day, skill) distinct-session counts; the panel ranks skills for the selected days. */
+  skillDays: Array<{ date: string; skill: string; sessions: number }>;
+  /** Per-(day, tool) call counts; the panel ranks tools for the selected days. */
+  toolDays: Array<{ date: string; tool: string; calls: number }>;
 }
 
 export interface SessionsBySourceResponse {
@@ -181,15 +186,17 @@ export function buildUsageByModel(rows: ByDateModel[]): UsageByModelResponse {
 export function buildDailyActivity(
   usage: Array<{ date: string; sessions: number; tokens: number }>,
   interactions: Array<{ date: string; interactions: number }>,
+  tasks: Array<{ date: string; tasks: number }> = [],
+  skillDays: Array<{ date: string; skill: string; sessions: number }> = [],
+  toolDays: Array<{ date: string; tool: string; calls: number }> = [],
 ): DailyActivityResponse {
   const map = new Map<string, DailyActivityDay>();
-  for (const r of usage) map.set(r.date, { date: r.date, sessions: r.sessions, tokens: r.tokens, interactions: 0 });
-  for (const r of interactions) {
-    const day = map.get(r.date) ?? { date: r.date, sessions: 0, tokens: 0, interactions: 0 };
-    day.interactions = r.interactions;
-    map.set(r.date, day);
-  }
-  return { days: [...map.values()].sort((a, b) => a.date.localeCompare(b.date)) };
+  const day = (date: string) =>
+    map.get(date) ?? { date, sessions: 0, tokens: 0, interactions: 0, tasks: 0 };
+  for (const r of usage) map.set(r.date, { date: r.date, sessions: r.sessions, tokens: r.tokens, interactions: 0, tasks: 0 });
+  for (const r of interactions) map.set(r.date, { ...day(r.date), interactions: r.interactions });
+  for (const r of tasks) map.set(r.date, { ...day(r.date), tasks: r.tasks });
+  return { days: [...map.values()].sort((a, b) => a.date.localeCompare(b.date)), skillDays, toolDays };
 }
 
 /** Fold per-(date, source) session counts into a daily series plus the source list (ordered by total

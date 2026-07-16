@@ -91,7 +91,7 @@ export function Home() {
       </div>
 
       <aside className="home-rail">
-        <DailyActivityPanel days={dailyActivityQ.data!.days} rangeStart={rangeStart} rangeEnd={rangeEnd} />
+        <DailyActivityPanel data={dailyActivityQ.data!} rangeStart={rangeStart} rangeEnd={rangeEnd} />
       </aside>
     </div>
   );

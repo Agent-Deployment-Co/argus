@@ -109,7 +109,7 @@ describe("usage builders", () => {
     expect(res.totalCost).toBeCloseTo(res.totalsBySource.claude!.cost + res.totalsBySource.codex!.cost, 9);
   });
 
-  test("buildDailyActivity merges per-day sessions/tokens with interactions, ascending, filling gaps", () => {
+  test("buildDailyActivity merges per-day sessions/tokens with interactions and tasks, ascending, filling gaps", () => {
     const res = buildDailyActivity(
       [
         { date: "2026-06-02", sessions: 2, tokens: 500 },
@@ -119,11 +119,32 @@ describe("usage builders", () => {
         { date: "2026-06-01", interactions: 7 },
         { date: "2026-06-03", interactions: 3 }, // interactions on a day with no usage row
       ],
+      [
+        { date: "2026-06-01", tasks: 2 },
+        { date: "2026-06-03", tasks: 1 },
+      ],
+      [
+        { date: "2026-06-01", skill: "plan-work", sessions: 3 },
+        { date: "2026-06-02", skill: "plan-work", sessions: 1 },
+      ],
+      [
+        { date: "2026-06-01", tool: "Bash", calls: 9 },
+        { date: "2026-06-02", tool: "Read", calls: 4 },
+      ],
     );
     expect(res.days.map((d) => d.date)).toEqual(["2026-06-01", "2026-06-02", "2026-06-03"]);
-    expect(res.days[0]).toEqual({ date: "2026-06-01", sessions: 1, tokens: 100, interactions: 7 });
-    expect(res.days[1]).toEqual({ date: "2026-06-02", sessions: 2, tokens: 500, interactions: 0 });
-    expect(res.days[2]).toEqual({ date: "2026-06-03", sessions: 0, tokens: 0, interactions: 3 });
+    expect(res.days[0]).toEqual({ date: "2026-06-01", sessions: 1, tokens: 100, interactions: 7, tasks: 2 });
+    expect(res.days[1]).toEqual({ date: "2026-06-02", sessions: 2, tokens: 500, interactions: 0, tasks: 0 });
+    expect(res.days[2]).toEqual({ date: "2026-06-03", sessions: 0, tokens: 0, interactions: 3, tasks: 1 });
+    // skillDays passes through for the panel to rank per selection.
+    expect(res.skillDays).toEqual([
+      { date: "2026-06-01", skill: "plan-work", sessions: 3 },
+      { date: "2026-06-02", skill: "plan-work", sessions: 1 },
+    ]);
+    expect(res.toolDays).toEqual([
+      { date: "2026-06-01", tool: "Bash", calls: 9 },
+      { date: "2026-06-02", tool: "Read", calls: 4 },
+    ]);
   });
 });
 
