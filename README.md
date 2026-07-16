@@ -59,6 +59,12 @@ npx @agentdeploymentco/argus serve --port 8080      # choose a port (or set ARGU
 |------|-------------|
 | `-p, --port <N>` | Local port to listen on (env `ARGUS_PORT`, default: `4242`) |
 | `--open` | Open the web app in your browser once it's ready (macOS) |
+| `--demo` | Read-only demo mode (env `ARGUS_DEMO`; `--no-demo` forces it off) |
+
+`--demo` starts a read-only version of the web app: it hides labels, hiding sessions, refresh, and
+Settings, and drops their underlying routes from the server entirely. Use it to share a running
+Argus instance (a public demo, a screen share, a support session) without letting anyone viewing it
+change your data.
 
 The web app shows the whole local session store and refreshes it in the background; it does not
 re-parse every transcript on each page load. Session titles use an instant heuristic summary built
