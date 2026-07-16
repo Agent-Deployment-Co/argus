@@ -71,6 +71,7 @@ jobs:
             args: "--target aarch64-pc-windows-msvc --bundles nsis"
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}
+    environment: production
     env:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
