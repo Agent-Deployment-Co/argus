@@ -821,6 +821,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(RETENTION_SETTINGS),
     ...Object.values(LOG_SETTINGS),
     ...Object.values(STATE_SETTINGS),
+    ...Object.values(DEMO_SETTINGS),
   ].map((s) => [s.path, s as Setting<unknown>]),
 );
 

@@ -534,6 +534,13 @@ function parseTaskSeq(raw: string): number | null {
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
+  // Every route registered on `writes` (rather than `app` directly) is dropped entirely in demo mode
+  // (#281) by the single `app.route("/", writes)` mount below, gated on `opts.demo` — one decision
+  // point instead of the five separate `if (!opts.demo) { ... }` blocks this replaced, which had
+  // already let a write route (`/api/sessions/bulk/labels`) ship ungated once. Order among `writes`'
+  // own routes is preserved (still resolved relative to each other, e.g. the "bulk" literal-segment
+  // routes before their ":id" counterparts), so mounting doesn't change any existing precedence.
+  const writes = new Hono();
 
   // Cheap liveness check: no store access, just confirms the server is answering. The desktop app's
   // front-door proxy polls this to know when a restarting sidecar is back up. `demo` doubles as the
@@ -612,70 +619,68 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   // Session hide/unhide and reindex are all writes with a disk/subprocess side effect (reindex) or a
   // store mutation (hide) — dropped entirely in demo mode (#281) rather than 503ing, so the SPA never
   // renders a button that hits a route that isn't there.
-  if (!opts.demo) {
-    // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
-    // the literal "bulk" segment isn't swallowed by that route's ":id" param.
-    app.post("/api/sessions/bulk/hidden", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!opts.setSessionsHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
+  // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
+  // the literal "bulk" segment isn't swallowed by that route's ":id" param.
+  writes.post("/api/sessions/bulk/hidden", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!opts.setSessionsHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
 
-      const sessionIds = await readJsonStringArrayField(c, "sessionIds");
-      if (!Array.isArray(sessionIds)) return sessionIds;
-      const hidden = await readJsonBooleanField(c, "hidden");
-      if (typeof hidden !== "boolean") return hidden;
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const hidden = await readJsonBooleanField(c, "hidden");
+    if (typeof hidden !== "boolean") return hidden;
 
-      await opts.setSessionsHidden(sessionIds, hidden);
-      opts.onStoreChanged?.();
-      return c.json({ hidden });
-    });
+    await opts.setSessionsHidden(sessionIds, hidden);
+    opts.onStoreChanged?.();
+    return c.json({ hidden });
+  });
 
-    // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
-    // hidden, but its usage still counts in aggregate rollups. No feature-gate beyond store availability
-    // — unlike reindex, this is a pure store write.
-    app.post("/api/sessions/:id/hidden", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
+  // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
+  // hidden, but its usage still counts in aggregate rollups. No feature-gate beyond store availability
+  // — unlike reindex, this is a pure store write.
+  writes.post("/api/sessions/:id/hidden", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
 
-      const sessionId = c.req.param("id").trim();
-      if (!sessionId) return c.json({ error: "Missing session id." }, 400);
-      if (!opts.setSessionHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.setSessionHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
 
-      const hidden = await readJsonBooleanField(c, "hidden");
-      if (typeof hidden !== "boolean") return hidden;
+    const hidden = await readJsonBooleanField(c, "hidden");
+    if (typeof hidden !== "boolean") return hidden;
 
-      await opts.setSessionHidden(sessionId, hidden);
-      opts.onStoreChanged?.();
-      return c.json({ hidden });
-    });
+    await opts.setSessionHidden(sessionId, hidden);
+    opts.onStoreChanged?.();
+    return c.json({ hidden });
+  });
 
-    // Re-index a single session: re-read its transcript from disk and refresh it in the store
-    // (sessions/messages/invocations/tasks), with task processing always on. 404 if the session is
-    // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
-    // diagnostics — the session is still structurally refreshed.
-    app.post("/api/sessions/:id/reindex", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
+  // Re-index a single session: re-read its transcript from disk and refresh it in the store
+  // (sessions/messages/invocations/tasks), with task processing always on. 404 if the session is
+  // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
+  // diagnostics — the session is still structurally refreshed.
+  writes.post("/api/sessions/:id/reindex", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
 
-      const sessionId = c.req.param("id").trim();
-      if (!sessionId) return c.json({ error: "Missing session id." }, 400);
-      if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);
 
-      opts.log?.(`Refreshing ${sessionId}: re-reading the session and rebuilding tasks...`);
-      const result = await opts.reindex(sessionId);
-      if (!result.ok) {
-        if (opts.log) logWarn(opts.log, `Refresh failed for ${sessionId}: ${result.message}`);
-        return c.json({ error: result.message, diagnostics: result.diagnostics ?? [] }, result.status);
-      }
+    opts.log?.(`Refreshing ${sessionId}: re-reading the session and rebuilding tasks...`);
+    const result = await opts.reindex(sessionId);
+    if (!result.ok) {
+      if (opts.log) logWarn(opts.log, `Refresh failed for ${sessionId}: ${result.message}`);
+      return c.json({ error: result.message, diagnostics: result.diagnostics ?? [] }, result.status);
+    }
 
-      const diagnostics = result.diagnostics ?? [];
-      const issueCount = diagnostics.filter((diagnostic) => diagnostic.severity !== "info").length;
-      const issueNote = issueCount ? ` with ${issueCount} issue${issueCount === 1 ? "" : "s"}` : "";
-      opts.log?.(`Refreshed ${sessionId}: rebuilt ${taskCountLabel(result.tasks.length)}${issueNote}.`);
-      opts.onStoreChanged?.();
-      return c.json({ tasks: result.tasks, diagnostics } satisfies ReindexResponse);
-    });
-  }
+    const diagnostics = result.diagnostics ?? [];
+    const issueCount = diagnostics.filter((diagnostic) => diagnostic.severity !== "info").length;
+    const issueNote = issueCount ? ` with ${issueCount} issue${issueCount === 1 ? "" : "s"}` : "";
+    opts.log?.(`Refreshed ${sessionId}: rebuilt ${taskCountLabel(result.tasks.length)}${issueNote}.`);
+    opts.onStoreChanged?.();
+    return c.json({ tasks: result.tasks, diagnostics } satisfies ReindexResponse);
+  });
 
   // Per-task metrics for a whole session, computed on demand from the messages attributed to each
   // task (not shipped in the big snapshot). One fetch backs both the task list and the detail drawer.
@@ -698,45 +703,43 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ labels: await labels.list() } satisfies LabelsResponse);
   });
 
-  if (!opts.demo) {
-    app.post("/api/labels", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const name = await readJsonStringField(c, "name");
-      if (typeof name !== "string") return name;
-      try {
-        return c.json({ label: await labels.create(name) } satisfies LabelResponse);
-      } catch (err) {
-        return labelErrorResponse(c, err);
-      }
-    });
+  writes.post("/api/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const name = await readJsonStringField(c, "name");
+    if (typeof name !== "string") return name;
+    try {
+      return c.json({ label: await labels.create(name) } satisfies LabelResponse);
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
 
-    app.patch("/api/labels/:id", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const id = c.req.param("id").trim();
-      if (!id) return c.json({ error: "Missing label id." }, 400);
-      const name = await readJsonStringField(c, "name");
-      if (typeof name !== "string") return name;
-      try {
-        return c.json({ label: await labels.rename(id, name) } satisfies LabelResponse);
-      } catch (err) {
-        return labelErrorResponse(c, err);
-      }
-    });
+  writes.patch("/api/labels/:id", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const id = c.req.param("id").trim();
+    if (!id) return c.json({ error: "Missing label id." }, 400);
+    const name = await readJsonStringField(c, "name");
+    if (typeof name !== "string") return name;
+    try {
+      return c.json({ label: await labels.rename(id, name) } satisfies LabelResponse);
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
 
-    app.delete("/api/labels/:id", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const id = c.req.param("id").trim();
-      if (!id) return c.json({ error: "Missing label id." }, 400);
-      await labels.remove(id);
-      return c.json({ ok: true });
-    });
-  }
+  writes.delete("/api/labels/:id", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const id = c.req.param("id").trim();
+    if (!id) return c.json({ error: "Missing label id." }, 400);
+    await labels.remove(id);
+    return c.json({ ok: true });
+  });
 
   // A session's labels + its per-task labels. Read path, so no CSRF guard.
   app.get("/api/sessions/:id/labels", async (c) => {
@@ -759,215 +762,213 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
   // Apply / remove a session-level label across many sessions at once (bulk mode). Registered before
   // the single-id route below so the literal "bulk" segment isn't swallowed by that route's ":id" param.
-  if (!opts.demo) {
-    app.post("/api/sessions/bulk/labels", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const sessionIds = await readJsonStringArrayField(c, "sessionIds");
-      if (!Array.isArray(sessionIds)) return sessionIds;
-      const labelId = await readJsonStringField(c, "labelId");
-      if (typeof labelId !== "string") return labelId;
-      const applied = await readJsonBooleanField(c, "applied");
-      if (typeof applied !== "boolean") return applied;
-      try {
-        await labels.setForSessions(labelId, sessionIds, applied);
-        return c.json({ ok: true });
-      } catch (err) {
-        return labelErrorResponse(c, err);
-      }
-    });
-  }
+  writes.post("/api/sessions/bulk/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionIds = await readJsonStringArrayField(c, "sessionIds");
+    if (!Array.isArray(sessionIds)) return sessionIds;
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    const applied = await readJsonBooleanField(c, "applied");
+    if (typeof applied !== "boolean") return applied;
+    try {
+      await labels.setForSessions(labelId, sessionIds, applied);
+      return c.json({ ok: true });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
 
   // Apply / remove a label on a session. The applier is a person using the web app, so applied_by is
   // "user" — combined with a system-origin label, that's the "user-applied system label" case.
-  if (!opts.demo) {
-    app.post("/api/sessions/:id/labels", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const sessionId = c.req.param("id").trim();
-      if (!sessionId) return c.json({ error: "Missing session id." }, 400);
-      const labelId = await readJsonStringField(c, "labelId");
-      if (typeof labelId !== "string") return labelId;
-      try {
-        await labels.assign(labelId, { sessionId }, "user");
-        return c.json({ ok: true });
-      } catch (err) {
-        return labelErrorResponse(c, err);
-      }
-    });
-
-    app.delete("/api/sessions/:id/labels/:labelId", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const sessionId = c.req.param("id").trim();
-      const labelId = c.req.param("labelId").trim();
-      if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
-      await labels.unassign(labelId, { sessionId });
+  writes.post("/api/sessions/:id/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    try {
+      await labels.assign(labelId, { sessionId }, "user");
       return c.json({ ok: true });
-    });
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
 
-    // Apply / remove a label on a task, addressed by its position within the session.
-    app.post("/api/sessions/:id/tasks/:taskSeq/labels", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const sessionId = c.req.param("id").trim();
-      if (!sessionId) return c.json({ error: "Missing session id." }, 400);
-      const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
-      if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
-      const labelId = await readJsonStringField(c, "labelId");
-      if (typeof labelId !== "string") return labelId;
-      try {
-        await labels.assign(labelId, { sessionId, taskSeq }, "user");
-        return c.json({ ok: true });
-      } catch (err) {
-        return labelErrorResponse(c, err);
-      }
-    });
+  writes.delete("/api/sessions/:id/labels/:labelId", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    const labelId = c.req.param("labelId").trim();
+    if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
+    await labels.unassign(labelId, { sessionId });
+    return c.json({ ok: true });
+  });
 
-    app.delete("/api/sessions/:id/tasks/:taskSeq/labels/:labelId", async (c) => {
-      const blocked = rejectCrossSite(c);
-      if (blocked) return blocked;
-      if (!labels) return labelsUnavailable(c);
-      const sessionId = c.req.param("id").trim();
-      const labelId = c.req.param("labelId").trim();
-      if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
-      const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
-      if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
-      await labels.unassign(labelId, { sessionId, taskSeq });
+  // Apply / remove a label on a task, addressed by its position within the session.
+  writes.post("/api/sessions/:id/tasks/:taskSeq/labels", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
+    if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
+    const labelId = await readJsonStringField(c, "labelId");
+    if (typeof labelId !== "string") return labelId;
+    try {
+      await labels.assign(labelId, { sessionId, taskSeq }, "user");
       return c.json({ ok: true });
-    });
-  }
+    } catch (err) {
+      return labelErrorResponse(c, err);
+    }
+  });
+
+  writes.delete("/api/sessions/:id/tasks/:taskSeq/labels/:labelId", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+    if (!labels) return labelsUnavailable(c);
+    const sessionId = c.req.param("id").trim();
+    const labelId = c.req.param("labelId").trim();
+    if (!sessionId || !labelId) return c.json({ error: "Missing session or label id." }, 400);
+    const taskSeq = parseTaskSeq(c.req.param("taskSeq"));
+    if (taskSeq === null) return c.json({ error: "Invalid task position." }, 400);
+    await labels.unassign(labelId, { sessionId, taskSeq });
+    return c.json({ ok: true });
+  });
 
   // Everything below is dropped entirely in demo mode (#281): /api/debug leaks local paths/env, and
   // /api/settings*/onboarding read and write local config, secrets, and provider connections — none
   // of which belong in a public read-only deployment.
-  if (!opts.demo) {
-    // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
-    app.get("/api/debug", async (c) => {
-      if (!opts.debugInfo) return c.json({ error: "Debug info is unavailable in this process." }, 503);
-      return c.json(await opts.debugInfo());
-    });
 
-    // Settings surface (#154): the registry-driven view of everything in `argus.json`, plus a
-    // validated, atomic single-setting write. Read is open (like /api/debug — it exposes no secret
-    // values; the surfaced settings carry none). The write is mutating and persists to disk, so it
-    // gets the same hardening as the secret endpoints: CSRF (rejectCrossSite) + DNS-rebinding
-    // (rejectUnsafeHost).
-    app.get("/api/settings", (c) =>
-      c.json(
-        describeSettings(
-          opts.configPath ? loadConfig(opts.configPath) : undefined,
-          opts.claudeBinary, // resolved once at startup, not per request (resolution can block on a shell)
-        ) satisfies SettingsResponse,
-      ),
-    );
+  // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
+  writes.get("/api/debug", async (c) => {
+    if (!opts.debugInfo) return c.json({ error: "Debug info is unavailable in this process." }, 503);
+    return c.json(await opts.debugInfo());
+  });
 
-    app.put("/api/settings/:path", async (c) => {
-      const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
-      if (blocked) return blocked;
-      const path = c.req.param("path");
-      let value: unknown;
-      try {
-        value = (await c.req.json())?.value;
-      } catch {
-        return c.json({ error: 'Expected a JSON body with a "value".' }, 400);
-      }
-      const result = applySetting(path, value, opts.configPath);
-      if (!result.ok) return c.json({ error: result.error }, result.status);
-      // Apply a log-level change to this serve process's logger right away, so terminal verbosity
-      // changes without a restart (matters most for the tauri sidecar, which is long-lived). The
-      // effective value already accounts for ARGUS_LOG_LEVEL winning over the file we just wrote, so
-      // setting it here won't override an active env var.
-      if (path === "log.level") {
-        const level = normalizeLogLevel(result.setting.effectiveValue);
-        if (level) logger.setLevel?.(level);
-      }
-      return c.json({ setting: result.setting });
-    });
+  // Settings surface (#154): the registry-driven view of everything in `argus.json`, plus a
+  // validated, atomic single-setting write. Read is open (like /api/debug — it exposes no secret
+  // values; the surfaced settings carry none). The write is mutating and persists to disk, so it
+  // gets the same hardening as the secret endpoints: CSRF (rejectCrossSite) + DNS-rebinding
+  // (rejectUnsafeHost).
+  writes.get("/api/settings", (c) =>
+    c.json(
+      describeSettings(
+        opts.configPath ? loadConfig(opts.configPath) : undefined,
+        opts.claudeBinary, // resolved once at startup, not per request (resolution can block on a shell)
+      ) satisfies SettingsResponse,
+    ),
+  );
 
-    // The welcome modal's "Don't show this again" checkbox (not a settings-surface field — see
-    // `applyOnboardingCompleted`). Same CSRF/DNS-rebinding hardening as the other mutating endpoints.
-    app.put("/api/onboarding", async (c) => {
-      const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
-      if (blocked) return blocked;
-      let completed: unknown;
-      try {
-        completed = (await c.req.json())?.completed;
-      } catch {
-        return c.json({ error: 'Expected a JSON body with a "completed" boolean.' }, 400);
-      }
-      applyOnboardingCompleted(Boolean(completed), opts.configPath);
-      return c.json({ completed: Boolean(completed) });
-    });
+  writes.put("/api/settings/:path", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const path = c.req.param("path");
+    let value: unknown;
+    try {
+      value = (await c.req.json())?.value;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a "value".' }, 400);
+    }
+    const result = applySetting(path, value, opts.configPath);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    // Apply a log-level change to this serve process's logger right away, so terminal verbosity
+    // changes without a restart (matters most for the tauri sidecar, which is long-lived). The
+    // effective value already accounts for ARGUS_LOG_LEVEL winning over the file we just wrote, so
+    // setting it here won't override an active env var.
+    if (path === "log.level") {
+      const level = normalizeLogLevel(result.setting.effectiveValue);
+      if (level) logger.setLevel?.(level);
+    }
+    return c.json({ setting: result.setting });
+  });
 
-    // BYO LLM API keys (#132). Both routes are guarded against CSRF (rejectCrossSite) and
-    // DNS-rebinding (rejectUnsafeHost), accept only allowlisted secret names, and NEVER return or log
-    // the raw value — GET reports masked status only, POST echoes back masked status after writing.
-    const secretStore = (): SecretStore => opts.secrets ?? defaultSecretStore();
+  // The welcome modal's "Don't show this again" checkbox (not a settings-surface field — see
+  // `applyOnboardingCompleted`). Same CSRF/DNS-rebinding hardening as the other mutating endpoints.
+  writes.put("/api/onboarding", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    let completed: unknown;
+    try {
+      completed = (await c.req.json())?.completed;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a "completed" boolean.' }, 400);
+    }
+    applyOnboardingCompleted(Boolean(completed), opts.configPath);
+    return c.json({ completed: Boolean(completed) });
+  });
 
-    app.get("/api/settings/secrets/:name", async (c) => {
-      const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
-      if (blocked) return blocked;
-      const name = c.req.param("name");
-      if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
-      return c.json(await secretStore().describe(name) satisfies SecretStatus);
-    });
+  // BYO LLM API keys (#132). Both routes are guarded against CSRF (rejectCrossSite) and
+  // DNS-rebinding (rejectUnsafeHost), accept only allowlisted secret names, and NEVER return or log
+  // the raw value — GET reports masked status only, POST echoes back masked status after writing.
+  const secretStore = (): SecretStore => opts.secrets ?? defaultSecretStore();
 
-    app.post("/api/settings/secrets/:name", async (c) => {
-      const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
-      if (blocked) return blocked;
-      const name = c.req.param("name");
-      if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+  writes.get("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+    return c.json(await secretStore().describe(name) satisfies SecretStatus);
+  });
 
-      let value: unknown;
-      try {
-        value = (await c.req.json())?.value;
-      } catch {
-        return c.json({ error: 'Expected a JSON body with a string "value".' }, 400);
-      }
-      if (typeof value !== "string" || !value.trim()) {
-        return c.json({ error: 'Missing "value".' }, 400);
-      }
-      try {
-        await secretStore().set(name, value);
-      } catch {
-        // Deliberately generic — never surface the value or a provider error that might echo it.
-        return c.json({ error: "Couldn't save the secret." }, 500);
-      }
-      // Derive the masked status from the value we just wrote rather than reading it back, which on
-      // macOS/Windows would launch a second `security`/PowerShell subprocess.
-      return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
-    });
+  writes.post("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
 
-    // Test the configured LLM provider end to end: a tiny live completion so the user can confirm
-    // their setup works. Mutating-ish (outbound network / a local subprocess for claude-cli/command,
-    // and it reads the stored key), so it carries the same CSRF + DNS-rebinding guards.
-    app.post("/api/settings/test-connection", async (c) => {
-      const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
-      if (blocked) return blocked;
-      return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore(), log: opts.log }));
-    });
+    let value: unknown;
+    try {
+      value = (await c.req.json())?.value;
+    } catch {
+      return c.json({ error: 'Expected a JSON body with a string "value".' }, 400);
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      return c.json({ error: 'Missing "value".' }, 400);
+    }
+    try {
+      await secretStore().set(name, value);
+    } catch {
+      // Deliberately generic — never surface the value or a provider error that might echo it.
+      return c.json({ error: "Couldn't save the secret." }, 500);
+    }
+    // Derive the masked status from the value we just wrote rather than reading it back, which on
+    // macOS/Windows would launch a second `security`/PowerShell subprocess.
+    return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
+  });
 
-    // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards;
-    // returns the now-unconfigured status. Idempotent — deleting an absent key still reports
-    // not-configured.
-    app.delete("/api/settings/secrets/:name", async (c) => {
-      const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
-      if (blocked) return blocked;
-      const name = c.req.param("name");
-      if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
-      try {
-        await secretStore().delete(name);
-      } catch {
-        return c.json({ error: "Couldn't remove the secret." }, 500);
-      }
-      return c.json({ configured: false } satisfies SecretStatus);
-    });
-  }
+  // Test the configured LLM provider end to end: a tiny live completion so the user can confirm
+  // their setup works. Mutating-ish (outbound network / a local subprocess for claude-cli/command,
+  // and it reads the stored key), so it carries the same CSRF + DNS-rebinding guards.
+  writes.post("/api/settings/test-connection", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore(), log: opts.log }));
+  });
+
+  // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards;
+  // returns the now-unconfigured status. Idempotent — deleting an absent key still reports
+  // not-configured.
+  writes.delete("/api/settings/secrets/:name", async (c) => {
+    const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
+    if (blocked) return blocked;
+    const name = c.req.param("name");
+    if (!isSecretName(name)) return c.json({ error: `Unknown secret "${name}".` }, 400);
+    try {
+      await secretStore().delete(name);
+    } catch {
+      return c.json({ error: "Couldn't remove the secret." }, 500);
+    }
+    return c.json({ configured: false } satisfies SecretStatus);
+  });
+
+  // The one gate for everything registered on `writes` above.
+  if (!opts.demo) app.route("/", writes);
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
   // back to index.html so client-side routes resolve on a hard refresh.
