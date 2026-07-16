@@ -8,8 +8,8 @@ changing a screen, build from the pieces here rather than hand-rolling markup or
 Tokens and element styling live in `web/src/styles.css`; the primitives and components live in
 `web/src/components/`; palettes and formatters live in `web/src/lib/`.
 
-Some conventions below are **standardized by repetition but not yet tokenized** (spacing, elevation,
-motion, z-index). They are documented so a new view stays consistent with the existing ones; turning
+Some conventions below are **standardized by repetition but not yet tokenized** (component spacing,
+elevation, motion, z-index) — layout spacing itself is now tokenized. They are documented so a new view stays consistent with the existing ones; turning
 them into real `--*` variables is tracked under [Known divergences and debt](#known-divergences-and-debt).
 
 ## Foundations
@@ -58,15 +58,24 @@ Body text is the **Aleo** serif (set on `body`, 15px/1.55); labels, headings, bu
 
 ### Spacing
 
-There is no `--space-*` scale yet; spacing is raw px literals that cluster on an even-ish ramp. Reach
-for a value already on the ramp rather than a new number:
+**Layout spacing is tokenized** (theme-independent, in `:root`). Route grids, section rhythm, and page
+padding through these rather than repeating px literals — so gaps can't drift apart again:
 
-`2 · 4 · 6 · 8 · 10 · 12 · 14 · 18 · 22 · 24 · 28 · 32 · 42`
+| Token | Value | Owns |
+| --- | --- | --- |
+| `--gap` | 24px | the one grid/column gutter — `.grid2`, `.home-layout`, any multi-column grid |
+| `--section-gap` | 32px | the vertical rhythm below a top-level `section` (owned by `<Section>`) |
+| `--page-x` | 32px | page horizontal padding (`main`, session detail, bulk overlay, inbox body) |
+| `--page-top` / `--page-bottom` | 32px / 64px | page vertical padding |
 
-Anchors worth knowing: a top-level `section` leaves **42px** below it; the `.grid2` gutter is **24px**;
-`.panel` padding is **18px**; the stat-card grid gutter is **14px**; a panel title row leaves **10px**;
-the page content gutter is **32px** (dropping to 18px under 640px). Prefer the primitives (which own
-this spacing) over inline `margin`/`padding`.
+Component-internal spacing (a panel's inner gaps, list rows, chips) is **not yet tokenized** — it's
+raw px on an even-ish ramp. Reach for a value already on the ramp rather than a new number:
+
+`2 · 4 · 6 · 8 · 10 · 12 · 14 · 18 · 22 · 24 · 28 · 32`
+
+Anchors worth knowing: `.panel` padding is **18px**; the stat-card grid gutter is **14px**; a panel
+title row leaves **10px**. Prefer the primitives (which own the layout spacing above) over inline
+`margin`/`padding`.
 
 ### Radius
 
@@ -184,7 +193,7 @@ Two components express the composition rules so they can't drift. Import them fr
 
 ### `<Section eyebrow?>`
 
-A top-level block on a view. Renders a `<section>` (so it carries the 42px rhythm) with an optional
+A top-level block on a view. Renders a `<section>` (so it carries the `--section-gap` rhythm) with an optional
 `.t-eyebrow` heading above its content.
 
 ```tsx
@@ -206,7 +215,7 @@ An optional `title` renders as a `.t-subhead`; optional `actions` sit right-alig
 
 ### `.grid2`
 
-Two equal columns with a 24px gutter, collapsing to one column at ≤880px viewport width. The standard
+Two equal columns with a `--gap` (24px) gutter, collapsing to one column at ≤880px viewport width. The standard
 way to pair two panels. (Viewport-based on purpose; SessionDetail uses container queries because its
 pane is resizable.) There is no `.grid3`/`.grid4` yet — add one deliberately if a view needs it rather
 than reaching for inline grid styles.
@@ -341,8 +350,9 @@ into new views.** Bringing it onto `<Panel>` is a pending follow-up.
 - **`SERIES.accent === SERIES.output`** (both orange), so orange means both "cost" and "output
   tokens" depending on the chart. Single-series bars also borrow semantic `SERIES` colors as generic
   accents, giving color a false meaning; a dedicated neutral single-series color would fix both.
-- **No `--space-*`, `--shadow-*`, `--z-*`, or motion tokens** — the spacing/elevation/z-index/motion
-  conventions above are repetition, not variables. Shadows and modal backdrops are also fixed black
-  (not theme-aware).
+- **Only layout spacing is tokenized** (`--gap` / `--section-gap` / `--page-*`); component-internal
+  spacing is still raw px on the ramp, and there are no `--shadow-*`, `--z-*`, or motion tokens — those
+  conventions are repetition, not variables. Shadows and modal backdrops are also fixed black (not
+  theme-aware).
 - `fmtTick` / `dollarTick` / `rotated` chart-axis helpers are re-declared in three routes; hoist into
   `lib/charts.ts`.

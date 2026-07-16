@@ -3539,6 +3539,30 @@ export class SqliteStore implements Store {
     });
   }
 
+  // The most recent tasks for sessions active in range (for the Home recent-tasks panel), newest
+  // first. Pulls description/outcome straight out of task_json.
+  readRecentTasks(
+    query?: ResolvedQuery,
+    limit = 10,
+  ): Promise<Array<{ sessionId: string; source: string; ts: number | null; id: string; description: string; outcome: string | null; outcomeReason: string | null }>> {
+    return this.schedule(async () => {
+      const usage = buildResolvedFilters(query);
+      return all<{ sessionId: string; source: string; ts: number | null; id: string; description: string; outcome: string | null; outcomeReason: string | null }>(
+        this.db,
+        `SELECT session_id AS sessionId, source, ts,
+                json_extract(task_json, '$.id') AS id,
+                COALESCE(json_extract(task_json, '$.description'), '') AS description,
+                json_extract(task_json, '$.outcome') AS outcome,
+                json_extract(task_json, '$.outcomeReason') AS outcomeReason
+         FROM resolved_tasks
+         WHERE session_id IN (SELECT DISTINCT session_id FROM resolved_usage ${usage.messageWhere})
+         ORDER BY ts DESC
+         LIMIT ?`,
+        [...usage.messageParams, limit],
+      );
+    });
+  }
+
   // Per-(day, tool) call counts (for the daily-activity panel's top-tools list). One
   // resolved_invocations row is one call, so COUNT(*) per (date, tool) is the call count.
   readToolCallsByDate(

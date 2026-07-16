@@ -14,7 +14,9 @@ import type {
   HealthResponse,
   HeaviestResultsResponse,
   PluginsResponse,
+  RecentTasksResponse,
   RecommendationsResponse,
+  SessionListResponse,
   SessionsBySourceResponse,
   SkillsResponse,
   UsageByModelResponse,
@@ -82,3 +84,19 @@ export const useHeaviestResultsQuery = makeViewHook<HeaviestResultsResponse>("/a
 export const usePluginsQuery = makeViewHook<PluginsResponse>("/api/plugins");
 export const useHealthQuery = makeViewHook<HealthResponse>("/api/health");
 export const useRecommendationsQuery = makeViewHook<RecommendationsResponse>("/api/recommendations");
+export const useRecentTasksQuery = makeViewHook<RecentTasksResponse>("/api/tasks/recent");
+
+/** The N most-recent sessions (for the Home Sessions panel), off the paginated `/api/sessions` list
+ *  with `sort=recent`, honoring the shared date/source filters. */
+export function useRecentSessionsQuery(filters: SnapshotFilters, limit = 10) {
+  return useQuery({
+    queryKey: [VIEW_QUERY_KEY, "/api/sessions/recent", filters.since ?? null, filters.until ?? null, sanitizedSource(filters.source), limit] as const,
+    queryFn: () => {
+      const params = new URLSearchParams({ sort: "recent", limit: String(limit) });
+      appendViewParams(params, filters);
+      return fetchOrOffline(`/api/sessions?${params}`).then((res) => jsonOrThrow<SessionListResponse>(res, "Failed to load sessions"));
+    },
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+}

@@ -45,6 +45,7 @@ import {
 } from "./tools.ts";
 import { buildPlugins, type PluginsResponse } from "./plugins.ts";
 import { buildHealth, type HealthResponse } from "./health.ts";
+import type { RecentTasksResponse } from "./tasks.ts";
 import {
   buildSessionDetail,
   buildSessionList,
@@ -186,6 +187,7 @@ export interface ViewReaders {
   plugins: ViewReader<PluginsResponse>;
   health: ViewReader<HealthResponse>;
   recommendations: ViewReader<RecommendationsResponse>;
+  tasksRecent: ViewReader<RecentTasksResponse>;
 }
 export type SessionReindexer = (sessionId: string) => Promise<ReindexSessionResult>;
 /** Flag/unflag a session as hidden (local-only UI state). */
@@ -553,6 +555,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   viewRoute("/api/plugins", views?.plugins);
   viewRoute("/api/health", views?.health);
   viewRoute("/api/recommendations", views?.recommendations);
+  viewRoute("/api/tasks/recent", views?.tasksRecent);
 
   // Paginated, filtered, sorted session list — backed by SQL session aggregates (no per-message JS
   // walk). The dashboard views are separate per-view endpoints; sessions were never in them.
@@ -1136,6 +1139,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
           }),
         };
       }),
+    tasksRecent: (filters) =>
+      withStore(filters, async (store, query) => ({ tasks: await store.readRecentTasks(query, 10) })),
   };
 
   const reindex: SessionReindexer = async (sessionId) => {

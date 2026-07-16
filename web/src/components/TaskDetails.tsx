@@ -1,9 +1,5 @@
 import { fmt } from "../lib/format";
 import { useSessionTaskMetrics } from "../lib/sessions";
-import type { SessionRow } from "../types";
-
-// The task shape comes straight from the snapshot (TaskFact, re-exported via SessionRow).
-type Task = NonNullable<SessionRow["tasks"]>[number];
 
 export function OutcomeBadge({ outcome }: { outcome?: string }) {
   if (!outcome) return <span className="muted">—</span>;
@@ -15,9 +11,10 @@ export function FrustrationBadge({ frustration }: { frustration?: string }) {
   return <span className={`pill frust-${frustration}`}>{frustration}</span>;
 }
 
-/** The detail body for one task (reason text + on-demand metrics), revealed inline when a task in the
- *  Overview list is expanded. */
-export function TaskDetails({ sessionId, task }: { sessionId: string; task: Task }) {
+/** The detail body for one task (reason text + on-demand metrics), revealed inline when a task row is
+ *  expanded. Only needs the task's id (to key its per-session metrics) + its outcome rationale, so any
+ *  task-ish object works — the session-detail list and the Home recent-tasks panel both use it. */
+export function TaskDetails({ sessionId, task }: { sessionId: string; task: { id: string; outcomeReason?: string | null } }) {
   // Metrics are fetched on demand for the whole session (not part of the snapshot) and shared with the
   // task list via React Query's cache; we pick this task's entry.
   const metricsQuery = useSessionTaskMetrics(sessionId);

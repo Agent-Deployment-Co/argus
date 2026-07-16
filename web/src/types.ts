@@ -63,6 +63,7 @@ import type {
 } from "../../src/api/tools";
 import type { PluginsResponse } from "../../src/api/plugins";
 import type { HealthResponse } from "../../src/api/health";
+import type { RecentTask, RecentTasksResponse } from "../../src/api/tasks";
 import type {
   ConnectionTestDescriptor,
   ConnectionTestResult,
@@ -124,6 +125,8 @@ export type {
   PluginsResponse,
   HealthResponse,
   RecommendationsResponse,
+  RecentTask,
+  RecentTasksResponse,
   // Labels (session-and-task-labels).
   AppliedLabel,
   BulkSessionLabelsResponse,

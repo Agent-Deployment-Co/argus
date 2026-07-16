@@ -36,6 +36,7 @@ function makeViews(capture?: (filters: SnapshotFilters) => void): ViewReaders {
     plugins: reader,
     health: reader,
     recommendations: reader,
+    tasksRecent: reader,
   };
 }
 

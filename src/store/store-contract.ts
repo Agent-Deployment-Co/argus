@@ -877,6 +877,10 @@ export interface ReadModelStore {
   readToolCallsByDate(
     query?: ResolvedQuery,
   ): Promise<Array<{ date: string; tool: string; calls: number }>>;
+  readRecentTasks(
+    query?: ResolvedQuery,
+    limit?: number,
+  ): Promise<Array<{ sessionId: string; source: string; ts: number | null; id: string; description: string; outcome: string | null; outcomeReason: string | null }>>;
   /** skill === "" means unattributed ("(none)"). */
   readUsageBySkillModel(query?: ResolvedQuery): Promise<Array<{ skill: string } & UsageGroupRow>>;
   /** Per (date, skill) total tokens, attributed skills only — backs the skill-over-time chart. */

@@ -1,5 +1,8 @@
 import { DailyActivityPanel } from "../components/DailyActivityPanel";
 import { type Column, DataTable } from "../components/DataTable";
+import { Panel } from "../components/Panel";
+import { RecentSessionsList } from "../components/RecentSessionsList";
+import { RecentTasksList } from "../components/RecentTasksList";
 import { Section } from "../components/Section";
 import { SourceOverviewCard, type SourceMetrics } from "../components/SourceOverviewCard";
 import { UsageHero } from "../components/UsageHero";
@@ -8,6 +11,8 @@ import { SourceBadge } from "../lib/sources";
 import {
   useDailyActivityQuery,
   useDashboardFilters,
+  useRecentSessionsQuery,
+  useRecentTasksQuery,
   useSessionsBySourceQuery,
   useUsageBySourceDailyQuery,
   useUsageBySourceQuery,
@@ -42,7 +47,9 @@ export function Home() {
   const bySourceQ = useUsageBySourceQuery(filters);
   const bySourceDailyQ = useUsageBySourceDailyQuery(filters);
   const dailyActivityQ = useDailyActivityQuery(filters);
-  const gate = viewGate([sessionsQ, bySourceQ, bySourceDailyQ, dailyActivityQ]);
+  const recentTasksQ = useRecentTasksQuery(filters);
+  const recentSessionsQ = useRecentSessionsQuery(filters);
+  const gate = viewGate([sessionsQ, bySourceQ, bySourceDailyQ, dailyActivityQ, recentTasksQ, recentSessionsQ]);
   if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
@@ -65,6 +72,19 @@ export function Home() {
       <Section>
         <UsageHero data={bySourceDailyQ.data!} sessions={sessionsQ.data!} rangeStart={rangeStart} rangeEnd={rangeEnd} />
       </Section>
+
+      <div className="grid2 home-lists">
+        <Section eyebrow="Tasks">
+          <Panel>
+            <RecentTasksList tasks={recentTasksQ.data!.tasks} />
+          </Panel>
+        </Section>
+        <Section eyebrow="Sessions">
+          <Panel>
+            <RecentSessionsList sessions={recentSessionsQ.data!.rows} />
+          </Panel>
+        </Section>
+      </div>
 
       {/* Source overview + By source are hidden for now (may revisit). The queries + builders that
           feed them (bySourceQ, metricsBySource, sourceColumns, SourceOverviewCard) are kept in place. */}
