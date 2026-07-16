@@ -43,13 +43,14 @@ engine underneath.
 That engine is a Bun + TypeScript CLI, and the more technical end of the audience can run it
 directly. `serve` runs the local **web app** — a React SPA (see `docs/internals/web-app.md`) that is
 the dashboard the desktop app opens. `index` reads transcripts into the local store (`argus.db`).
-`sync` (formerly `push`) uploads per-(org, user) usage data to a private Hub backend.
+`sync` (formerly `push`) uploads per-(org, user) usage data to an **Argus Hub** — a hosted backend a
+company runs to pool its users' usage.
 `run` ties the long-running pieces together (`index --watch` + `serve`, plus `sync --watch` when a
 Hub is configured) in one supervised process — this is what the desktop app runs. Nothing is
 uploaded during `serve`/`index`; the only data that ever leaves the machine is what `sync` sends.
 
 This repo is the public CLI, its web app (`web/`), and the desktop tray shell (`desktop/`). The
-Hub backend that `sync` uploads to lives in a **separate public repo**,
+Hub's own code (the backend `sync` uploads to) lives in a **separate public repo**,
 `agentdeploymentco/argus-hub`.
 
 ## Commands
@@ -64,7 +65,7 @@ bun run typecheck                         # tsc --noEmit for root src + web/ (al
 bun run build:web                         # build web/ → dist/web
 bun run build:compile                     # compile a self-contained CLI binary → dist/argus (bun:sqlite, no Node)
 bun run build:npm                         # build the publishable npm package set → dist/npm/* (all OS/arch)
-bun run desktop:build                     # build the Tauri tray app → desktop/src-tauri/target/**/Argus.app
+bun run desktop:build                     # build the Tauri tray app (per-OS bundle) → desktop/src-tauri/target/**
 ```
 
 CI (`.github/workflows/ci.yml`) typechecks the root and `web/`, runs `bun test`, and verifies
@@ -151,20 +152,24 @@ you'd cause a bug by not knowing:
   `message.id` (first wins) because resumed/compacted sessions re-append earlier messages verbatim.
   Claude and Codex have **different transcript shapes**, parsed by separate branches; cache accounting
   splits Anthropic's 5m/1h ephemeral buckets and treats Codex `cached_input_tokens` as a cache **read**.
-- **Indexing is the only writer to the store** (`argus.db`); `serve` and `sync` only read (SQLite WAL
-  makes one writer + many readers safe). The write path reconciles then materializes at write time —
-  consumers `SELECT` finished `resolved_*` rows, never reconciling on read.
+- **Indexing is the sole writer of the reconciled session data** (`argus.db`'s `resolved_*` rows): it
+  reconciles then materializes at write time, so consumers `SELECT` finished rows and never reconcile
+  on read. `serve` and `sync` write too, but only their own state — `serve` persists user actions
+  (labels, hidden sessions, settings), `sync` its upload cursors — never the session data.
 - **Interpret runs *after* materialize**, as a decoupled, throttled, **default-on** (toggleable) drain
-  — not between reconcile and materialize. Materialize writes only structural rows (**no tasks**);
-  interpret then writes `resolved_tasks` and stamps each interaction's `task_seq`.
+  — not between reconcile and materialize. Materialize writes only structural rows (**no
+  interpretations**); interpret then writes the model's per-session **title + summary** and its
+  **tasks** (`resolved_tasks`), stamping each interaction's `task_seq`.
 - **No monolithic `Dashboard`.** Each `serve` view is its own small endpoint — a promoted store read
-  plus a pure builder in `api/` — with no server-side cache; `sync` uploads raw `resolved_*` rows the
-  Hub aggregates. `web/src/types.ts` imports the response types **type-only** from `src/`, so the API
-  payload and the UI can't drift.
-- **Local-only, never on the sync wire:** `TaskFact` + the task-interpretation fields (outcome,
-  frustration, chapter span), the retained prompt/response text (`resolved_interaction_text`,
-  default-on and toggleable via `retainText`), and BYO API keys (`secrets.ts`) — none of it is ever
-  pushed by `sync`.
+  plus a pure builder in `api/` — with no server-side cache; `sync` uploads reconciled rows (plus
+  labels) that the Hub aggregates. `web/src/types.ts` imports the response types **type-only** from
+  `src/`, so the API payload and the UI can't drift.
+- **What crosses the sync wire, and what doesn't.** `sync` uploads the reconciled rows *and the
+  interpretations*: sessions (with the model's title/summary), usage, `resolved_tasks` (the full
+  `TaskFact` — outcome, frustration, signals), interactions (with `task_seq`), invocations, and user
+  **labels**. Only two things never leave the machine: the retained prompt/response **text**
+  (`resolved_interaction_text`, toggleable via `retainText`) and **BYO API keys** (`secrets.ts`) — so
+  the interpretations *derived from* the text upload, but the raw text does not.
 - **Canonical tool/MCP parsing lives in `tool-categories.ts`** (`categorizeTool`, `parseMcpTool` — the
   `mcp__server__tool` split). Route through it so categorization and MCP naming stay consistent.
 - **All LLM access goes through `src/llm/`.** `registry.ts` is the single source of truth (adding a
@@ -174,13 +179,13 @@ you'd cause a bug by not knowing:
   durations). Codex/Gemini sessions leave friction **undefined** (unknown), not zero.
 - **Settings live in `config.ts` / `argus.json`,** resolved through one chain: `managed > flag > env
   > argus.json > default` (the top `managed` layer is org-managed MDM settings, `managed-config.ts`).
-  The CLI (`cli.ts`, on citty) exposes `serve`, `index` (+ `rebuild`/`refresh`/`delete`), `sync`,
-  `run`, `status`, `config`, `secret`; `run` supervises `index --watch` + `serve` (+ `sync --watch`)
-  in one process.
-- **The desktop app (`desktop/`) is a Tauri tray shell around the CLI** — how most users run Argus. It
-  spawns `argus run` as a bundled sidecar and proxies a fixed front-door port (default `4242`) so the
-  browser dashboard survives sidecar restarts; it auto-updates. Native code is `desktop/src-tauri/`
-  (sidecar supervision in `lib.rs`, the front-door proxy in `proxy.rs`).
+  The CLI (`cli.ts`, on citty) wraps the pipeline commands (`index`/`serve`/`sync`/`run`) plus
+  `status`, `search` (full-text over sessions), `config`, and `secret`; `run` supervises
+  `index --watch` + `serve` (+ `sync --watch`) in one process.
+- **The desktop app (`desktop/`) is a Tauri tray shell around the CLI** (macOS and Windows) — how most
+  users run Argus. It spawns `argus run` as a bundled sidecar and proxies a fixed front-door port
+  (default `4242`) so the browser dashboard survives sidecar restarts; it auto-updates. Native code is
+  `desktop/src-tauri/` (sidecar supervision in `lib.rs`, the front-door proxy in `proxy.rs`).
 
 ## The wire contract (important)
 
@@ -189,12 +194,14 @@ extended there with CLI-only fields (e.g. `bySource`, `source`). They used to co
 `@agentdeploymentco/argus-schema` package; that dependency was retired once it was down to type-only
 imports (the Hub backend had inlined its own copies and dropped it too).
 
-`sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads raw `resolved_*` rows and the
-Hub aggregates them, so the old `PushPayloadSchema`-vs-`Dashboard` CI check is gone. `Dashboard` still
-backs the web app's per-view response types (imported type-only by `web/src/types.ts` from
-`src/types.ts`); the wire contract itself is being reworked separately.
+`sync` no longer assembles or uploads a `Dashboard`: `push.ts` uploads the reconciled rows — sessions
+(with model title/summary), usage, `resolved_tasks`, interactions, invocations — plus session
+`labels`, and the Hub aggregates them (the old `PushPayloadSchema`-vs-`Dashboard` CI check is gone).
+`Dashboard` still backs the web app's per-view response types (imported type-only by `web/src/types.ts`
+from `src/types.ts`); the wire contract itself is being reworked separately.
 
-Not everything is on the wire: `TaskFact` and the task-interpretation fields (chapter span, outcome,
-frustration) live in `store/store-contract.ts` and are **local-only** — never pushed by `sync`.
-`store/store-contract.ts` (the parse→store fact contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`)
-is a separate contract from the `Dashboard`/`SessionRow` types above.
+Two things stay off the wire entirely: the retained prompt/response text (`resolved_interaction_text`)
+and BYO API keys (`secrets.ts`). The task *interpretations* built from that text (outcome, frustration,
+chapter span) do upload — the raw text doesn't. Separately, `store/store-contract.ts` (the parse→store
+fact contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`) is its own contract, distinct from the
+`Dashboard`/`SessionRow` types above.

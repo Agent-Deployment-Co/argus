@@ -88,7 +88,7 @@ archived (kept after leaving disk).
 
 ## The coordinator: how producers feed the store
 
-`syncStore()` in `src/indexing/pipeline.ts` is the only writer. Its job is to take what producers
+`syncStore()` in `src/indexing/pipeline.ts` is the only writer of the read-model session data. Its job is to take what producers
 parse and turn it into finished rows, using two steps — **reconcile**, then **materialize**.
 
 ### What "reconcile" means
@@ -170,8 +170,9 @@ archived ones are absent), while an **`index()` fails loud** — the error propa
 silently writing to a temp store it then discards (which would report success having persisted
 nothing, and would mask a corrupt store the user should `reindex --force`).
 
-- `sync` — read the current local store and upload its raw `resolved_*` rows; the Hub aggregates
-  them server-side (no `Dashboard` is assembled locally).
+- `sync` — read the current local store and upload its reconciled rows (sessions, usage, tasks,
+  interactions, invocations) plus session labels; the Hub aggregates them server-side (no `Dashboard`
+  is assembled locally).
 - `serve` — exposes the store as a JSON API and an interactive web app (see [web-app.md](./web-app.md)).
   Each dashboard view is its own small endpoint, reading only what it needs from the store on demand;
   there is no server-side cache and no monolithic dashboard build.
@@ -216,9 +217,11 @@ dashboard tab keeps working across sidecar restarts. The app auto-updates from G
 - **The index is disposable; the read model is not.** `index refresh` rebuilds the index from disk;
   the trusted rows (including archived sessions) are preserved. `index rebuild` wipes everything.
 - **Nothing is uploaded except by `sync`** (one-shot, `sync --watch`, or the upload leg of `run`).
-  `serve` is entirely local.
-- **Indexing is the only writer.** Under `run`, the index leg writes; `serve` and the upload leg only
-  read. SQLite WAL makes one writer + concurrent readers safe.
+  `serve` runs entirely on the local machine and never uploads.
+- **Indexing is the only writer of the reconciled session data.** The index leg writes the
+  `resolved_*` rows; `serve` also writes user-applied state (labels, hidden sessions, settings) and
+  `sync` writes its own upload cursors, but neither touches the session data. SQLite WAL keeps the
+  concurrent readers and (serialized) writers safe.
 
 ## Configuration
 
