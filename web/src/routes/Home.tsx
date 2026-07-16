@@ -23,6 +23,10 @@ import type { NamedUsage } from "../types";
 // interactions/tasks ride NamedUsage.meta (a loose bag) alongside sessions; read them as numbers.
 const metaNum = (r: NamedUsage, key: string): number => Number(r.meta?.[key] ?? 0);
 
+// The per-source "Source overview" cards + "By source" table are parked for now (#270); flip to true
+// to bring them back. Their queries/builders are left wired so restoring is a one-line change.
+const SHOW_SOURCE_SECTIONS = false;
+
 // Per-source breakdown table: session count, tokens, interactions, tasks.
 const sourceColumns: Column<NamedUsage>[] = [
   { id: "name", label: "Source", sortValue: (r) => r.name, cell: (r) => <SourceBadge id={r.name} /> },
@@ -62,32 +66,38 @@ export function Home() {
         <UsageHero data={bySourceDailyQ.data!} sessions={sessionsQ.data!} rangeStart={rangeStart} rangeEnd={rangeEnd} />
       </Section>
 
-      <Section eyebrow="Source overview">
-        {sources.length ? (
-          <div className="source-overview-stack">
-            {sources.map((s) => (
-              <SourceOverviewCard
-                key={s}
-                source={s}
-                metrics={metricsBySource.get(s) ?? { sessions: 0, tokens: 0, interactions: 0, tasks: 0 }}
-                dailyCounts={new Map(daily.map((d) => [d.date, d.bySource[s] ?? 0]))}
-                rangeStart={rangeStart}
-                rangeEnd={rangeEnd}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="note">No sessions in this range.</p>
-        )}
-      </Section>
+      {/* Source overview + By source are hidden for now (may revisit). The queries + builders that
+          feed them (bySourceQ, metricsBySource, sourceColumns, SourceOverviewCard) are kept in place. */}
+      {SHOW_SOURCE_SECTIONS && (
+        <>
+          <Section eyebrow="Source overview">
+            {sources.length ? (
+              <div className="source-overview-stack">
+                {sources.map((s) => (
+                  <SourceOverviewCard
+                    key={s}
+                    source={s}
+                    metrics={metricsBySource.get(s) ?? { sessions: 0, tokens: 0, interactions: 0, tasks: 0 }}
+                    dailyCounts={new Map(daily.map((d) => [d.date, d.bySource[s] ?? 0]))}
+                    rangeStart={rangeStart}
+                    rangeEnd={rangeEnd}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="note">No sessions in this range.</p>
+            )}
+          </Section>
 
-      <Section eyebrow="By source">
-        {bySourceQ.data!.bySource.length ? (
-          <DataTable columns={sourceColumns} rows={bySourceQ.data!.bySource} initialSort="sessions" />
-        ) : (
-          <p className="note">No sessions in this range.</p>
-        )}
-      </Section>
+          <Section eyebrow="By source">
+            {bySourceQ.data!.bySource.length ? (
+              <DataTable columns={sourceColumns} rows={bySourceQ.data!.bySource} initialSort="sessions" />
+            ) : (
+              <p className="note">No sessions in this range.</p>
+            )}
+          </Section>
+        </>
+      )}
       </div>
 
       <aside className="home-rail">
