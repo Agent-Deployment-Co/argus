@@ -103,19 +103,19 @@ describe("serve API", () => {
     const app = createApp(null);
     const res = await app.request("/healthz");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, demo: false });
+    expect(await res.json()).toEqual({ ok: true, readOnly: false });
   });
 
-  test("GET /healthz reports demo mode when the server is in read-only demo mode (#281)", async () => {
-    const app = createApp(null, { demo: true });
+  test("GET /healthz reports read-only mode when the server is in read-only mode (#281)", async () => {
+    const app = createApp(null, { readOnly: true });
     const res = await app.request("/healthz");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, demo: true });
+    expect(await res.json()).toEqual({ ok: true, readOnly: true });
   });
 
-  test("demo mode drops write and settings/debug routes entirely (404, not 503) (#281)", async () => {
+  test("read-only mode drops write and settings/debug routes entirely (404, not 503) (#281)", async () => {
     const app = createApp(null, {
-      demo: true,
+      readOnly: true,
       views: {} as never,
       reindex: async () => ({ ok: true, tasks: [] }) as never,
       setSessionHidden: async () => {},
@@ -157,26 +157,26 @@ describe("serve API", () => {
       expect(res.headers.get("content-type")).toMatch(/text\/html/);
     }
 
-    // Reads stay mounted: the label list/read routes are open even in demo mode.
+    // Reads stay mounted: the label list/read routes are open even in read-only mode.
     const labelsRes = await app.request("/api/labels");
     expect(labelsRes.status).toBe(200);
     expect(labelsRes.headers.get("content-type")).toMatch(/application\/json/);
   });
 
   // A structural backstop for the enumerated test above (#281): that test only checks the specific
-  // paths it names, so a new write route added to createApp without an `if (!opts.demo)` wrapper would
-  // ship silently unless someone also remembers to add it to that list — exactly how
+  // paths it names, so a new write route added to createApp without an `if (!opts.readOnly)` wrapper
+  // would ship silently unless someone also remembers to add it to that list — exactly how
   // `/api/sessions/bulk/labels` shipped ungated in an earlier commit on this branch. This test instead
   // introspects Hono's own route table (`app.routes`) for every mutating-method route (anything but
-  // GET) and fails if one exists in the demo build that isn't the one documented exception below — no
-  // enumeration to keep in sync as new routes are added.
-  test("every mutating-method route is dropped in demo mode, except the documented bulk-lookup read (#281)", () => {
+  // GET) and fails if one exists in the read-only build that isn't the one documented exception below
+  // — no enumeration to keep in sync as new routes are added.
+  test("every mutating-method route is dropped in read-only mode, except the documented bulk-lookup read (#281)", () => {
     // POST rather than GET only because its id list can be large — a read, not a write (see its own
-    // comment in serve.ts). The only mutating-method route deliberately left mounted in demo mode.
-    const ALLOWED_IN_DEMO = new Set(["POST /api/sessions/bulk/labels-lookup"]);
+    // comment in serve.ts). The only mutating-method route deliberately left mounted in read-only mode.
+    const ALLOWED_READ_ONLY = new Set(["POST /api/sessions/bulk/labels-lookup"]);
 
-    const full = createApp(null, { demo: false });
-    const demo = createApp(null, { demo: true });
+    const full = createApp(null, { readOnly: false });
+    const readOnly = createApp(null, { readOnly: true });
     const mutatingRoutes = (app: typeof full) =>
       new Set(
         app.routes
@@ -185,14 +185,14 @@ describe("serve API", () => {
       );
 
     const fullRoutes = mutatingRoutes(full);
-    const demoRoutes = mutatingRoutes(demo);
+    const readOnlyRoutes = mutatingRoutes(readOnly);
 
-    // Sanity check: the full (non-demo) build actually has write routes to test against, so this test
-    // can't pass vacuously if createApp's route table changes shape entirely.
-    expect(fullRoutes.size).toBeGreaterThan(ALLOWED_IN_DEMO.size);
+    // Sanity check: the full (non-read-only) build actually has write routes to test against, so this
+    // test can't pass vacuously if createApp's route table changes shape entirely.
+    expect(fullRoutes.size).toBeGreaterThan(ALLOWED_READ_ONLY.size);
 
-    for (const route of demoRoutes) {
-      expect(ALLOWED_IN_DEMO.has(route)).toBe(true);
+    for (const route of readOnlyRoutes) {
+      expect(ALLOWED_READ_ONLY.has(route)).toBe(true);
     }
   });
 

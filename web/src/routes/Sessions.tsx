@@ -10,7 +10,7 @@ import { useBulkLabelMutations, useLabelCatalogMutations, useLabelsQuery, useSes
 import type { LabelRecord } from "../types";
 import { LabelPopover, type TriState } from "../components/LabelBar";
 import { FilterDropdown, FilterDropdownOption } from "../components/FilterDropdown";
-import { useDemoMode } from "../lib/demo";
+import { useReadOnly } from "../lib/read-only";
 import { DATE_PRESETS, formatDateShort, SORTED_SOURCES, sourceLabel } from "../lib/filters";
 import { daysAgo } from "../router";
 import type { SessionListItem, SessionSort } from "../types";
@@ -373,10 +373,10 @@ function NoSessionsSelected() {
  *  clear the selection, and the bulk actions themselves (labels, hide) — mirrors `SessionsEmpty`'s
  *  pane-swap pattern as a third detail-pane state. */
 function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
-  // Demo mode (#281): label/hide writes are dropped entirely on the server, so the bulk actions
+  // Read-only mode (#281): label/hide writes are dropped entirely on the server, so the bulk actions
   // (which only exist to drive those writes) are hidden — selecting sessions still works, there's
   // just nothing to do with the selection.
-  const demo = useDemoMode();
+  const readOnly = useReadOnly();
   const ids = useMemo(() => [...selection.ids], [selection.ids]);
   const catalog = useLabelsQuery();
   const sessionsLabels = useSessionsLabelsQuery(ids);
@@ -422,7 +422,7 @@ function BulkSelectionOverlay({ selection }: { selection: SessionSelection }) {
         </button>
       </div>
 
-      {!demo && (
+      {!readOnly && (
         <div className="bulk-overlay-section">
           <h3 className="bulk-overlay-heading">Actions</h3>
           <div className="bulk-actions-row">

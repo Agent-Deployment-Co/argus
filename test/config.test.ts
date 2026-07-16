@@ -10,9 +10,9 @@ import {
   migrateTaskExtractionToSessionInterpretation,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
-  resolveDemoMode,
   resolveDesktopStartAtLogin,
   resolveLogLevel,
+  resolveReadOnly,
   resolveRetainText,
   resolveSetting,
   resolveSessionInterpretation,
@@ -39,7 +39,7 @@ const CONFIG_ENV = [
   "ARGUS_TASK_COMMAND",
   "ARGUS_RETAIN_TEXT",
   "ARGUS_LOG_LEVEL",
-  "ARGUS_DEMO",
+  "ARGUS_READ_ONLY",
 ];
 
 afterEach(() => {
@@ -436,28 +436,28 @@ describe("resolveRetainText", () => {
   });
 });
 
-describe("resolveDemoMode (#281)", () => {
+describe("resolveReadOnly (#281)", () => {
   test("defaults to off", () => {
-    expect(resolveDemoMode({}, {})).toBe(false);
+    expect(resolveReadOnly({}, {})).toBe(false);
   });
 
   test("argus.json can turn it on", () => {
-    expect(resolveDemoMode({}, { demoMode: true })).toBe(true);
+    expect(resolveReadOnly({}, { readOnly: true })).toBe(true);
   });
 
   test("env var overrides argus.json", () => {
-    process.env.ARGUS_DEMO = "true";
-    expect(resolveDemoMode({}, { demoMode: false })).toBe(true);
+    process.env.ARGUS_READ_ONLY = "true";
+    expect(resolveReadOnly({}, { readOnly: false })).toBe(true);
   });
 
   test("flag overrides env and file", () => {
-    process.env.ARGUS_DEMO = "true";
-    expect(resolveDemoMode({ demo: false }, { demoMode: true })).toBe(false);
+    process.env.ARGUS_READ_ONLY = "true";
+    expect(resolveReadOnly({ "read-only": false }, { readOnly: true })).toBe(false);
   });
 
   test("empty env value falls through to the default", () => {
-    process.env.ARGUS_DEMO = "";
-    expect(resolveDemoMode({}, {})).toBe(false);
+    process.env.ARGUS_READ_ONLY = "";
+    expect(resolveReadOnly({}, {})).toBe(false);
   });
 });
 

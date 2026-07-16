@@ -3,7 +3,7 @@ import { useIsFetching } from "@tanstack/react-query";
 import { Activity, Folder, HeartPulse, Inbox, PanelLeftClose, PanelLeftOpen, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { FilterBar } from "./FilterBar";
-import { useDemoMode } from "../lib/demo";
+import { useReadOnly } from "../lib/read-only";
 import { VIEW_QUERY_KEY } from "../lib/views";
 import { SettingsSurface } from "../routes/Settings";
 import { WelcomeModal } from "../routes/Welcome";
@@ -57,11 +57,11 @@ const NAV: { to: string; label: string; icon: LucideIcon }[] = [
 ];
 
 export function Layout() {
-  // Demo mode (#281): the server dropped /api/settings*/onboarding entirely — hide the affordances
-  // that link there (the rail's Settings icon, the welcome modal) rather than duplicating the
-  // server's route list here. A direct /settings visit still renders; its own data fetches just fail
-  // gracefully (no real settings data can leak — the endpoint isn't mounted).
-  const demo = useDemoMode();
+  // Read-only mode (#281): the server dropped /api/settings*/onboarding entirely — hide the
+  // affordances that link there (the rail's Settings icon, the welcome modal) rather than
+  // duplicating the server's route list here. A direct /settings visit still renders; its own data
+  // fetches just fail gracefully (no real settings data can leak — the endpoint isn't mounted).
+  const readOnly = useReadOnly();
   // The settings surface (incl. the Debug tab) takes over the whole view and reads its own data, so
   // it bypasses the snapshot gate (and we skip the snapshot fetch while it's open).
   const isSettings = useRouterState({ select: (s) => s.location.pathname.startsWith("/settings") });
@@ -127,7 +127,7 @@ export function Layout() {
             top-to-bottom) reads settings, expand; expanded, the toggle is pushed right. The color
             theme moved into Settings → General → Appearance. */}
         <div className="rail-footer">
-          {!demo && (
+          {!readOnly && (
             <Link
               to="/settings/$category"
               params={{ category: "general" }}
@@ -155,7 +155,7 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
-      {firstRun && !demo && <WelcomeModal />}
+      {firstRun && !readOnly && <WelcomeModal />}
     </div>
   );
 }

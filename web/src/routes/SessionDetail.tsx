@@ -8,7 +8,7 @@ import { Dash, InteractionCount, Skills } from "../components/pills";
 import { Kv, KvRow } from "../components/kv";
 import { InteractionsIcon } from "../lib/icons";
 import { LabelBar } from "../components/LabelBar";
-import { useDemoMode } from "../lib/demo";
+import { useReadOnly } from "../lib/read-only";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
 import { SessionTimeline } from "../components/SessionTimeline";
@@ -34,9 +34,9 @@ const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 const SHOW_TASK_LABELS = false;
 
 export function SessionDetail() {
-  // Demo mode (#281): labels/hide/reindex are all writes the server dropped entirely — hide the
-  // affordances rather than rendering a button that 404s.
-  const demo = useDemoMode();
+  // Read-only mode (#281): labels/hide/reindex are all writes the server dropped entirely — hide
+  // the affordances rather than rendering a button that 404s.
+  const readOnly = useReadOnly();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
@@ -160,9 +160,9 @@ export function SessionDetail() {
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
           {s.summary?.trim() && <ClampText text={s.summary} maxLines={2} className="session-summary" />}
-          {!demo && <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />}
+          {!readOnly && <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />}
         </div>
-        {!demo && (
+        {!readOnly && (
           <div className="session-detail-actions">
             <button
               type="button"
@@ -188,8 +188,8 @@ export function SessionDetail() {
         )}
       </header>
 
-      {!demo && refreshError && <div className="task-error" role="alert">{refreshError}</div>}
-      {!demo && hideError && <div className="task-error" role="alert">{hideError}</div>}
+      {!readOnly && refreshError && <div className="task-error" role="alert">{refreshError}</div>}
+      {!readOnly && hideError && <div className="task-error" role="alert">{hideError}</div>}
 
       <div className="detail-tabs" role="tablist" aria-label="Session detail views">
         <button

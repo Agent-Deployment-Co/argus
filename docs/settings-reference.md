@@ -77,7 +77,7 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 | Update check interval | Minutes between desktop update checks. | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | None | `60` |
 | Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `false` |
 | Silent desktop mode | Whether the desktop app runs without a tray icon, notifications or opening the browser on first run. | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | None | `false` |
-| Demo mode | Whether `serve` runs read-only: labels, hiding sessions, refresh and Settings are hidden and their routes aren't mounted. | `demoMode` | `ARGUS_DEMO` | `serve`: `--demo` | `false` |
+| Read-only mode | Whether `serve` runs read-only: labels, hiding sessions, refresh and Settings are hidden and their routes aren't mounted. | `readOnly` | `ARGUS_READ_ONLY` | `serve`: `--read-only` | `false` |
 | Hub URL | Argus Hub server URL for [sync](/terminology#sync). | `hub.url` | `ARGUS_HUB_URL` | None | unset |
 | Hub key | Key used to authenticate to Argus Hub. | `hub.key` | `ARGUS_HUB_KEY` | None | unset |
 | Log level | How much detail Argus prints to the terminal. | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` | `info` |
@@ -91,9 +91,9 @@ does not use it while start-at-login is disabled.
 `argus config set desktop.silent true` or `ARGUS_DESKTOP_SILENT=true`; it is not
 shown in the app Settings screen.
 
-`demoMode` is a deployment switch for running a shared, read-only Argus instance, not something to
-flip from the app Settings screen. Set it with `argus config set demoMode true`, `ARGUS_DEMO=true`,
-or `serve --demo`.
+`readOnly` is a deployment switch for running a shared, read-only Argus instance, not something to
+flip from the app Settings screen. Set it with `argus config set readOnly true`, `ARGUS_READ_ONLY=true`,
+or `serve --read-only`.
 
 Use the secret store or `ARGUS_HUB_KEY` for the Hub key. A legacy plaintext
 `hub.key` in `argus.json` is still read and migrated by `serve`, but new

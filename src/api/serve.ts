@@ -84,9 +84,9 @@ export interface ServeOptions {
   /** Override the `argus.json` path. Defaults to CONFIG_FILE; injected by tests so they never touch
    *  the real config. */
   configPath?: string;
-  /** Read-only demo mode (#281): mount only the read routes in `createApp` and tell the SPA (via
-   *  `demo: true` on `GET /healthz`) to hide edit affordances. Default false. */
-  demo?: boolean;
+  /** Read-only mode (#281): mount only the read routes in `createApp` and tell the SPA (via
+   *  `readOnly: true` on `GET /healthz`) to hide edit affordances. Default false. */
+  readOnly?: boolean;
 }
 
 /** Control surface for a running server. `closed` resolves once it has fully shut down. */
@@ -264,9 +264,9 @@ interface AppOptions {
   claudeBinary?: string;
   /** Server log sink. Used for explicit user actions like Refresh. */
   log?: Log;
-  /** Read-only demo mode (#281): mount only the read routes, drop /api/debug and every
-   *  /api/settings*, and answer `demo: true` on `/healthz` so the SPA hides edit affordances. */
-  demo?: boolean;
+  /** Read-only mode (#281): mount only the read routes, drop /api/debug and every
+   *  /api/settings*, and answer `readOnly: true` on `/healthz` so the SPA hides edit affordances. */
+  readOnly?: boolean;
 }
 
 const MIME: Record<string, string> = {
@@ -534,19 +534,20 @@ function parseTaskSeq(raw: string): number | null {
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
-  // Every route registered on `writes` (rather than `app` directly) is dropped entirely in demo mode
-  // (#281) by the single `app.route("/", writes)` mount below, gated on `opts.demo` — one decision
-  // point instead of the five separate `if (!opts.demo) { ... }` blocks this replaced, which had
-  // already let a write route (`/api/sessions/bulk/labels`) ship ungated once. Order among `writes`'
-  // own routes is preserved (still resolved relative to each other, e.g. the "bulk" literal-segment
-  // routes before their ":id" counterparts), so mounting doesn't change any existing precedence.
+  // Every route registered on `writes` (rather than `app` directly) is dropped entirely in read-only
+  // mode (#281) by the single `app.route("/", writes)` mount below, gated on `opts.readOnly` — one
+  // decision point instead of the five separate `if (!opts.readOnly) { ... }` blocks this replaced,
+  // which had already let a write route (`/api/sessions/bulk/labels`) ship ungated once. Order among
+  // `writes`' own routes is preserved (still resolved relative to each other, e.g. the "bulk"
+  // literal-segment routes before their ":id" counterparts), so mounting doesn't change any existing
+  // precedence.
   const writes = new Hono();
 
   // Cheap liveness check: no store access, just confirms the server is answering. The desktop app's
-  // front-door proxy polls this to know when a restarting sidecar is back up. `demo` doubles as the
-  // capability flag the SPA reads at startup (#281) to hide edit affordances — it's the one route
-  // that's always mounted, so it's the one place a demo-mode client can reliably learn its own mode.
-  app.get("/healthz", (c) => c.json({ ok: true, demo: opts.demo ?? false }));
+  // front-door proxy polls this to know when a restarting sidecar is back up. `readOnly` doubles as
+  // the capability flag the SPA reads at startup (#281) to hide edit affordances — it's the one route
+  // that's always mounted, so it's the one place a read-only client can reliably learn its own mode.
+  app.get("/healthz", (c) => c.json({ ok: true, readOnly: opts.readOnly ?? false }));
 
   // Per-view dashboard endpoints (#217): each reads exactly what its view needs from argus.db on
   // demand — no monolithic snapshot. All share the since/until/project/source filter contract (unknown
@@ -617,8 +618,8 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   });
 
   // Session hide/unhide and reindex are all writes with a disk/subprocess side effect (reindex) or a
-  // store mutation (hide) — dropped entirely in demo mode (#281) rather than 503ing, so the SPA never
-  // renders a button that hits a route that isn't there.
+  // store mutation (hide) — dropped entirely in read-only mode (#281) rather than 503ing, so the SPA
+  // never renders a button that hits a route that isn't there.
   // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
   // the literal "bulk" segment isn't swallowed by that route's ":id" param.
   writes.post("/api/sessions/bulk/hidden", async (c) => {
@@ -841,9 +842,9 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ ok: true });
   });
 
-  // Everything below is dropped entirely in demo mode (#281): /api/debug leaks local paths/env, and
-  // /api/settings*/onboarding read and write local config, secrets, and provider connections — none
-  // of which belong in a public read-only deployment.
+  // Everything below is dropped entirely in read-only mode (#281): /api/debug leaks local paths/env,
+  // and /api/settings*/onboarding read and write local config, secrets, and provider connections —
+  // none of which belong in a public read-only deployment.
 
   // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
   writes.get("/api/debug", async (c) => {
@@ -968,7 +969,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   });
 
   // The one gate for everything registered on `writes` above.
-  if (!opts.demo) app.route("/", writes);
+  if (!opts.readOnly) app.route("/", writes);
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
   // back to index.html so client-side routes resolve on a hard refresh.
@@ -1293,7 +1294,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     claudeBinary,
     configPath: opts.configPath,
     log,
-    demo: opts.demo,
+    readOnly: opts.readOnly,
   });
 
   let resolveClosed!: () => void;
