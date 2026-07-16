@@ -641,9 +641,8 @@ const serve = defineCommand({
       description: "Open the dashboard in your browser once it's ready (macOS)",
     },
     demo: {
-      type: "string",
-      description: "Read-only demo mode: hides editing and disables settings (true/false; env ARGUS_DEMO)",
-      valueHint: "true|false",
+      type: "boolean",
+      description: "Read-only demo mode: hides editing and disables settings (env ARGUS_DEMO; --no-demo forces it off)",
     },
   },
   run: handler((args) =>
@@ -651,7 +650,7 @@ const serve = defineCommand({
       {
         port: Number(args.port) || DEFAULT_PORT,
         open: args.open,
-        demo: resolveDemoMode({ demo: toBoolOverride(args.demo, "demo") }, loadConfig()),
+        demo: resolveDemoMode({ demo: args.demo }, loadConfig()),
       },
       log,
     ),
