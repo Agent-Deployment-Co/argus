@@ -66,7 +66,7 @@ export function Home() {
   return (
     <>
       <Section>
-        <UsageHero data={bySourceDailyQ.data!} />
+        <UsageHero data={bySourceDailyQ.data!} sessions={sessionsQ.data!} />
       </Section>
 
       <Section eyebrow="Source overview">

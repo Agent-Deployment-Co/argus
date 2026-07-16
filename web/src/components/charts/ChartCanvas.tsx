@@ -1,4 +1,4 @@
-import type { ChartData, ChartOptions, ChartType } from "chart.js";
+import type { ChartData, ChartOptions, ChartType, Plugin } from "chart.js";
 import { Chart as ReactChart } from "react-chartjs-2";
 import { chartChrome } from "../../lib/charts";
 import { useTheme } from "../../lib/theme";
@@ -23,6 +23,8 @@ interface Props<T extends ChartType> {
   data: ChartData<T>;
   options?: ChartOptions<T>;
   height?: number;
+  /** Per-chart inline plugins (e.g. a plot-area background wash). Not registered globally. */
+  plugins?: Plugin<T>[];
 }
 
 // Chart types that use cartesian x/y scales. Non-cartesian types (doughnut/pie/polarArea/radar)
@@ -30,14 +32,14 @@ interface Props<T extends ChartType> {
 const CARTESIAN = new Set<ChartType>(["bar", "line", "scatter", "bubble"]);
 
 /** react-chartjs-2 wrapper that applies the current theme's chrome and a fixed-height container. */
-export function ChartCanvas<T extends ChartType>({ type, data, options, height = 240 }: Props<T>) {
+export function ChartCanvas<T extends ChartType>({ type, data, options, height = 240, plugins }: Props<T>) {
   const { theme } = useTheme();
   const { scales, ...rest } = chartChrome(theme);
   const chrome = CARTESIAN.has(type) ? { ...rest, scales } : rest;
   const merged = deepMerge<ChartOptions<T>>(chrome, options ?? {});
   return (
     <div className="chart-box" style={{ height }}>
-      <ReactChart type={type} data={data} options={merged} />
+      <ReactChart type={type} data={data} options={merged} plugins={plugins} />
     </div>
   );
 }

@@ -521,6 +521,10 @@ section { margin: 0 0 42px; }
 /* Home usage hero (#270): a wide lead panel spanning 3/4 of the content width. */
 .usage-hero { width: 75%; }
 @media (max-width: 900px) { .usage-hero { width: 100%; } }
+/* The stock-chart "volume" pane: a small daily-session chart flush under the main chart, sharing its
+   x. Its plot-area tint is painted inside the canvas (UsageHero volumeWash), so only the drawing
+   area is shaded — not the axis gutters. */
+.usage-hero-volume { margin-top: 0; }
 
 /* Segmented tokens/cost switch in the hero's title row: two integrated buttons sharing one pill
    outline, mutually-exclusive selected state (house accent-tint, matching the filter mode toggles). */
@@ -533,6 +537,29 @@ section { margin: 0 0 42px; }
 .mode-switch-btn svg { flex: 0 0 auto; }
 
 .chart-box { position: relative; }
+/* HTML chart tooltip (lib/chart-tooltip): lives outside the canvas so short charts (the usage hero
+   volume band) don't clip it. Glides between positions and carries a bordered caret pointing at the
+   hovered column. --caret-x (the caret's x within the tooltip) is set inline by the handler. */
+.chart-tooltip {
+  position: absolute; z-index: 10; pointer-events: none;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+  font: 500 12px var(--font-ui); white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+  opacity: 0; transition: left .13s ease, top .13s ease, opacity .13s ease;
+}
+/* Caret: a rotated square with a border on the two outward-facing edges, filled to match the box. */
+.chart-tooltip::after {
+  content: ""; position: absolute; left: var(--caret-x); margin-left: -5px;
+  width: 10px; height: 10px; background: var(--surface);
+  border: 1px solid var(--line); transform: rotate(45deg);
+  transition: left .13s ease;
+}
+.chart-tooltip--above::after { bottom: -6px; border-top: 0; border-left: 0; }
+.chart-tooltip--below::after { top: -6px; border-bottom: 0; border-right: 0; }
+.chart-tooltip-title { margin-bottom: 4px; font-weight: 600; color: var(--heading); }
+.chart-tooltip-row { display: flex; align-items: center; gap: 6px; line-height: 1.55; }
+.chart-tooltip-swatch { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 2px; }
 canvas { max-width: 100%; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
