@@ -17,6 +17,8 @@
 #
 # Usage:
 #   bun run dev            # or: ./scripts/dev.sh   (random free ports, store under ./tmp)
+#   bun run dev --port 5173       # pin the web (Vite) port so its URL stays stable
+#   WEB_PORT=5173 bun run dev     # same, via env var
 #   ARGUS_PORT=4300 bun run dev   # pin the API port instead of picking one at random
 #   ARGUS_HOME=~/.argus bun run dev   # use a shared store/config instead of the worktree's ./tmp
 #
@@ -24,6 +26,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# Optional --port <n> (or --port=<n>) pins the web (Vite) port — the URL you open. It wins over the
+# WEB_PORT env var; without either, a random free port is chosen. Other args are ignored.
+WEB_PORT_FLAG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --port) WEB_PORT_FLAG="${2:-}"; shift 2 ;;
+    --port=*) WEB_PORT_FLAG="${1#*=}"; shift ;;
+    --) shift ;;
+    *) shift ;;
+  esac
+done
 
 # Ask the OS for a free TCP port (bind to :0, read the assigned port, release it). There's a tiny
 # window between releasing and re-binding, but with random ports collisions are vanishingly rare.
@@ -92,8 +106,9 @@ for _ in $(seq 1 60); do
   sleep 0.25
 done
 
-# Random free port for Vite too, so several web dev servers can run side by side. Pin with WEB_PORT.
-WEB_PORT="${WEB_PORT:-$(find_free_port)}"
+# Web (Vite) port: --port flag wins, then WEB_PORT env, else a random free port so several web dev
+# servers can run side by side.
+WEB_PORT="${WEB_PORT_FLAG:-${WEB_PORT:-$(find_free_port)}}"
 WEB_URL="http://localhost:$WEB_PORT"
 echo "→ Web server:  $WEB_URL  (Vite, hot reload)"
 
