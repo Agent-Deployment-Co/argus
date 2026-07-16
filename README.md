@@ -1,13 +1,12 @@
 # Argus
 
 Argus analyzes how you use your AI agents (Claude Code, Claude Cowork, Claude Chat, Codex and
-Gemini CLI) so you can get more out of them. It brings all your agent work into one place, running
-locally on your computer. Argus is free, [open source](LICENSE) software from [The Agent Deployment Company](https://www.agentdeployment.co).
+Gemini CLI) so you can get more out of them. It runs locally and brings all your agent work into one place. Argus is free, [open source](LICENSE) software from [The Agent Deployment Company](https://www.agentdeployment.co).
+
+![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](docs/images/screenshots/activity@1920x1080@2.webp)
 
 **📖 Full documentation: [argus.agentdeployment.co](https://argus.agentdeployment.co)** — the best
 place to start if you're here to *use* Argus.
-
-![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](docs/images/screenshots/activity@1920x1080@2.webp)
 
 ## Get started
 
