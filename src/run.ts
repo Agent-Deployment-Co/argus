@@ -17,6 +17,7 @@ export interface RunOptions extends SyncOptions {
   syncIntervalMin: number;
   noSync: boolean;
   taskExtraction: ResolvedSessionInterpretation;
+  readOnly: boolean;
 }
 
 /**
@@ -40,7 +41,12 @@ export function assertHomeResolved(log: Log): void {
 
 /** The web-server leg: run the server until shutdown, restarting with backoff if it errors. */
 async function serveLeg(
-  opts: { port: number; build: BuildDashboardOptions; taskExtraction: ResolvedSessionInterpretation },
+  opts: {
+    port: number;
+    build: BuildDashboardOptions;
+    taskExtraction: ResolvedSessionInterpretation;
+    readOnly: boolean;
+  },
   log: Log,
   signal: AbortSignal,
 ): Promise<void> {
@@ -53,6 +59,7 @@ async function serveLeg(
           open: false,
           build: opts.build,
           taskExtraction: opts.taskExtraction,
+          readOnly: opts.readOnly,
           installSignalHandlers: false,
           signal: sig,
         },
@@ -97,7 +104,7 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
     // never stops serving.
     const legs: Promise<void>[] = [
       watchIndex({ ...src, intervalMin: opts.indexIntervalMin }, log, ac.signal),
-      serveLeg({ port: opts.port, build, taskExtraction: opts.taskExtraction }, log, ac.signal),
+      serveLeg({ port: opts.port, build, taskExtraction: opts.taskExtraction, readOnly: opts.readOnly }, log, ac.signal),
     ];
     if (!opts.noSync) {
       legs.push(

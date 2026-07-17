@@ -14,6 +14,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": `http://localhost:${process.env.ARGUS_PORT || 4242}`,
+      "/healthz": `http://localhost:${process.env.ARGUS_PORT || 4242}`,
     },
   },
 });

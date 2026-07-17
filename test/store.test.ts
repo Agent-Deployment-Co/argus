@@ -2057,6 +2057,46 @@ describe("session search (#155)", () => {
     }
   });
 
+  test("retractSessions clears every FTS index row for the session, not just resolved_sessions (#281)", async () => {
+    // searchSessions can't observe this either way (it joins from resolved_sessions, so a session with
+    // no parent row never matches regardless of leftover FTS rows) — check the FTS tables directly, the
+    // same way the migration test below does, so an orphaned row can't accumulate unbounded FTS index
+    // growth silently.
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [sessionFixture()], { retainText: true });
+      await store.writeSessionTasks(sid, [{
+        id: "task:claude:retract",
+        source: "claude",
+        sourceSessionId: sid,
+        timestampMs: 1000,
+        description: "The flibbertigibbet outage, summarized",
+        evidence: "interactions: 0",
+        evidenceKind: "llm_inference",
+        position: pos(0),
+      }], "v1", "A title", "A summary");
+
+      const before = await withRawDatabase(path, (db) => ({
+        interactionText: rawGet<{ n: number }>(db, `SELECT count(*) AS n FROM resolved_interaction_text_fts WHERE session_id = '${sid}'`)?.n,
+        tasks: rawGet<{ n: number }>(db, `SELECT count(*) AS n FROM resolved_tasks_fts WHERE session_id = '${sid}'`)?.n,
+        sessions: rawGet<{ n: number }>(db, `SELECT count(*) AS n FROM resolved_sessions_fts WHERE session_id = '${sid}'`)?.n,
+      }));
+      expect(before).toEqual({ interactionText: 2, tasks: 1, sessions: 1 });
+
+      await store.retractSessions([sid]);
+
+      const after = await withRawDatabase(path, (db) => ({
+        interactionText: rawGet<{ n: number }>(db, `SELECT count(*) AS n FROM resolved_interaction_text_fts WHERE session_id = '${sid}'`)?.n,
+        tasks: rawGet<{ n: number }>(db, `SELECT count(*) AS n FROM resolved_tasks_fts WHERE session_id = '${sid}'`)?.n,
+        sessions: rawGet<{ n: number }>(db, `SELECT count(*) AS n FROM resolved_sessions_fts WHERE session_id = '${sid}'`)?.n,
+      }));
+      expect(after).toEqual({ interactionText: 0, tasks: 0, sessions: 0 });
+    } finally {
+      await store.close();
+    }
+  });
+
   test("v19 -> v20 migration backfills both FTS indexes from existing data", async () => {
     const path = storePath();
     const store = await openStore({ path });

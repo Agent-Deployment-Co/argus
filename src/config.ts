@@ -131,6 +131,9 @@ export interface ArgusConfig {
    *  transcripts from disk (#120). Stored text is local-only — never uploaded by `sync`. On by
    *  default; set to false to keep session text out of `argus.db` entirely. */
   retainText?: boolean;
+  /** Read-only mode (#281): `serve` mounts only the read routes and the SPA hides edit
+   *  affordances. A deployment switch, not a user preference — off by default. */
+  readOnly?: boolean;
   /** App-persisted state: things Argus itself records about what's already happened (a completion
    *  marker, a dismissed prompt), as opposed to a user-editable preference. Never shown in the
    *  settings surface — there's no `ui` on these, so they never land in `EDITABLE`/`LAYOUT`. */
@@ -425,6 +428,19 @@ const RETENTION_SETTINGS = {
     env: "ARGUS_RETAIN_TEXT",
     flag: "retain-text",
     default: true,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+};
+
+/** Read-only mode (#281): mounts only the read routes in `createApp` and tells the SPA to
+ *  hide edit affordances. No `ui` — it's a deployment switch (`argus serve --read-only`, the hosted
+ *  Cloudflare demo), not something to flip from the Settings screen. */
+const READ_ONLY_SETTINGS = {
+  enabled: {
+    path: "readOnly",
+    env: "ARGUS_READ_ONLY",
+    flag: "read-only",
+    default: false,
     parse: parseBool,
   } satisfies Setting<boolean>,
 };
@@ -805,6 +821,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(RETENTION_SETTINGS),
     ...Object.values(LOG_SETTINGS),
     ...Object.values(STATE_SETTINGS),
+    ...Object.values(READ_ONLY_SETTINGS),
   ].map((s) => [s.path, s as Setting<unknown>]),
 );
 
@@ -1145,6 +1162,15 @@ export function resolveRetainText(
   file: ArgusConfig = loadConfig(),
 ): boolean {
   return resolveSetting(RETENTION_SETTINGS.retainText, flags, file);
+}
+
+/** Whether `serve` should run in read-only mode (#281): `--read-only` flag > `ARGUS_READ_ONLY` env >
+ *  `argus.json` `readOnly` > default off. */
+export function resolveReadOnly(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(READ_ONLY_SETTINGS.enabled, flags, file);
 }
 
 // Resolving the Hub connection needs the secret store (the Hub key lives in the OS keychain, like the

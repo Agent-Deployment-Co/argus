@@ -8,6 +8,7 @@ import { Dash, InteractionCount, Skills } from "../components/pills";
 import { Kv, KvRow } from "../components/kv";
 import { InteractionsIcon } from "../lib/icons";
 import { LabelBar } from "../components/LabelBar";
+import { useReadOnly } from "../lib/read-only";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
 import { SessionTimeline } from "../components/SessionTimeline";
@@ -33,6 +34,9 @@ const numOrDash = (v: number | null) => (v != null ? v : <Dash />);
 const SHOW_TASK_LABELS = false;
 
 export function SessionDetail() {
+  // Read-only mode (#281): labels/hide/reindex are all writes the server dropped entirely — hide
+  // the affordances rather than rendering a button that 404s.
+  const readOnly = useReadOnly();
   const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
   const detail = useSessionDetailQuery(sessionId);
   const s = detail.data;
@@ -156,30 +160,32 @@ export function SessionDetail() {
           </div>
           <h2 className="t-title">{sessionTitle(s)}</h2>
           {s.summary?.trim() && <ClampText text={s.summary} maxLines={2} className="session-summary" />}
-          <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />
+          {!readOnly && <LabelBar sessionId={s.sessionId} applied={sessionLabels?.session ?? []} />}
         </div>
-        <div className="session-detail-actions">
-          <button
-            type="button"
-            className="task-action"
-            onClick={() => hide.mutate({ sessionId: s.sessionId, hidden: !s.isHidden })}
-            disabled={hidePending}
-            title={s.isHidden ? "Unhide this session" : "Hide this session from the list and search"}
-          >
-            {s.isHidden ? <Eye size={14} strokeWidth={1.75} aria-hidden /> : <EyeOff size={14} strokeWidth={1.75} aria-hidden />}
-            <span>{s.isHidden ? "Unhide" : "Hide"}</span>
-          </button>
-          <button
-            type="button"
-            className="task-action"
-            onClick={() => refresh.mutate(s.sessionId)}
-            disabled={refreshingThisSession}
-            title="Re-read this session's transcript from disk and update it"
-          >
-            <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
-            <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="session-detail-actions">
+            <button
+              type="button"
+              className="task-action"
+              onClick={() => hide.mutate({ sessionId: s.sessionId, hidden: !s.isHidden })}
+              disabled={hidePending}
+              title={s.isHidden ? "Unhide this session" : "Hide this session from the list and search"}
+            >
+              {s.isHidden ? <Eye size={14} strokeWidth={1.75} aria-hidden /> : <EyeOff size={14} strokeWidth={1.75} aria-hidden />}
+              <span>{s.isHidden ? "Unhide" : "Hide"}</span>
+            </button>
+            <button
+              type="button"
+              className="task-action"
+              onClick={() => refresh.mutate(s.sessionId)}
+              disabled={refreshingThisSession}
+              title="Re-read this session's transcript from disk and update it"
+            >
+              <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
+              <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>
+            </button>
+          </div>
+        )}
       </header>
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}

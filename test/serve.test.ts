@@ -103,7 +103,97 @@ describe("serve API", () => {
     const app = createApp(null);
     const res = await app.request("/healthz");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, readOnly: false });
+  });
+
+  test("GET /healthz reports read-only mode when the server is in read-only mode (#281)", async () => {
+    const app = createApp(null, { readOnly: true });
+    const res = await app.request("/healthz");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, readOnly: true });
+  });
+
+  test("read-only mode drops write and settings/debug routes entirely (404, not 503) (#281)", async () => {
+    const app = createApp(null, {
+      readOnly: true,
+      views: {} as never,
+      reindex: async () => ({ ok: true, tasks: [] }) as never,
+      setSessionHidden: async () => {},
+      setSessionsHidden: async () => {},
+      labels: {
+        list: async () => [],
+        readForSession: async () => ({ session: [], tasks: {} }) as never,
+        readForSessions: async () => new Map(),
+        create: async () => ({}) as never,
+        rename: async () => ({}) as never,
+        remove: async () => {},
+        assign: async () => {},
+        unassign: async () => {},
+        setForSessions: async () => {},
+      } as never,
+      debugInfo: async () => ({}) as never,
+    });
+
+    // POST/PUT to a dropped route has no SPA catch-all to fall back to, so Hono's own 404 shows
+    // through directly.
+    for (const req of [
+      { method: "POST", path: "/api/sessions/s1/hidden" },
+      { method: "POST", path: "/api/sessions/bulk/hidden" },
+      { method: "POST", path: "/api/sessions/s1/reindex" },
+      { method: "POST", path: "/api/labels" },
+      { method: "POST", path: "/api/sessions/s1/labels" },
+      { method: "POST", path: "/api/sessions/bulk/labels" },
+      { method: "PUT", path: "/api/onboarding" },
+    ]) {
+      const res = await app.request(req.path, { method: req.method });
+      expect(res.status).toBe(404);
+    }
+
+    // A dropped GET route falls through to the SPA catch-all (matching real browser navigation), so
+    // it answers 200 with the placeholder page rather than the JSON payload — confirm it's not JSON.
+    for (const path of ["/api/debug", "/api/settings", "/api/settings/secrets/hubKey"]) {
+      const res = await app.request(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toMatch(/text\/html/);
+    }
+
+    // Reads stay mounted: the label list/read routes are open even in read-only mode.
+    const labelsRes = await app.request("/api/labels");
+    expect(labelsRes.status).toBe(200);
+    expect(labelsRes.headers.get("content-type")).toMatch(/application\/json/);
+  });
+
+  // A structural backstop for the enumerated test above (#281): that test only checks the specific
+  // paths it names, so a new write route added to createApp without an `if (!opts.readOnly)` wrapper
+  // would ship silently unless someone also remembers to add it to that list — exactly how
+  // `/api/sessions/bulk/labels` shipped ungated in an earlier commit on this branch. This test instead
+  // introspects Hono's own route table (`app.routes`) for every mutating-method route (anything but
+  // GET) and fails if one exists in the read-only build that isn't the one documented exception below
+  // — no enumeration to keep in sync as new routes are added.
+  test("every mutating-method route is dropped in read-only mode, except the documented bulk-lookup read (#281)", () => {
+    // POST rather than GET only because its id list can be large — a read, not a write (see its own
+    // comment in serve.ts). The only mutating-method route deliberately left mounted in read-only mode.
+    const ALLOWED_READ_ONLY = new Set(["POST /api/sessions/bulk/labels-lookup"]);
+
+    const full = createApp(null, { readOnly: false });
+    const readOnly = createApp(null, { readOnly: true });
+    const mutatingRoutes = (app: typeof full) =>
+      new Set(
+        app.routes
+          .filter((r) => r.method !== "GET" && r.method !== "ALL")
+          .map((r) => `${r.method} ${r.path}`),
+      );
+
+    const fullRoutes = mutatingRoutes(full);
+    const readOnlyRoutes = mutatingRoutes(readOnly);
+
+    // Sanity check: the full (non-read-only) build actually has write routes to test against, so this
+    // test can't pass vacuously if createApp's route table changes shape entirely.
+    expect(fullRoutes.size).toBeGreaterThan(ALLOWED_READ_ONLY.size);
+
+    for (const route of readOnlyRoutes) {
+      expect(ALLOWED_READ_ONLY.has(route)).toBe(true);
+    }
   });
 
   test("view endpoints return the reader payload and pass filters through", async () => {
