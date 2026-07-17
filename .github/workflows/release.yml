@@ -319,33 +319,60 @@ jobs:
           }
           gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $installers
 
-      # Actions downloads are ZIP archives. Stage the release files at the archive root so
-      # workflow_dispatch users do not need to navigate the Rust target directory structure.
+      # Stage the Windows installer with a stable name so archive:false can upload the raw file.
       - name: Stage Windows installer for workflow artifact
         if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows' }}
         shell: pwsh
         run: |
           $destination = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          $filename = "argus-${{ matrix.slug }}-setup.exe"
           $installers = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\target" -Filter "*-setup.exe" -Recurse)
           if ($installers.Count -eq 0) {
             throw "No Windows installer was found to package."
           }
-          foreach ($installer in $installers) {
-            Copy-Item -LiteralPath $installer.FullName -Destination $destination -Force
+          if ($installers.Count -ne 1) {
+            throw "Expected one Windows installer, found $($installers.Count)."
           }
+          foreach ($installer in $installers) {
+            Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $destination $filename) -Force
+          }
+
+      # The artifact action can upload one file without wrapping it in a ZIP. Give the DMG a
+      # stable name because archive:false uses the file name as the artifact name.
+      - name: Stage macOS DMG for workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="$GITHUB_WORKSPACE/release-artifacts/argus-macos-universal.dmg"
+          mkdir -p "$(dirname "$destination")"
+          dmg_count="$(find desktop/src-tauri/target -path '*/bundle/dmg/*.dmg' -type f | wc -l | tr -d '[:space:]')"
+          if [ "$dmg_count" -ne 1 ]; then
+            echo "Expected one macOS DMG, found $dmg_count." >&2
+            exit 1
+          fi
+          dmg="$(find desktop/src-tauri/target -path '*/bundle/dmg/*.dmg' -type f -print -quit)"
+          cp "$dmg" "$destination"
+          echo "Staged $destination"
 
       # Dry-run mode only: expose the desktop installers on the workflow run so they can be
       # downloaded and tested on real machines before any tag exists. Standalone Windows CLI
       # ZIPs are published only on tagged releases, not as workflow artifacts.
-      - name: Upload desktop installers as workflow artifacts
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload macOS DMG as workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS' }}
         uses: actions/upload-artifact@v7
         with:
-          name: argus-${{ matrix.slug }}
           if-no-files-found: error
-          path: |
-            desktop/src-tauri/target/**/bundle/dmg/*.dmg
-            release-artifacts/*-setup.exe
+          path: release-artifacts/argus-macos-universal.dmg
+          archive: false
+
+      - name: Upload Windows installer as workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          path: release-artifacts/argus-${{ matrix.slug }}-setup.exe
+          archive: false
 
   # Tag pushes create the release as a draft; flip it public only when every platform leg
   # succeeded, so a failed leg can never leave a half-populated public release (and the
