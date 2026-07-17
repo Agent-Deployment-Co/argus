@@ -905,6 +905,10 @@ const runCmd = defineCommand({
     "sync-interval": { type: "string", default: String(DEFAULT_SYNC_INTERVAL_MIN), description: "Minutes between uploads", valueHint: "N" },
     "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
     debug: { type: "boolean", default: false, description: "Print task extraction debug logs" },
+    "read-only": {
+      type: "boolean",
+      description: "Read-only mode: hides editing and disables settings (env ARGUS_READ_ONLY; --no-read-only forces it off)",
+    },
   },
   run: handler((args) => {
     return runRun(
@@ -915,6 +919,7 @@ const runCmd = defineCommand({
         syncIntervalMin: Number(args["sync-interval"]) || DEFAULT_SYNC_INTERVAL_MIN,
         noSync: !!args["no-sync"],
         taskExtraction: taskExtractionOptions(args),
+        readOnly: resolveReadOnly({ "read-only": args["read-only"] }, loadConfig()),
       },
       log,
     );

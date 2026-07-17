@@ -188,8 +188,8 @@ export function SessionDetail() {
         )}
       </header>
 
-      {!readOnly && refreshError && <div className="task-error" role="alert">{refreshError}</div>}
-      {!readOnly && hideError && <div className="task-error" role="alert">{hideError}</div>}
+      {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
+      {hideError && <div className="task-error" role="alert">{hideError}</div>}
 
       <div className="detail-tabs" role="tablist" aria-label="Session detail views">
         <button
