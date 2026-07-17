@@ -17,19 +17,23 @@ withDefaults(
 
 const repo = 'Agent-Deployment-Co/argus'
 // No-JS fallback: the latest release page always shows the newest build.
-const macHref = ref(`https://github.com/${repo}/releases/latest`)
+const releasePage = `https://github.com/${repo}/releases/latest`
+const macHref = ref(releasePage)
+const winHref = ref(releasePage)
 
-// Resolve the newest release's .dmg at runtime (cached for an hour) and point the
-// macOS button straight at it. On any failure the button still works — it falls
-// back to the release page.
+// Resolve the newest release's installers at runtime (cached for an hour) and point
+// each button straight at its artifact: the .dmg for macOS, the x64 `-setup.exe` for
+// Windows (ARM64 users get theirs from the release page, which both buttons fall
+// back to on any failure — so the buttons always work).
 onMounted(async () => {
-  const cacheKey = 'argus:latest-dmg'
+  const cacheKey = 'argus:latest-downloads'
   try {
     const cached = localStorage.getItem(cacheKey)
     if (cached) {
-      const { url, ts } = JSON.parse(cached)
-      if (url && Date.now() - ts < 3_600_000) {
-        macHref.value = url
+      const { mac, win, ts } = JSON.parse(cached)
+      if ((mac || win) && Date.now() - ts < 3_600_000) {
+        if (mac) macHref.value = mac
+        if (win) winHref.value = win
         return
       }
     }
@@ -40,11 +44,21 @@ onMounted(async () => {
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`)
     if (!res.ok) return
     const data = await res.json()
-    const dmg = (data.assets || []).find((a: any) => /\.dmg$/i.test(a?.name))
-    if (dmg?.browser_download_url) {
-      macHref.value = dmg.browser_download_url
+    const assets: any[] = data.assets || []
+    const dmg = assets.find((a) => /\.dmg$/i.test(a?.name))
+    const setup = assets.find((a) => /-setup\.exe$/i.test(a?.name) && !/arm64/i.test(a?.name))
+    if (dmg?.browser_download_url) macHref.value = dmg.browser_download_url
+    if (setup?.browser_download_url) winHref.value = setup.browser_download_url
+    if (dmg?.browser_download_url || setup?.browser_download_url) {
       try {
-        localStorage.setItem(cacheKey, JSON.stringify({ url: macHref.value, ts: Date.now() }))
+        localStorage.setItem(
+          cacheKey,
+          JSON.stringify({
+            mac: dmg?.browser_download_url,
+            win: setup?.browser_download_url,
+            ts: Date.now()
+          })
+        )
       } catch {
         // ignore unwritable storage
       }
@@ -72,15 +86,20 @@ onMounted(async () => {
       </svg>
       macOS
     </a>
-    <span class="download-btns__soon" aria-disabled="true">
+    <a
+      class="btn-primary"
+      :href="winHref"
+      data-ph-event="download_clicked"
+      :data-ph-location="location || undefined"
+    >
       <svg viewBox="0 0 448 512" width="16" height="16" aria-hidden="true">
         <path
           fill="currentColor"
           d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z"
         />
       </svg>
-      Windows (coming soon)
-    </span>
+      Windows
+    </a>
   </div>
 </template>
 
@@ -104,25 +123,4 @@ onMounted(async () => {
   color: var(--vp-c-text-1);
 }
 
-.download-btns__soon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
-  font-family: 'Poppins', var(--vp-font-family-base);
-  font-weight: 600;
-  font-size: 0.875rem;
-  line-height: 1;
-  color: var(--vp-c-text-3);
-  background: transparent;
-  border: 1px solid var(--vp-c-divider);
-  cursor: default;
-}
-
-.download-btns__soon svg {
-  flex-shrink: 0;
-  fill: currentColor;
-}
 </style>
