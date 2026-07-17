@@ -29,7 +29,7 @@ jobs:
     name: Build VitePress site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Release events check out the release tag by default. The generated changelog is
           # committed to the default branch, so always build and update main.
@@ -38,7 +38,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - run: bun install --frozen-lockfile
       - name: Refresh changelog
         env:
@@ -67,7 +67,7 @@ jobs:
           # browser. Absent -> analytics stays a silent no-op. Same var name as
           # the adc.co site, so one org value can feed both.
           PUBLIC_POSTHOG_PROJECT_TOKEN: ${{ vars.PUBLIC_POSTHOG_PROJECT_TOKEN }}
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/.vitepress/dist
 
@@ -80,4 +80,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
