@@ -83,7 +83,7 @@ jobs:
       # cross-volume moves fail when `bun build --compile --target=bun-windows-arm64` populates it.
       BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.bun-cache
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -360,7 +360,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Publish the draft release
         run: |
           set -euo pipefail
