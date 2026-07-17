@@ -666,8 +666,74 @@ fn startup_vetoed_in_task_manager() -> bool {
     false
 }
 
+/// Remove the launch agent an earlier Argus wrote (`~/Library/LaunchAgents/Argus.plist`). The
+/// SMAppService login item replaces it; left behind, it would start Argus a second time at
+/// sign-in — and it's also the thing System Settings could only display as a generic
+/// signing-team background item.
+#[cfg(target_os = "macos")]
+fn remove_stale_launch_agent() {
+    let Some(path) = home_dir().map(|dir| {
+        dir.join("Library/LaunchAgents")
+            .join(format!("{AUTOSTART_APP_NAME}.plist"))
+    }) else {
+        return;
+    };
+    if !path.exists() {
+        return;
+    }
+    match std::fs::remove_file(&path) {
+        Ok(()) => log::info!("removed the old start-at-login launch agent"),
+        Err(err) => log::warn!("removing the old start-at-login launch agent: {err}"),
+    }
+}
+
+/// Reconcile the login item through `SMAppService` (macOS 13+), so Argus shows up in System
+/// Settings under "Open at Login" with its own name and icon. The autostart plugin's launch-agent
+/// mechanism is invisible there: a bare launchd plist can't be mapped back to the app, so the OS
+/// files it under "Allow in the Background", attributed to the signing team with a generic icon.
+///
+/// Returns false when `SMAppService` doesn't exist (macOS 12 and older) so the caller falls back
+/// to the plugin's launch agent.
+#[cfg(target_os = "macos")]
+fn sync_login_item_macos(desired: bool) -> bool {
+    use objc2_service_management::{SMAppService, SMAppServiceStatus};
+    if objc2::runtime::AnyClass::get(c"SMAppService").is_none() {
+        return false;
+    }
+    remove_stale_launch_agent();
+    // SAFETY: plain ObjC calls on the main-app service; the class was just checked to exist.
+    let service = unsafe { SMAppService::mainAppService() };
+    let status = unsafe { service.status() };
+    if desired {
+        match status {
+            SMAppServiceStatus::Enabled => {}
+            // The user switched Argus off in System Settings' login items. That veto wins —
+            // re-registering wouldn't flip it back, and fighting it isn't our call to make.
+            SMAppServiceStatus::RequiresApproval => log::info!(
+                "start-at-login is turned off in System Settings; leaving it as the user set it"
+            ),
+            _ => match unsafe { service.registerAndReturnError() } {
+                Ok(()) => log::info!("start-at-login enabled"),
+                Err(err) => log::warn!("enabling start-at-login: {err:?}"),
+            },
+        }
+    } else if matches!(
+        status,
+        SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
+    ) {
+        match unsafe { service.unregisterAndReturnError() } {
+            Ok(()) => log::info!("start-at-login disabled"),
+            Err(err) => log::warn!("disabling start-at-login: {err:?}"),
+        }
+    }
+    true
+}
+
 /// Keep the OS startup registration in sync with `desktop.startAtLogin`. The setting is saved by the
 /// sidecar's web API, so the native shell reconciles it independently instead of requiring a restart.
+/// On macOS this registers an `SMAppService` login item ("Open at Login" in System Settings); on
+/// Windows — and on macOS 12 and older, where `SMAppService` doesn't exist — it goes through the
+/// autostart plugin (registry `Run` entry / launch agent).
 ///
 /// Never touches the OS registration in debug builds: a dev build's login item would point at the
 /// `cargo`/dev binary. The guard lives here so every caller (the sync loop and the quit handler) is
@@ -677,6 +743,10 @@ fn sync_autostart_setting(app: &AppHandle) {
         return;
     }
     let desired = desktop_start_at_login_enabled();
+    #[cfg(target_os = "macos")]
+    if sync_login_item_macos(desired) {
+        return;
+    }
     let autostart = app.autolaunch();
     let current = match autostart.is_enabled() {
         Ok(value) => value,
