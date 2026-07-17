@@ -59,13 +59,13 @@ describe("describeSettings", () => {
     expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
   });
 
-  test("General exposes auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
+  test("General exposes startup, auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
-    expect(paths).toEqual(["autoUpdate.enabled", "hub.url", "log.level"]);
-    // The desktop start-at-login toggle is temporarily removed from the UI: start-at-login is
-    // hard-disabled in the desktop shell until the app is signed with an org Developer ID cert.
-    expect(paths).not.toContain("desktop.startAtLogin");
+    expect(paths).toEqual(["desktop.startAtLogin", "autoUpdate.enabled", "hub.url", "log.level"]);
+    const startAtLogin = findSetting({}, "desktop.startAtLogin");
+    expect(startAtLogin.ui.control).toBe("toggle");
+    expect(startAtLogin.effectiveValue).toBe(true);
     // Silent mode (#255) is config-only by design — never in the UI, even when set.
     expect(paths).not.toContain("desktop.silent");
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.

@@ -579,20 +579,15 @@ fn json_minutes_setting(value: Option<&serde_json::Value>) -> Option<u64> {
     }
 }
 
-/// Whether the desktop shell should start automatically when the user signs in.
-///
-/// TEMPORARILY HARD-DISABLED for everyone. The app is signed with a personal Developer ID
-/// certificate, so the OS background-activity notification and the Login Items entry would show an
-/// individual's name instead of the org's. Until the app is signed with an org certificate,
-/// start-at-login is off unconditionally: this ignores both `ARGUS_DESKTOP_START_AT_LOGIN` and
-/// `desktop.startAtLogin` in argus.json and always returns false, so `sync_autostart_setting` only
-/// ever *unregisters* the login item (clearing the notification) and never registers one.
-///
-/// To re-enable once the org cert is in place: restore the env + argus.json lookup below (see git
-/// history for this function) and re-add the "Startup" toggle to the Settings layout in
-/// `src/api/settings.ts`.
+/// Whether the desktop shell should start automatically when the user signs in. Defaults to true,
+/// matching the shared `desktop.startAtLogin` setting in `argus.json`.
 fn desktop_start_at_login_enabled() -> bool {
-    false
+    if let Some(value) = non_empty_env("ARGUS_DESKTOP_START_AT_LOGIN") {
+        return parse_bool_setting(&value).unwrap_or(true);
+    }
+    read_argus_config_json()
+        .and_then(|json| json_bool_setting(json.get("desktop").and_then(|v| v.get("startAtLogin"))))
+        .unwrap_or(true)
 }
 
 /// Whether the desktop shell should run invisibly: no tray icon, no notifications, and no
@@ -628,6 +623,49 @@ fn sync_silent_mode(app: &AppHandle) {
     }
 }
 
+/// The name the autostart plugin registers under — the macOS login item / Windows registry value
+/// name. Must match `.app_name(...)` on the plugin builder in `run()`.
+const AUTOSTART_APP_NAME: &str = "Argus";
+
+/// Whether the user has switched Argus off in Task Manager's "Startup apps" tab.
+///
+/// Windows layers a per-user override on top of the `Run` registration: the `Run` value says
+/// "start this at sign-in", and `StartupApproved\Run` records whether the user has vetoed it in
+/// Task Manager (a 12-byte flag whose trailing 8 bytes are zero when approved, a disable
+/// timestamp otherwise). The autostart plugin's `is_enabled` folds both into one bool, and its
+/// `enable` *overwrites* the veto — so before re-enabling, tell "never registered" (fine to
+/// register) apart from "vetoed by the user" (leave it alone; their Task Manager choice wins
+/// until they flip it back there).
+#[cfg(windows)]
+fn startup_vetoed_in_task_manager() -> bool {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run_registered = hkcu
+        .open_subkey_with_flags("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_READ)
+        .and_then(|key| key.get_value::<String, _>(AUTOSTART_APP_NAME))
+        .is_ok();
+    if !run_registered {
+        return false;
+    }
+    let Ok(value) = hkcu
+        .open_subkey_with_flags(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
+            KEY_READ,
+        )
+        .and_then(|key| key.get_raw_value(AUTOSTART_APP_NAME))
+    else {
+        return false;
+    };
+    // Approved entries end in eight zero bytes; disabling stamps a timestamp there.
+    value.bytes.len() >= 8 && value.bytes.iter().rev().take(8).any(|byte| *byte != 0)
+}
+
+#[cfg(not(windows))]
+fn startup_vetoed_in_task_manager() -> bool {
+    false
+}
+
 /// Keep the OS startup registration in sync with `desktop.startAtLogin`. The setting is saved by the
 /// sidecar's web API, so the native shell reconciles it independently instead of requiring a restart.
 ///
@@ -648,6 +686,13 @@ fn sync_autostart_setting(app: &AppHandle) {
         }
     };
     if current == desired {
+        return;
+    }
+    // A Task Manager veto (Windows) reads as "off", but re-enabling would silently overwrite the
+    // user's explicit OS-level choice — respect it instead. This also means the Settings toggle
+    // can't force past a Task Manager disable; the user re-enables it where they turned it off.
+    if desired && startup_vetoed_in_task_manager() {
+        log::info!("start-at-login is turned off in Task Manager; leaving it as the user set it");
         return;
     }
     let result = if desired {
@@ -1284,7 +1329,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()
-                .app_name("Argus")
+                .app_name(AUTOSTART_APP_NAME)
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1389,11 +1434,10 @@ pub fn run() {
             // clicks "Open Argus".
             start(app.handle());
 
-            // Keep live state in sync with argus.json: the OS start-at-login registration (default
-            // temporarily off, see `desktop_start_at_login_enabled` — an install that never touched
-            // the toggle unregisters its login item here on the next launch) and silent mode's tray
-            // visibility. The initial reconcile inside also hides the tray right away when
-            // `desktop.silent` was already set at launch.
+            // Keep live state in sync with argus.json: the OS start-at-login registration (on by
+            // default — the initial reconcile inside registers the login item on first launch) and
+            // silent mode's tray visibility. That same reconcile also hides the tray right away
+            // when `desktop.silent` was already set at launch.
             start_config_sync_watcher(app.handle());
 
             // Check for a newer signed build in the background; the menu item lets the user ask for

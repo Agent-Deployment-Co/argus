@@ -31,3 +31,9 @@ tauri-plugin-autostart = "2.5.1"
 notify = "8"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros", "time"] }
+
+[target."cfg(windows)".dependencies]
+# Already a transitive dependency of tauri-plugin-autostart (via auto-launch); used directly to
+# tell "not registered" apart from "disabled by the user in Task Manager" (see
+# `windows_startup_disabled_in_task_manager`).
+winreg = "0.55"

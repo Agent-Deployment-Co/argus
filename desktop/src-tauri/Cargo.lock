@@ -102,6 +102,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tokio",
+ "winreg 0.55.0",
 ]
 
 [[package]]

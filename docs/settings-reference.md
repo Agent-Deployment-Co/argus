@@ -75,7 +75,7 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 |---|---|---|---|---|---|
 | Automatic updates | Whether the desktop app installs updates automatically. | `autoUpdate.enabled` | `ARGUS_AUTO_UPDATE_ENABLED` | None | `true` |
 | Update check interval | Minutes between desktop update checks. | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | None | `60` |
-| Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `false` |
+| Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `true` |
 | Silent desktop mode | Whether the desktop app runs without a tray icon, notifications or opening the browser on first run. | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | None | `false` |
 | Read-only mode | Whether `serve` runs read-only: labels, hiding sessions, refresh and Settings are hidden and their routes aren't mounted. | `readOnly` | `ARGUS_READ_ONLY` | `serve`: `--read-only` | `false` |
 | Hub URL | Argus Hub server URL for [sync](/terminology#sync). | `hub.url` | `ARGUS_HUB_URL` | None | unset |
@@ -83,9 +83,6 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 | Log level | How much detail Argus prints to the terminal. | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` | `info` |
 | Retain session text | Whether Argus keeps prompt and response text in the local [index](/terminology#index) for interpretation. | `retainText` | `ARGUS_RETAIN_TEXT` | `index`, `index rebuild` and `index refresh`: `--retain-text true\|false` | `true` |
 | Welcome completed | Whether the first-run welcome screen has been dismissed. | `state.onboardingCompleted` | `ARGUS_STATE_ONBOARDING_COMPLETED` | None | `false` |
-
-`desktop.startAtLogin` is currently kept as restore plumbing. The desktop app
-does not use it while start-at-login is disabled.
 
 `desktop.silent` is for managed or scripted desktop deployments. Set it with
 `argus config set desktop.silent true` or `ARGUS_DESKTOP_SILENT=true`; it is not
