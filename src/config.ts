@@ -347,14 +347,7 @@ export const DESKTOP_SETTINGS = {
   startAtLogin: {
     path: "desktop.startAtLogin",
     env: "ARGUS_DESKTOP_START_AT_LOGIN",
-    // Temporarily hard-disabled. The desktop app is signed with a personal Developer ID, so the OS
-    // "runs in the background" notification and the Login Items entry show an individual's name
-    // instead of the org's. Until the app is signed with an org certificate, start-at-login is off
-    // for everyone: the desktop shell ignores this setting (see `desktop_start_at_login_enabled` in
-    // desktop/src-tauri/src/lib.rs) and the Settings toggle is removed from the UI (src/api/settings.ts).
-    // This descriptor is kept as restore-plumbing; re-enable by restoring both, then flipping this
-    // default back to `true`.
-    default: false,
+    default: true,
     ui: {
       label: "Start when you sign in",
       description: "Open the desktop app automatically when you sign in to this computer.",

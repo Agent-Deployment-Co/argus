@@ -10,6 +10,11 @@ managed-settings behavior, see the [Settings Reference](/settings-reference).
 
 - **Appearance** sets the color theme: follow your system, or force light or
   dark.
+- **Startup** controls whether the desktop app starts automatically when you sign
+  in to this computer. It's on by default. If you turn Argus off in your
+  computer's own startup settings instead (Open at Login on macOS, Startup apps
+  in Windows Task Manager), Argus respects that choice, and you turn it back on
+  in the same place.
 - **Updates** controls whether the desktop app installs new versions
   automatically. With it off, Argus tells you when an update is ready and you
   install it from the menu bar.

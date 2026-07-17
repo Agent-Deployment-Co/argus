@@ -31,3 +31,15 @@ tauri-plugin-autostart = "2.5.1"
 notify = "8"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros", "time"] }
+
+[target."cfg(target_os = \"macos\")".dependencies]
+# SMAppService bindings for the login-item registration (macOS 13+). objc2 is already in the
+# dependency tree via tauri; the version here must stay in step with the one tauri pins.
+objc2 = "0.6"
+objc2-service-management = "0.3"
+
+[target."cfg(windows)".dependencies]
+# Already a transitive dependency of tauri-plugin-autostart (via auto-launch); used directly to
+# tell "not registered" apart from "disabled by the user in Task Manager" (see
+# `windows_startup_disabled_in_task_manager`).
+winreg = "0.55"
