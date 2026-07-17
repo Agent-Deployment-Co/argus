@@ -15,6 +15,10 @@ no separate setup. The macOS build is available now, and Windows is coming soon.
 Once it's running, look for the Argus icon in your menu bar. Open it to see your
 usage.
 
+From then on, Argus starts on its own when you sign in to your Mac, so your data
+stays current even after a restart. Turn that off under **Startup** in
+[Settings](/settings) if you'd rather launch it yourself.
+
 ![The Argus menu bar icon and its menu: Open Argus, Start, Stop, Check for updates and more.](./images/screenshots/mac-menu.png)
 
 ::: tip If macOS blocks the app on first launch

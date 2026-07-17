@@ -30,6 +30,7 @@ it.
 ## On a Mac, it lives in your menu bar
 
 The macOS app runs from your menu bar. Look for the Argus icon at the top of your
-screen: open it to launch the app in your browser, and leave it running so Argus
-keeps finding and indexing new sessions in the background. See
-[Download](/download) to set it up.
+screen and open it to launch the app in your browser. Argus starts on its own when
+you sign in to your Mac and keeps finding and indexing new sessions in the
+background, so it's ready even after a restart. You can turn that off in
+[Settings](/settings). See [Download](/download) to set it up.
