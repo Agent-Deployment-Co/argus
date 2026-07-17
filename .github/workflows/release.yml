@@ -3,7 +3,7 @@ name: Release
 # Builds and signs the distributable artifacts:
 #   - npm: per-OS prebuilt binaries published under @agentdeploymentco/argus*
 #   - macOS: a signed + notarized Argus.app / .dmg
-#   - Windows: Azure Artifact Signing-signed NSIS installers (.exe) for x64 and ARM64
+#   - Windows: standalone CLI ZIPs plus Azure Artifact Signing-signed NSIS installers (.exe)
 #
 # Two modes, decided by what triggered the run:
 #   - Tag push: build everything, upload to a DRAFT GitHub Release, and publish it only after
@@ -56,6 +56,7 @@ jobs:
           # Windows x64, built natively on the x64 runner.
           - name: Windows x64
             slug: windows-x64
+            archive_arch: amd64
             platform: "windows-latest"
             rust-targets: ""
             stage-args: "--build"
@@ -65,6 +66,7 @@ jobs:
           # `bun build --compile --target=bun-windows-arm64` (stage-desktop-sidecar.sh --target).
           - name: Windows ARM64
             slug: windows-arm64
+            archive_arch: arm64
             platform: "windows-latest"
             rust-targets: "aarch64-pc-windows-msvc"
             stage-args: "--target aarch64-pc-windows-msvc"
@@ -260,6 +262,44 @@ jobs:
             Write-Host "$($artifact.Name): $($signature.Status) ($($signature.SignerCertificate.Subject))"
           }
 
+      # Package the signed CLI sidecar with the web app so Windows users can run Argus without
+      # installing the desktop shell. Keep both files at the archive root for easy extraction.
+      - name: Package Windows CLI archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archiveDir = Join-Path $env:RUNNER_TEMP "argus-cli-archive"
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $archiveDir
+          New-Item -ItemType Directory -Force -Path $archiveDir, $releaseDir | Out-Null
+
+          $binaries = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\binaries" -Filter "*.exe")
+          if ($binaries.Count -ne 1) {
+            throw "Expected one Windows CLI binary, found $($binaries.Count)."
+          }
+          Copy-Item -LiteralPath $binaries[0].FullName -Destination (Join-Path $archiveDir "argus.exe")
+          Copy-Item -Recurse -LiteralPath "$env:GITHUB_WORKSPACE\desktop\src-tauri\web" -Destination (Join-Path $archiveDir "web")
+
+          $version = (Get-Content "$env:GITHUB_WORKSPACE\desktop\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $archive = Join-Path $releaseDir "argus_${version}_windows_${{ matrix.archive_arch }}.zip"
+          Compress-Archive -Path (Join-Path $archiveDir "argus.exe"), (Join-Path $archiveDir "web") -DestinationPath $archive -Force
+          Write-Host "Created $archive"
+
+      - name: Upload Windows CLI archive to release
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content "desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $tag = "argus-v$version"
+          $archive = Get-ChildItem -Path "$env:GITHUB_WORKSPACE\release-artifacts" -Filter "*.zip" |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $archive) {
+            throw "No Windows CLI archive was found to upload."
+          }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $archive
+
       # tauri-action uploads the unsigned bundle while creating the draft release. Replace that
       # asset with the signed file before publish-release makes the draft public. workflow_dispatch
       # has no release, so its upload-artifact step below receives the signed file directly.
@@ -279,6 +319,21 @@ jobs:
           }
           gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $installers
 
+      # Actions downloads are ZIP archives. Stage the release files at the archive root so
+      # workflow_dispatch users do not need to navigate the Rust target directory structure.
+      - name: Stage Windows installer for workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          $installers = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\target" -Filter "*-setup.exe" -Recurse)
+          if ($installers.Count -eq 0) {
+            throw "No Windows installer was found to package."
+          }
+          foreach ($installer in $installers) {
+            Copy-Item -LiteralPath $installer.FullName -Destination $destination -Force
+          }
+
       # Dry-run mode only: expose the bundles on the workflow run so they can be
       # downloaded and installed on real machines before any tag exists.
       - name: Upload bundles as workflow artifacts
@@ -290,7 +345,7 @@ jobs:
           path: |
             desktop/src-tauri/target/**/bundle/macos/*.app.tar.gz*
             desktop/src-tauri/target/**/bundle/dmg/*.dmg
-            desktop/src-tauri/target/**/bundle/nsis/*-setup.exe*
+            release-artifacts/*
 
   # Tag pushes create the release as a draft; flip it public only when every platform leg
   # succeeded, so a failed leg can never leave a half-populated public release (and the
