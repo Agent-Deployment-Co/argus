@@ -334,18 +334,18 @@ jobs:
             Copy-Item -LiteralPath $installer.FullName -Destination $destination -Force
           }
 
-      # Dry-run mode only: expose the bundles on the workflow run so they can be
-      # downloaded and installed on real machines before any tag exists.
-      - name: Upload bundles as workflow artifacts
+      # Dry-run mode only: expose the desktop installers on the workflow run so they can be
+      # downloaded and tested on real machines before any tag exists. Standalone Windows CLI
+      # ZIPs are published only on tagged releases, not as workflow artifacts.
+      - name: Upload desktop installers as workflow artifacts
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: argus-${{ matrix.slug }}
           if-no-files-found: error
           path: |
-            desktop/src-tauri/target/**/bundle/macos/*.app.tar.gz*
             desktop/src-tauri/target/**/bundle/dmg/*.dmg
-            release-artifacts/*
+            release-artifacts/*-setup.exe
 
   # Tag pushes create the release as a draft; flip it public only when every platform leg
   # succeeded, so a failed leg can never leave a half-populated public release (and the
