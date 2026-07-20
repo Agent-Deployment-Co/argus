@@ -5,8 +5,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Write-Diagnostic {
+  param([string]$Message)
+
+  if ($env:RUNNER_TEMP) {
+    Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP "argus-signing.log") -Value $Message
+  }
+  if ($env:GITHUB_STEP_SUMMARY) {
+    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $Message
+  }
+}
+
 if ($env:GITHUB_STEP_SUMMARY) {
-  Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "`nArtifact signer invoked for: $Artifact"
+  Write-Diagnostic "`nArtifact signer invoked for: $Artifact"
+} else {
+  Write-Diagnostic "Artifact signer invoked for: $Artifact"
 }
 
 $signingCli = $env:ARTIFACT_SIGNING_CLI
@@ -42,14 +55,11 @@ if ($exitCode -ne 0) {
     }
   }
 
-  if ($env:GITHUB_STEP_SUMMARY) {
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "`n### Azure Artifact Signing failure"
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Artifact: $Artifact"
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Exit code: $exitCode"
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "````text"
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $details
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "````"
-  }
+  Write-Diagnostic "`n### Azure Artifact Signing failure"
+  Write-Diagnostic "Artifact: $Artifact"
+  Write-Diagnostic "Exit code: $exitCode"
+  Write-Diagnostic "Signer output:"
+  Write-Diagnostic $details
 
   throw "Azure Artifact Signing failed for $Artifact (exit code $exitCode)."
 }

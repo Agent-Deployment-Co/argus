@@ -194,6 +194,17 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
 
+      - name: Show Windows signing diagnostics
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $diagnosticPath = Join-Path $env:RUNNER_TEMP "argus-signing.log"
+          if (Test-Path -LiteralPath $diagnosticPath) {
+            Get-Content -LiteralPath $diagnosticPath
+          } else {
+            Write-Host "The Windows signing wrapper did not create a diagnostic log."
+          }
+
       # Releases created with GITHUB_TOKEN do not reliably emit a release event that can
       # trigger another workflow. Dispatch docs explicitly after the release exists.
       - name: Refresh docs changelog
