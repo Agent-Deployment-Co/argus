@@ -10,10 +10,10 @@ name: Release
 #     every platform leg has succeeded (the publish-release job below).
 #   - workflow_dispatch (any branch): build-only dry run — no tag, no release; the bundles are
 #     uploaded as workflow artifacts so they can be downloaded and tested on real machines.
-# Windows signing uses GitHub Actions OIDC with Azure Artifact Signing. The Windows jobs fail
-# clearly if the Azure identity or signing configuration is missing, so a tagged release cannot
-# silently publish unsigned installers. No secret value ever lives in this file — only references
-# to `secrets.*`.
+# Windows signing uses Tauri's `bundle.windows.signCommand` with Azure Artifact Signing. The
+# Windows jobs fail clearly if the Azure identity or signing configuration is missing, so a tagged
+# release cannot silently publish unsigned installers. No secret value ever lives in this file —
+# only references to `secrets.*`.
 #
 # Required secrets (set in repo/org settings; never commit their values):
 #   NPM_TOKEN                              npm automation token (npm publish)
@@ -21,8 +21,8 @@ name: Release
 #   APPLE_CERTIFICATE_PASSWORD             its export password
 #   APPLE_SIGNING_IDENTITY                 e.g. "Developer ID Application: … (TEAMID)"
 #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
-#   AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID
-#                                            GitHub OIDC identity used by Azure Artifact Signing
+#   AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID
+#                                            service principal used by artifact-signing-cli
 # Required repository or organization secrets:
 #   AZURE_ARTIFACT_SIGNING_ENDPOINT          Region-specific codesigning.azure.net endpoint
 #   AZURE_ARTIFACT_SIGNING_ACCOUNT           Artifact Signing account name
@@ -36,7 +36,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write # required for OIDC
   contents: write # create the GitHub Release and upload assets
   actions: write # dispatch the docs changelog refresh after publishing a release
 
@@ -92,6 +91,33 @@ jobs:
           # Extra targets beyond the host: both macOS arches for the universal build,
           # aarch64-pc-windows-msvc for the Windows ARM64 cross-build.
           targets: ${{ matrix.rust-targets }}
+      - name: Install Azure Artifact Signing CLI
+        if: runner.os == 'Windows'
+        run: cargo install artifact-signing-cli --version 0.11.0 --locked
+      - name: Locate Windows signing tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $signingCli = Join-Path $env:CARGO_HOME "bin\artifact-signing-cli.exe"
+          if (-not (Test-Path -LiteralPath $signingCli)) {
+            throw "artifact-signing-cli was not installed at $signingCli."
+          }
+
+          $azureCli = (Get-Command az.cmd -ErrorAction Stop).Path
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter "signtool.exe" -File -Recurse |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Sort-Object -Property FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            throw "No x64 signtool.exe was found in the installed Windows SDKs."
+          }
+
+          "ARTIFACT_SIGNING_CLI=$signingCli" >> $env:GITHUB_ENV
+          "AZURE_CLI_PATH=$azureCli" >> $env:GITHUB_ENV
+          "SIGNTOOL_PATH=$($signTool.FullName)" >> $env:GITHUB_ENV
+          Write-Host "artifact-signing-cli: $signingCli"
+          Write-Host "Azure CLI: $azureCli"
+          Write-Host "SignTool: $($signTool.FullName)"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
@@ -104,30 +130,6 @@ jobs:
       #   --target aarch64-pc-windows-msvc  cross-compiled Windows ARM64 sidecar
       - name: Stage sidecar + web
         run: bash scripts/stage-desktop-sidecar.sh ${{ matrix.stage-args }}
-
-      - name: Azure login for Artifact Signing
-        if: runner.os == 'Windows'
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # Sign the CLI sidecar before Tauri embeds it in the installed application. The ARM64
-      # sidecar is signed on this x64 Windows runner because Artifact Signing does not support
-      # Windows ARM runners.
-      - name: Sign Windows sidecar
-        if: runner.os == 'Windows'
-        uses: azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\desktop\src-tauri\binaries
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
 
       - name: import Apple Developer Certificate
         if: runner.os == 'macOS'
@@ -169,6 +171,13 @@ jobs:
           # artifacts are produced; the normal app/DMG build still runs.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Azure Artifact Signing credentials are consumed by the Tauri signCommand wrapper.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          AZURE_ARTIFACT_SIGNING_PROFILE: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
         with:
           # An empty tagName makes tauri-action build without touching releases at all —
           # that's the workflow_dispatch dry-run mode. On tag pushes the release is created
@@ -184,6 +193,17 @@ jobs:
           tauriScript: ${{ runner.os == 'Windows' && 'bunx tauri' || format('{0}/node_modules/.bin/tauri', github.workspace) }}
           includeUpdaterJson: true
           args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
+
+      - name: Show Windows signing diagnostics
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $diagnosticPath = Join-Path $env:RUNNER_TEMP "argus-signing.log"
+          if (Test-Path -LiteralPath $diagnosticPath) {
+            Get-Content -LiteralPath $diagnosticPath
+          } else {
+            Write-Host "The Windows signing wrapper did not create a diagnostic log."
+          }
 
       # Releases created with GITHUB_TOKEN do not reliably emit a release event that can
       # trigger another workflow. Dispatch docs explicitly after the release exists.
@@ -214,33 +234,6 @@ jobs:
             echo "No updater signature (${pattern}.sig) was produced." >&2
             exit 1
           fi
-
-      - name: Locate Windows installers
-        if: runner.os == 'Windows'
-        id: windows_installers
-        shell: pwsh
-        run: |
-          $installers = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\target" -Filter "*-setup.exe" -Recurse |
-            Select-Object -ExpandProperty FullName
-          )
-          if ($installers.Count -eq 0) {
-            throw "No Windows installer was found to sign."
-          }
-          "files<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          $installers | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Sign Windows installers
-        if: runner.os == 'Windows'
-        uses: azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
-          files: ${{ steps.windows_installers.outputs.files }}
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
 
       - name: Verify Windows Authenticode signatures
         if: runner.os == 'Windows'
@@ -299,25 +292,6 @@ jobs:
             throw "No Windows CLI archive was found to upload."
           }
           gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $archive
-
-      # tauri-action uploads the unsigned bundle while creating the draft release. Replace that
-      # asset with the signed file before publish-release makes the draft public. workflow_dispatch
-      # has no release, so its upload-artifact step below receives the signed file directly.
-      - name: Replace Windows release assets with signed installers
-        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $version = (Get-Content "desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
-          $tag = "argus-v$version"
-          $installers = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\target" -Filter "*-setup.exe" -Recurse |
-            Select-Object -ExpandProperty FullName
-          )
-          if ($installers.Count -eq 0) {
-            throw "No Windows installer was found to upload."
-          }
-          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $installers
 
       # Stage the Windows installer with a stable name so archive:false can upload the raw file.
       - name: Stage Windows installer for workflow artifact
