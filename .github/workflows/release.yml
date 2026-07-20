@@ -94,6 +94,30 @@ jobs:
       - name: Install Azure Artifact Signing CLI
         if: runner.os == 'Windows'
         run: cargo install artifact-signing-cli --version 0.11.0 --locked
+      - name: Locate Windows signing tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $signingCli = Join-Path $env:CARGO_HOME "bin\artifact-signing-cli.exe"
+          if (-not (Test-Path -LiteralPath $signingCli)) {
+            throw "artifact-signing-cli was not installed at $signingCli."
+          }
+
+          $azureCli = (Get-Command az.cmd -ErrorAction Stop).Path
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter "signtool.exe" -File -Recurse |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Sort-Object -Property FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            throw "No x64 signtool.exe was found in the installed Windows SDKs."
+          }
+
+          "ARTIFACT_SIGNING_CLI=$signingCli" >> $env:GITHUB_ENV
+          "AZURE_CLI_PATH=$azureCli" >> $env:GITHUB_ENV
+          "SIGNTOOL_PATH=$($signTool.FullName)" >> $env:GITHUB_ENV
+          Write-Host "artifact-signing-cli: $signingCli"
+          Write-Host "Azure CLI: $azureCli"
+          Write-Host "SignTool: $($signTool.FullName)"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri

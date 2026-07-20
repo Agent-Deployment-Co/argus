@@ -5,12 +5,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-& artifact-signing-cli `
-  --endpoint $env:AZURE_ARTIFACT_SIGNING_ENDPOINT `
-  --account $env:AZURE_ARTIFACT_SIGNING_ACCOUNT `
-  --certificate $env:AZURE_ARTIFACT_SIGNING_PROFILE `
-  --description Argus `
+$signingCli = $env:ARTIFACT_SIGNING_CLI
+if (-not $signingCli) {
+  $signingCli = Join-Path $env:CARGO_HOME "bin\artifact-signing-cli.exe"
+}
+
+$arguments = @(
+  "-e", $env:AZURE_ARTIFACT_SIGNING_ENDPOINT,
+  "-a", $env:AZURE_ARTIFACT_SIGNING_ACCOUNT,
+  "-c", $env:AZURE_ARTIFACT_SIGNING_PROFILE,
+  "-d", "Argus",
+  "--azure-cli-path", $env:AZURE_CLI_PATH,
+  "--sign-tool-path", $env:SIGNTOOL_PATH,
   $Artifact
+)
+
+& $signingCli @arguments
 
 if ($LASTEXITCODE -ne 0) {
   throw "Azure Artifact Signing failed for $Artifact."
