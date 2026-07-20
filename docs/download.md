@@ -26,16 +26,16 @@ Privacy & Security** and click **Open Anyway**.
 
 ## Install on Windows
 
-1. Run the downloaded installer (its name ends in `x64-setup.exe`). It sets
-   Argus up for your user account, so no administrator sign-off is needed.
+1. Run the downloaded installer. Its name ends in `x64-setup.exe` for Windows
+   x64 or `arm64-setup.exe` for Windows ARM. It sets Argus up for your user
+   account, so no administrator sign-off is needed.
 2. When it finishes, Argus starts and its icon appears in your system tray, in
    the bottom-right corner of your screen (it may be tucked behind the `^`
    arrow). Open it to see your usage.
 
-On a Windows ARM device (a Snapdragon Surface, for example), download the
-`arm64` installer from the
-[GitHub releases](https://github.com/Agent-Deployment-Co/argus/releases/latest)
-page instead.
+The Windows download button checks your browser's reported architecture and
+selects the matching installer when it can. If your browser doesn't report an
+architecture, it opens the latest release with links for choosing x64 or ARM64.
 
 ::: tip If Windows warns about the installer
 If Microsoft Defender SmartScreen shows "Windows protected your PC", click
