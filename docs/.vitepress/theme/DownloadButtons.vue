@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import {
+  detectBrowserWindowsArchitecture,
+  findReleaseDownloadUrls,
+  isWindowsBrowser,
+  windowsInstallerUrl,
+  type ReleaseDownloadUrls,
+  type WindowsArchitecture
+} from './download-links'
 
 // `center` centers the row; `label` shows a caption inline to the left of the
 // buttons. Quick Start uses both; the Download page uses neither. `location`
@@ -20,21 +28,45 @@ const repo = 'Agent-Deployment-Co/argus'
 const releasePage = `https://github.com/${repo}/releases/latest`
 const macHref = ref(releasePage)
 const winHref = ref(releasePage)
+const windowsBrowser = ref(false)
+const windowsArchitecture = ref<WindowsArchitecture>('unknown')
+const windowsDownloads = ref<ReleaseDownloadUrls>({})
+const hasDirectWindowsDownload = computed(() => winHref.value !== releasePage)
+const showWindowsFallback = computed(
+  () => windowsBrowser.value && !hasDirectWindowsDownload.value
+)
+const windowsArchitectureLabel = computed(() =>
+  hasDirectWindowsDownload.value && windowsArchitecture.value !== 'unknown'
+    ? ` (${windowsArchitecture.value})`
+    : ''
+)
 
-// Resolve the newest release's installers at runtime (cached for an hour) and point
-// each button straight at its artifact: the .dmg for macOS, the x64 `-setup.exe` for
-// Windows (ARM64 users get theirs from the release page, which both buttons fall
-// back to on any failure — so the buttons always work).
+function applyDownloads(urls: ReleaseDownloadUrls) {
+  if (urls.mac) macHref.value = urls.mac
+  windowsDownloads.value = urls
+  const windowsUrl = windowsInstallerUrl(urls, windowsArchitecture.value)
+  if (windowsUrl) winHref.value = windowsUrl
+}
+
+// Resolve the newest release's installers at runtime (cached for an hour).
 onMounted(async () => {
+  windowsBrowser.value = isWindowsBrowser()
+  windowsArchitecture.value = await detectBrowserWindowsArchitecture()
   const cacheKey = 'argus:latest-downloads'
   try {
     const cached = localStorage.getItem(cacheKey)
     if (cached) {
-      const { mac, win, ts } = JSON.parse(cached)
-      if ((mac || win) && Date.now() - ts < 3_600_000) {
-        if (mac) macHref.value = mac
-        if (win) winHref.value = win
-        return
+      const stored = JSON.parse(cached) as ReleaseDownloadUrls & { win?: string; ts?: number }
+      const urls: ReleaseDownloadUrls = {
+        mac: stored.mac,
+        windowsX64: stored.windowsX64 ?? stored.win,
+        windowsArm64: stored.windowsArm64
+      }
+      if (Date.now() - (stored.ts ?? 0) < 3_600_000) {
+        applyDownloads(urls)
+        if (windowsInstallerUrl(urls, windowsArchitecture.value) || windowsArchitecture.value === 'unknown') {
+          return
+        }
       }
     }
   } catch {
@@ -43,21 +75,14 @@ onMounted(async () => {
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`)
     if (!res.ok) return
-    const data = await res.json()
-    const assets: any[] = data.assets || []
-    const dmg = assets.find((a) => /\.dmg$/i.test(a?.name))
-    const setup = assets.find((a) => /-setup\.exe$/i.test(a?.name) && !/arm64/i.test(a?.name))
-    if (dmg?.browser_download_url) macHref.value = dmg.browser_download_url
-    if (setup?.browser_download_url) winHref.value = setup.browser_download_url
-    if (dmg?.browser_download_url || setup?.browser_download_url) {
+    const data = (await res.json()) as { assets?: Array<{ name?: string; browser_download_url?: string }> }
+    const urls = findReleaseDownloadUrls(data.assets ?? [])
+    applyDownloads(urls)
+    if (urls.mac || urls.windowsX64 || urls.windowsArm64) {
       try {
         localStorage.setItem(
           cacheKey,
-          JSON.stringify({
-            mac: dmg?.browser_download_url,
-            win: setup?.browser_download_url,
-            ts: Date.now()
-          })
+          JSON.stringify({ ...urls, ts: Date.now() })
         )
       } catch {
         // ignore unwritable storage
@@ -98,9 +123,27 @@ onMounted(async () => {
           d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z"
         />
       </svg>
-      Windows
+      Windows{{ windowsArchitectureLabel }}
     </a>
   </div>
+  <p v-if="showWindowsFallback" class="download-btns__windows-fallback">
+    <template v-if="windowsArchitecture === 'unknown'">
+      Windows architecture couldn't be detected.
+    </template>
+    <template v-else>
+      The Windows {{ windowsArchitecture }} installer couldn't be loaded.
+    </template>
+    <template v-if="windowsDownloads.windowsX64 || windowsDownloads.windowsArm64">
+      Choose the
+      <a :href="windowsDownloads.windowsX64 || releasePage">x64</a> or
+      <a :href="windowsDownloads.windowsArm64 || releasePage">ARM64</a>
+      installer.
+    </template>
+    <template v-else>
+      Choose x64 or ARM64 from the
+      <a :href="releasePage">latest release</a>.
+    </template>
+  </p>
 </template>
 
 <style scoped>
@@ -121,6 +164,12 @@ onMounted(async () => {
   font-weight: 600;
   font-size: 0.95rem;
   color: var(--vp-c-text-1);
+}
+
+.download-btns__windows-fallback {
+  margin: -12px 0 24px;
+  color: var(--vp-c-text-2);
+  font-size: 0.95rem;
 }
 
 </style>
