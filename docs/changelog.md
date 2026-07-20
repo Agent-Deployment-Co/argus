@@ -4,6 +4,27 @@
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.22
+
+Published July 17, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.22).
+
+### Changes
+
+- Sync session titles, summaries, and labels to the Hub ([#268](https://github.com/Agent-Deployment-Co/argus/pull/268))
+- docs: refresh screenshots and update Using Argus pages for 0.1.21 ([#269](https://github.com/Agent-Deployment-Co/argus/pull/269))
+- Fix Windows ARM64 desktop builds ([#277](https://github.com/Agent-Deployment-Co/argus/pull/277))
+- Fix release changelog synchronization ([#275](https://github.com/Agent-Deployment-Co/argus/pull/275))
+- Make docs sidebar and outline dropdown opaque ([#279](https://github.com/Agent-Deployment-Co/argus/pull/279))
+- Open Argus in the default Windows browser ([#280](https://github.com/Agent-Deployment-Co/argus/pull/280))
+- Add the Activity view screenshot to the README ([#285](https://github.com/Agent-Deployment-Co/argus/pull/285))
+- CLAUDE.md + architecture.md: audience, fix drift, collapse to invariants, document desktop ([#236](https://github.com/Agent-Deployment-Co/argus/pull/236))
+- Add read-only mode to serve ([#283](https://github.com/Agent-Deployment-Co/argus/pull/283))
+- Sign Windows release artifacts with Azure Artifact Signing ([#284](https://github.com/Agent-Deployment-Co/argus/pull/284))
+- Re-enable start-at-login, with Windows Task Manager respect ([#287](https://github.com/Agent-Deployment-Co/argus/pull/287))
+- Bump version to 0.1.22 ([#288](https://github.com/Agent-Deployment-Co/argus/pull/288))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.21...argus-v0.1.22).
+
 ## Argus v0.1.21
 
 Published July 10, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.21).
