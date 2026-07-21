@@ -95,6 +95,30 @@ async function renderMermaid(isDark: boolean) {
   }
 }
 
+// Wide tables scroll horizontally (see .vp-doc table in style.css), but macOS
+// hides scrollbars until you scroll — so fade out the clipped edge as a hint
+// that there's more to the right. The class drives a mask in style.css.
+function updateTableOverflowHint(table: HTMLElement) {
+  const hiddenRight =
+    table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+  table.classList.toggle('has-overflow-right', hiddenRight)
+  table.classList.toggle('has-overflow-left', table.scrollLeft > 1)
+}
+
+function initTableOverflowHints() {
+  if (typeof window === 'undefined') return
+  const tables = document.querySelectorAll<HTMLElement>('.vp-doc table')
+  for (const table of tables) {
+    if (!('overflowHintBound' in table.dataset)) {
+      table.dataset.overflowHintBound = ''
+      table.addEventListener('scroll', () => updateTableOverflowHint(table), {
+        passive: true
+      })
+    }
+    updateTableOverflowHint(table)
+  }
+}
+
 export default {
   extends: DefaultTheme,
   // Add the GitHub star-count button at the right end of the nav bar.
@@ -113,12 +137,22 @@ export default {
     // Start PostHog once the app is mounted in the browser. It's a no-op unless
     // PUBLIC_POSTHOG_PROJECT_TOKEN was set at build time; pageviews (including
     // client-side navigations) and delegated CTA clicks are handled from there.
-    onMounted(() => initPostHog())
+    onMounted(() => {
+      initPostHog()
+      // Column widths change with the viewport, so re-check which tables clip.
+      window.addEventListener('resize', initTableOverflowHints, {
+        passive: true
+      })
+    })
     // Re-render on navigation and theme change. nextTick lets the new page DOM
     // mount before we look for diagram placeholders.
     watch(
       () => [route.path, isDark.value] as const,
-      () => nextTick(() => renderMermaid(isDark.value)),
+      () =>
+        nextTick(() => {
+          renderMermaid(isDark.value)
+          initTableOverflowHints()
+        }),
       { immediate: true }
     )
   }
