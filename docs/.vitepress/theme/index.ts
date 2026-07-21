@@ -119,6 +119,44 @@ function initTableOverflowHints() {
   }
 }
 
+// Click-to-zoom for product screenshots (.screenshot wrappers in the
+// markdown): clicking the image opens it in a full-viewport lightbox;
+// clicking again or pressing Escape closes it. Styles: .screenshot-lightbox
+// in style.css.
+function openScreenshotLightbox(img: HTMLImageElement) {
+  const overlay = document.createElement('div')
+  overlay.className = 'screenshot-lightbox'
+  const zoomed = document.createElement('img')
+  zoomed.src = img.currentSrc || img.src
+  zoomed.alt = img.alt
+  overlay.appendChild(zoomed)
+
+  const close = () => {
+    document.removeEventListener('keydown', onKeydown)
+    document.body.style.overflow = ''
+    overlay.remove()
+  }
+  const onKeydown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') close()
+  }
+  overlay.addEventListener('click', close)
+  document.addEventListener('keydown', onKeydown)
+  document.body.style.overflow = 'hidden'
+  document.body.appendChild(overlay)
+}
+
+// One delegated listener survives client-side navigation, so this only needs
+// to run once on mount.
+function initScreenshotLightbox() {
+  if (typeof window === 'undefined') return
+  document.addEventListener('click', (event) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const img = target.closest('.screenshot img')
+    if (img instanceof HTMLImageElement) openScreenshotLightbox(img)
+  })
+}
+
 export default {
   extends: DefaultTheme,
   // Add the GitHub star-count button at the right end of the nav bar.
@@ -139,6 +177,7 @@ export default {
     // client-side navigations) and delegated CTA clicks are handled from there.
     onMounted(() => {
       initPostHog()
+      initScreenshotLightbox()
       // Column widths change with the viewport, so re-check which tables clip.
       window.addEventListener('resize', initTableOverflowHints, {
         passive: true

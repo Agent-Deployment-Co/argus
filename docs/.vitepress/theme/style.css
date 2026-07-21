@@ -702,3 +702,36 @@ html:not(.dark) .shiki span {
 .vp-doc .screenshot + .download-btns {
   margin-top: 44px;
 }
+
+/* Click-to-zoom (theme/index.ts opens the lightbox). */
+.screenshot img {
+  cursor: zoom-in;
+}
+
+.screenshot-lightbox {
+  position: fixed;
+  inset: 0;
+  /* Above the nav bar and the local-nav dropdown (VitePress tops out below
+     100 for those layers). */
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(28, 17, 5, 0.85);
+  cursor: zoom-out;
+  animation: screenshot-lightbox-in 0.18s ease;
+}
+
+@keyframes screenshot-lightbox-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.screenshot-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
