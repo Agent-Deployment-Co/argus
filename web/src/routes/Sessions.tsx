@@ -124,6 +124,11 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { sessionId: selectedId } = useParams({ strict: false }) as { sessionId?: string };
   const activeRef = useRef<HTMLAnchorElement | null>(null);
+  const sessionItemsRef = useRef<HTMLUListElement | null>(null);
+  const sessionListSentinelRef = useRef<HTMLLIElement | null>(null);
+  // IntersectionObserver can report the same sentinel more than once while a page is loading.
+  // Keep a local guard so each page boundary starts at most one fetch.
+  const fetchingNextPageRef = useRef(false);
 
   const filters = useMemo(() => filtersFromSearch(search), [search]);
   const query = useSessionsQuery(filters);
@@ -154,6 +159,39 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedId, rows]);
+
+  // A filter change creates a new infinite query; don't let a request from the previous query
+  // suppress the first automatic fetch for the new one.
+  useEffect(() => {
+    fetchingNextPageRef.current = false;
+  }, [filters]);
+
+  // Load the next page as the non-interactive sentinel approaches the end of the scrollable list.
+  // The scroll container is the observer root because the session list, not the window, scrolls.
+  useEffect(() => {
+    const root = sessionItemsRef.current;
+    const sentinel = sessionListSentinelRef.current;
+    if (!root || !sentinel || !query.hasNextPage || query.isError) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting || query.isFetchingNextPage || fetchingNextPageRef.current) return;
+        fetchingNextPageRef.current = true;
+        void query.fetchNextPage().then(
+          () => {
+            fetchingNextPageRef.current = false;
+          },
+          () => {
+            fetchingNextPageRef.current = false;
+          },
+        );
+      },
+      // Start loading before the user reaches the final row so the transition feels continuous.
+      { root, rootMargin: "0px 0px 200px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [query.fetchNextPage, query.hasNextPage, query.isError, query.isFetchingNextPage]);
 
   // j/k step the selection to the next/previous row, but only once a row is already selected —
   // otherwise they'd hijack normal typing (e.g. in the search box) with no selection to move. They
@@ -283,7 +321,7 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
           </button>
         </div>
       )}
-      <ul className="session-items">
+      <ul className="session-items" ref={sessionItemsRef}>
         {query.isError && <li className="session-empty-row">{(query.error as Error).message}</li>}
         {rows.map((s, index) => (
           <li key={`${s.source}:${s.sessionId}`}>
@@ -329,17 +367,15 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
         {!query.isPending && !query.isError && !rows.length && (
           <li className="session-empty-row">No sessions match your filters.</li>
         )}
+        {query.hasNextPage && (
+          <li ref={sessionListSentinelRef} className="session-list-sentinel">
+            {query.isFetchingNextPage && <span role="status">Loading more sessions…</span>}
+          </li>
+        )}
+        {!query.isPending && !query.isError && rows.length > 0 && !query.hasNextPage && (
+          <li className="session-list-end">End of sessions</li>
+        )}
       </ul>
-      {query.hasNextPage && (
-        <button
-          type="button"
-          className="session-load-more"
-          onClick={() => query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-        >
-          {query.isFetchingNextPage ? "Loading…" : `Load more (${total - rows.length} more)`}
-        </button>
-      )}
     </aside>
   );
 }

@@ -248,9 +248,8 @@ main:has(.inbox-page) { padding: 0; }
 .session-select-all:hover { text-decoration: underline; }
 .session-select-all:disabled { opacity: .6; cursor: default; text-decoration: none; }
 .session-list-select-matching { display: flex; justify-content: flex-end; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-.session-load-more { flex: 0 0 auto; margin: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; }
-.session-load-more:hover { border-color: var(--accent); color: var(--heading); }
-.session-load-more:disabled { opacity: .6; cursor: default; }
+.session-list-sentinel { min-height: 1px; padding: 10px 14px; color: var(--muted); font: 600 11px var(--font-ui); text-align: center; }
+.session-list-end { padding: 10px 14px; color: var(--muted); font: 600 11px var(--font-ui); text-align: center; opacity: .7; }
 .session-items { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; }
 .session-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; text-decoration: none; color: var(--text); }
 .session-item:hover { background: var(--hover); color: var(--text); }
