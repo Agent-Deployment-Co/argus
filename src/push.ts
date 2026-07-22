@@ -24,6 +24,9 @@ export interface PushResult {
   /** No upload was attempted because there was nothing eligible to send (e.g. the requested source is
    *  local-only). Distinct from a successful upload so callers don't report "Uploaded". */
   skipped?: boolean;
+  /** Hub settings are not complete yet. Watchers should keep checking so settings added while the
+   *  process is running take effect without a restart. */
+  notConfigured?: boolean;
 }
 
 // ---- Hub JSON payload shape (mirrors hub's HubUploadRows row shapes) --------------------

@@ -12,6 +12,7 @@ import type { SyncOptions } from "./cli-options.ts";
 import { logError, logWarn, type Log } from "./logger.ts";
 
 const MIN_INTERVAL_MIN = 1;
+const DEFAULT_CONFIG_CHECK_INTERVAL_MS = 5_000;
 
 export interface WatchIndexOptions extends SyncOptions {
   /** Minutes between reads. */
@@ -65,6 +66,8 @@ export interface PushLoopOptions extends BuildDashboardOptions {
 export interface WatchSyncOptions extends PushLoopOptions {
   /** Minutes between uploads. */
   intervalMin: number;
+  /** How often to check for Hub settings when the process started without a configured Hub. */
+  configCheckIntervalMs?: number;
 }
 
 /** POST session data to Argus Hub. Returns a non-ok result when Hub is not configured. */
@@ -80,7 +83,12 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, log: Log): Prom
   }
   const hubCfg = await resolveHubConfig({ log });
   if (!hubCfg) {
-    return { ok: false, status: 0, body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data." };
+    return {
+      ok: false,
+      status: 0,
+      notConfigured: true,
+      body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data.",
+    };
   }
   log(`Uploading to Hub → ${hubCfg.url}`);
   const store = await openStore({ path: STORE_FILE });
@@ -113,6 +121,7 @@ function waitUntilAbort(signal: AbortSignal): Promise<void> {
 export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortSignal, deps: WatchSyncDeps = {}): Promise<void> {
   const push = deps.push ?? pushSnapshotForOpts;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
+  const configCheckIntervalMs = opts.configCheckIntervalMs ?? DEFAULT_CONFIG_CHECK_INTERVAL_MS;
 
   const backoff = new Backoff();
   const collapser = new RepeatCollapser(log);
@@ -145,6 +154,12 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
           logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
           await waitUntilAbort(sig);
+        } else if (res.notConfigured) {
+          // The desktop shell starts the sync loop even before a Hub is configured. Keep checking so
+          // adding the URL/key in Settings takes effect without restarting the sidecar.
+          collapser.note(res.body);
+          backoff.reset();
+          await sleep(configCheckIntervalMs, sig);
         } else if (res.status === 0) {
           logError(log, res.body);
           await waitUntilAbort(sig);

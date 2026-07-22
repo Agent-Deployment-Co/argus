@@ -74,22 +74,30 @@ describe("watchSync", () => {
     expect(lines.some((l) => l.includes("Uploaded"))).toBe(false);
   });
 
-  test("a permanent setup failure is logged and does not retry", async () => {
+  test("marks missing Hub settings so the watch loop can recheck them", async () => {
+    const res = await pushSnapshotForOpts({ source: "claude" }, () => {});
+    expect(res).toMatchObject({ ok: false, status: 0, notConfigured: true });
+    expect(res.body).toContain("No Hub configured");
+  });
+
+  test("keeps checking after starting without Hub settings", async () => {
     const ac = new AbortController();
     const lines: string[] = [];
     let pushed = 0;
-    const p = watchSync(syncOpts({}), (s) => lines.push(s), ac.signal, {
+    const p = watchSync(syncOpts({ configCheckIntervalMs: 1 }), (s) => lines.push(s), ac.signal, {
       push: async () => {
         pushed++;
-        return { ok: false, status: 0, body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data." };
+        return pushed === 1
+          ? { ok: false, status: 0, notConfigured: true, body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data." }
+          : ok();
       },
     });
-    while (!lines.some((l) => l.includes("No Hub configured"))) await sleep(10);
-    await sleep(20);
+    while (!lines.some((l) => l.includes("Uploaded"))) await sleep(10);
     ac.abort();
     await p;
-    expect(pushed).toBe(1);
-    expect(lines.some((l) => l.includes("Retrying"))).toBe(false);
+    expect(pushed).toBeGreaterThanOrEqual(2);
+    expect(lines.some((l) => l.includes("No Hub configured"))).toBe(true);
+    expect(lines.some((l) => l.includes("Uploaded (200)"))).toBe(true);
   });
 
   test("a transient upload failure backs off, then a success is reported", async () => {
