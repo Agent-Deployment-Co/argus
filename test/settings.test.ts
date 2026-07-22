@@ -170,14 +170,16 @@ describe("describeSettings", () => {
     expect(pb.values["openrouter"]).toBeUndefined(); // no default → falls back to a generic placeholder
   });
 
-  test("base URL, max tokens, and the API key env var are advanced/CLI only (not in the UI)", () => {
+  test("max tokens and the API key env var are advanced/CLI only (not in the UI); base URL is surfaced", () => {
     const paths = describeSettings({})
       .categories.flatMap((c) => c.sections)
       .flatMap((s) => s.settings)
       .map((s) => s.path);
     expect(paths).not.toContain("llm.apiKeyEnv");
-    expect(paths).not.toContain("llm.baseUrl");
     expect(paths).not.toContain("llm.maxTokens");
+    // Base URL is editable in the UI (provider-scoped, shown only for providers that use it — e.g. the
+    // OpenAI provider pointed at an OpenAI-compatible server such as a LiteLLM proxy).
+    expect(paths).toContain("llm.baseUrl");
   });
 
   test("exposes an API key secret field for the BYO-key providers", () => {
