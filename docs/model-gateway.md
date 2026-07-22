@@ -48,7 +48,7 @@ provider key:
 model_list:
   - model_name: argus-model
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: openai/gpt-5.6-luna
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -124,6 +124,8 @@ In the app, open **Settings**, then **Sessions**, and set the model fields:
 | Base URL | The gateway address ending in `/v1`. On your computer that's `http://127.0.0.1:4000/v1`; on a shared server, the address your team gives you. |
 | Model | The model name from the gateway config, `argus-model` above. |
 | API key | The gateway key, not your OpenAI key. Argus stores it in your operating system's secure store. |
+
+![Sessions settings pointed at a gateway: OpenAI as the provider, the gateway key stored securely, the gateway model and the gateway base URL.](./images/screenshots/model-gateway-sessions@1920x1080@2.webp)
 
 Use **Test connection** to confirm it works. Keep `/v1` at the end of the base URL;
 Argus adds `/chat/completions` itself.
