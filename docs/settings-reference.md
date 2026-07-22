@@ -158,7 +158,7 @@ provider's model, command and API-key variable separate.
 |---|---|---|---|---|---|
 | Provider | Which backend Argus uses for model calls. | `llm.provider` | `ARGUS_LLM_PROVIDER` | None | `claude-cli` |
 | Model | Model name to request for the selected provider. | `llm.providerConfigs.<provider>.model` or flat fallback `llm.model` | `ARGUS_LLM_MODEL` | None | provider default |
-| Base URL | OpenAI-compatible endpoint for the `openai` provider. | `llm.providerConfigs.<provider>.baseUrl` or flat fallback `llm.baseUrl` | `ARGUS_LLM_BASE_URL` | None | `https://api.openai.com/v1` for `openai` |
+| Base URL | OpenAI-compatible endpoint for the `openai` provider. Point this at a [model gateway](/model-gateway) to route through one. | `llm.providerConfigs.<provider>.baseUrl` or flat fallback `llm.baseUrl` | `ARGUS_LLM_BASE_URL` | None | `https://api.openai.com/v1` for `openai` |
 | API key variable | Environment variable or secret name used for a provider's API key. | `llm.providerConfigs.<provider>.apiKeyEnv` or flat fallback `llm.apiKeyEnv` | `ARGUS_LLM_API_KEY_ENV` | None | provider standard |
 | Max output tokens | Output token cap for model requests. | `llm.providerConfigs.<provider>.maxTokens` or flat fallback `llm.maxTokens` | `ARGUS_LLM_MAX_TOKENS` | None | unset, with HTTP calls capped at `2048` when no request cap is set |
 | Reasoning effort | Provider-native reasoning effort value. | `llm.providerConfigs.<provider>.effort` or flat fallback `llm.effort` | `ARGUS_LLM_EFFORT` | None | unset |

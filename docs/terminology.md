@@ -60,6 +60,13 @@ The specific AI behind an agent, such as Claude Opus, Claude Sonnet or a GPT
 model. Different models have different speed, capability and price, so your usage
 and cost depend on which ones you use.
 
+## Model gateway
+
+An OpenAI-compatible endpoint that sits between Argus and a model provider. The
+gateway holds the provider's API key, and Argus reaches it with a separate key, so
+the provider key can stay off your computer or on a shared server your team runs.
+See [Model Gateway](/model-gateway).
+
 ## Plugin
 
 A bundle that adds skills, tools or connectors to an agent in one package. Argus

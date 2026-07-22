@@ -580,7 +580,8 @@ export const LLM_SETTINGS = {
     providerScoped: true,
     ui: {
       label: "Base URL",
-      description: "OpenAI-compatible API endpoint, for the OpenAI provider or a self-hosted server.",
+      description:
+        "OpenAI-compatible API endpoint, for a self-hosted or proxied server. Leave blank for the provider default.",
       control: "text",
       activeWhen: INTERPRETATION_GATE,
       visibleWhen: visibleForField("baseUrl"),

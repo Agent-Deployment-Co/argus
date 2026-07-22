@@ -170,14 +170,22 @@ describe("describeSettings", () => {
     expect(pb.values["openrouter"]).toBeUndefined(); // no default → falls back to a generic placeholder
   });
 
-  test("base URL, max tokens, and the API key env var are advanced/CLI only (not in the UI)", () => {
+  test("max tokens and the API key env var are advanced/CLI only (not in the UI); base URL is surfaced", () => {
     const paths = describeSettings({})
       .categories.flatMap((c) => c.sections)
       .flatMap((s) => s.settings)
       .map((s) => s.path);
     expect(paths).not.toContain("llm.apiKeyEnv");
-    expect(paths).not.toContain("llm.baseUrl");
     expect(paths).not.toContain("llm.maxTokens");
+    // Base URL is editable in the UI (provider-scoped, shown only for providers that use it — e.g. the
+    // OpenAI provider pointed at an OpenAI-compatible server such as a LiteLLM proxy).
+    expect(paths).toContain("llm.baseUrl");
+    // …and it stays gated to the provider(s) that actually use a base URL. The descriptor is always
+    // emitted (visibility is resolved client-side from ui.visibleWhen), so assert the gate itself: if
+    // it broke, Base URL would render for every provider (claude-cli/gemini/…), not just OpenAI.
+    const baseUrlVisibleWhen = findSetting({}, "llm.baseUrl").ui.visibleWhen!;
+    expect(baseUrlVisibleWhen.path).toBe("llm.provider");
+    expect([...baseUrlVisibleWhen.in]).toEqual(["openai"]);
   });
 
   test("exposes an API key secret field for the BYO-key providers", () => {
