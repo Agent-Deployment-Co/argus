@@ -50,6 +50,8 @@ managed-settings behavior, see the [Settings Reference](/settings-reference).
   sharper titles, summaries, and outcome calls, point Argus at a stronger model such
   as Claude Sonnet or Opus. Argus stores any API key in your operating system's secure
   store, never in its settings file, and a **Test connection** button confirms it works.
+  To keep the provider key off your computer, or run one shared backend for a team,
+  point Argus at a [model gateway](/model-gateway) instead.
 - **Reasoning effort** is passed straight through to the provider, so use the value
   that provider expects: `low`, `medium`, `high` (and `xhigh`, `max` on the newest
   models) for Claude and OpenAI; a thinking level for Gemini. Leave it blank for the
