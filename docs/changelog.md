@@ -4,6 +4,21 @@
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.23
+
+Published July 22, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.23).
+
+### Changes
+
+- Docs: choose the matching Windows installer ([#291](https://github.com/Agent-Deployment-Co/argus/pull/291))
+- Fix Windows updater signing order ([#292](https://github.com/Agent-Deployment-Co/argus/pull/292))
+- Add infinite scroll to sessions list ([#294](https://github.com/Agent-Deployment-Co/argus/pull/294))
+- Docs: wide-screen layout polish, table scrolling fix, screenshot zoom ([#295](https://github.com/Agent-Deployment-Co/argus/pull/295))
+- Docs: restore centered layout on wide screens ([#296](https://github.com/Agent-Deployment-Co/argus/pull/296))
+- Bump version to 0.1.23 ([#298](https://github.com/Agent-Deployment-Co/argus/pull/298))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.22...argus-v0.1.23).
+
 ## Argus v0.1.22
 
 Published July 17, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.22).
