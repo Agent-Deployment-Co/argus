@@ -6,6 +6,8 @@ and opens Argus in your browser, with no separate setup.
 
 <DownloadButtons location="download_page" />
 
+Not ready to install? Try the [live demo](https://argus-demo.agentdeployment.co), a read-only copy of Argus filled with sample data.
+
 ## Install on macOS
 
 1. Open the downloaded `.dmg`.
