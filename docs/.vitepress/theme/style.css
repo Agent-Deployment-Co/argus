@@ -71,7 +71,13 @@
   --vp-font-family-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco',
     'Consolas', 'Liberation Mono', 'Courier New', monospace;
 
-  --vp-layout-max-width: 1320px;
+  /* Sized so the centered wide-screen layout exactly fits the doc column:
+     272px sidebar + 64px doc padding + 820px text column + 64px content
+     padding + 256px outline + 76px table-breakout slack = 1552px. The min()
+     matters: the default theme starts centering at 1440px viewports, and
+     between 1440px and 1552px its padding calcs would go negative (pushing
+     content under the sidebar) with a fixed value this large. */
+  --vp-layout-max-width: min(100%, 1552px);
   --vp-nav-height: 68px;
   --vp-nav-logo-height: 24px;
   --vp-nav-bg-color: rgba(249, 235, 220, 0.92);
@@ -577,47 +583,12 @@ body {
   }
 }
 
-/*
- * Wide screens (>= 1440px): the default theme centers the whole layout by
- * dumping the leftover viewport width into the two edge columns — the sidebar
- * band and the content padding both grow with the viewport. With our colored
- * sidebar background that slack reads as a giant sidebar. Keep the layout
- * left-anchored instead (same as the 960–1440px behavior): sidebar stays at
- * --vp-sidebar-width, and the doc column + outline center in the remaining
- * space as one capped reading unit. The #app prefix outranks the theme's
- * scoped [data-v-*] selectors.
- */
 @media (min-width: 1440px) {
-  #app .VPSidebar {
-    padding-left: 32px;
-    width: var(--vp-sidebar-width);
+  .VPFooter.has-sidebar {
+    padding-left: calc(
+      (100% - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width)
+    );
   }
-
-  #app .VPNavBar.has-sidebar > .wrapper > .container > .title {
-    padding-left: 32px;
-    width: var(--vp-sidebar-width);
-  }
-
-  #app .VPNavBar.has-sidebar .content {
-    padding-left: var(--vp-sidebar-width);
-    padding-right: 32px;
-  }
-
-  #app .VPNavBar.has-sidebar .divider {
-    padding-left: var(--vp-sidebar-width);
-  }
-
-  #app .VPContent.has-sidebar {
-    padding-left: var(--vp-sidebar-width);
-    padding-right: 0;
-  }
-}
-
-/* Keep the text column and the "On this page" outline together as one
-   centered unit instead of letting the outline drift to the right edge
-   (896px text + 64px content padding + 256px aside). */
-#app .VPDoc.has-aside .container {
-  max-width: 1216px;
 }
 
 /* Widen the text column from the default 688px; tables and code blocks
