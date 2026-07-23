@@ -9,6 +9,17 @@ and the brief evidence behind a task's judgment. It never receives the full text
 your sessions. It merges everything into one central database tagged by user and
 serves an org-wide view.
 
+## Set up the connection
+
+Open **Settings**, then enter the Hub URL and Hub key under **Argus Hub**. Argus stores
+the key securely on your computer and masks it after you save it.
+
+<div class="screenshot">
+
+![Argus Hub settings with a Hub URL and masked Hub key.](./images/screenshots/argus-hub-settings@1920x1080@2.webp)
+
+</div>
+
 ## Sending data to Argus Hub
 
 The desktop app uploads automatically on a schedule once you point it at an Argus Hub, so
