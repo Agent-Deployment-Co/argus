@@ -24,6 +24,12 @@ export interface PushResult {
   /** No upload was attempted because there was nothing eligible to send (e.g. the requested source is
    *  local-only). Distinct from a successful upload so callers don't report "Uploaded". */
   skipped?: boolean;
+  /** Hub settings are not complete yet. Watchers should keep checking so settings added while the
+   *  process is running take effect without a restart. */
+  notConfigured?: boolean;
+  /** The request never reached the Hub (offline, DNS failure, connection refused, a malformed URL) —
+   *  as opposed to a local store error or an HTTP response. Safe to retry. */
+  network?: boolean;
 }
 
 // ---- Hub JSON payload shape (mirrors hub's HubUploadRows row shapes) --------------------
@@ -677,7 +683,7 @@ export async function pushHubJson(
     }
     return { ok: res.ok, status: res.status, body: text };
   } catch (err) {
-    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+    return { ok: false, status: 0, network: true, body: err instanceof Error ? err.message : String(err) };
   }
 }
 

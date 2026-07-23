@@ -1,7 +1,7 @@
 // Argus tray app: a thin native shell around the `argus` sidecar.
 //
-// On launch it starts `argus run` (index + serve, plus sync when a Hub URL + key are configured —
-// otherwise `--no-sync`, all supervised in one process) on a free local port and exposes a tray menu
+// On launch it starts `argus run` (index + serve + a sync loop that picks up Hub settings as they
+// change, all supervised in one process) on a free local port and exposes a tray menu
 // whose items map onto the CLI's command surface. Logs are written to rotating files. "Open Argus"
 // opens the user's default browser at the served URL; the only embedded webview is the bundled About
 // screen.
@@ -299,18 +299,10 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     app.state::<AppState>()
         .backend_port
         .store(port, Ordering::SeqCst);
-    // Enable uploads only when a Hub URL + key are configured (mirrors the CLI's resolveHubConfig).
-    // Without them there's nothing to upload to, so run index + serve only. Re-checked on every
-    // start, so toggling the Hub settings then using Stop/Start picks up the change.
-    let sync_enabled = hub_configured();
-    let mut args = vec!["run".to_string(), "--port".to_string(), port.to_string()];
-    if !sync_enabled {
-        args.push("--no-sync".to_string());
-    }
-    log::info!(
-        "starting argus on port {port} ({})",
-        if sync_enabled { "sync on" } else { "sync off" }
-    );
+    // Always start the sync loop. It re-reads the Hub settings on each pass, so adding a Hub URL
+    // or key in the dashboard takes effect without restarting the sidecar.
+    let args = vec!["run".to_string(), "--port".to_string(), port.to_string()];
+    log::info!("starting argus on port {port} (sync watches settings)");
     let mut command = app
         .shell()
         .sidecar("argus")
@@ -873,72 +865,6 @@ fn auto_update_check_interval_minutes() -> u64 {
             )
         })
         .unwrap_or(DEFAULT_UPDATE_CHECK_INTERVAL_MINUTES)
-}
-
-/// True when both the Hub URL and key are configured — the same condition the CLI's
-/// `resolveHubConfig` uses to switch on Hub uploads. When true the tray runs `argus run` with sync on
-/// (no `--no-sync`). Tolerant: a missing or malformed config simply reads as "not configured", so the
-/// service still starts (index + serve only).
-fn hub_configured() -> bool {
-    hub_url_present() && hub_key_present()
-}
-
-/// True when a non-empty Hub URL is set in the env or `argus.json`. The URL is not a secret, so it
-/// stays in `argus.json` (it's never moved into the keychain).
-fn hub_url_present() -> bool {
-    if non_empty_env("ARGUS_HUB_URL").is_some() {
-        return true;
-    }
-    read_argus_config_json()
-        .and_then(|json| {
-            json.get("hub")
-                .and_then(|hub| hub.get("url"))
-                .and_then(|value| value.as_str())
-                .map(|value| !value.trim().is_empty())
-        })
-        .unwrap_or(false)
-}
-
-/// Resolve the Hub key the same way the CLI's `resolveHubKey` does: the `ARGUS_HUB_KEY` env var wins,
-/// then the OS secret store. On macOS that store is the login keychain — read via the system
-/// `security` tool using the same `(service, account)` identity the CLI writes (`secrets.ts`'s
-/// `KEYCHAIN_SERVICE`). Reading through `/usr/bin/security` (as the CLI also does) keeps the item's
-/// ACL satisfied, so this never raises a keychain prompt. A legacy plaintext `hub.key` still in
-/// `argus.json` (pre-migration) also counts, which doubles as the fallback on platforms whose secret
-/// store we don't read here. Without this, a key the CLI has already migrated into the keychain would
-/// read as "not configured" and the tray would wrongly launch with `--no-sync`.
-fn hub_key_present() -> bool {
-    if non_empty_env("ARGUS_HUB_KEY").is_some() {
-        return true;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // `security find-generic-password -w` prints just the secret and exits nonzero when the item
-        // is absent; command_stdout maps both "nonzero" and "empty" to None.
-        if command_stdout(
-            "/usr/bin/security",
-            &[
-                "find-generic-password",
-                "-s",
-                "co.agentdeployment.argus",
-                "-a",
-                "ARGUS_HUB_KEY",
-                "-w",
-            ],
-        )
-        .is_some()
-        {
-            return true;
-        }
-    }
-    read_argus_config_json()
-        .and_then(|json| {
-            json.get("hub")
-                .and_then(|hub| hub.get("key"))
-                .and_then(|value| value.as_str())
-                .map(|value| !value.trim().is_empty())
-        })
-        .unwrap_or(false)
 }
 
 /// Read the per-install client id out of the store's `store_metadata` bag. Opens `argus.db`

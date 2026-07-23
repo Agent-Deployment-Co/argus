@@ -297,6 +297,7 @@ describe("pushHubJson", () => {
       const res = await pushHubJson("http://hub.test", "hub-key", path, { all: true });
       expect(res.ok).toBe(false);
       expect(res.status).toBe(0);
+      expect(res.network).toBe(true);
       expect(res.body).toContain("ECONNREFUSED");
     } finally {
       globalThis.fetch = originalFetch;
@@ -307,6 +308,8 @@ describe("pushHubJson", () => {
     const res = await pushHubJson("http://hub.test", "hub-key", "/nonexistent/path/argus.db", { all: true });
     expect(res.ok).toBe(false);
     expect(res.status).toBe(0);
+    // A local store error, not a network failure — watchers hold rather than retry.
+    expect(res.network).toBeUndefined();
   });
 });
 
