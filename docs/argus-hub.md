@@ -196,6 +196,12 @@ for the complete plist, including log paths and restart behavior.
 Open the Hub URL in a browser. The dashboard uses the same views as `argus serve`, with a user
 dimension added:
 
+<div class="screenshot">
+
+![Argus Hub activity dashboard showing organization-wide usage, tasks, token usage and cost.](./images/screenshots/argus-hub-dashboard@1920x1080@2.webp)
+
+</div>
+
 | View | What you can see |
 |---|---|
 | Activity | Usage and cost for the whole organization or one person |
