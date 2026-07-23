@@ -35,6 +35,14 @@ pooled usage data. Do not put either value in source control or share them in a 
 In the desktop app, open **Settings** and enter the Hub URL and API key. The app uploads on a
 schedule after the connection is configured.
 
+The app stores the key securely and shows a masked value after you save it.
+
+<div class="screenshot">
+
+![Argus Hub settings with a Hub URL and masked Hub key.](./images/screenshots/argus-hub-settings@1920x1080@2.webp)
+
+</div>
+
 For command-line use, save the URL in Argus and store the key in the local secret store:
 
 ```bash
