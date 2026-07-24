@@ -126,7 +126,7 @@ describe("reindexSession", () => {
     }
   });
 
-  test("reports an imported / no-local-transcript session clearly, not 'not readable' (#93)", async () => {
+  test("reports an imported / no-longer-on-disk session clearly, not 'not readable' (#93)", async () => {
     const root = tempRoot();
     const storePath = join(root, "cache", "fragments.sqlite3");
     const store = await openStore({ path: storePath });
@@ -140,7 +140,7 @@ describe("reindexSession", () => {
       ]);
       const result = await reindexSession("codex:imported1", { store });
       expect(result).toMatchObject({ ok: false, status: 422 });
-      if (!result.ok) expect(result.message).toContain("no local transcript");
+      if (!result.ok) expect(result.message).toContain("no longer on disk");
     } finally {
       await store.close();
     }

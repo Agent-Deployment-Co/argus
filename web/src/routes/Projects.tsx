@@ -28,7 +28,7 @@ export function Projects() {
   const filters = useDashboardFilters();
   const q = useUsageByProjectQuery(filters);
   const gate = viewGate([q]);
-  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.pending) return <div className="center-state">Indexing your sessions…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
   const byProject = q.data!.byProject;
