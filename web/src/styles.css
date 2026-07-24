@@ -199,6 +199,14 @@ main:has(.inbox-page) { padding: 0; }
 .inbox-search-input { box-sizing: border-box; width: 100%; height: 32px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 12px 0 32px; color: var(--text); font: 13px "Aleo", Georgia, serif; }
 .inbox-search-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* A static pill for the `project` filter (#273): arrives via a link from Projects/Health, so unlike
+   the dropdown pills beside it there's no menu to open — just a name and a clear button. Matches
+   .filter-dropdown-btn's active look so the two read as one pill row. */
+.inbox-project-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; height: 32px; padding: 0 6px 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--heading); font: 600 12px var(--font-ui); white-space: nowrap; }
+.inbox-project-chip-clear { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: 0 0 auto; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.inbox-project-chip-clear:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.inbox-project-chip-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .filter-dropdown { position: relative; flex: 0 0 auto; }
 .filter-dropdown-btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
 .filter-dropdown-btn:hover { border-color: var(--accent); }
