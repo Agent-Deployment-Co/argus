@@ -21,7 +21,8 @@ and task counts. The toolbar across the top narrows the list:
 
 The reset button next to the filters clears them back to the last 30 days and all
 sources. If you open Sessions by clicking a project or [source](/terminology#source)
-on another view, the list arrives already narrowed to it.
+on another view, the list arrives already narrowed to it, and the project appears
+as a pill you can remove.
 
 ::: tip
 Press `/` or Cmd+K (Ctrl+K on Windows) to jump to the search box. With a session
