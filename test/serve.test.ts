@@ -304,7 +304,7 @@ describe("serve API", () => {
     expect(res.status).toBe(200);
     expect(changed).toBe(1);
     expect(logs).toEqual([
-      "Refreshing codex:codex-sess1: re-reading the session and rebuilding tasks...",
+      "Refreshing codex:codex-sess1: re-indexing the session and rebuilding tasks...",
       "Refreshed codex:codex-sess1: rebuilt 1 task.",
     ]);
     expect(await res.json()).toEqual({
@@ -313,11 +313,11 @@ describe("serve API", () => {
     });
   });
 
-  test("POST /api/sessions/:id/reindex returns a clear error when the transcript is gone", async () => {
+  test("POST /api/sessions/:id/reindex returns a clear error when the session is gone", async () => {
     let changed = 0;
     const logs: string[] = [];
     const app = createApp(null, {
-      reindex: async () => ({ ok: false, status: 422, message: "Couldn't re-index missing: it has no local transcript on disk." }),
+      reindex: async () => ({ ok: false, status: 422, message: "Couldn't re-index missing: it's no longer on disk." }),
       onStoreChanged: () => { changed++; },
       log: (message) => { logs.push(message); },
     });
@@ -326,11 +326,11 @@ describe("serve API", () => {
     expect(res.status).toBe(422);
     expect(changed).toBe(0);
     expect(logs).toEqual([
-      "Refreshing missing: re-reading the session and rebuilding tasks...",
-      "Refresh failed for missing: Couldn't re-index missing: it has no local transcript on disk.",
+      "Refreshing missing: re-indexing the session and rebuilding tasks...",
+      "Refresh failed for missing: Couldn't re-index missing: it's no longer on disk.",
     ]);
     expect(await res.json()).toEqual({
-      error: "Couldn't re-index missing: it has no local transcript on disk.",
+      error: "Couldn't re-index missing: it's no longer on disk.",
       diagnostics: [],
     });
   });

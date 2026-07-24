@@ -555,7 +555,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   const views = opts.views;
   const viewRoute = <T,>(path: string, reader: ViewReader<T> | undefined): void => {
     app.get(path, async (c) => {
-      if (!reader) return c.json({ error: "Dashboard data is unavailable in this process." }, 503);
+      if (!reader) return c.json({ error: "App data is unavailable in this process." }, 503);
       const filters = parseSnapshotFilters(c);
       if (typeof filters === "string") return c.json({ error: filters }, 400);
       return c.json(await reader(filters));
@@ -668,7 +668,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     if (!sessionId) return c.json({ error: "Missing session id." }, 400);
     if (!opts.reindex) return c.json({ error: "Reindexing is unavailable in this process." }, 503);
 
-    opts.log?.(`Refreshing ${sessionId}: re-reading the session and rebuilding tasks...`);
+    opts.log?.(`Refreshing ${sessionId}: re-indexing the session and rebuilding tasks...`);
     const result = await opts.reindex(sessionId);
     if (!result.ok) {
       if (opts.log) logWarn(opts.log, `Refresh failed for ${sessionId}: ${result.message}`);

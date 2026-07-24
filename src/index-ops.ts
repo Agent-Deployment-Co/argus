@@ -57,7 +57,7 @@ export async function runIndex(
     log,
   });
   try {
-    log("Reading new and changed sessions…");
+    log("Indexing new and changed sessions…");
     const parsed = await store.index({});
     if (store.stats) log(syncStatsSummary(store.stats));
     log(`Local store now has ${parsed.sessions.size} sessions and ${parsed.messages.length} messages.`);
@@ -115,13 +115,13 @@ export async function runIndexRebuild(
   if (!opts.force) {
     if (!process.stdin.isTTY) {
       // Non-interactive (a script or pipe): refuse rather than silently destroy. Re-run with --force.
-      log("Rebuilding re-reads every transcript and permanently removes any sessions no longer on disk. Re-run with --force to confirm.");
+      log("Rebuilding re-indexes every session and permanently removes any sessions no longer on disk. Re-run with --force to confirm.");
       process.exit(2);
     }
     const note = archived.length
       ? `This permanently removes ${archived.length} session${archived.length === 1 ? "" : "s"} no longer on disk. `
       : "";
-    const confirmed = await promptYesNo(`Rebuild the local store from your transcripts? ${note}[y/N] `);
+    const confirmed = await promptYesNo(`Rebuild the local store by re-indexing your sessions? ${note}[y/N] `);
     if (!confirmed) {
       log("Cancelled. Left the store as it is.");
       return;
@@ -132,7 +132,7 @@ export async function runIndexRebuild(
 
   const rebuilt = await rebuildStore();
   await rebuilt.close();
-  log("Rebuilt the local store from scratch. Re-reading all transcripts from disk…");
+  log("Rebuilt the local store from scratch. Re-indexing all sessions from disk…");
   await runIndex(opts, log, extractTasks, debug, retainText);
 }
 
@@ -150,7 +150,7 @@ export async function runIndexRefresh(opts: RefreshOptions, log: Log): Promise<v
   } finally {
     await store.close();
   }
-  log("Re-reading all transcripts from disk…");
+  log("Re-indexing all sessions from disk…");
   await runIndex(opts, log, opts.extractTasks, opts.debug, opts.retainText);
 }
 

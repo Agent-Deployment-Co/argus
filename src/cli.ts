@@ -299,7 +299,7 @@ async function runStatus(): Promise<void> {
       `Couldn't read the local store: ${err instanceof Error ? err.message : String(err)}`,
     );
     printResultLine(
-      "Run `argus index rebuild --force` to rebuild it from your transcripts.",
+      "Run `argus index rebuild --force` to rebuild it by re-indexing your sessions.",
     );
     process.exit(1);
   }
@@ -351,7 +351,7 @@ async function runStatus(): Promise<void> {
 
   if (!lines.length) {
     printResultLine(
-      "No sessions yet. Run `argus index` once you've used Claude Code, Claude Cowork, Codex, or Gemini.",
+      "No sessions yet. Run `argus index` once you've used Claude Code, Claude Cowork, Claude Chat, Codex, or Gemini CLI.",
     );
     return;
   }
@@ -624,7 +624,7 @@ function taskExtractionOptions(
 const serve = defineCommand({
   meta: {
     name: "serve",
-    description: "serve the interactive dashboard at a local web address",
+    description: "serve the interactive web app at a local web address",
   },
   args: {
     ...logArgs,
@@ -638,7 +638,7 @@ const serve = defineCommand({
     open: {
       type: "boolean",
       default: false,
-      description: "Open the dashboard in your browser once it's ready (macOS)",
+      description: "Open the web app in your browser once it's ready (macOS)",
     },
     "read-only": {
       type: "boolean",
@@ -663,7 +663,7 @@ const indexRebuild = defineCommand({
   meta: {
     name: "rebuild",
     description:
-      "rebuild the store from your transcripts (drops sessions no longer on disk)",
+      "rebuild the store by re-indexing your sessions (drops sessions no longer on disk)",
   },
   args: {
     ...sourceArg,
@@ -692,7 +692,7 @@ const indexRefresh = defineCommand({
   meta: {
     name: "refresh",
     description:
-      "re-read transcripts from disk; pass session id(s) to refresh only those",
+      "re-index sessions from disk; pass session id(s) to refresh only those",
   },
   args: {
     id: {
@@ -752,7 +752,7 @@ const indexDelete = defineCommand({
 const index = defineCommand({
   meta: {
     name: "index",
-    description: "read new and changed sessions into the local store",
+    description: "index new and changed sessions into the local store",
   },
   args: {
     ...sourceArg,
@@ -763,12 +763,12 @@ const index = defineCommand({
     watch: {
       type: "boolean",
       default: false,
-      description: "Keep reading new and changed sessions on an interval",
+      description: "Keep indexing new and changed sessions on an interval",
     },
     interval: {
       type: "string",
       default: String(DEFAULT_INDEX_INTERVAL_MIN),
-      description: "Minutes between reads (with --watch)",
+      description: "Minutes between indexing runs (with --watch)",
       valueHint: "N",
     },
   },
@@ -894,14 +894,14 @@ const runCmd = defineCommand({
   meta: {
     name: "run",
     description:
-      "keep the dashboard live: index, serve, and upload in one process",
+      "keep the web app live: index, serve, and upload in one process",
   },
   args: {
     ...sourceArg,
     ...interpretOverrideArgs,
     ...logArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
-    "index-interval": { type: "string", default: String(DEFAULT_INDEX_INTERVAL_MIN), description: "Minutes between transcript reads", valueHint: "N" },
+    "index-interval": { type: "string", default: String(DEFAULT_INDEX_INTERVAL_MIN), description: "Minutes between indexing runs", valueHint: "N" },
     "sync-interval": { type: "string", default: String(DEFAULT_SYNC_INTERVAL_MIN), description: "Minutes between uploads", valueHint: "N" },
     "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
     debug: { type: "boolean", default: false, description: "Print task extraction debug logs" },
@@ -1154,7 +1154,7 @@ const main = defineCommand({
     name: "argus",
     version: pkg.version,
     description:
-      "audit your Claude Code, Claude Cowork, Codex, and Gemini CLI usage",
+      "find and index your Claude Code, Claude Cowork, Claude Chat, Codex, and Gemini CLI usage",
   },
   // No root flags and no default command: every flag belongs to a specific subcommand, so running
   // `argus` with no subcommand falls through to the usage/help. Sessions stay in the local store
