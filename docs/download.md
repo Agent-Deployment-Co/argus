@@ -1,10 +1,12 @@
 # Download
 
-Argus is a native desktop app that lives in your menu bar. It keeps your local
-[session](/terminology#session) data current and opens Argus in your browser, with
-no separate setup. The macOS build is available now, and Windows is coming soon.
+Argus is a native desktop app that lives in your menu bar on macOS or your system
+tray on Windows. It keeps your local [session](/terminology#session) data current
+and opens Argus in your browser, with no separate setup.
 
 <DownloadButtons location="download_page" />
+
+Not ready to install? Try the [live demo](https://argus-demo.agentdeployment.co), a read-only copy of Argus filled with sample data.
 
 ## Install on macOS
 
@@ -23,6 +25,31 @@ Control-click) **Argus** in Applications and choose **Open**, then confirm.
 You only need to do this once. Alternatively, open **System Settings →
 Privacy & Security** and click **Open Anyway**.
 :::
+
+## Install on Windows
+
+1. Run the downloaded installer. Its name ends in `x64-setup.exe` for Windows
+   x64 or `arm64-setup.exe` for Windows ARM. It sets Argus up for your user
+   account, so no administrator sign-off is needed.
+2. When it finishes, Argus starts and its icon appears in your system tray, in
+   the bottom-right corner of your screen (it may be tucked behind the `^`
+   arrow). Open it to see your usage.
+
+The Windows download button checks your browser's reported architecture and
+selects the matching installer when it can. If your browser doesn't report an
+architecture, it opens the latest release with links for choosing x64 or ARM64.
+
+::: tip If Windows warns about the installer
+If Microsoft Defender SmartScreen shows "Windows protected your PC", click
+**More info**, then **Run anyway**. A fresh release can trigger this until
+Windows has seen enough downloads to trust it.
+:::
+
+## Argus starts when you sign in
+
+After the first launch, Argus starts on its own whenever you sign in to your
+computer, so your data stays current even after a restart. Turn that off under
+**Startup** in [Settings](/settings) if you'd rather launch it yourself.
 
 ## Updating
 

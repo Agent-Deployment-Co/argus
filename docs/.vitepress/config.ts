@@ -102,7 +102,8 @@ export default defineConfig({
           { text: 'Sessions', link: '/sessions' },
           { text: 'Tasks', link: '/tasks' },
           { text: 'Metric Views', link: '/metric-views' },
-          { text: 'Settings', link: '/settings' }
+          { text: 'Settings', link: '/settings' },
+          { text: 'Model Gateway', link: '/model-gateway' }
         ]
       },
       {

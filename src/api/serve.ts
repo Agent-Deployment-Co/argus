@@ -77,7 +77,7 @@ import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "..
 
 export interface ServeOptions {
   port: number;
-  /** Open the dashboard in the default browser once it's ready (macOS `open`). */
+  /** Open the dashboard in the default browser once it's ready. */
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
   build: BuildDashboardOptions;
@@ -91,12 +91,31 @@ export interface ServeOptions {
   /** Override the `argus.json` path. Defaults to CONFIG_FILE; injected by tests so they never touch
    *  the real config. */
   configPath?: string;
+  /** Read-only mode (#281): mount only the read routes in `createApp` and tell the SPA (via
+   *  `readOnly: true` on `GET /healthz`) to hide edit affordances. Default false. */
+  readOnly?: boolean;
 }
 
 /** Control surface for a running server. `closed` resolves once it has fully shut down. */
 export interface ServeHandle {
   closed: Promise<void>;
   close(): Promise<void>;
+}
+
+/** Return the platform command used to open a URL in the user's default browser. Kept pure so the
+ * command selection is testable without launching a browser. Windows' `start` is a cmd.exe builtin,
+ * and the empty title argument is required so the URL isn't treated as the console window title. */
+export function defaultBrowserCommand(
+  url: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === "win32") {
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", "start", "", url] };
+  }
+  if (platform === "darwin") {
+    return { command: "open", args: [url] };
+  }
+  return { command: "xdg-open", args: [url] };
 }
 
 /** GET /api/recommendations payload. */
@@ -256,6 +275,9 @@ interface AppOptions {
   claudeBinary?: string;
   /** Server log sink. Used for explicit user actions like Refresh. */
   log?: Log;
+  /** Read-only mode (#281): mount only the read routes, drop /api/debug and every
+   *  /api/settings*, and answer `readOnly: true` on `/healthz` so the SPA hides edit affordances. */
+  readOnly?: boolean;
 }
 
 const MIME: Record<string, string> = {
@@ -523,10 +545,20 @@ function parseTaskSeq(raw: string): number | null {
  *  no transcript reading — so it can be exercised directly in tests. */
 export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   const app = new Hono();
+  // Every route registered on `writes` (rather than `app` directly) is dropped entirely in read-only
+  // mode (#281) by the single `app.route("/", writes)` mount below, gated on `opts.readOnly` — one
+  // decision point instead of the five separate `if (!opts.readOnly) { ... }` blocks this replaced,
+  // which had already let a write route (`/api/sessions/bulk/labels`) ship ungated once. Order among
+  // `writes`' own routes is preserved (still resolved relative to each other, e.g. the "bulk"
+  // literal-segment routes before their ":id" counterparts), so mounting doesn't change any existing
+  // precedence.
+  const writes = new Hono();
 
   // Cheap liveness check: no store access, just confirms the server is answering. The desktop app's
-  // front-door proxy polls this to know when a restarting sidecar is back up.
-  app.get("/healthz", (c) => c.json({ ok: true }));
+  // front-door proxy polls this to know when a restarting sidecar is back up. `readOnly` doubles as
+  // the capability flag the SPA reads at startup (#281) to hide edit affordances — it's the one route
+  // that's always mounted, so it's the one place a read-only client can reliably learn its own mode.
+  app.get("/healthz", (c) => c.json({ ok: true, readOnly: opts.readOnly ?? false }));
 
   // Per-view dashboard endpoints (#217): each reads exactly what its view needs from argus.db on
   // demand — no monolithic snapshot. All share the since/until/project/source filter contract (unknown
@@ -600,9 +632,12 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json(provenance satisfies SessionProvenance);
   });
 
+  // Session hide/unhide and reindex are all writes with a disk/subprocess side effect (reindex) or a
+  // store mutation (hide) — dropped entirely in read-only mode (#281) rather than 503ing, so the SPA
+  // never renders a button that hits a route that isn't there.
   // Hide/unhide many sessions at once (bulk mode). Registered before the single-id route below so
   // the literal "bulk" segment isn't swallowed by that route's ":id" param.
-  app.post("/api/sessions/bulk/hidden", async (c) => {
+  writes.post("/api/sessions/bulk/hidden", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!opts.setSessionsHidden) return c.json({ error: "Hiding sessions is unavailable in this process." }, 503);
@@ -620,7 +655,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   // Hide/unhide a session (local-only UI state): excluded from the sessions list and search while
   // hidden, but its usage still counts in aggregate rollups. No feature-gate beyond store availability
   // — unlike reindex, this is a pure store write.
-  app.post("/api/sessions/:id/hidden", async (c) => {
+  writes.post("/api/sessions/:id/hidden", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
 
@@ -640,7 +675,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   // (sessions/messages/invocations/tasks), with task processing always on. 404 if the session is
   // unknown, 422 if its transcript is no longer on disk. Provider failures come back as non-fatal
   // diagnostics — the session is still structurally refreshed.
-  app.post("/api/sessions/:id/reindex", async (c) => {
+  writes.post("/api/sessions/:id/reindex", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
 
@@ -684,7 +719,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ labels: await labels.list() } satisfies LabelsResponse);
   });
 
-  app.post("/api/labels", async (c) => {
+  writes.post("/api/labels", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -697,7 +732,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     }
   });
 
-  app.patch("/api/labels/:id", async (c) => {
+  writes.patch("/api/labels/:id", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -712,7 +747,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     }
   });
 
-  app.delete("/api/labels/:id", async (c) => {
+  writes.delete("/api/labels/:id", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -743,7 +778,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
   // Apply / remove a session-level label across many sessions at once (bulk mode). Registered before
   // the single-id route below so the literal "bulk" segment isn't swallowed by that route's ":id" param.
-  app.post("/api/sessions/bulk/labels", async (c) => {
+  writes.post("/api/sessions/bulk/labels", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -763,7 +798,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
   // Apply / remove a label on a session. The applier is a person using the web app, so applied_by is
   // "user" — combined with a system-origin label, that's the "user-applied system label" case.
-  app.post("/api/sessions/:id/labels", async (c) => {
+  writes.post("/api/sessions/:id/labels", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -779,7 +814,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     }
   });
 
-  app.delete("/api/sessions/:id/labels/:labelId", async (c) => {
+  writes.delete("/api/sessions/:id/labels/:labelId", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -791,7 +826,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   });
 
   // Apply / remove a label on a task, addressed by its position within the session.
-  app.post("/api/sessions/:id/tasks/:taskSeq/labels", async (c) => {
+  writes.post("/api/sessions/:id/tasks/:taskSeq/labels", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -809,7 +844,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     }
   });
 
-  app.delete("/api/sessions/:id/tasks/:taskSeq/labels/:labelId", async (c) => {
+  writes.delete("/api/sessions/:id/tasks/:taskSeq/labels/:labelId", async (c) => {
     const blocked = rejectCrossSite(c);
     if (blocked) return blocked;
     if (!labels) return labelsUnavailable(c);
@@ -822,8 +857,12 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ ok: true });
   });
 
+  // Everything below is dropped entirely in read-only mode (#281): /api/debug leaks local paths/env,
+  // and /api/settings*/onboarding read and write local config, secrets, and provider connections —
+  // none of which belong in a public read-only deployment.
+
   // Hidden /debug page payload: settings, environment, resolved paths, and store/index status.
-  app.get("/api/debug", async (c) => {
+  writes.get("/api/debug", async (c) => {
     if (!opts.debugInfo) return c.json({ error: "Debug info is unavailable in this process." }, 503);
     return c.json(await opts.debugInfo());
   });
@@ -833,7 +872,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   // values; the surfaced settings carry none). The write is mutating and persists to disk, so it
   // gets the same hardening as the secret endpoints: CSRF (rejectCrossSite) + DNS-rebinding
   // (rejectUnsafeHost).
-  app.get("/api/settings", (c) =>
+  writes.get("/api/settings", (c) =>
     c.json(
       describeSettings(
         opts.configPath ? loadConfig(opts.configPath) : undefined,
@@ -842,7 +881,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     ),
   );
 
-  app.put("/api/settings/:path", async (c) => {
+  writes.put("/api/settings/:path", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
     const path = c.req.param("path");
@@ -867,7 +906,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
 
   // The welcome modal's "Don't show this again" checkbox (not a settings-surface field — see
   // `applyOnboardingCompleted`). Same CSRF/DNS-rebinding hardening as the other mutating endpoints.
-  app.put("/api/onboarding", async (c) => {
+  writes.put("/api/onboarding", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
     let completed: unknown;
@@ -885,7 +924,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   // the raw value — GET reports masked status only, POST echoes back masked status after writing.
   const secretStore = (): SecretStore => opts.secrets ?? defaultSecretStore();
 
-  app.get("/api/settings/secrets/:name", async (c) => {
+  writes.get("/api/settings/secrets/:name", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
     const name = c.req.param("name");
@@ -893,7 +932,7 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json(await secretStore().describe(name) satisfies SecretStatus);
   });
 
-  app.post("/api/settings/secrets/:name", async (c) => {
+  writes.post("/api/settings/secrets/:name", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
     const name = c.req.param("name");
@@ -919,18 +958,19 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     return c.json({ configured: true, hint: maskSecret(value) } satisfies SecretStatus);
   });
 
-  // Test the configured LLM provider end to end: a tiny live completion so the user can confirm their
-  // setup works. Mutating-ish (outbound network / a local subprocess for claude-cli/command, and it
-  // reads the stored key), so it carries the same CSRF + DNS-rebinding guards.
-  app.post("/api/settings/test-connection", async (c) => {
+  // Test the configured LLM provider end to end: a tiny live completion so the user can confirm
+  // their setup works. Mutating-ish (outbound network / a local subprocess for claude-cli/command,
+  // and it reads the stored key), so it carries the same CSRF + DNS-rebinding guards.
+  writes.post("/api/settings/test-connection", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
     return c.json(await testLlmConnection({ configPath: opts.configPath, secrets: secretStore(), log: opts.log }));
   });
 
-  // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards; returns
-  // the now-unconfigured status. Idempotent — deleting an absent key still reports not-configured.
-  app.delete("/api/settings/secrets/:name", async (c) => {
+  // Remove a stored key (the `argus secret rm` equivalent). Same CSRF + DNS-rebinding guards;
+  // returns the now-unconfigured status. Idempotent — deleting an absent key still reports
+  // not-configured.
+  writes.delete("/api/settings/secrets/:name", async (c) => {
     const blocked = rejectCrossSite(c) ?? rejectUnsafeHost(c);
     if (blocked) return blocked;
     const name = c.req.param("name");
@@ -942,6 +982,9 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     }
     return c.json({ configured: false } satisfies SecretStatus);
   });
+
+  // The one gate for everything registered on `writes` above.
+  if (!opts.readOnly) app.route("/", writes);
 
   // Everything else is the single-page app. Serve the requested file when it exists, otherwise fall
   // back to index.html so client-side routes resolve on a hard refresh.
@@ -1287,6 +1330,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     claudeBinary,
     configPath: opts.configPath,
     log,
+    readOnly: opts.readOnly,
   });
 
   let resolveClosed!: () => void;
@@ -1321,13 +1365,14 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     if (opts.open) {
       // Fresh install (or the welcome modal hasn't been dismissed yet): land on the welcome
       // overlay instead of the bare dashboard. `state.onboardingCompleted` is the same flag the
-      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding. Onboarding is
-      // macOS-only (mirrors `onboarding_completed()` in desktop/src-tauri/src/lib.rs): other
-      // platforms never read `state.onboardingCompleted` and always land on the bare dashboard.
-      const onboardingCompleted =
-        process.platform !== "darwin" ||
-        (loadConfig(opts.configPath).state?.onboardingCompleted ?? false);
-      spawnSync("open", [onboardingCompleted ? url : `${url}?firstRun=1`]);
+      // modal's "Don't show this again" checkbox writes via PUT /api/onboarding.
+      const onboardingCompleted = loadConfig(opts.configPath).state?.onboardingCompleted ?? false;
+      const browserUrl = onboardingCompleted ? url : `${url}?firstRun=1`;
+      const { command, args } = defaultBrowserCommand(browserUrl);
+      const result = spawnSync(command, args, { stdio: "ignore", windowsHide: true });
+      if (result.error) {
+        logWarn(log, `Couldn't open the dashboard in your browser: ${result.error.message}`);
+      }
     }
     resolveListening();
   });

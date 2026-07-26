@@ -2,6 +2,7 @@
 // `argus run`. Each takes an AbortSignal so the caller owns shutdown, and each is built on the
 // backoff primitives so a flaky laptop (sleep/wake, dropped Wi-Fi) never busy-waits or floods logs.
 import { Backoff, RepeatCollapser, sleep, superviseLoop } from "./backoff.ts";
+import { HUB_SETTINGS, loadConfig, resolveSetting } from "./config.ts";
 import { type BuildDashboardOptions, sourcesFor } from "./reporting/dashboard-builder.ts";
 import { runIndex } from "./index-ops.ts";
 import { STORE_FILE } from "./paths.ts";
@@ -9,9 +10,10 @@ import { hubErrorMessage, pushHubJson, type PushResult } from "./push.ts";
 import { resolveHubConfig } from "./secrets.ts";
 import { openStore } from "./store/store.ts";
 import type { SyncOptions } from "./cli-options.ts";
-import { logError, logWarn, type Log } from "./logger.ts";
+import { logError, type Log } from "./logger.ts";
 
 const MIN_INTERVAL_MIN = 1;
+const DEFAULT_CONFIG_CHECK_INTERVAL_MS = 5_000;
 
 export interface WatchIndexOptions extends SyncOptions {
   /** Minutes between reads. */
@@ -65,6 +67,8 @@ export interface PushLoopOptions extends BuildDashboardOptions {
 export interface WatchSyncOptions extends PushLoopOptions {
   /** Minutes between uploads. */
   intervalMin: number;
+  /** How often to check for Hub settings when the process started without a configured Hub. */
+  configCheckIntervalMs?: number;
 }
 
 /** POST session data to Argus Hub. Returns a non-ok result when Hub is not configured. */
@@ -80,7 +84,12 @@ export async function pushSnapshotForOpts(opts: PushLoopOptions, log: Log): Prom
   }
   const hubCfg = await resolveHubConfig({ log });
   if (!hubCfg) {
-    return { ok: false, status: 0, body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data." };
+    return {
+      ok: false,
+      status: 0,
+      notConfigured: true,
+      body: "No Hub configured. Set ARGUS_HUB_URL and ARGUS_HUB_KEY to upload usage data.",
+    };
   }
   log(`Uploading to Hub → ${hubCfg.url}`);
   const store = await openStore({ path: STORE_FILE });
@@ -100,19 +109,33 @@ export interface WatchSyncDeps {
   push?: (opts: PushLoopOptions, log: Log) => Promise<PushResult>;
 }
 
-function waitUntilAbort(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+/** The Hub URL as currently configured (managed > env > argus.json), read fresh so a settings
+ *  change made while the loop runs is visible. Never touches the keychain. */
+function currentHubUrl(): string | undefined {
+  return resolveSetting(HUB_SETTINGS.url, {}, loadConfig());
+}
+
+/** Wait until the configured Hub URL differs from `url` (the one the failed attempt used), or the
+ *  signal aborts. Polling settings lets a fatal upload failure recover when the user points at a
+ *  different Hub, without restarting the process. */
+async function waitForHubUrlChange(url: string | undefined, intervalMs: number, signal: AbortSignal): Promise<void> {
+  while (!signal.aborted && currentHubUrl() === url) {
+    await sleep(intervalMs, signal);
+  }
 }
 
 /**
- * Periodically upload the snapshot until the signal aborts. Transient failures (offline, 5xx)
- * back off with jitter; a success resets the backoff and resumes the normal interval. Repeated
- * identical failures collapse to one log line.
+ * Periodically upload the snapshot until the signal aborts. Transient failures (offline, DNS,
+ * connection refused, 5xx) back off with jitter and re-resolve settings on each attempt; a
+ * success resets the backoff and resumes the normal interval. Repeated identical failures
+ * collapse to one log line. A fatal failure (schema mismatch, a local store error) stops
+ * retrying until the configured Hub URL changes, so pointing at a different Hub takes effect
+ * without a restart.
  */
 export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortSignal, deps: WatchSyncDeps = {}): Promise<void> {
   const push = deps.push ?? pushSnapshotForOpts;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
+  const configCheckIntervalMs = opts.configCheckIntervalMs ?? DEFAULT_CONFIG_CHECK_INTERVAL_MS;
 
   const backoff = new Backoff();
   const collapser = new RepeatCollapser(log);
@@ -121,6 +144,9 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
     "upload",
     async (sig) => {
       while (!sig.aborted) {
+        // Snapshot the URL this attempt runs against, so a fatal failure below holds until the
+        // user changes it — not until some unrelated future edit.
+        const attemptUrl = currentHubUrl();
         let res: PushResult;
         try {
           res = await push(opts, log);
@@ -130,6 +156,16 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           await sleep(backoff.next(), sig);
           continue;
         }
+        // A failure that won't heal by retrying against the same Hub. Log it once, then hold
+        // until the Hub URL changes in settings and try again with the new URL.
+        const holdForNewHubUrl = async (message: string) => {
+          logError(log, message);
+          await waitForHubUrlChange(attemptUrl, configCheckIntervalMs, sig);
+          if (sig.aborted) return;
+          collapser.flush();
+          backoff.reset();
+          log("The Hub URL changed. Trying the upload again.");
+        };
         if (res.skipped) {
           // Nothing eligible to upload. Not an error: idle a normal interval.
           collapser.note(res.body);
@@ -142,12 +178,23 @@ export async function watchSync(opts: WatchSyncOptions, log: Log, signal: AbortS
           await sleep(intervalMs, sig);
         } else if (res.status === 422) {
           // Schema version mismatch: permanent until one side is upgraded. The Hub's body states
-          // the direction (client too new → update the Hub; too old → re-index). Stop retrying.
-          logError(log, `Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
-          await waitUntilAbort(sig);
+          // the direction (client too new → update the Hub; too old → re-index).
+          await holdForNewHubUrl(`Hub rejected upload (422): ${hubErrorMessage(res.body)}`);
+        } else if (res.notConfigured) {
+          // The desktop shell starts the sync loop even before a Hub is configured. Keep checking so
+          // adding the URL/key in Settings takes effect without restarting the sidecar.
+          collapser.note(res.body);
+          backoff.reset();
+          await sleep(configCheckIntervalMs, sig);
+        } else if (res.network) {
+          // Couldn't reach the Hub — the flaky-laptop case (offline, DNS, refused), or a bad URL.
+          // Back off and retry; each attempt re-resolves settings, so a corrected URL is picked up.
+          collapser.note(`Upload failed: ${res.body}. Retrying.`, "warn");
+          await sleep(backoff.next(), sig);
         } else if (res.status === 0) {
-          logError(log, res.body);
-          await waitUntilAbort(sig);
+          // status 0 without `network` = a local error (e.g. the store couldn't be read). Retrying
+          // won't help; hold like the 422 case.
+          await holdForNewHubUrl(res.body);
         } else {
           collapser.note(`Upload failed (${res.status}). Retrying.`, "warn");
           await sleep(backoff.next(), sig);

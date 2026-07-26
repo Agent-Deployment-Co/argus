@@ -1,5 +1,15 @@
 .PHONY: install build test typecheck changelog publish clean desktop dmg version bump help
 
+# GNU Make exposes OS=Windows_NT on Windows. On macOS, retain the cross-build
+# path so one command produces the macOS app plus both Windows architectures.
+ifeq ($(OS),Windows_NT)
+DESKTOP_PLATFORM := windows
+else ifeq ($(shell uname -s 2>/dev/null),Darwin)
+DESKTOP_PLATFORM := macos
+else
+DESKTOP_PLATFORM := unsupported
+endif
+
 NPM_PUBLISH_FLAGS ?= --access public
 
 .DEFAULT_GOAL := help
@@ -13,7 +23,7 @@ help:
 	@echo "  changelog  Rebuild docs/changelog.md from GitHub releases"
 	@echo "  publish    Build and publish to npm"
 	@echo "  clean      Remove dist/"
-	@echo "  desktop    Build the desktop app"
+	@echo "  desktop    Build the native desktop app (macOS also cross-builds Windows x64/ARM64)"
 	@echo "  dmg        Build a macOS DMG (requires APPLE_ID and APPLE_PASSWORD)"
 	@echo "  version    Print the current version"
 	@echo "  bump       Bump the version (requires VERSION=major.minor.patch)"
@@ -60,7 +70,18 @@ clean: install
 	rm -rf dist/
 
 desktop: install
+ifeq ($(DESKTOP_PLATFORM),windows)
+	bun run desktop:build:windows:native
+else ifeq ($(DESKTOP_PLATFORM),macos)
+	@command -v cargo-xwin >/dev/null 2>&1 || { echo "cargo-xwin is required for the Windows desktop build (install it with cargo install --locked cargo-xwin)." >&2; exit 1; }
+	@rustup target list --installed 2>/dev/null | grep -qx 'x86_64-pc-windows-msvc' || { echo "The x86_64-pc-windows-msvc Rust target is required (install it with rustup target add x86_64-pc-windows-msvc)." >&2; exit 1; }
+	@rustup target list --installed 2>/dev/null | grep -qx 'aarch64-pc-windows-msvc' || { echo "The aarch64-pc-windows-msvc Rust target is required (install it with rustup target add aarch64-pc-windows-msvc)." >&2; exit 1; }
 	bun run desktop:build
+	bun run desktop:build:windows
+	bun run desktop:build:windows:arm64
+else
+	@echo "The desktop build is supported on macOS and Windows." >&2; exit 1
+endif
 
 dmg: install
 ifndef APPLE_ID

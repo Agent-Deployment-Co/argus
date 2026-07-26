@@ -12,6 +12,8 @@ Argus indexes [sessions](/terminology#session) from your AI [agents](/terminolog
 
 <DownloadButtons center label="Download:" location="quick_start" />
 
+Want to look around first? Open the [live demo](https://argus-demo.agentdeployment.co), a read-only copy of Argus filled with sample data.
+
 ## Local, private and free
 
 Argus stores all its data on your own computer and never uploads it unless you choose to [sync](/terminology#sync) usage data to an [Argus Hub](/terminology#argus-hub) run by your company. Argus is a [free open source project](https://github.com/Agent-Deployment-Co/argus) from [The Agent Deployment Company](https://www.agentdeployment.co).

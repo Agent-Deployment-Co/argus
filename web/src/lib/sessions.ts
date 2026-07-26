@@ -67,8 +67,8 @@ export async function fetchAllSessionIds(filters: SessionListFilters): Promise<s
   return ids;
 }
 
-/** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery so "Load more"
- *  appends; changing any filter starts a fresh first page. */
+/** Paginated session list (keyset by offset). Pages accumulate via useInfiniteQuery as the list
+ *  scrolls; changing any filter starts a fresh first page. */
 export function useSessionsQuery(filters: SessionListFilters) {
   return useInfiniteQuery({
     queryKey: ["sessions", filters],

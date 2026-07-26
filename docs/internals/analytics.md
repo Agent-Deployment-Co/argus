@@ -100,12 +100,11 @@ waiting on the Live events view.)
 | Event | When | Properties |
 |-------|------|------------|
 | `$pageview` | Any page load or client-side navigation | captured automatically by `defaults` |
-| `download_clicked` | The macOS download button is clicked | `location`: `quick_start`, `download_page` |
+| `download_clicked` | A macOS or Windows download button is clicked | `location`: `quick_start`, `download_page` |
 
 `download_clicked` is emitted by the delegated handler via the data attributes on
-the macOS button in `DownloadButtons.vue`. The `location` prop on the component
-identifies the placement, so we can tell which page drives downloads. The
-"Windows (coming soon)" control is disabled and carries no event.
+the download buttons in `DownloadButtons.vue`. The `location` prop on the
+component identifies the placement, so we can tell which page drives downloads.
 
 ## Adding instrumentation
 

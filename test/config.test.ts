@@ -12,6 +12,7 @@ import {
   resolveAutoUpdateEnabled,
   resolveDesktopStartAtLogin,
   resolveLogLevel,
+  resolveReadOnly,
   resolveRetainText,
   resolveSetting,
   resolveSessionInterpretation,
@@ -38,6 +39,7 @@ const CONFIG_ENV = [
   "ARGUS_TASK_COMMAND",
   "ARGUS_RETAIN_TEXT",
   "ARGUS_LOG_LEVEL",
+  "ARGUS_READ_ONLY",
 ];
 
 afterEach(() => {
@@ -350,22 +352,18 @@ describe("desktop.silent", () => {
   });
 });
 
-// `resolveDesktopStartAtLogin` is currently latent restore-plumbing: start-at-login is
-// hard-disabled in the desktop shell (see `desktop_start_at_login_enabled` in lib.rs), which ignores
-// this resolver entirely, and the Settings toggle is removed from the UI. These tests keep the
-// resolver mechanics honest for when the feature is re-enabled.
 describe("resolveDesktopStartAtLogin", () => {
-  test("defaults to disabled", () => {
-    expect(resolveDesktopStartAtLogin({}, {})).toBe(false);
+  test("defaults to enabled", () => {
+    expect(resolveDesktopStartAtLogin({}, {})).toBe(true);
   });
 
-  test("resolver returns true when argus.json sets it (shell ignores it while disabled)", () => {
-    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: true } })).toBe(true);
+  test("argus.json can disable start at login", () => {
+    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: false } })).toBe(false);
   });
 
   test("env var overrides argus.json", () => {
-    process.env.ARGUS_DESKTOP_START_AT_LOGIN = "no";
-    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: true } })).toBe(false);
+    process.env.ARGUS_DESKTOP_START_AT_LOGIN = "yes";
+    expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: false } })).toBe(true);
   });
 });
 
@@ -431,6 +429,31 @@ describe("resolveRetainText", () => {
   test("empty env value falls through to the default", () => {
     process.env.ARGUS_RETAIN_TEXT = "";
     expect(resolveRetainText({}, {})).toBe(true);
+  });
+});
+
+describe("resolveReadOnly (#281)", () => {
+  test("defaults to off", () => {
+    expect(resolveReadOnly({}, {})).toBe(false);
+  });
+
+  test("argus.json can turn it on", () => {
+    expect(resolveReadOnly({}, { readOnly: true })).toBe(true);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_READ_ONLY = "true";
+    expect(resolveReadOnly({}, { readOnly: false })).toBe(true);
+  });
+
+  test("flag overrides env and file", () => {
+    process.env.ARGUS_READ_ONLY = "true";
+    expect(resolveReadOnly({ "read-only": false }, { readOnly: true })).toBe(false);
+  });
+
+  test("empty env value falls through to the default", () => {
+    process.env.ARGUS_READ_ONLY = "";
+    expect(resolveReadOnly({}, {})).toBe(false);
   });
 });
 

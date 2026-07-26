@@ -35,7 +35,7 @@ export function WelcomeModal() {
                 <div>
                   <div className="welcome-point-title">Local by default</div>
                   <div className="welcome-point-body">
-                    Everything is read and stored on this Mac. Nothing is sent anywhere by
+                    Everything is read and stored on this computer. Nothing is sent anywhere by
                     default.
                   </div>
                 </div>
@@ -46,7 +46,7 @@ export function WelcomeModal() {
                 <div>
                   <div className="welcome-point-title">Finds sessions automatically</div>
                   <div className="welcome-point-body">
-                    Argus finds and indexes every session it can as soon as it's saved, no setup
+                    Argus finds and indexes every session it can as soon as it's saved, with no setup
                     required.
                   </div>
                 </div>
@@ -55,9 +55,9 @@ export function WelcomeModal() {
               <div className="welcome-point">
                 <AppWindow className="welcome-point-icon" size={20} strokeWidth={1.75} aria-hidden />
                 <div>
-                  <div className="welcome-point-title">Lives in the menu bar</div>
+                  <div className="welcome-point-title">Lives in the system tray</div>
                   <div className="welcome-point-body">
-                    Argus has no dock icon. Look for it in the menu bar at the top of the screen.
+                    Argus has no main window. Look for it in the system tray or menu bar.
                   </div>
                 </div>
               </div>
@@ -65,7 +65,7 @@ export function WelcomeModal() {
           </div>
 
           <figure className="welcome-shot">
-            <img src="/images/mac-menu.png" alt="The Argus menu in the macOS menu bar, showing Open Argus, Stop, Check for updates, About Argus, and Quit Argus" />
+            <img src="/images/mac-menu.png" alt="The Argus desktop menu, showing Open Argus, Stop, Check for updates, About Argus, and Quit Argus" />
           </figure>
         </div>
 

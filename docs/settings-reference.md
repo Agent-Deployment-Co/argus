@@ -75,20 +75,22 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 |---|---|---|---|---|---|
 | Automatic updates | Whether the desktop app installs updates automatically. | `autoUpdate.enabled` | `ARGUS_AUTO_UPDATE_ENABLED` | None | `true` |
 | Update check interval | Minutes between desktop update checks. | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | None | `60` |
-| Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `false` |
+| Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `true` |
 | Silent desktop mode | Whether the desktop app runs without a tray icon, notifications or opening the browser on first run. | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | None | `false` |
+| Read-only mode | Whether `serve` runs read-only: labels, hiding sessions, refresh and Settings are hidden and their routes aren't mounted. | `readOnly` | `ARGUS_READ_ONLY` | `serve`: `--read-only` | `false` |
 | Hub URL | Argus Hub server URL for [sync](/terminology#sync). | `hub.url` | `ARGUS_HUB_URL` | None | unset |
 | Hub key | Key used to authenticate to Argus Hub. | `hub.key` | `ARGUS_HUB_KEY` | None | unset |
 | Log level | How much detail Argus prints to the terminal. | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` | `info` |
 | Retain session text | Whether Argus keeps prompt and response text in the local [index](/terminology#index) for interpretation. | `retainText` | `ARGUS_RETAIN_TEXT` | `index`, `index rebuild` and `index refresh`: `--retain-text true\|false` | `true` |
 | Welcome completed | Whether the first-run welcome screen has been dismissed. | `state.onboardingCompleted` | `ARGUS_STATE_ONBOARDING_COMPLETED` | None | `false` |
 
-`desktop.startAtLogin` is currently kept as restore plumbing. The desktop app
-does not use it while start-at-login is disabled.
-
 `desktop.silent` is for managed or scripted desktop deployments. Set it with
 `argus config set desktop.silent true` or `ARGUS_DESKTOP_SILENT=true`; it is not
 shown in the app Settings screen.
+
+`readOnly` is a deployment switch for running a shared, read-only Argus instance, not something to
+flip from the app Settings screen. Set it with `argus config set readOnly true`, `ARGUS_READ_ONLY=true`,
+or `serve --read-only`.
 
 Use the secret store or `ARGUS_HUB_KEY` for the Hub key. A legacy plaintext
 `hub.key` in `argus.json` is still read and migrated by `serve`, but new
@@ -156,7 +158,7 @@ provider's model, command and API-key variable separate.
 |---|---|---|---|---|---|
 | Provider | Which backend Argus uses for model calls. | `llm.provider` | `ARGUS_LLM_PROVIDER` | None | `claude-cli` |
 | Model | Model name to request for the selected provider. | `llm.providerConfigs.<provider>.model` or flat fallback `llm.model` | `ARGUS_LLM_MODEL` | None | provider default |
-| Base URL | OpenAI-compatible endpoint for the `openai` provider. | `llm.providerConfigs.<provider>.baseUrl` or flat fallback `llm.baseUrl` | `ARGUS_LLM_BASE_URL` | None | `https://api.openai.com/v1` for `openai` |
+| Base URL | OpenAI-compatible endpoint for the `openai` provider. Point this at a [model gateway](/model-gateway) to route through one. | `llm.providerConfigs.<provider>.baseUrl` or flat fallback `llm.baseUrl` | `ARGUS_LLM_BASE_URL` | None | `https://api.openai.com/v1` for `openai` |
 | API key variable | Environment variable or secret name used for a provider's API key. | `llm.providerConfigs.<provider>.apiKeyEnv` or flat fallback `llm.apiKeyEnv` | `ARGUS_LLM_API_KEY_ENV` | None | provider standard |
 | Max output tokens | Output token cap for model requests. | `llm.providerConfigs.<provider>.maxTokens` or flat fallback `llm.maxTokens` | `ARGUS_LLM_MAX_TOKENS` | None | unset, with HTTP calls capped at `2048` when no request cap is set |
 | Reasoning effort | Provider-native reasoning effort value. | `llm.providerConfigs.<provider>.effort` or flat fallback `llm.effort` | `ARGUS_LLM_EFFORT` | None | unset |

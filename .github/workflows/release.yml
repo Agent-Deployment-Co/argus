@@ -1,20 +1,32 @@
 name: Release
 
-# Builds and (when the signing secrets are configured) signs the distributable artifacts:
+# Builds and signs the distributable artifacts:
 #   - npm: per-OS prebuilt binaries published under @agentdeploymentco/argus*
 #   - macOS: a signed + notarized Argus.app / .dmg
-#   - Windows: an Authenticode-signed .msi / .exe
-# All signing is gated on secrets being present, so this workflow runs end-to-end (producing
-# UNSIGNED artifacts) before any certificate exists, and starts signing the moment the secrets are
-# added. No secret value ever lives in this file — only references to `secrets.*`.
+#   - Windows: standalone CLI ZIPs plus Azure Artifact Signing-signed NSIS installers (.exe)
 #
-# Required secrets to activate signing (set in repo/org settings; never commit their values):
+# Two modes, decided by what triggered the run:
+#   - Tag push: build everything, upload to a DRAFT GitHub Release, and publish it only after
+#     every platform leg has succeeded (the publish-release job below).
+#   - workflow_dispatch (any branch): build-only dry run — no tag, no release; the bundles are
+#     uploaded as workflow artifacts so they can be downloaded and tested on real machines.
+# Windows signing uses Tauri's `bundle.windows.signCommand` with Azure Artifact Signing. The
+# Windows jobs fail clearly if the Azure identity or signing configuration is missing, so a tagged
+# release cannot silently publish unsigned installers. No secret value ever lives in this file —
+# only references to `secrets.*`.
+#
+# Required secrets (set in repo/org settings; never commit their values):
 #   NPM_TOKEN                              npm automation token (npm publish)
 #   APPLE_CERTIFICATE                      base64 of the Developer ID Application .p12
 #   APPLE_CERTIFICATE_PASSWORD             its export password
 #   APPLE_SIGNING_IDENTITY                 e.g. "Developer ID Application: … (TEAMID)"
 #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
-#   WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD   Authenticode signing cert (base64 + pwd)
+#   AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID
+#                                            service principal used by artifact-signing-cli
+# Required repository or organization secrets:
+#   AZURE_ARTIFACT_SIGNING_ENDPOINT          Region-specific codesigning.azure.net endpoint
+#   AZURE_ARTIFACT_SIGNING_ACCOUNT           Artifact Signing account name
+#   AZURE_ARTIFACT_SIGNING_PROFILE           Certificate profile name
 #   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #                                            updater signing key (separate from OS certs)
 
@@ -24,43 +36,103 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write # required for OIDC
   contents: write # create the GitHub Release and upload assets
+  actions: write # dispatch the docs changelog refresh after publishing a release
 
 jobs:
-  build-macos:
+  build-desktop:
     strategy:
       fail-fast: false
       matrix:
         include:
-          # for Universal macOS builds (arm64 and x86_64)
-          - platform: "macos-latest"
+          # Universal macOS build (arm64 + x86_64)
+          - name: macOS universal
+            slug: macos-universal
+            platform: "macos-latest"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            stage-args: "--universal"
             args: "--target universal-apple-darwin"
-    runs-on: macos-latest
+          # Windows x64, built natively on the x64 runner.
+          - name: Windows x64
+            slug: windows-x64
+            archive_arch: amd64
+            platform: "windows-latest"
+            rust-targets: ""
+            stage-args: "--build"
+            args: "--bundles nsis"
+          # Windows ARM64, cross-compiled on the x64 runner: the runner's MSVC toolchain
+          # ships the ARM64 build tools, and the sidecar cross-compiles via
+          # `bun build --compile --target=bun-windows-arm64` (stage-desktop-sidecar.sh --target).
+          - name: Windows ARM64
+            slug: windows-arm64
+            archive_arch: arm64
+            platform: "windows-latest"
+            rust-targets: "aarch64-pc-windows-msvc"
+            stage-args: "--target aarch64-pc-windows-msvc"
+            args: "--target aarch64-pc-windows-msvc --bundles nsis"
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    environment: production
     env:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       TAURI_UPDATER_ARGS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
+      # Keep Bun's package and cross-compiled-runtime cache on the same volume as the checkout.
+      # GitHub's Windows workspace is on D:, while Bun otherwise defaults to C:\Users\runneradmin\.bun;
+      # cross-volume moves fail when `bun build --compile --target=bun-windows-arm64` populates it.
+      BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.bun-cache
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # Extra targets beyond the host: both macOS arches for the universal build,
+          # aarch64-pc-windows-msvc for the Windows ARM64 cross-build.
+          targets: ${{ matrix.rust-targets }}
+      - name: Install Azure Artifact Signing CLI
+        if: runner.os == 'Windows'
+        run: cargo install artifact-signing-cli --version 0.11.0 --locked
+      - name: Locate Windows signing tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $signingCli = Join-Path $env:CARGO_HOME "bin\artifact-signing-cli.exe"
+          if (-not (Test-Path -LiteralPath $signingCli)) {
+            throw "artifact-signing-cli was not installed at $signingCli."
+          }
+
+          $azureCli = (Get-Command az.cmd -ErrorAction Stop).Path
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter "signtool.exe" -File -Recurse |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Sort-Object -Property FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            throw "No x64 signtool.exe was found in the installed Windows SDKs."
+          }
+
+          "ARTIFACT_SIGNING_CLI=$signingCli" >> $env:GITHUB_ENV
+          "AZURE_CLI_PATH=$azureCli" >> $env:GITHUB_ENV
+          "SIGNTOOL_PATH=$($signTool.FullName)" >> $env:GITHUB_ENV
+          Write-Host "artifact-signing-cli: $signingCli"
+          Write-Host "Azure CLI: $azureCli"
+          Write-Host "SignTool: $($signTool.FullName)"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+          # Keep the two windows-latest legs (host x64 vs ARM64 cross) from sharing a cache.
+          key: ${{ matrix.rust-targets || 'host' }}
       - run: bun install --frozen-lockfile
-      # Cross-compile the CLI for both macOS arches and stage them (+ the web app) for Tauri.
-      # --universal produces argus-aarch64-apple-darwin and argus-x86_64-apple-darwin, both
-      # required when Tauri builds a universal-apple-darwin bundle.
+      # Compile the CLI sidecar(s) and stage them (+ the web app) for Tauri:
+      #   --universal                       both macOS arches + a lipo'd universal binary
+      #   --build                           the host triple (Windows x64 leg)
+      #   --target aarch64-pc-windows-msvc  cross-compiled Windows ARM64 sidecar
       - name: Stage sidecar + web
-        run: bash scripts/stage-desktop-sidecar.sh --universal
+        run: bash scripts/stage-desktop-sidecar.sh ${{ matrix.stage-args }}
 
       - name: import Apple Developer Certificate
+        if: runner.os == 'macOS'
         # Prevents keychain from locking automatically for 3600 seconds.
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -77,13 +149,14 @@ jobs:
           security find-identity -v -p codesigning build.keychain
 
       - name: verify certificate
+        if: runner.os == 'macOS'
         run: |
           CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application")
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
           echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
           echo "Certificate imported."
 
-      - name: Build (and sign, if secrets present) the desktop app
+      - name: Build the desktop app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,28 +171,210 @@ jobs:
           # artifacts are produced; the normal app/DMG build still runs.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Azure Artifact Signing credentials are consumed by the Tauri signCommand wrapper.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          AZURE_ARTIFACT_SIGNING_PROFILE: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
         with:
-          tagName: argus-v__VERSION__
-          releaseName: Argus v__VERSION__
-          releaseDraft: false
+          # An empty tagName makes tauri-action build without touching releases at all —
+          # that's the workflow_dispatch dry-run mode. On tag pushes the release is created
+          # as a draft and published by the publish-release job once every leg succeeds.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && 'argus-v__VERSION__' || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && 'Argus v__VERSION__' || '' }}
+          releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
           projectPath: desktop
-          tauriScript: ${{ github.workspace }}/node_modules/.bin/tauri
+          # bun's Windows bin shims aren't directly spawnable by path; bunx resolves the
+          # locally installed @tauri-apps/cli either way.
+          tauriScript: ${{ runner.os == 'Windows' && 'bunx tauri' || format('{0}/node_modules/.bin/tauri', github.workspace) }}
           includeUpdaterJson: true
           args: ${{ matrix.args }} ${{ env.TAURI_UPDATER_ARGS }}
 
+      - name: Show Windows signing diagnostics
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $diagnosticPath = Join-Path $env:RUNNER_TEMP "argus-signing.log"
+          if (Test-Path -LiteralPath $diagnosticPath) {
+            Get-Content -LiteralPath $diagnosticPath
+          } else {
+            Write-Host "The Windows signing wrapper did not create a diagnostic log."
+          }
+
+      # Releases created with GITHUB_TOKEN do not reliably emit a release event that can
+      # trigger another workflow. Dispatch docs explicitly after the release exists.
+      - name: Refresh docs changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --repo "${GITHUB_REPOSITORY}" --ref main
+
       - name: Verify updater artifacts
         if: ${{ env.TAURI_UPDATER_ARGS != '' }}
+        shell: bash
         run: |
           set -euo pipefail
-          archive_count="$(find desktop/src-tauri/target -path '*/bundle/macos/*.app.tar.gz' -type f | wc -l | tr -d '[:space:]')"
-          signature_count="$(find desktop/src-tauri/target -path '*/bundle/macos/*.app.tar.gz.sig' -type f | wc -l | tr -d '[:space:]')"
+          # macOS updater artifacts are the .app archive + .sig; on Windows (NSIS with
+          # createUpdaterArtifacts) they're the -setup.exe installer + .sig.
+          case "$RUNNER_OS" in
+            macOS)   pattern='*/bundle/macos/*.app.tar.gz' ;;
+            Windows) pattern='*/bundle/nsis/*-setup.exe' ;;
+            *)       echo "Unexpected runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          archive_count="$(find desktop/src-tauri/target -path "$pattern" -type f | wc -l | tr -d '[:space:]')"
+          signature_count="$(find desktop/src-tauri/target -path "${pattern}.sig" -type f | wc -l | tr -d '[:space:]')"
           if [ "$archive_count" -eq 0 ]; then
-            echo "No macOS updater archive (*.app.tar.gz) was produced." >&2
+            echo "No updater archive ($pattern) was produced." >&2
             exit 1
           fi
           if [ "$signature_count" -eq 0 ]; then
-            echo "No macOS updater signature (*.app.tar.gz.sig) was produced." >&2
+            echo "No updater signature (${pattern}.sig) was produced." >&2
             exit 1
           fi
+
+      - name: Verify Windows Authenticode signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\target" -Filter "*-setup.exe" -Recurse)
+          if ($installers.Count -eq 0) {
+            throw "No Windows installer was found to verify."
+          }
+          $artifacts = @(
+            Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\binaries" -Filter "*.exe"
+            $installers
+          )
+          foreach ($artifact in $artifacts) {
+            $signature = Get-AuthenticodeSignature -FilePath $artifact.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature on $($artifact.FullName): $($signature.Status)"
+            }
+            Write-Host "$($artifact.Name): $($signature.Status) ($($signature.SignerCertificate.Subject))"
+          }
+
+      # Package the signed CLI sidecar with the web app so Windows users can run Argus without
+      # installing the desktop shell. Keep both files at the archive root for easy extraction.
+      - name: Package Windows CLI archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archiveDir = Join-Path $env:RUNNER_TEMP "argus-cli-archive"
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $archiveDir
+          New-Item -ItemType Directory -Force -Path $archiveDir, $releaseDir | Out-Null
+
+          $binaries = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\binaries" -Filter "*.exe")
+          if ($binaries.Count -ne 1) {
+            throw "Expected one Windows CLI binary, found $($binaries.Count)."
+          }
+          Copy-Item -LiteralPath $binaries[0].FullName -Destination (Join-Path $archiveDir "argus.exe")
+          Copy-Item -Recurse -LiteralPath "$env:GITHUB_WORKSPACE\desktop\src-tauri\web" -Destination (Join-Path $archiveDir "web")
+
+          $version = (Get-Content "$env:GITHUB_WORKSPACE\desktop\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $archive = Join-Path $releaseDir "argus_${version}_windows_${{ matrix.archive_arch }}.zip"
+          Compress-Archive -Path (Join-Path $archiveDir "argus.exe"), (Join-Path $archiveDir "web") -DestinationPath $archive -Force
+          Write-Host "Created $archive"
+
+      - name: Upload Windows CLI archive to release
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content "desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $tag = "argus-v$version"
+          $archive = Get-ChildItem -Path "$env:GITHUB_WORKSPACE\release-artifacts" -Filter "*.zip" |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $archive) {
+            throw "No Windows CLI archive was found to upload."
+          }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $archive
+
+      # Stage the Windows installer with a stable name so archive:false can upload the raw file.
+      - name: Stage Windows installer for workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          $filename = "argus-${{ matrix.slug }}-setup.exe"
+          $installers = @(Get-ChildItem -Path "$env:GITHUB_WORKSPACE\desktop\src-tauri\target" -Filter "*-setup.exe" -Recurse)
+          if ($installers.Count -eq 0) {
+            throw "No Windows installer was found to package."
+          }
+          if ($installers.Count -ne 1) {
+            throw "Expected one Windows installer, found $($installers.Count)."
+          }
+          foreach ($installer in $installers) {
+            Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $destination $filename) -Force
+          }
+
+      # The artifact action can upload one file without wrapping it in a ZIP. Give the DMG a
+      # stable name because archive:false uses the file name as the artifact name.
+      - name: Stage macOS DMG for workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="$GITHUB_WORKSPACE/release-artifacts/argus-macos-universal.dmg"
+          mkdir -p "$(dirname "$destination")"
+          dmg_count="$(find desktop/src-tauri/target -path '*/bundle/dmg/*.dmg' -type f | wc -l | tr -d '[:space:]')"
+          if [ "$dmg_count" -ne 1 ]; then
+            echo "Expected one macOS DMG, found $dmg_count." >&2
+            exit 1
+          fi
+          dmg="$(find desktop/src-tauri/target -path '*/bundle/dmg/*.dmg' -type f -print -quit)"
+          cp "$dmg" "$destination"
+          echo "Staged $destination"
+
+      # Dry-run mode only: expose the desktop installers on the workflow run so they can be
+      # downloaded and tested on real machines before any tag exists. Standalone Windows CLI
+      # ZIPs are published only on tagged releases, not as workflow artifacts.
+      - name: Upload macOS DMG as workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          path: release-artifacts/argus-macos-universal.dmg
+          archive: false
+
+      - name: Upload Windows installer as workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          path: release-artifacts/argus-${{ matrix.slug }}-setup.exe
+          archive: false
+
+  # Tag pushes create the release as a draft; flip it public only when every platform leg
+  # succeeded, so a failed leg can never leave a half-populated public release (and the
+  # updater's `releases/latest/download/latest.json` endpoint never resolves to one).
+  publish-release:
+    needs: build-desktop
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Publish the draft release
+        run: |
+          set -euo pipefail
+          # tauri-action names the release tag from the app version, independent of the
+          # pushed ref, so derive it the same way instead of trusting github.ref_name.
+          version="$(jq -r .version desktop/src-tauri/tauri.conf.json)"
+          tag="argus-v${version}"
+          if [ "$HAS_UPDATER_KEY" = "true" ]; then
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+                --jq '.assets[].name' | grep -qx 'latest.json'; then
+              echo "The draft release $tag has no latest.json updater manifest." >&2
+              exit 1
+            fi
+          fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "Published release $tag"

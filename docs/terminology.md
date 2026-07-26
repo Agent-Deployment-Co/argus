@@ -42,6 +42,12 @@ like) and saves them so the app is fast and your sessions are ready to
 explore. The index lives on your own computer. Nothing is uploaded unless you
 choose to sync.
 
+## Interaction
+
+One back-and-forth with an agent: a prompt you send and the reply it works out,
+including any tools it uses along the way. Argus counts interactions per session and
+per task as a measure of how much work each one took.
+
 ## MCP server
 
 A connector that gives an agent extra abilities, like access to a database, a
@@ -53,6 +59,13 @@ standard agents use to talk to these connectors.
 The specific AI behind an agent, such as Claude Opus, Claude Sonnet or a GPT
 model. Different models have different speed, capability and price, so your usage
 and cost depend on which ones you use.
+
+## Model gateway
+
+An OpenAI-compatible endpoint that sits between Argus and a model provider. The
+gateway holds the provider's API key, and Argus reaches it with a separate key, so
+the provider key can stay off your computer or on a shared server your team runs.
+See [Model Gateway](/model-gateway).
 
 ## Plugin
 

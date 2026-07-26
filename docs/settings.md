@@ -10,6 +10,11 @@ managed-settings behavior, see the [Settings Reference](/settings-reference).
 
 - **Appearance** sets the color theme: follow your system, or force light or
   dark.
+- **Startup** controls whether the desktop app starts automatically when you sign
+  in to this computer. It's on by default. If you turn Argus off in your
+  computer's own startup settings instead (Open at Login on macOS, Startup apps
+  in Windows Task Manager), Argus respects that choice, and you turn it back on
+  in the same place.
 - **Updates** controls whether the desktop app installs new versions
   automatically. With it off, Argus tells you when an update is ready and you
   install it from the menu bar.
@@ -38,11 +43,15 @@ managed-settings behavior, see the [Settings Reference](/settings-reference).
 - **Max sessions per hour** caps how many sessions Argus interprets
   automatically each hour. Refreshing a session by hand isn't limited.
 - **Model provider**, **Model**, **Reasoning effort** and **Claude CLI path** choose
-  which model backend does the interpretation and how hard it works. The cheap
+  which model backend does the interpretation and how hard it works. Some fields
+  appear only for the provider that uses them: the Claude CLI path for the local
+  Claude CLI, or a **Command** to run for the Command provider. The cheap
   defaults (Claude Haiku on the local Claude CLI) are good enough out of the box; for
   sharper titles, summaries, and outcome calls, point Argus at a stronger model such
   as Claude Sonnet or Opus. Argus stores any API key in your operating system's secure
   store, never in its settings file, and a **Test connection** button confirms it works.
+  To keep the provider key off your computer, or run one shared backend for a team,
+  point Argus at a [model gateway](/model-gateway) instead.
 - **Reasoning effort** is passed straight through to the provider, so use the value
   that provider expects: `low`, `medium`, `high` (and `xhigh`, `max` on the newest
   models) for Claude and OpenAI; a thinking level for Gemini. Leave it blank for the

@@ -21,6 +21,7 @@
 #   WEB_PORT=5173 bun run dev     # same, via env var
 #   ARGUS_PORT=4300 bun run dev   # pin the API port instead of picking one at random
 #   ARGUS_HOME=~/.argus bun run dev   # use a shared store/config instead of the worktree's ./tmp
+#   bun run dev -- --read-only   # forwarded straight to `argus serve`, e.g. to try read-only mode
 #
 set -euo pipefail
 
@@ -75,7 +76,7 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 echo "→ API server:  http://localhost:$PORT  (restarts on src/ changes)"
-bun --watch run src/cli.ts serve --port "$PORT" &
+bun --watch run src/cli.ts serve --port "$PORT" "$@" &
 API_PID=$!
 
 _cleaned_up=""

@@ -5,6 +5,7 @@
 // fields. This module only *groups* and *serializes* — the value contract stays in `config.ts`.
 import {
   AUTO_UPDATE_SETTINGS,
+  DESKTOP_SETTINGS,
   getPath,
   HUB_SETTINGS,
   llmFieldName,
@@ -174,10 +175,7 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     id: "general",
     label: "General",
     sections: [
-      // The "Startup" (desktop.startAtLogin) toggle is temporarily removed: start-at-login is
-      // hard-disabled in the desktop shell until the app is signed with an org Developer ID cert
-      // (see `desktop_start_at_login_enabled` in desktop/src-tauri/src/lib.rs). Re-add this section
-      // to restore the toggle: { label: "Startup", settings: [DESKTOP_SETTINGS.startAtLogin] }.
+      { label: "Startup", settings: [DESKTOP_SETTINGS.startAtLogin] },
       { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled] },
       { label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] },
       // Terminal verbosity for this `argus serve` process. A change here applies to the running
@@ -188,11 +186,12 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
   {
     // Sessions = session interpretation + the LLM that powers it (its only consumer today). One group:
     // the Interpret-sessions toggle, the hourly cap, then the LLM provider + its provider-specific fields
-    // (model, reasoning effort), the API key, and the Test-connection action. (Custom prompt / prompt
-    // file aren't exposed yet; advanced / CLI-only and not shown here: `llm.apiKeyEnv` — the UI offers the
-    // key itself via API_KEY_FIELD — `llm.baseUrl`, `llm.maxTokens`, and the title/summary length limits
-    // (`sessionInterpretation.titleMaxChars`/`summaryMaxChars`). `claudeCliPath`/`effort` show only for
-    // the providers that use them, per their configFields.)
+    // (model, base URL, reasoning effort), the API key, and the Test-connection action. (Custom prompt /
+    // prompt file aren't exposed yet; advanced / CLI-only and not shown here: `llm.apiKeyEnv` — the UI
+    // offers the key itself via API_KEY_FIELD — `llm.maxTokens`, and the title/summary length limits
+    // (`sessionInterpretation.titleMaxChars`/`summaryMaxChars`). `baseUrl`/`claudeCliPath`/`effort` show
+    // only for the providers that use them, per their configFields — e.g. `baseUrl` for the OpenAI
+    // provider pointed at an OpenAI-compatible server such as a LiteLLM proxy.)
     id: "sessions",
     label: "Sessions",
     sections: [
@@ -202,6 +201,7 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
           SESSION_INTERPRETATION_SETTINGS.maxSessionsPerHour,
           LLM_SETTINGS.provider,
           LLM_SETTINGS.model,
+          LLM_SETTINGS.baseUrl,
           LLM_SETTINGS.effort,
           LLM_SETTINGS.claudeCliPath,
           LLM_SETTINGS.command,

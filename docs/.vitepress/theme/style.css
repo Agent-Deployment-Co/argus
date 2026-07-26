@@ -71,13 +71,19 @@
   --vp-font-family-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco',
     'Consolas', 'Liberation Mono', 'Courier New', monospace;
 
-  --vp-layout-max-width: 1320px;
+  /* Sized so the centered wide-screen layout exactly fits the doc column:
+     272px sidebar + 64px doc padding + 820px text column + 64px content
+     padding + 256px outline + 76px table-breakout slack = 1552px. The min()
+     matters: the default theme starts centering at 1440px viewports, and
+     between 1440px and 1552px its padding calcs would go negative (pushing
+     content under the sidebar) with a fixed value this large. */
+  --vp-layout-max-width: min(100%, 1552px);
   --vp-nav-height: 68px;
   --vp-nav-logo-height: 24px;
   --vp-nav-bg-color: rgba(249, 235, 220, 0.92);
   --vp-nav-screen-bg-color: var(--adc-antique-white);
-  --vp-sidebar-bg-color: rgba(243, 215, 186, 0.46);
-  --vp-local-nav-bg-color: rgba(249, 235, 220, 0.94);
+  --vp-sidebar-bg-color: var(--adc-soft-apricot);
+  --vp-local-nav-bg-color: var(--adc-antique-white);
 
   --vp-code-color: var(--adc-cornflower-ocean);
   --vp-code-bg: rgba(239, 137, 32, 0.12);
@@ -147,7 +153,7 @@
   --vp-nav-bg-color: rgba(28, 17, 5, 0.92);
   --vp-nav-screen-bg-color: var(--adc-coffee-bean);
   --vp-sidebar-bg-color: #241607;
-  --vp-local-nav-bg-color: rgba(28, 17, 5, 0.94);
+  --vp-local-nav-bg-color: var(--adc-coffee-bean);
 
   --vp-code-color: var(--adc-sky-surge);
   --vp-code-bg: rgba(93, 188, 223, 0.14);
@@ -184,6 +190,37 @@ body {
 
 .VPNav {
   backdrop-filter: blur(14px);
+}
+
+#app .VPNavBar > .wrapper > .container > .title {
+  transition: none;
+}
+
+/* The expanded "On this page" dropdown (VPLocalNavOutlineDropdown) sits over
+ * page content; the default theme paints its sections with the translucent
+ * --vp-c-bg-soft, letting text bleed through. Force them opaque (the 1px gaps
+ * between sections still show the gutter color as divider lines). */
+.VPLocalNavOutlineDropdown .header,
+.VPLocalNavOutlineDropdown .outline {
+  background-color: var(--vp-c-bg);
+}
+
+/* Desktop sidebar: the default theme fixes it full-height (top:0) so its scroll
+ * container — and scrollbar — runs up behind the translucent, blurred nav, and
+ * uses a sticky ".curtain" to mask that region. Anchor the top to the nav
+ * height instead so the scroll area (and scrollbar) starts at the logo line;
+ * the curtain is then unnecessary. */
+@media (min-width: 960px) {
+  #app .VPSidebar {
+    top: calc(var(--vp-layout-top-height, 0px) + var(--vp-nav-height));
+    padding-top: 0;
+  }
+  #app .VPSidebar .curtain {
+    display: none;
+  }
+  #app .VPNavBar.has-sidebar > .wrapper > .container > .title {
+    background-color: var(--vp-sidebar-bg-color);
+  }
 }
 
 .VPNavBarTitle .title {
@@ -332,9 +369,44 @@ body {
   text-underline-offset: 3px;
 }
 
+/* Rounded corners without breaking horizontal scroll: overflow-x: auto still
+   clips the cell backgrounds at the corners when the table fits, and lets
+   wide tables scroll when it doesn't (overflow: hidden would clip them). */
 .vp-doc table {
-  overflow: hidden;
+  overflow-x: auto;
   border-radius: 8px;
+}
+
+/* Scroll hint for wide tables: while columns are clipped on a side (classes
+   toggled from theme/index.ts), dissolve that edge so it reads as "more
+   content this way" — macOS hides scrollbars until you scroll, so a hard
+   clip looks like the table just ends. */
+.vp-doc table.has-overflow-right {
+  --table-fade-right: linear-gradient(
+    to right,
+    #000 calc(100% - 48px),
+    transparent
+  );
+  -webkit-mask-image: var(--table-fade-right);
+  mask-image: var(--table-fade-right);
+}
+
+.vp-doc table.has-overflow-left {
+  --table-fade-left: linear-gradient(to right, transparent, #000 48px);
+  -webkit-mask-image: var(--table-fade-left);
+  mask-image: var(--table-fade-left);
+}
+
+.vp-doc table.has-overflow-left.has-overflow-right {
+  --table-fade-both: linear-gradient(
+    to right,
+    transparent,
+    #000 48px,
+    #000 calc(100% - 48px),
+    transparent
+  );
+  -webkit-mask-image: var(--table-fade-both);
+  mask-image: var(--table-fade-both);
 }
 
 .vp-doc th {
@@ -519,6 +591,23 @@ body {
   }
 }
 
+/* Widen the text column from the default 688px; tables and code blocks
+   need the room. */
+#app .VPDoc.has-aside .content-container {
+  max-width: 820px;
+}
+
+/* On screens with room to spare, let tables and code blocks break out of
+   the text column to the right, up to the 896px the container reserves
+   (820px column + 38px centering slack + 32px content padding + 6px of the
+   gap before the outline). Prose keeps its 820px reading measure. */
+@media (min-width: 1560px) {
+  #app .VPDoc.has-aside .vp-doc > div > table,
+  #app .VPDoc.has-aside .vp-doc > div > div[class*='language-'] {
+    margin-right: -76px;
+  }
+}
+
 /*
  * Code blocks use the dark Coffee Bean background in both light and dark
  * mode. VitePress, in light mode, colors syntax tokens with Shiki's
@@ -583,4 +672,37 @@ html:not(.dark) .shiki span {
    below it (the Quick Start page). */
 .vp-doc .screenshot + .download-btns {
   margin-top: 44px;
+}
+
+/* Click-to-zoom (theme/index.ts opens the lightbox). */
+.screenshot img {
+  cursor: zoom-in;
+}
+
+.screenshot-lightbox {
+  position: fixed;
+  inset: 0;
+  /* Above the nav bar and the local-nav dropdown (VitePress tops out below
+     100 for those layers). */
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(28, 17, 5, 0.85);
+  cursor: zoom-out;
+  animation: screenshot-lightbox-in 0.18s ease;
+}
+
+@keyframes screenshot-lightbox-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.screenshot-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
 }

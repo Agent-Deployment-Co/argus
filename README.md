@@ -1,17 +1,16 @@
 # Argus
 
-Argus analyzes how you use your AI agents (Claude Code, Claude Cowork, Claude Chat, Codex and
-Gemini CLI) so you can get more out of them. It brings all your agent work into one place, running
-locally on your computer. Argus is free, [open source](LICENSE) software from [The Agent Deployment Company](https://www.agentdeployment.co).
+Argus analyzes how you use your AI agents (Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI) so you can be more productive. It's built for anyone using agents to do business tasks like account research, drafting content, editing spreadsheets and building workflows.
 
-**📖 Full documentation: [argus.agentdeployment.co](https://argus.agentdeployment.co)** — the best
-place to start if you're here to *use* Argus.
+![The Argus Activity view: sessions, tokens and estimated cost up top, with recommendations and daily token and cost trends below.](docs/images/screenshots/activity@1920x1080@2.webp)
+
+Argus runs locally and brings all your agent work into one place. Argus is free, [open source](LICENSE) software from [The Agent Deployment Company](https://www.agentdeployment.co).
+
+If you're here to use Argus, [argus.agentdeployment.co](https://argus.agentdeployment.co) is the best place to learn more.
 
 ## Get started
 
-The easiest way to run Argus is the **desktop app** — a native app that lives in your menu bar, keeps
-your local session data current, and opens Argus in your browser with no separate setup. The macOS
-build is available now; Windows is coming soon.
+The easiest way to run Argus is the **desktop app** — a native app that lives in your menu bar, keeps your local session data current, and opens Argus in your browser with no separate setup. The macOS build is available now; Windows is coming soon.
 
 **→ [Download the app](https://argus.agentdeployment.co/download)**
 
@@ -59,6 +58,12 @@ npx @agentdeploymentco/argus serve --port 8080      # choose a port (or set ARGU
 |------|-------------|
 | `-p, --port <N>` | Local port to listen on (env `ARGUS_PORT`, default: `4242`) |
 | `--open` | Open the web app in your browser once it's ready (macOS) |
+| `--read-only` | Read-only mode (env `ARGUS_READ_ONLY`; `--no-read-only` forces it off) |
+
+`--read-only` starts a read-only version of the web app: it hides labels, hiding sessions, refresh,
+and Settings, and those actions are unavailable even if attempted directly. Use it to share a
+running Argus instance (a public demo, a screen share, a support session) without letting anyone
+viewing it change your data.
 
 The web app shows the whole local session store and refreshes it in the background; it does not
 re-parse every transcript on each page load. Session titles use an instant heuristic summary built

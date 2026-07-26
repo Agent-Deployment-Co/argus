@@ -59,13 +59,13 @@ describe("describeSettings", () => {
     expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
   });
 
-  test("General exposes auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
+  test("General exposes startup, auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
-    expect(paths).toEqual(["autoUpdate.enabled", "hub.url", "log.level"]);
-    // The desktop start-at-login toggle is temporarily removed from the UI: start-at-login is
-    // hard-disabled in the desktop shell until the app is signed with an org Developer ID cert.
-    expect(paths).not.toContain("desktop.startAtLogin");
+    expect(paths).toEqual(["desktop.startAtLogin", "autoUpdate.enabled", "hub.url", "log.level"]);
+    const startAtLogin = findSetting({}, "desktop.startAtLogin");
+    expect(startAtLogin.ui.control).toBe("toggle");
+    expect(startAtLogin.effectiveValue).toBe(true);
     // Silent mode (#255) is config-only by design — never in the UI, even when set.
     expect(paths).not.toContain("desktop.silent");
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.
@@ -170,14 +170,22 @@ describe("describeSettings", () => {
     expect(pb.values["openrouter"]).toBeUndefined(); // no default → falls back to a generic placeholder
   });
 
-  test("base URL, max tokens, and the API key env var are advanced/CLI only (not in the UI)", () => {
+  test("max tokens and the API key env var are advanced/CLI only (not in the UI); base URL is surfaced", () => {
     const paths = describeSettings({})
       .categories.flatMap((c) => c.sections)
       .flatMap((s) => s.settings)
       .map((s) => s.path);
     expect(paths).not.toContain("llm.apiKeyEnv");
-    expect(paths).not.toContain("llm.baseUrl");
     expect(paths).not.toContain("llm.maxTokens");
+    // Base URL is editable in the UI (provider-scoped, shown only for providers that use it — e.g. the
+    // OpenAI provider pointed at an OpenAI-compatible server such as a LiteLLM proxy).
+    expect(paths).toContain("llm.baseUrl");
+    // …and it stays gated to the provider(s) that actually use a base URL. The descriptor is always
+    // emitted (visibility is resolved client-side from ui.visibleWhen), so assert the gate itself: if
+    // it broke, Base URL would render for every provider (claude-cli/gemini/…), not just OpenAI.
+    const baseUrlVisibleWhen = findSetting({}, "llm.baseUrl").ui.visibleWhen!;
+    expect(baseUrlVisibleWhen.path).toBe("llm.provider");
+    expect([...baseUrlVisibleWhen.in]).toEqual(["openai"]);
   });
 
   test("exposes an API key secret field for the BYO-key providers", () => {

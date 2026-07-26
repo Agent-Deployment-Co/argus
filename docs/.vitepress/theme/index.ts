@@ -95,6 +95,68 @@ async function renderMermaid(isDark: boolean) {
   }
 }
 
+// Wide tables scroll horizontally (see .vp-doc table in style.css), but macOS
+// hides scrollbars until you scroll — so fade out the clipped edge as a hint
+// that there's more to the right. The class drives a mask in style.css.
+function updateTableOverflowHint(table: HTMLElement) {
+  const hiddenRight =
+    table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+  table.classList.toggle('has-overflow-right', hiddenRight)
+  table.classList.toggle('has-overflow-left', table.scrollLeft > 1)
+}
+
+function initTableOverflowHints() {
+  if (typeof window === 'undefined') return
+  const tables = document.querySelectorAll<HTMLElement>('.vp-doc table')
+  for (const table of tables) {
+    if (!('overflowHintBound' in table.dataset)) {
+      table.dataset.overflowHintBound = ''
+      table.addEventListener('scroll', () => updateTableOverflowHint(table), {
+        passive: true
+      })
+    }
+    updateTableOverflowHint(table)
+  }
+}
+
+// Click-to-zoom for product screenshots (.screenshot wrappers in the
+// markdown): clicking the image opens it in a full-viewport lightbox;
+// clicking again or pressing Escape closes it. Styles: .screenshot-lightbox
+// in style.css.
+function openScreenshotLightbox(img: HTMLImageElement) {
+  const overlay = document.createElement('div')
+  overlay.className = 'screenshot-lightbox'
+  const zoomed = document.createElement('img')
+  zoomed.src = img.currentSrc || img.src
+  zoomed.alt = img.alt
+  overlay.appendChild(zoomed)
+
+  const close = () => {
+    document.removeEventListener('keydown', onKeydown)
+    document.body.style.overflow = ''
+    overlay.remove()
+  }
+  const onKeydown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') close()
+  }
+  overlay.addEventListener('click', close)
+  document.addEventListener('keydown', onKeydown)
+  document.body.style.overflow = 'hidden'
+  document.body.appendChild(overlay)
+}
+
+// One delegated listener survives client-side navigation, so this only needs
+// to run once on mount.
+function initScreenshotLightbox() {
+  if (typeof window === 'undefined') return
+  document.addEventListener('click', (event) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const img = target.closest('.screenshot img')
+    if (img instanceof HTMLImageElement) openScreenshotLightbox(img)
+  })
+}
+
 export default {
   extends: DefaultTheme,
   // Add the GitHub star-count button at the right end of the nav bar.
@@ -113,12 +175,23 @@ export default {
     // Start PostHog once the app is mounted in the browser. It's a no-op unless
     // PUBLIC_POSTHOG_PROJECT_TOKEN was set at build time; pageviews (including
     // client-side navigations) and delegated CTA clicks are handled from there.
-    onMounted(() => initPostHog())
+    onMounted(() => {
+      initPostHog()
+      initScreenshotLightbox()
+      // Column widths change with the viewport, so re-check which tables clip.
+      window.addEventListener('resize', initTableOverflowHints, {
+        passive: true
+      })
+    })
     // Re-render on navigation and theme change. nextTick lets the new page DOM
     // mount before we look for diagram placeholders.
     watch(
       () => [route.path, isDark.value] as const,
-      () => nextTick(() => renderMermaid(isDark.value)),
+      () =>
+        nextTick(() => {
+          renderMermaid(isDark.value)
+          initTableOverflowHints()
+        }),
       { immediate: true }
     )
   }
