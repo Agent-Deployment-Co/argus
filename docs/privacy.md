@@ -1,3 +1,7 @@
+---
+description: What Argus reads from your machine, what it stores and the few times anything leaves your computer.
+---
+
 # Privacy and Security
 
 Argus is built to keep your data on your own machine. This page lays out what it
@@ -10,7 +14,7 @@ Argus is a free and open source tool,
 so you can read exactly what it does. It runs entirely on your own computer.
 Installing it and browsing your usage needs no account and no server.
 
-## What it reads and stores
+## Indexing and storage
 
 Argus finds and indexes the [sessions](/terminology#session) your AI agents have
 already saved to your own disk (see [Supported Agents](/supported-agents) for the
@@ -37,6 +41,12 @@ When you use a provider that needs an API key, Argus stores the key in your
 operating system's secure store (the Keychain on macOS), never in its settings
 file and never on any server. It reads the key from there only to call the
 provider you configured.
+
+## Updates
+
+The desktop app checks for new versions on a schedule and downloads them in the
+background. The **Updates** setting in [Settings](/settings) controls whether new versions automatically install; with it off, Argus still checks and tells you when one is ready, and you install it from the menu bar. The command-line tool doesn't check for updates at all.
+
 
 ## Argus Hub
 

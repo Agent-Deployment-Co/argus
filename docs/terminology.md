@@ -1,3 +1,7 @@
+---
+description: Plain definitions for the words you'll meet in the Argus docs and in the app.
+---
+
 # Terminology
 
 Plain definitions for the terms you'll meet in these docs and in the Argus app.
@@ -91,8 +95,8 @@ task the same way each time, like drafting a release note or formatting a report
 
 ## Source
 
-Which agent a piece of usage came from. Argus indexes Claude (Claude Code, Claude
-Cowork, and Claude Chat), Codex, and Gemini CLI. Claude Chat usage is estimated
+Which agent a piece of usage came from. Argus indexes Claude Cowork, Claude Chat,
+Claude Code, ChatGPT Work, Codex and Gemini CLI. Claude Chat usage is estimated
 rather than metered, and it stays on your machine: it isn't uploaded to an Argus
 Hub.
 

@@ -1,3 +1,7 @@
+---
+description: What the numbers mean in the Activity, Projects, Tools and Health views, and how the date and source filters change them.
+---
+
 # Metric Views
 
 Argus rolls your usage up several ways, one per view in the left nav. This page
@@ -79,7 +83,7 @@ often a session's context had to be compacted and how long turns took. Totals si
 up top and a table breaks the same signals down by project.
 
 Argus measures friction for Claude sessions only, so this view stays empty until
-you have some. Codex and Gemini sessions don't report these signals.
+you have some. ChatGPT Work, Codex and Gemini CLI sessions don't report these signals.
 
 <div class="screenshot">
 

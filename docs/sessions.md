@@ -1,10 +1,14 @@
+---
+description: Find, search and read individual agent sessions, label them and open one to see its tasks and details.
+---
+
 # Sessions
 
 The Sessions view is where you see how you actually work with your agents, one
 [session](/terminology#session) at a time, rather than as totals. Find a session,
 open it, and read what happened in it.
 
-## Finding a session
+## Search and filters
 
 The list down the left shows your sessions, newest first. Each entry shows its
 title, when it ran, its project and its token, [interaction](/terminology#interaction)
@@ -47,7 +51,7 @@ ones you don't want to see.
 - **Hiding.** The **Hide** button on a session removes it from the list and from
   search. Open a hidden session and **Unhide** it to bring it back.
 
-## Working with several sessions at once
+## Bulk actions
 
 Hold Cmd (or Ctrl) and click to pick sessions one at a time, or hold Shift and
 click to select a range. **Select all** picks every session in view and offers to
@@ -93,7 +97,7 @@ session (interruptions, tool actions you declined, compactions and turn timings,
 Claude sessions), the full table of tools the session used and the files the agent
 read or changed.
 
-## Keeping a session current
+## Refresh
 
 If a session has grown since Argus last indexed it, the **Refresh** button at the
 top re-reads it from disk and updates everything on the page.

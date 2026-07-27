@@ -1,3 +1,7 @@
+---
+description: Who makes Argus, why we built it and how the project is licensed.
+---
+
 # About
 
 Argus is a free and open source tool from the team at
@@ -6,7 +10,7 @@ on [GitHub](https://github.com/Agent-Deployment-Co/argus), and it's
 [MIT licensed](https://github.com/Agent-Deployment-Co/argus/blob/main/LICENSE),
 so you're free to use, read and modify it.
 
-## Why we built it
+## Background
 
 We build and deploy AI agents for go-to-market teams, and we kept hitting the
 same wall: it's hard to see how people are actually using their agents, where

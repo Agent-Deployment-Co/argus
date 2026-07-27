@@ -1,3 +1,7 @@
+---
+description: How Argus groups a session into tasks, and how it judges whether each one finished, failed or is unclear.
+---
+
 # Tasks
 
 A task is one thing you set out to do in a [session](/terminology#session), like
@@ -10,7 +14,7 @@ lets you see not just how many [tokens](/terminology#token) and how much
 [cost](/terminology#cost) a session used, but which of your goals succeeded and
 what each one took.
 
-## What Argus captures per task
+## Task details
 
 For each task it finds, Argus records:
 
@@ -21,7 +25,7 @@ For each task it finds, Argus records:
 - **Its own tokens, interactions and tool calls**, so you can see what each goal
   took, not just the session total.
 
-## Where you see them
+## In the app
 
 Open a session (see [Sessions](/sessions)) and its tasks are listed under
 **Tasks**, each with its outcome and an [interaction](/terminology#interaction)
@@ -35,7 +39,7 @@ task also links into the Timeline, where you can read that stretch of the sessio
 
 </div>
 
-## How Argus builds them
+## Extraction
 
 Argus reads a session in two passes:
 
@@ -67,7 +71,7 @@ under **Sessions**:
 
 </div>
 
-## Choosing a model provider
+## Model providers
 
 Interpretation needs a [model](/terminology#model) to do the reading, and you
 choose which one in the same Sessions settings. This is the only part of Argus
@@ -106,7 +110,7 @@ Whichever you choose, interpretation uses tokens with that provider. The default
 uses your existing Claude sign-in; a provider with its own API key bills that
 account for what it reads and writes.
 
-## What stays private
+## Privacy
 
 Two things decide where your task data goes:
 
