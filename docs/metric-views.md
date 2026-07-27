@@ -83,7 +83,7 @@ often a session's context had to be compacted and how long turns took. Totals si
 up top and a table breaks the same signals down by project.
 
 Argus measures friction for Claude sessions only, so this view stays empty until
-you have some. Codex and Gemini sessions don't report these signals.
+you have some. ChatGPT Work, Codex and Gemini CLI sessions don't report these signals.
 
 <div class="screenshot">
 

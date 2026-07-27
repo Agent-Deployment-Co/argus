@@ -1,8 +1,6 @@
 # Quick Start
 
-Argus analyzes your AI agent usage to help you be more productive with AI. It's built for anyone using agents to do business tasks like account research, drafting content, editing spreadsheets and building workflows.
-
-Argus indexes [sessions](/terminology#session) from your AI [agents](/terminology#agent) like Claude and Codex, bringing all your AI agent work into one app running locally on your computer. It's free and open source.
+Argus is a desktop app that helps you find and fix wasted agent work. It's built for people using AI for business tasks. These tasks are usually more open-ended and need more external context than coding, making for some frustrating agent interactions. Argus analyzes your AI [sessions](/terminology#session) to identify those costly, repetitive or unsuccessful tasks. It works with Claude Cowork, Claude Chat, Claude Code, ChatGPT Work and Codex.
 
 <div class="screenshot">
 
@@ -18,17 +16,17 @@ Want to look around first? Open the [live demo](https://argus-demo.agentdeployme
 
 Argus stores all its data on your own computer and never uploads it unless you choose to [sync](/terminology#sync) usage data to an [Argus Hub](/terminology#argus-hub) run by your company. Argus is a [free open source project](https://github.com/Agent-Deployment-Co/argus) from [The Agent Deployment Company](https://www.agentdeployment.co).
 
-## What you'll see
+## Features
 
 Open Argus and it shows your agent usage from every angle:
 
 - [Tokens](/terminology#token) and estimated [cost](/terminology#cost) over time
-- A breakdown by [source](/terminology#source): Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI
+- A breakdown by [source](/terminology#source): Claude Cowork, Claude Chat, Claude Code, ChatGPT Work, Codex and Gemini CLI
 - The [skills](/terminology#skill), [tools](/terminology#tool), [MCP servers](/terminology#mcp-server), [plugins](/terminology#plugin), [models](/terminology#model) and [projects](/terminology#project) you use most
 - The tools that send the most content back into your agent's context
 - Per-session time, tokens, cost and prompts
 
-## Where to go next
+## Next steps
 
 - **[How It Works](/how-it-works):** how Argus finds and indexes your sessions in the background.
 - **[Overview](/overview):** get around the app.

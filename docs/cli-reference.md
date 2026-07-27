@@ -33,7 +33,7 @@ npx @agentdeploymentco/argus <command>
 
 Run `argus <command> --help` for the flags on any command.
 
-## Where Argus stores its data
+## Data locations
 
 Argus keeps its [index](/terminology#index) and settings on your own computer:
 
