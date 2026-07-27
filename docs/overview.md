@@ -1,3 +1,7 @@
+---
+description: Get around the Argus app. The views in the left nav and the filters that shape what each one shows.
+---
+
 # Overview
 
 Argus opens in your browser and brings all your AI agent work into one place.

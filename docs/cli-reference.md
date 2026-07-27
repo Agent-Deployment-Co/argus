@@ -1,3 +1,7 @@
+---
+description: Every Argus command and flag, covering index, serve, sync, run, status, search, config and secret.
+---
+
 # CLI Reference
 
 Argus is desktop-first, but everything it does is also a command-line tool, for

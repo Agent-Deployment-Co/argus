@@ -1,3 +1,7 @@
+---
+description: Run an Argus Hub so a team can pool its usage into one org-wide dashboard. Setup, connecting people and what each person sends.
+---
+
 # Argus Hub
 
 Argus Hub is a self-hosted server that collects usage data from multiple Argus clients and

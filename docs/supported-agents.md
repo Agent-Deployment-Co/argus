@@ -1,3 +1,7 @@
+---
+description: The agents Argus indexes, where it finds each one on your computer and what it can measure for each.
+---
+
 # Supported Agents
 
 Argus finds and indexes the [sessions](/terminology#session) from your AI

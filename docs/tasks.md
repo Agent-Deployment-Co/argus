@@ -1,3 +1,7 @@
+---
+description: How Argus groups a session into tasks, and how it judges whether each one finished, failed or is unclear.
+---
+
 # Tasks
 
 A task is one thing you set out to do in a [session](/terminology#session), like

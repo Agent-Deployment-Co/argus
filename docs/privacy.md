@@ -1,3 +1,7 @@
+---
+description: What Argus reads from your machine, what it stores and the few times anything leaves your computer.
+---
+
 # Privacy and Security
 
 Argus is built to keep your data on your own machine. This page lays out what it

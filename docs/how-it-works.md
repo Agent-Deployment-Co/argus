@@ -1,3 +1,7 @@
+---
+description: How Argus finds and indexes your agent sessions in the background, and where it keeps what it builds.
+---
+
 # How It Works
 
 Argus runs quietly in the background. It watches for new work you do with your

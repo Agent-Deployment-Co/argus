@@ -1,3 +1,7 @@
+---
+description: Download Argus for macOS or Windows, install it and find it in your menu bar or system tray.
+---
+
 # Download
 
 Argus is a native desktop app that lives in your menu bar on macOS or your system

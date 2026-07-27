@@ -1,3 +1,7 @@
+---
+description: Point Argus at an OpenAI-compatible model gateway so it reaches a provider through your own endpoint and key.
+---
+
 # Model Gateway
 
 A model gateway is an OpenAI-compatible endpoint that sits between Argus and a

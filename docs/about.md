@@ -1,3 +1,7 @@
+---
+description: Who makes Argus, why we built it and how the project is licensed.
+---
+
 # About
 
 Argus is a free and open source tool from the team at

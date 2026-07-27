@@ -1,3 +1,7 @@
+---
+description: Find, search and read individual agent sessions, label them and open one to see its tasks and details.
+---
+
 # Sessions
 
 The Sessions view is where you see how you actually work with your agents, one

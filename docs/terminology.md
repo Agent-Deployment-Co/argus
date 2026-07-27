@@ -1,3 +1,7 @@
+---
+description: Plain definitions for the words you'll meet in the Argus docs and in the app.
+---
+
 # Terminology
 
 Plain definitions for the terms you'll meet in these docs and in the Argus app.

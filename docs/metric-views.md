@@ -1,3 +1,7 @@
+---
+description: What the numbers mean in the Activity, Projects, Tools and Health views, and how the date and source filters change them.
+---
+
 # Metric Views
 
 Argus rolls your usage up several ways, one per view in the left nav. This page
