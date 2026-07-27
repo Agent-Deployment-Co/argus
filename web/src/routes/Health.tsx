@@ -30,14 +30,14 @@ export function Health() {
   const filters = useDashboardFilters();
   const q = useHealthQuery(filters);
   const gate = viewGate([q]);
-  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.pending) return <div className="center-state">Indexing your sessions…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
   const ft = q.data!.frictionTotals;
   const n = ft.observableSessions;
 
   if (n <= 0) {
-    return <div className="center-state">No Claude sessions yet — friction signals require native Claude transcripts.</div>;
+    return <div className="center-state">No sessions with friction data yet — these signals are only available for Claude Code and Claude Cowork sessions.</div>;
   }
 
   const cards: Stat[] = [
@@ -55,7 +55,7 @@ export function Health() {
     <>
       <section>
         <StatCards stats={cards} />
-        <p className="note">{n} observable sessions — native Claude transcripts with friction data. Open a project to drill into its sessions.</p>
+        <p className="note">{n} observable sessions — Claude Code and Claude Cowork sessions with friction data. Open a project to drill into its sessions.</p>
       </section>
 
       <section>

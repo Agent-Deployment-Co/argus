@@ -54,7 +54,7 @@ export function Tools() {
   const heaviestQ = useHeaviestResultsQuery(filters);
   const pluginsQ = usePluginsQuery(filters);
   const gate = viewGate([skillsQ, toolsQ, categoryQ, mcpQ, heaviestQ, pluginsQ]);
-  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.pending) return <div className="center-state">Indexing your sessions…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
   const { bySkill, bySkillDaily } = skillsQ.data!;

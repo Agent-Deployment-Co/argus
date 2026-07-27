@@ -25,7 +25,7 @@ export function Activity() {
   const sourceQ = useUsageBySourceQuery(filters);
   const recsQ = useRecommendationsQuery(filters);
   const gate = viewGate([dailyQ, modelQ, sourceQ, recsQ]);
-  if (gate.pending) return <div className="center-state">Reading transcripts…</div>;
+  if (gate.pending) return <div className="center-state">Indexing your sessions…</div>;
   if (gate.errorMessage) return <div className="center-state">Couldn't load data: {gate.errorMessage}</div>;
 
   const { totals, daily, unpriced } = dailyQ.data!;

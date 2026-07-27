@@ -105,7 +105,7 @@ export function Layout() {
           <ArchMark />
           <Wordmark />
         </div>
-        <nav className="rail-nav" aria-label="Dashboard sections">
+        <nav className="rail-nav" aria-label="App sections">
           {NAV.map((item) => {
             const Ico = item.icon;
             return (

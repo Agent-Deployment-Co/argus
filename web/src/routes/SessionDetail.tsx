@@ -179,7 +179,7 @@ export function SessionDetail() {
               className="task-action"
               onClick={() => refresh.mutate(s.sessionId)}
               disabled={refreshingThisSession}
-              title="Re-read this session's transcript from disk and update it"
+              title="Re-index this session from disk and update it"
             >
               <RefreshCw size={14} strokeWidth={1.75} className={refreshingThisSession ? "spin" : undefined} aria-hidden />
               <span>{refreshingThisSession ? "Refreshing…" : "Refresh"}</span>

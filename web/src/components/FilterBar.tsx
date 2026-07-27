@@ -36,7 +36,7 @@ export function FilterBar({ refreshing }: { refreshing: boolean }) {
   const sourcesSummary = source ? sourceLabel(source) : "All sources";
 
   return (
-    <div className="filter-bar" role="group" aria-label="Dashboard filters">
+    <div className="filter-bar" role="group" aria-label="App filters">
       <FilterDropdown
         icon={<Calendar size={14} strokeWidth={2} aria-hidden />}
         label="Date"
