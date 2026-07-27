@@ -14,12 +14,16 @@ Before writing a page, you want [Audience](./audience.md) for who reads it,
   subject. No preamble, no "in this guide we will."
 - **One page, one job.** If a page is doing two jobs, split it and add both to
   the sidebar.
-- **Short sections with task-shaped headings.** A heading names what the reader
-  wants to do or know.
+- **Headings name the subject, not the reader's task.** A short noun phrase, or a
+  conventional section name where one exists. "Filters", not "Filtering what you
+  see". "Updates", not "Keeping Argus up to date". A reader scanning the outline
+  is looking for a thing, so give them the thing. `Install`, `Settings` and
+  `License` are fine as they are; the rule is aimed at headings shaped like
+  sentences, questions or gerunds, not at every heading containing a verb.
 - **Heading case: Title Case for the page, sentence case for sections.** A page's
   H1 and its sidebar or nav label use Title Case ("Quick Start", "Supported
   Agents"). Every heading inside the page (H2 and below) uses sentence case
-  ("Get started", "What the dashboard shows").
+  ("Filters", "Cost estimates").
 - **Front-load the answer.** Put the command or the conclusion first and the
   caveats after.
 
