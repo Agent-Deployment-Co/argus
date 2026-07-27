@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Calendar, EyeOff, FilterX, Layers, Search, Tag, X } from "lucide-react";
+import { Calendar, EyeOff, FilterX, Folder, Layers, Search, Tag, X } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, pluralize } from "../lib/format";
 import { TasksIcon, TokensIcon } from "../lib/icons";
@@ -632,13 +632,14 @@ export function Sessions() {
   );
 
   const navigate = useNavigate();
-  const { since, until, committedQ, source, labelIds, labelMode } = useSearch({
+  const { since, until, committedQ, source, project, labelIds, labelMode } = useSearch({
     strict: false,
     select: (s) => ({
       since: s.since ?? DEFAULT_SINCE,
       until: s.until ?? DEFAULT_UNTIL,
       committedQ: s.q ?? "",
       source: s.source,
+      project: s.project,
       labelIds: labelIdsFromSearch(s as Record<string, unknown>),
       labelMode: s.labelMode === "all" ? "all" : "any",
     }),
@@ -674,11 +675,20 @@ export function Sessions() {
   const sourcesSummary = source ? sourceLabel(source) : "All sources";
 
   // Reset mirrors the shared FilterBar's reset (source + date range), plus the toolbar's own search
-  // box and label selection — enabled only when one of those is off its default.
-  const hasActiveFilters = Boolean(source) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0;
+  // box, label selection, and a `project` filter arrived at via a link from Projects/Health (#273) —
+  // enabled only when one of those is off its default.
+  const hasActiveFilters = Boolean(source) || Boolean(project) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0;
   const resetFilters = () => {
     setQuery("");
-    setRange({ since: undefined, until: undefined, source: undefined, q: undefined, label: undefined, labelMode: undefined });
+    setRange({
+      since: undefined,
+      until: undefined,
+      source: undefined,
+      project: undefined,
+      q: undefined,
+      label: undefined,
+      labelMode: undefined,
+    });
   };
 
   const filteredLabels = (labelCatalog.data ?? []).filter((l) => l.name.toLowerCase().includes(labelSearch.toLowerCase()));
@@ -720,6 +730,21 @@ export function Sessions() {
         </span>
 
         <div className="inbox-toolbar-filters">
+          {project && (
+            <span className="inbox-project-chip" title={`Filtered to ${project}`}>
+              <Folder size={14} strokeWidth={2} aria-hidden />
+              <span className="truncate">{compactProject(project)}</span>
+              <button
+                type="button"
+                className="inbox-project-chip-clear"
+                aria-label={`Clear project filter (${compactProject(project)})`}
+                onClick={() => setRange({ project: undefined })}
+              >
+                <X size={12} strokeWidth={2.5} aria-hidden />
+              </button>
+            </span>
+          )}
+
           <FilterDropdown
             icon={<Tag size={14} strokeWidth={2} aria-hidden />}
             label="Labels"
