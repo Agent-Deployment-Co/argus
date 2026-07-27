@@ -107,8 +107,8 @@ Only use `HUB_INSECURE_COOKIE_HOSTS` for hostnames reachable through a private n
 a hostname that is reachable from the public internet.
 
 To rotate a key, delete the old key's row from the Hub database, then restart Hub. Hub only
-generates a new key when the `api_keys` table is empty — disabling a key with `is_enabled = 0`
-does not trigger this, so rotation requires removing the row outright, not just disabling it. A
+generates a new key when the `api_keys` table is empty, so disabling a key with `is_enabled = 0`
+does not trigger this: rotation requires removing the row outright, not just disabling it. A
 disabled key is rejected before Hub reads the upload body.
 
 ## Run Hub continuously
@@ -194,8 +194,7 @@ for the complete plist, including log paths and restart behavior.
 
 ## Use the dashboard
 
-Open the Hub URL in a browser. The dashboard uses the same views as `argus serve`, with a user
-dimension added:
+Open the Hub URL in a browser. The dashboard groups organization-wide usage into these views:
 
 <div class="screenshot">
 
@@ -206,7 +205,7 @@ dimension added:
 | View | What you can see |
 |---|---|
 | Activity | Usage and cost for the whole organization or one person |
-| Tasks | Extracted tasks — outcomes, frustration and interrupted rates, top failure signals |
+| Tasks | Extracted tasks, including outcomes, frustration and interrupted rates, and top failure signals |
 | Tools | Tool and MCP server usage across the organization or for one person |
 | Team | Per-user sessions, tokens, estimated cost and last-sync time |
 | Export | Download the full dataset as a Snowflake-ready zip |
