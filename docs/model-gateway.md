@@ -155,7 +155,7 @@ export LITELLM_API_KEY=sk-your-generated-gateway-key
 ```
 :::
 
-## Running the gateway for a team
+## Shared gateways
 
 For a team, run one gateway on a shared server rather than on each person's computer.
 The provider key lives on that server, so nobody's machine holds it, and you manage

@@ -91,7 +91,7 @@ writes nothing back except your own actions, like labels and hidden sessions.
 Argus interprets each session to summarize it, extract tasks and judge how they turned out. It's the
 only part of Argus that sends anything to a model, and it defaults to the `claude` CLI you already
 have signed in. You can point it at
-[another provider](https://argus.agentdeployment.co/tasks#choosing-a-model-provider), a
+[another provider](https://argus.agentdeployment.co/tasks#model-providers), a
 [model gateway](https://argus.agentdeployment.co/model-gateway) or a local model, or turn it off.
 See [Tasks](https://argus.agentdeployment.co/tasks) for what it captures.
 

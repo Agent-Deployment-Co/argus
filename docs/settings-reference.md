@@ -10,7 +10,7 @@ this page when you need the exact setting name or precedence order.
 
 For the everyday Settings screen, see [Settings](/settings).
 
-## How settings are applied
+## Precedence
 
 Most settings resolve in this order:
 

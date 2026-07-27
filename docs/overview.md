@@ -34,7 +34,7 @@ Activity, Projects, Tools and Health are the metric views, explained in
 [Metric Views](/metric-views). A gear icon at the bottom opens
 [Settings](/settings).
 
-## Filtering what you see
+## Filters
 
 Two controls at the top of the metric views shape what they show: a date range (a
 From and a To date) and a [source](/terminology#source) filter. Set them once and
@@ -43,7 +43,7 @@ agent, without setting them again each time. Argus starts on the last 30 days an
 all sources, and a Reset button returns to that. The Sessions view has its own
 toolbar that adds search and labels to the same date and source filters.
 
-## Moving between views
+## Navigation
 
 The views link into each other. Click a project on Projects, or a project in the
 Health breakdown, and Argus opens the Sessions view already filtered to it, so you

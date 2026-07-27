@@ -274,7 +274,7 @@ The client sends resolved usage rows, session summaries, tasks, interaction meta
 invocations and labels. It does not send retained prompt and response text or BYO API keys. The
 client's local `argus.db` file never leaves the machine as a file.
 
-## How data moves
+## Data flow
 
 ```text
 Argus clients --POST /api/sync--> Hub ingest --> hub.db
