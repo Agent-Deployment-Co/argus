@@ -1,7 +1,7 @@
 {
   "name": "@agentdeploymentco/argus-workspace",
   "version": "0.1.23",
-  "description": "Argus is free, open source software that analyzes AI agent usage to help everyone be more productive with AI. It supports Claude Code, Claude Cowork, Claude Chat, Codex and Gemini CLI.",
+  "description": "Argus is a desktop app that helps find and fix wasted agent work. Local, free and open source. Focuses on business tasks, not code. Works with Claude Cowork / Chat / Code, ChatGPT Work and Codex.",
   "type": "module",
   "private": true,
   "bin": {
