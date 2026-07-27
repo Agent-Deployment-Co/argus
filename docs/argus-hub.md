@@ -106,9 +106,10 @@ when Hub starts, it generates a key for the Default organization and prints it t
 Only use `HUB_INSECURE_COOKIE_HOSTS` for hostnames reachable through a private network. Never list
 a hostname that is reachable from the public internet.
 
-To rotate a key, disable or remove the old key in the Hub database, then restart Hub. If no enabled
-key remains, Hub generates a new one on startup. A disabled key is rejected before Hub reads the
-upload body.
+To rotate a key, delete the old key's row from the Hub database, then restart Hub. Hub only
+generates a new key when the `api_keys` table is empty, so disabling a key with `is_enabled = 0`
+does not trigger this: rotation requires removing the row outright, not just disabling it. A
+disabled key is rejected before Hub reads the upload body.
 
 ## Run Hub continuously
 
@@ -193,8 +194,7 @@ for the complete plist, including log paths and restart behavior.
 
 ## Use the dashboard
 
-Open the Hub URL in a browser. The dashboard uses the same views as `argus serve`, with a user
-dimension added:
+Open the Hub URL in a browser. The dashboard groups organization-wide usage into these views:
 
 <div class="screenshot">
 
@@ -205,15 +205,14 @@ dimension added:
 | View | What you can see |
 |---|---|
 | Activity | Usage and cost for the whole organization or one person |
-| Sessions | Sessions filtered to the whole organization or one person |
-| Projects | Project activity across the organization or for one person |
+| Tasks | Extracted tasks, including outcomes, frustration and interrupted rates, and top failure signals |
 | Tools | Tool and MCP server usage across the organization or for one person |
-| Health | Health signals for the selected scope |
-| Users | Per-user sessions, tokens, estimated cost and last-sync time |
+| Team | Per-user sessions, tokens, estimated cost and last-sync time |
+| Export | Download the full dataset as a Snowflake-ready zip |
 
-The user picker appears after at least one client syncs. Leave it on **All users** for an
-organization-wide view, or choose one person to scope the views. The Users table can be sorted by
-any column.
+The user/group picker appears after at least one client syncs. Leave it on **All** for an
+organization-wide view, or choose one person or group to scope Activity, Tasks and Tools. The
+Team table can be sorted by any column, and clicking a row opens that person's own activity view.
 
 ## Query Hub from an agent
 
@@ -229,9 +228,11 @@ HTTPS without a subprocess or a session.
 | `query_tool_usage` | Which tools and MCP servers people use |
 | `query_users` | User IDs, display names, emails, last-sync time, sessions, tokens and cost |
 
-The first four query tools accept `since`, `until`, `project`, `source` and `user` filters. The
-`source` filter accepts `claude`, `codex`, `gemini` or `cowork`. `query_users` takes no arguments
-and can help you find a `userId` before scoping another query.
+The first four query tools accept `since`, `until`, `project`, `source`, `user` and `group`
+filters. The `source` filter accepts `claude`, `codex`, `gemini` or `cowork`. The `group` filter
+takes a groupId, or `__none__` for users with no group assigned. `query_users` accepts an
+optional `group` filter (matching a groupId or groupName) and can help you find a `userId` before
+scoping another query.
 
 Authenticate with the Hub admin password:
 
