@@ -106,9 +106,10 @@ when Hub starts, it generates a key for the Default organization and prints it t
 Only use `HUB_INSECURE_COOKIE_HOSTS` for hostnames reachable through a private network. Never list
 a hostname that is reachable from the public internet.
 
-To rotate a key, disable or remove the old key in the Hub database, then restart Hub. If no enabled
-key remains, Hub generates a new one on startup. A disabled key is rejected before Hub reads the
-upload body.
+To rotate a key, delete the old key's row from the Hub database, then restart Hub. Hub only
+generates a new key when the `api_keys` table is empty — disabling a key with `is_enabled = 0`
+does not trigger this, so rotation requires removing the row outright, not just disabling it. A
+disabled key is rejected before Hub reads the upload body.
 
 ## Run Hub continuously
 
