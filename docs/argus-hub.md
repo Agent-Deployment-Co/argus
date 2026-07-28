@@ -198,7 +198,8 @@ for the complete plist, including log paths and restart behavior.
 
 ## Use the dashboard
 
-Open the Hub URL in a browser. The dashboard groups organization-wide usage into these views:
+Open the Hub URL in a browser. The dashboard groups organization-wide usage into five views,
+each covered in depth under **Using Argus Hub** in the nav:
 
 <div class="screenshot">
 
@@ -208,62 +209,29 @@ Open the Hub URL in a browser. The dashboard groups organization-wide usage into
 
 | View | What you can see |
 |---|---|
-| Activity | Usage and cost for the whole organization or one person |
-| Tasks | Extracted tasks, including outcomes, frustration and interrupted rates, and top failure signals |
-| Tools | Tool and MCP server usage across the organization or for one person |
-| Team | Per-user sessions, tokens, estimated cost and last-sync time |
-| Export | Download the full dataset as a Snowflake-ready zip |
+| [Activity](/hub-activity) | Usage and cost for the whole organization, trended against the prior window |
+| [Tasks](/hub-tasks) | Extracted tasks, outcomes, frustration and friction, top failure signals, and hub labels |
+| [Tools](/hub-tools) | Tool, skill and MCP server usage across the organization |
+| [Team](/hub-team) | Per-user sessions, tokens, estimated cost, last-sync time and groups |
+| [Export](/hub-export) | Download the full dataset, or load it into Snowflake |
 
-The user/group picker appears after at least one client syncs. Leave it on **All** for an
-organization-wide view, or choose one person or group to scope Activity, Tasks and Tools. The
-Team table can be sorted by any column, and clicking a row opens that person's own activity view.
+The group picker appears after at least one client syncs and someone has been put in a group.
+Leave it on **All** for an organization-wide view, or choose a group to scope Activity, Tasks and
+Tools. The Team table lists everyone by group, and clicking a row opens that person's own
+activity view.
 
 ## Query Hub from an agent
 
-Hub provides a read-only [MCP](https://modelcontextprotocol.io) endpoint at `POST /mcp`. It uses
-the stateless Streamable HTTP transport, so an MCP client sends JSON-RPC requests directly over
-HTTPS without a subprocess or a session.
-
-| Tool | What it answers |
-|---|---|
-| `query_activity` | Usage and cost over a time window, including the previous window for comparison |
-| `query_tasks` | A paged, filterable list of extracted tasks |
-| `query_task_quality` | Success, frustration and interruption rates, outcomes over time and failure signals |
-| `query_tool_usage` | Which tools and MCP servers people use |
-| `query_users` | User IDs, display names, emails, last-sync time, sessions, tokens and cost |
-
-The first four query tools accept `since`, `until`, `project`, `source`, `user` and `group`
-filters. The `source` filter accepts `claude`, `codex`, `gemini` or `cowork`. The `group` filter
-takes a groupId, or `__none__` for users with no group assigned. `query_users` accepts an
-optional `group` filter (matching a groupId or groupName) and can help you find a `userId` before
-scoping another query.
-
-Authenticate with the Hub admin password:
-
-```text
-Authorization: Bearer <admin-password>
-```
-
-For Claude Code, add the endpoint with:
-
-```bash
-claude mcp add --transport http argus-hub https://hub.internal:4343/mcp \
-  --header "Authorization: Bearer <admin-password>"
-```
-
-Treat the admin password as a shared read credential after you give it to an agent. Anyone who
-holds it can query the organization's activity, tasks and tool usage. If Hub runs without
-`ADMIN_PASSWORD`, the MCP route is open, so set a password for any shared or network-accessible
-deployment.
+Hub also provides a read-only-by-default [MCP](https://modelcontextprotocol.io) endpoint at
+`POST /mcp`, so an agent can query activity, tasks and tool usage directly. See
+[Query Hub from an agent](/hub-mcp) for the full tool list, filters, authentication and a worked
+example.
 
 ## Export Hub data
 
 `argus-hub export snowflake` creates a consistent Snowflake-ready snapshot of the live Hub
-database. Add `--load` to upload it with the built-in connector, or use the generated JSONL files
-and `load.sql` for a manual or scheduled load.
-
-See [Export Argus Hub data to Snowflake](https://github.com/Agent-Deployment-Co/argus-hub/blob/main/docs/snowflake.md)
-for data coverage, setup, authentication, scheduling and limitations.
+database, from the dashboard or the command line. See [Export](/hub-export) for both paths and
+the Snowflake load flow.
 
 ## Keep a Hub private
 

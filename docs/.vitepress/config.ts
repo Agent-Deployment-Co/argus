@@ -141,6 +141,17 @@ export default defineConfig({
         items: [{ text: 'Argus Hub', link: '/argus-hub' }]
       },
       {
+        text: 'Using Argus Hub',
+        items: [
+          { text: 'Activity', link: '/hub-activity' },
+          { text: 'Tasks', link: '/hub-tasks' },
+          { text: 'Tools', link: '/hub-tools' },
+          { text: 'Team', link: '/hub-team' },
+          { text: 'Export', link: '/hub-export' },
+          { text: 'Query Hub from an Agent', link: '/hub-mcp' }
+        ]
+      },
+      {
         text: 'Reference',
         items: [
           { text: 'CLI Reference', link: '/cli-reference' },
