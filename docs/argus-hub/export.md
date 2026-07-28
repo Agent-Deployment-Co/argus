@@ -22,7 +22,7 @@ every table. API keys are never included, in the zip or anywhere else.
 
 <div class="screenshot">
 
-![The Argus Hub Export page, with the download button for the Snowflake-ready zip.](./images/screenshots/argus-hub-export@1920x1080@2.webp)
+![The Argus Hub Export page, with the download button for the Snowflake-ready zip.](../images/screenshots/argus-hub-export@1920x1080@2.webp)
 
 </div>
 

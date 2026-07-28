@@ -42,7 +42,7 @@ not read the source, and never will.
   more out of it. This is most readers, and the default you write for.
 - **Multi-player.** An ops or AI-ops reader looking across many people's use,
   building shared skills and connectors for them. This is the
-  [Argus Hub](/argus-hub) reader, and a real audience rather than an afterthought:
+  [Argus Hub](/argus-hub/) reader, and a real audience rather than an afterthought:
   a company runs a Hub, its people opt in, and the org gets a pooled view of how
   agents are actually being used.
 

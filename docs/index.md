@@ -31,4 +31,4 @@ Open Argus and it shows your agent usage from every angle:
 - **[How It Works](/how-it-works):** how Argus finds and indexes your sessions in the background.
 - **[Overview](/overview):** get around the app.
 - **[Download](/download):** get the desktop app.
-- **[Argus Hub](/argus-hub):** collect usage across a team and see an org-wide view.
+- **[Argus Hub](/argus-hub/):** collect usage across a team and see an org-wide view.

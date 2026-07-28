@@ -21,7 +21,7 @@ Health view the single-client Argus app shows (see [Overview](/overview),
 
 <div class="screenshot">
 
-![The Argus Hub Team table, people grouped into sections with sessions, tokens, cost and last-sync time.](./images/screenshots/argus-hub-team@1920x1080@2.webp)
+![The Argus Hub Team table, people grouped into sections with sessions, tokens, cost and last-sync time.](../images/screenshots/argus-hub-team@1920x1080@2.webp)
 
 </div>
 
@@ -44,11 +44,11 @@ division makes sense for you. Group names must be unique on a Hub.
   **Ungrouped**.
 
 Once at least one person has a group, the Group filter appears on
-[Activity](/hub-activity), [Tasks](/hub-tasks) and [Tools](/hub-tools),
+[Activity](/argus-hub/activity), [Tasks](/argus-hub/tasks) and [Tools](/argus-hub/tools),
 plus an **Ungrouped** option for anyone not yet assigned.
 
 <div class="screenshot">
 
-![One person's activity page, reached by clicking their name in the Team table.](./images/screenshots/argus-hub-user-activity@1920x1080@2.webp)
+![One person's activity page, reached by clicking their name in the Team table.](../images/screenshots/argus-hub-user-activity@1920x1080@2.webp)
 
 </div>

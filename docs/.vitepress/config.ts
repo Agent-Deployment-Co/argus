@@ -139,13 +139,14 @@ export default defineConfig({
       {
         text: 'Using Argus Hub',
         items: [
-          { text: 'Overview', link: '/argus-hub' },
-          { text: 'Activity', link: '/hub-activity' },
-          { text: 'Tasks', link: '/hub-tasks' },
-          { text: 'Tools', link: '/hub-tools' },
-          { text: 'Team', link: '/hub-team' },
-          { text: 'Export', link: '/hub-export' },
-          { text: 'Query Hub from an Agent', link: '/hub-mcp' }
+          { text: 'Overview', link: '/argus-hub/' },
+          { text: 'Configuration', link: '/argus-hub/configuration' },
+          { text: 'Activity', link: '/argus-hub/activity' },
+          { text: 'Tasks', link: '/argus-hub/tasks' },
+          { text: 'Tools', link: '/argus-hub/tools' },
+          { text: 'Team', link: '/argus-hub/team' },
+          { text: 'Export', link: '/argus-hub/export' },
+          { text: 'Query Hub from an Agent', link: '/argus-hub/mcp' }
         ]
       },
       {

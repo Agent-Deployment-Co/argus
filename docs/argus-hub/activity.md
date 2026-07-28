@@ -16,12 +16,12 @@ A filter bar sits above the view:
 - **Date** narrows the window, with quick presets or your own From and To
   dates. Hub defaults to the last 30 days.
 - **Sources** narrows to one agent.
-- **Group** narrows to one [group](/hub-team#groups) of people, or to
+- **Group** narrows to one [group](/argus-hub/team#groups) of people, or to
   **Ungrouped** for people with no group assigned. It only appears once at
   least one person has been put in a group.
 
 Activity has no per-person filter of its own. To see one person's usage,
-open their row in the [Team](/hub-team) table, which takes you to their own
+open their row in the [Team](/argus-hub/team) table, which takes you to their own
 activity page (see [Users](#users) below). A Reset button clears the
 filters back to the 30-day, all-sources default.
 
@@ -51,7 +51,7 @@ instead.
 
 <div class="screenshot">
 
-![The Argus Hub Activity view: headline totals with trends against the prior window, the daily activity chart and cost by model.](./images/screenshots/argus-hub-activity@1920x1080@2.webp)
+![The Argus Hub Activity view: headline totals with trends against the prior window, the daily activity chart and cost by model.](../images/screenshots/argus-hub-activity@1920x1080@2.webp)
 
 </div>
 
@@ -78,7 +78,7 @@ scoped to them.
 
 <div class="screenshot">
 
-![One person's activity page, reached from the Team table, the same Activity view scoped to their usage alone.](./images/screenshots/argus-hub-user-activity@1920x1080@2.webp)
+![One person's activity page, reached from the Team table, the same Activity view scoped to their usage alone.](../images/screenshots/argus-hub-user-activity@1920x1080@2.webp)
 
 </div>
 

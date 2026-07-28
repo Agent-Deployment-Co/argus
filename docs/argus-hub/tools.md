@@ -9,7 +9,7 @@ Hub's Tools view covers the same ground as the single-client
 aggregated across everyone syncing to the Hub, plus a handful of sections
 that only make sense once you're looking at more than one person's usage.
 
-The same filter bar as [Activity](/hub-activity) applies here: date range,
+The same filter bar as [Activity](/argus-hub/activity) applies here: date range,
 source and group.
 
 ## Access layer overview
@@ -21,7 +21,7 @@ servers make up the long tail beyond the heavily-used ones.
 
 <div class="screenshot">
 
-![The Argus Hub Tools view: the access layer overview and the "what people aren't using" table.](./images/screenshots/argus-hub-tools@1920x1080@2.webp)
+![The Argus Hub Tools view: the access layer overview and the "what people aren't using" table.](../images/screenshots/argus-hub-tools@1920x1080@2.webp)
 
 </div>
 

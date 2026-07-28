@@ -13,7 +13,7 @@ trouble, and what's causing it.
 
 ## Filters
 
-The same filter bar as [Activity](/hub-activity): date range, source,
+The same filter bar as [Activity](/argus-hub/activity): date range, source,
 group. This view adds two filters of its own: a free-text search over task
 descriptions and projects, and an outcome filter (success, failure,
 unknown) you can combine with it.
@@ -42,7 +42,7 @@ one bar per day across the whole window, including days with no tasks.
 
 <div class="screenshot">
 
-![The Argus Hub Tasks view: headline totals, outcome and frustration donuts, and outcome over time.](./images/screenshots/argus-hub-tasks@1920x1080@2.webp)
+![The Argus Hub Tasks view: headline totals, outcome and frustration donuts, and outcome over time.](../images/screenshots/argus-hub-tasks@1920x1080@2.webp)
 
 </div>
 
@@ -78,7 +78,7 @@ initiative, tasks a specific team should look at.
 - **Create a label.** Open **Labels** to see every label defined on this
   Hub. Add one with a name and an optional description of what it means
   (shown when you create it, not in the list). Querying labels over
-  [MCP](/hub-mcp) also returns how many tasks currently carry each one.
+  [MCP](/argus-hub/mcp) also returns how many tasks currently carry each one.
 - **Apply a label.** On a task in this view, open its label picker to find
   an existing label or create one on the spot, and toggle it onto that
   task. Applied labels show as pills on the task, both in the list and once
@@ -90,7 +90,7 @@ initiative, tasks a specific team should look at.
 
 <div class="screenshot">
 
-![The Argus Hub Labels page, listing every hub label defined on this Hub.](./images/screenshots/argus-hub-labels@1920x1080@2.webp)
+![The Argus Hub Labels page, listing every hub label defined on this Hub.](../images/screenshots/argus-hub-labels@1920x1080@2.webp)
 
 </div>
 

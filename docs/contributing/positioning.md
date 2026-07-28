@@ -35,7 +35,7 @@ who isn't going to run a binary from a terminal, that's the difference between a
 tool they can use and one they can't. Lead with the app. The CLI is the
 alternative for people who want it, not the main path.
 
-**Argus has a multi-player mode.** A company can run an [Argus Hub](/argus-hub),
+**Argus has a multi-player mode.** A company can run an [Argus Hub](/argus-hub/),
 each person points their Argus at it, and the org gets a pooled view of how
 agents are being used. Starting one is a single command, and joining it is a URL
 and a key in Settings.
@@ -202,7 +202,7 @@ cask, and it has a team mode that pushes session data to a shared PostgreSQL
 instance for a read-only team dashboard.
 
 The two multi-player setups ask different things of you. An
-[Argus Hub](/argus-hub) starts with one command and is joined with a URL and a key
+[Argus Hub](/argus-hub/) starts with one command and is joined with a URL and a key
 in Settings. AgentsView expects a PostgreSQL instance you provision and run.
 
 Argus's niche is the reader neither of them is aimed at: someone doing business

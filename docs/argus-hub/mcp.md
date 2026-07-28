@@ -72,7 +72,7 @@ roster, not a windowed report, so it's the tool to call first to find a
 | `query_tasks` | A paged, filterable list of tasks, with outcome counts for the filtered set. |
 | `query_task_quality` | Success, frustration and friction rates, outcomes over time, and the top failure signals. |
 | `query_tool_usage` | Which tools, skills and MCP servers people use, and how usage compares across sources. |
-| `list_labels` | Every [hub label](/hub-tasks#hub-labels) defined on this Hub, with how many tasks carry it. |
+| `list_labels` | Every [hub label](/argus-hub/tasks#hub-labels) defined on this Hub, with how many tasks carry it. |
 | `create_label` | Adds a new hub label. |
 | `set_task_label` | Applies or removes a hub label on one task. |
 
