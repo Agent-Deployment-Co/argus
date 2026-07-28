@@ -12,18 +12,18 @@ that only make sense once you're looking at more than one person's usage.
 The same filter bar as [Activity](/argus-hub/activity) applies here: date range,
 source and group.
 
+<div class="screenshot">
+
+![The Argus Hub Tools view: the access layer overview and the "what people aren't using" table.](../images/screenshots/argus-hub-tools@1920x1080@2.webp)
+
+</div>
+
 ## Access layer overview
 
 A stat row for the window: how many distinct **tools**, **skills**, **MCP
 servers** and **plugins** were used at all. A note below it calls out what
 share of tool calls the top three tools account for, and how many MCP
 servers make up the long tail beyond the heavily-used ones.
-
-<div class="screenshot">
-
-![The Argus Hub Tools view: the access layer overview and the "what people aren't using" table.](../images/screenshots/argus-hub-tools@1920x1080@2.webp)
-
-</div>
 
 ## What people aren't using
 
