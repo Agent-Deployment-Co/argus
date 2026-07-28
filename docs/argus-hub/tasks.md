@@ -11,6 +11,12 @@ the Hub. Where the single-client Tasks view shows one session at a time,
 this view is for spotting patterns: which projects or people are hitting
 trouble, and what's causing it.
 
+<div class="screenshot">
+
+![The Argus Hub Tasks view: headline totals, outcome and frustration donuts, and outcome over time.](../images/screenshots/argus-hub-tasks@1920x1080@2.webp)
+
+</div>
+
 ## Filters
 
 The same filter bar as [Activity](/argus-hub/activity): date range, source,
@@ -39,12 +45,6 @@ success doesn't get miscounted.
 
 A stacked daily bar chart of task outcomes, success, failure and unclear,
 one bar per day across the whole window, including days with no tasks.
-
-<div class="screenshot">
-
-![The Argus Hub Tasks view: headline totals, outcome and frustration donuts, and outcome over time.](../images/screenshots/argus-hub-tasks@1920x1080@2.webp)
-
-</div>
 
 ## By user, by source, by project
 
