@@ -4,14 +4,14 @@ description: Download a Hub's data from the dashboard or the command line, and l
 
 # Export
 
-Export gives you the Hub's full dataset as a Snowflake-ready bundle, either
-from the dashboard or the command line. Both paths produce the same
+Export gives you the Hub's full dataset as a Snowflake-ready bundle,
+either from the dashboard or the command line. Both paths produce the same
 contents; the CLI adds the option to load it straight into Snowflake.
 
 ## From the browser
 
 Open **Export** and click the download button. Your browser streams a zip
-straight to disk — Hub never has to hold the whole archive in memory to
+straight to disk, so Hub never has to hold the whole archive in memory to
 serve it.
 
 The zip contains one JSONL file per table (organizations, groups, users,
@@ -19,6 +19,8 @@ clients, sessions, usage, tasks, interactions, invocations, session labels
 and hub labels), a `manifest.json` with the schema version and a row count
 per table, and a `load.sql` with the Snowflake DDL and load statements for
 every table. API keys are never included, in the zip or anywhere else.
+
+<!-- TODO screenshot argus-hub-export: the Export page, with the download button for the Snowflake-ready zip. Capture with: bun run screenshot /export --name argus-hub-export --base-url http://localhost:4343 -->
 
 ## From the command line
 
@@ -46,12 +48,12 @@ npx @agentdeploymentco/argus-hub export snowflake --load \
 
 Credentials (password, token, key passphrase) are read from the
 environment, never passed as a flag. Key-pair authentication is the
-recommended choice for a scheduled or unattended load; browser SSO only
-works interactively.
+recommended choice for a scheduled or unattended load, and browser SSO
+only works interactively.
 
-Each load replaces a table's contents in full — stage the new rows,
-delete the old ones, insert the new ones, all inside one transaction. It
-is a snapshot replace, not an incremental or change-data-capture load, so
+Each load replaces a table's contents in full: stage the new rows, delete
+the old ones, insert the new ones, all inside one transaction. It's a
+snapshot replace, not an incremental or change-data-capture load, so
 running it again fully supersedes the last load rather than appending to
 it.
 

@@ -1,5 +1,5 @@
 ---
-description: Query an Argus Hub from an agent over MCP — the full tool list, filters, authentication and a worked example.
+description: Query an Argus Hub from an agent over MCP, the full tool list, filters, authentication and a worked example.
 ---
 
 # Query Hub from an agent
@@ -16,7 +16,7 @@ Hub label.
 The endpoint uses the stateless Streamable HTTP transport: every request
 is a self-contained JSON-RPC call over a single POST to `/mcp`, and Hub
 answers it without any `initialize` handshake or session to keep alive.
-There's nothing to warm up and nothing cached between calls — an MCP
+There's nothing to warm up and nothing cached between calls, so an MCP
 client can send `tools/list` or `tools/call` straight away.
 
 ## Authentication
@@ -30,7 +30,7 @@ Authorization: Bearer <admin-password>
 
 A missing or wrong password gets rejected before Hub reads the request
 body. If Hub runs with no admin password configured, `/mcp` is open to
-anyone who can reach it — set one for any Hub reachable outside your own
+anyone who can reach it, so set one for any Hub reachable outside your own
 machine.
 
 For Claude Code:
@@ -41,7 +41,7 @@ claude mcp add --transport http argus-hub https://hub.internal:4343/mcp \
 ```
 
 Treat the password as a shared read (and light write) credential once
-you've given it to an agent — anyone holding it can query the
+you've given it to an agent. Anyone holding it can query the
 organization's activity, tasks and tool usage, and add or apply labels.
 
 ## Filters
@@ -59,7 +59,7 @@ share one set of filters:
 
 `query_tasks` adds `q` (free-text search), `outcome` (comma-separated
 `success`, `failure`, `unknown`) and paging with `limit` (default 50,
-maximum 200) and `offset`. `query_users` only takes `group` — it's a
+maximum 200) and `offset`. `query_users` only takes `group`. It's a
 roster, not a windowed report, so it's the tool to call first to find a
 `userId` before scoping the others.
 
@@ -77,8 +77,8 @@ roster, not a windowed report, so it's the tool to call first to find a
 | `set_task_label` | Applies or removes a hub label on one task. |
 
 A query tool with no matching data returns an empty result (an empty task
-list, an empty roster) rather than an error — `query_activity` and
-`query_task_quality` are the exception, returning an error when the
+list, an empty roster) rather than an error. `query_activity` and
+`query_task_quality` are the exception: they return an error when the
 organization has no data at all in the window.
 
 ## A worked example
@@ -94,6 +94,6 @@ spend, then `query_task_quality` with the same filters (or `user` set to
 the top spender) to read their success and frustration rates against the
 organization's.
 
-Every tool's response comes back as a JSON string in the result content —
-have the agent parse it rather than expect structured fields directly on
-the MCP response.
+Every tool's response comes back as a JSON string in the result content,
+so have the agent parse it rather than expect structured fields directly
+on the MCP response.

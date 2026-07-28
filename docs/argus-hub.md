@@ -219,7 +219,7 @@ each covered in depth under **Using Argus Hub** in the nav:
 
 <div class="screenshot">
 
-![Argus Hub activity dashboard showing organization-wide usage, tasks, token usage and cost.](./images/screenshots/argus-hub-dashboard@1920x1080@2.webp)
+![The Argus Hub Activity view: headline totals, the daily activity chart and cost by model.](./images/screenshots/argus-hub-activity@1920x1080@2.webp)
 
 </div>
 
@@ -229,7 +229,7 @@ each covered in depth under **Using Argus Hub** in the nav:
 | [Tasks](/hub-tasks) | Extracted tasks, outcomes, frustration and friction, top failure signals |
 | [Tools](/hub-tools) | Tool, skill and MCP server usage across the organization |
 | [Team](/hub-team) | Per-user sessions, tokens, estimated cost, last-sync time and groups |
-| Labels | Hub-wide task labels — create, apply and remove them; see [Hub labels](/hub-tasks#hub-labels) |
+| Labels | Hub-wide task labels: create, apply and remove them (see [Hub labels](/hub-tasks#hub-labels)) |
 | [Export](/hub-export) | Download the full dataset, or load it into Snowflake |
 
 The group picker appears after at least one client syncs and someone has been put in a group.

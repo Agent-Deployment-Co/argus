@@ -12,23 +12,24 @@ rather than the whole organization.
 ## The table
 
 People are listed in sections, one per group plus a trailing **Ungrouped**
-section, each sorted alphabetically by name — there's no column sort here,
+section, each sorted alphabetically by name. There's no column sort here,
 since the point of this view is the roster, not ranking. Each row shows
 sessions, tokens, estimated cost and when that person last synced. Click a
-name to open their own activity page — the same Activity/Projects/Tools/Health
-view the single-client Argus app shows, scoped to their usage alone (see
-[Overview](/overview), [Metric Views](/metric-views)).
+name to open their own activity page: the same Activity/Projects/Tools/
+Health view the single-client Argus app shows (see [Overview](/overview),
+[Metric Views](/metric-views)), scoped to their usage alone.
+
+<!-- TODO screenshot argus-hub-team: the Team table, grouped into sections with the bulk-select checkboxes and per-row Move action visible. Capture with: bun run screenshot /users --name argus-hub-team --base-url http://localhost:4343 -->
 
 ## Groups
 
 Groups are how you scope Hub's other views (Activity, Tasks, Tools) to a
-team rather than the whole organization — a department, a pod, whatever
-division makes sense for you.
+team rather than the whole organization: a department, a pod, whatever
+division makes sense for you. Group names must be unique on a Hub.
 
 - **Create a group** from the button above the table, giving it a name.
-  Group names must be unique on this Hub.
 - **Rename** or **delete** a group from its section header. Deleting a
-  group doesn't remove its members — it only ungroups them, moving them
+  group doesn't remove its members, it only ungroups them, moving them
   back to the **Ungrouped** section. Nobody's sync history or usage is
   affected.
 - **Move one person** with the row action next to them: a popover lists
@@ -39,5 +40,7 @@ division makes sense for you.
   **Ungrouped**.
 
 Once at least one person has a group, the Group filter appears on
-[Activity](/hub-activity), [Tasks](/hub-tasks) and [Tools](/hub-tools), plus
-an **Ungrouped** option for anyone not yet assigned.
+[Activity](/hub-activity), [Tasks](/hub-tasks) and [Tools](/hub-tools),
+plus an **Ungrouped** option for anyone not yet assigned.
+
+<!-- TODO screenshot argus-hub-user-activity: one person's activity page, reached by clicking their name in the Team table (the same view Activity's Users section links to). Capture with: bun run screenshot "/users/<userId>" --name argus-hub-user-activity --base-url http://localhost:4343 -->
