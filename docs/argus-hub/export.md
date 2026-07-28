@@ -2,7 +2,7 @@
 description: Download an Argus Hub's data from the dashboard or the command line, and load it into Snowflake.
 ---
 
-# Export
+# Argus Hub: Export
 
 Export gives you the Argus Hub's full dataset as a Snowflake-ready bundle,
 either from the dashboard or the command line. Both paths produce the same

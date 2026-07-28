@@ -2,7 +2,7 @@
 description: Which skills, tools, MCP servers and plugins the organization reaches for, aggregated across everyone syncing to an Argus Hub.
 ---
 
-# Tools
+# Argus Hub: Tools
 
 Argus Hub's Tools view covers the same ground as the single-client
 [Tools view](/metric-views#tools), skills, tools, MCP servers and plugins,

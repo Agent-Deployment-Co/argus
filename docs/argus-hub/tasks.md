@@ -2,7 +2,7 @@
 description: How Argus Hub rolls up task outcomes, frustration and failure signals across the organization, and how to label tasks for your team.
 ---
 
-# Tasks
+# Argus Hub: Tasks
 
 Argus Hub's Tasks view takes the same per-session [task](/terminology#task)
 extraction described in [Tasks](/tasks), a task's description, its outcome

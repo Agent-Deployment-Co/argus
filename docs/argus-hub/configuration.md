@@ -2,7 +2,7 @@
 description: Configure Argus Hub's port, data directory and secret key, keep it running with systemd, Docker or launchd, and keep a deployment private.
 ---
 
-# Configuration
+# Argus Hub: Configuration
 
 ## Quick Start
 

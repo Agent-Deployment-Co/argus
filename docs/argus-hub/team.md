@@ -2,7 +2,7 @@
 description: The per-person summary table, organizing people into groups, and each person's own activity page.
 ---
 
-# Team
+# Argus Hub: Team
 
 Team is the roster: every person whose Argus has ever synced to this Argus Hub,
 what they've used, and when they last synced. It's also where you organize

@@ -2,7 +2,7 @@
 description: What the Argus Hub Activity view shows, org-wide totals, trends against the prior window, and rankings by person and by source.
 ---
 
-# Activity
+# Argus Hub: Activity
 
 Activity is Argus Hub's home view: how much agent work the organization did in the
 window you're looking at, and how that work is spread across people and

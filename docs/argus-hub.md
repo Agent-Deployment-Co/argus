@@ -2,7 +2,7 @@
 description: Run an Argus Hub so a team can pool its usage into one org-wide dashboard. Setup, connecting people and what each person sends.
 ---
 
-# Argus Hub
+# Argus Hub: Overview
 
 [Argus Hub](https://github.com/Agent-Deployment-Co/argus-hub) is a self-hosted server that pools usage data from a team's
 [Argus](https://github.com/Agent-Deployment-Co/argus) clients into one org-wide dashboard. Each Argus Hub aggregates session and task data into a centralized dashboard. Argus Hub runs entirely on your own network.

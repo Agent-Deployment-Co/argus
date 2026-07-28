@@ -2,7 +2,7 @@
 description: Query an Argus Hub from an agent over MCP, the full tool list, filters, authentication and a worked example.
 ---
 
-# MCP
+# Argus Hub: MCP
 
 Argus Hub exposes its data through [MCP](https://modelcontextprotocol.io) at
 `POST /mcp`, so an agent can answer questions about the organization's
