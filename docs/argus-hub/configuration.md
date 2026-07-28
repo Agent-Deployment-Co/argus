@@ -20,7 +20,7 @@ npx @agentdeploymentco/argus-hub serve --port 4343
 ```
 
 The first startup creates `data/hub.db`, generates an API key and generates an admin password.
-Both values are printed once, so copy them to a secure location before closing the terminal.
+Argus Hub prints both values once, so copy them to a secure location before closing the terminal.
 
 The **API key** authenticates uploads from Argus clients. The **admin password** protects the
 dashboard at `http://localhost:4343/login` and Argus Hub's read-only MCP endpoint. Set
@@ -67,8 +67,8 @@ a hostname that is reachable from the public internet.
 
 To rotate a key, delete the old key's row from the Argus Hub database, then restart Argus Hub. Argus Hub only
 generates a new key when the `api_keys` table is empty, so disabling a key with `is_enabled = 0`
-does not trigger this: rotation requires removing the row outright, not just disabling it. A
-disabled key is rejected before Argus Hub reads the upload body.
+does not trigger this: rotation requires removing the row outright, not just disabling it. Argus
+Hub rejects a disabled key before reading the upload body.
 
 ## Run Argus Hub continuously
 

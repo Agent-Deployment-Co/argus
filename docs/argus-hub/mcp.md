@@ -28,7 +28,7 @@ dashboard:
 Authorization: Bearer <admin-password>
 ```
 
-A missing or wrong password gets rejected before Argus Hub reads the request
+Argus Hub rejects a missing or wrong password before reading the request
 body. If Argus Hub runs with no admin password configured, `/mcp` is open to
 anyone who can reach it, so set one for any Argus Hub reachable outside your own
 machine.

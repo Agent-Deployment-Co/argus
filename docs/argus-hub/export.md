@@ -50,8 +50,8 @@ npx @agentdeploymentco/argus-hub export snowflake --load \
   --private-key-path /path/to/key.p8
 ```
 
-Credentials (password, token, key passphrase) are read from the
-environment, never passed as a flag. Key-pair authentication is the
+Read credentials (password, token, key passphrase) from the environment,
+never pass them as a flag. Key-pair authentication is the
 recommended choice for a scheduled or unattended load, and browser SSO
 only works interactively.
 

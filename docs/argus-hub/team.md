@@ -17,7 +17,7 @@ rather than the whole organization.
 
 ## The table
 
-People are listed in sections, one per group plus a trailing **Ungrouped**
+The table lists people in sections, one per group plus a trailing **Ungrouped**
 section, each sorted alphabetically by name. There's no column sort here,
 since the point of this view is the roster, not ranking. Each row shows
 sessions, tokens, estimated cost and when that person last synced. Click a
