@@ -25,7 +25,7 @@ The app stores the key securely and shows a masked value after you save it.
 
 <div class="screenshot">
 
-![Argus Hub settings with an Argus Hub URL and masked Argus Hub key.](../images/screenshots/argus-hub-settings@1920x1080@2.webp)
+![Argus Hub settings with an Argus Hub URL and masked Argus Hub key.](./images/screenshots/argus-hub-settings@1920x1080@2.webp)
 
 </div>
 
@@ -75,7 +75,7 @@ each covered in depth under **Using Argus Hub** in the nav:
 
 <div class="screenshot">
 
-![The Argus Hub Activity view: headline totals, the daily activity chart and cost by model.](../images/screenshots/argus-hub-activity@1920x1080@2.webp)
+![The Argus Hub Activity view: headline totals, the daily activity chart and cost by model.](./images/screenshots/argus-hub-activity@1920x1080@2.webp)
 
 </div>
 
