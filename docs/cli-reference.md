@@ -1,3 +1,7 @@
+---
+description: Every Argus command and flag, covering index, serve, sync, run, status, search, config and secret.
+---
+
 # CLI Reference
 
 Argus is desktop-first, but everything it does is also a command-line tool, for
@@ -29,7 +33,7 @@ npx @agentdeploymentco/argus <command>
 
 Run `argus <command> --help` for the flags on any command.
 
-## Where Argus stores its data
+## Data locations
 
 Argus keeps its [index](/terminology#index) and settings on your own computer:
 

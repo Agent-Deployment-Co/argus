@@ -663,7 +663,7 @@ export async function reindexSession(
       return {
         ok: false,
         status: 404,
-        message: `No session found for ${sessionId}. Run \`argus index\` to read sessions into the local store.`,
+        message: `No session found for ${sessionId}. Run \`argus index\` to index sessions into the local store.`,
       };
     }
     const producer = nativeProducerForSource(meta.source);
@@ -671,7 +671,7 @@ export async function reindexSession(
       return {
         ok: false,
         status: 422,
-        message: `Couldn't re-index ${sessionId}: no transcript reader is registered for ${meta.source}.`,
+        message: `Couldn't re-index ${sessionId}: ${meta.source} sessions can't be re-indexed.`,
       };
     }
     // A session with no local transcript on disk can't be re-parsed — say so plainly rather than the
@@ -680,7 +680,7 @@ export async function reindexSession(
       return {
         ok: false,
         status: 422,
-        message: `Couldn't re-index ${sessionId}: it has no local transcript on disk.`,
+        message: `Couldn't re-index ${sessionId}: it's no longer on disk.`,
       };
     }
     // Re-parse EVERY transcript for this session, discovered fresh from disk — the main transcript
@@ -785,8 +785,8 @@ export async function scanStore(opts: IncrementalParseOptions = {}): Promise<Sou
 
 /** A plain-language phrase describing where this sync's data came from. */
 export function syncModeSummary(stats: SyncStats): string {
-  if (stats.fallback) return "Read transcripts directly (couldn't open the local store)";
-  return "Read transcripts";
+  if (stats.fallback) return "Indexed sessions directly (couldn't open the local store)";
+  return "Indexed sessions";
 }
 
 /** One-line, plain-language summary of what a sync did, for the user. */

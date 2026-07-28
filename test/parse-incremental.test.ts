@@ -86,13 +86,13 @@ function comparable(result: ParseResult) {
 
 describe("parseAllIncrementalDetailed", () => {
   test("describes sync modes in plain language from stats", () => {
-    expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("Read transcripts —");
-    expect(syncStatsSummary(stats({ parsed: 3 }))).toStartWith("Read transcripts —");
+    expect(syncStatsSummary(stats({ hits: 2 }))).toStartWith("Indexed sessions —");
+    expect(syncStatsSummary(stats({ parsed: 3 }))).toStartWith("Indexed sessions —");
     // Archived sessions are working as intended, so the per-pass summary stays quiet about them
     // (the count lives in `argus status`).
     expect(syncStatsSummary(stats({ parsed: 2, archived: 3 }))).not.toContain("kept after leaving disk");
     expect(syncStatsSummary(stats({ fallback: true }))).toBe(
-      "Read transcripts directly (couldn't open the local store)",
+      "Indexed sessions directly (couldn't open the local store)",
     );
   });
 

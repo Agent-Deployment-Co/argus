@@ -1,3 +1,7 @@
+---
+description: Configure Argus from inside the app. What each group of settings in the gear menu controls.
+---
+
 # Settings
 
 Configure Argus from inside the app. The gear icon at the bottom of the left nav

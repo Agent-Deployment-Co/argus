@@ -95,10 +95,12 @@ bun run docs:build    # build the static site (catches dead links)
 bun run docs:preview  # serve the built output
 ```
 
-Before writing or editing pages, read the authoring guides in
-[`docs/contributing/`](docs/contributing/README.md): voice and tone, and technical writing. They
-keep the docs consistent and on-voice. (They live in the repo but are excluded from the published
-site.)
+Before writing or editing anything a user will read, and that includes the README, the repo
+description, package metadata and release notes as well as the docs, read the authoring guides in
+[`docs/contributing/`](docs/contributing/README.md). There are five, each owning one question:
+audience, positioning, voice and tone, terminology, and technical writing. Start with
+[audience](docs/contributing/audience.md); everything else assumes it. (They live in the repo but
+are excluded from the published site.)
 
 ## Architecture
 

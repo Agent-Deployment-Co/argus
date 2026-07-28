@@ -1,3 +1,7 @@
+---
+description: Every Argus setting, with its argus.json key, environment variable and command flag, and which source wins.
+---
+
 # Settings Reference
 
 Argus settings can come from the app, `argus.json`, environment variables,
@@ -6,7 +10,7 @@ this page when you need the exact setting name or precedence order.
 
 For the everyday Settings screen, see [Settings](/settings).
 
-## How settings are applied
+## Precedence
 
 Most settings resolve in this order:
 

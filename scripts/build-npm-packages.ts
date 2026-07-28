@@ -18,6 +18,25 @@ const PACKAGE_NAME = `${SCOPE}/argus`;
 const OUT = "dist/npm";
 const VERSION = pkg.version;
 
+// Shared metadata. Without these the npmjs.com page is a bare description with no
+// way back to the project, and npm can't show a license or a repo link.
+const REPOSITORY = { type: "git", url: "git+https://github.com/Agent-Deployment-Co/argus.git" };
+const HOMEPAGE = "https://argus.agentdeployment.co";
+const BUGS = { url: "https://github.com/Agent-Deployment-Co/argus/issues" };
+const LICENSE = "MIT";
+// Kept short on purpose. A long tail of near-duplicate keywords reads as padding.
+const KEYWORDS = [
+  "ai-agents",
+  "claude",
+  "claude-code",
+  "claude-cowork",
+  "chatgpt-work",
+  "codex",
+  "gemini-cli",
+  "agent-analytics",
+  "local-first",
+];
+
 interface Target {
   os: string; // npm `os` value (process.platform)
   cpu: string; // npm `cpu` value (process.arch)
@@ -60,7 +79,11 @@ for (const t of targets) {
       {
         name: `${SCOPE}/${name}`,
         version: VERSION,
-        description: `Argus CLI — prebuilt binary for ${t.os}/${t.cpu}.`,
+        description: `Argus, prebuilt binary for ${t.os}/${t.cpu}.`,
+        license: LICENSE,
+        repository: REPOSITORY,
+        homepage: HOMEPAGE,
+        bugs: BUGS,
         os: [t.os],
         cpu: [t.cpu],
         files: ["bin", "web"],
@@ -77,6 +100,9 @@ const mainDir = join(OUT, "argus");
 mkdirSync(join(mainDir, "bin"), { recursive: true });
 copyFileSync("npm/launcher.cjs", join(mainDir, "bin", "argus"));
 chmodSync(join(mainDir, "bin", "argus"), 0o755);
+// npm renders this as the package page. Without it the listing is a bare description.
+copyFileSync("README.md", join(mainDir, "README.md"));
+copyFileSync("LICENSE", join(mainDir, "LICENSE"));
 
 const optionalDependencies = Object.fromEntries(
   ALL_TARGETS.map((t) => [`${SCOPE}/argus-${t.os}-${t.cpu}`, VERSION]),
@@ -88,9 +114,14 @@ writeFileSync(
       name: PACKAGE_NAME,
       version: VERSION,
       description: pkg.description,
+      keywords: KEYWORDS,
+      license: LICENSE,
+      repository: REPOSITORY,
+      homepage: HOMEPAGE,
+      bugs: BUGS,
       type: "commonjs",
       bin: { argus: "bin/argus" },
-      files: ["bin"],
+      files: ["bin", "README.md", "LICENSE"],
       optionalDependencies,
     },
     null,

@@ -21,15 +21,20 @@ When you need example data, synthesize it. Use redacted, obviously-fake fixtures
 
 ## What this is
 
-**Who it's for.** Argus is built for **business users, not developers** — and explicitly not for
-developer workflows. That audience is a range: at one end, any knowledge worker using agents like
-Claude Cowork or Codex for business work (account research, drafting and editing content, working
-in spreadsheets, building workflows); at the other, more technical non-developers who live in a
-terminal, run Claude Code, and write the occasional script (technical RevOps, GTM engineers). What
-unites them is that they use agents to do their *business* work, not to build software. When you
-design features, write copy, or choose examples/taxonomies, assume this range and never assume a
-developer. (See the `docs/index.md` positioning and the `docs/contributing/` voice guides; don't
-call them "non-coders" or talk down.)
+**Who it's for.** Argus is built for **business users, not developers** — people who use agents to
+do their *business* work, not to build software. The audience spans a range, from knowledge workers
+who never open a terminal to technical non-developers who run Claude Code and write the occasional
+script. When you design features, write copy, or choose examples/taxonomies, assume that range and
+never assume a developer.
+
+**`docs/contributing/audience.md` is the canonical audience definition** — read it before writing
+anything user-facing or designing anything, and don't restate it elsewhere. Never call them
+"non-coders" or talk down.
+
+**How we describe Argus is canonical in `docs/contributing/positioning.md`** — the promise, the
+approved descriptions, which register each surface uses, which agents the descriptions name, and
+the inventory of every place a description lives. Anything outward-facing (the README, the repo
+description, package metadata, social cards, release notes) comes from there.
 
 Argus audits local agent usage — Claude Code, Claude Cowork, Claude Chat, Codex, and Gemini — by
 reading local session transcripts (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`,
@@ -81,26 +86,14 @@ into `dist/npm/` and the desktop bundles, not the root package.
 
 ## User-facing messages
 
-Anything printed to the terminal (CLI `log()`/`console` output, help text, error messages) is
-written for the person running the CLI — the more technical end of the audience above (comfortable
-in a terminal and fluent in the language of agents), but still not someone who has read the code:
-
-1. **Plain language.** Use words a user already knows — file, directory, session, transcript,
-   project. Avoid internal jargon.
-2. **Don't name code internals.** The user doesn't know what the code does, so don't refer to
-   implementation concepts (table names, "the structural index", "fragments", "materialize",
-   "reconcile", "fact rows", layer numbers, etc.). Describe the effect the user observes instead
-   (e.g. "Re-reading all transcripts from disk", not "Cleared the structural index").
-3. **Active voice** where possible ("Kept archived sessions", not "archived sessions were preserved").
-4. **Don't make Argus the subject.** Drop the actor and lead with the verb — "Kept archived
-   sessions.", not "Argus kept archived sessions."
+Anything printed to the terminal (CLI `log()`/`console` output, help text, error messages) follows
+**`docs/contributing/voice-and-tone.md` ("Writing for the terminal")**: plain language, no code
+internals, active voice, and Argus is not the subject ("Kept archived sessions.", not "Argus kept
+archived sessions."). Agent and concept names come from
+**`docs/contributing/terminology.md`**.
 
 These rules are for output the user sees. Code comments and internal identifiers stay precise and
 may use the internal vocabulary freely.
-
-**Product name styling.** Anthropic styles it **Claude Cowork** — "Cowork" with a lowercase "w"
-(not "CoWork" or "Co-Work"). Use this exact casing in all user-facing strings. The internal
-source identifier / slug stays `cowork` (all lowercase).
 
 ## User-facing UI
 
@@ -121,15 +114,26 @@ Rules for anything presented in the web app (and any other UI surface):
    invent new card tokens, radii, or heading patterns. Charts go in a `<Panel>`; tables sit bare in a
    `<Section>`. Full spec: **`docs/internals/design-system.md`**.
 
-## Writing the docs
+## Writing about Argus
 
-When writing or editing anything under `docs/` (the VitePress site), follow the authoring
-guides in **`docs/contributing/`**: `voice-and-tone.md` (how the docs should sound) and
-`technical-writing.md` (structure, formatting, terminology). They specialize ADC's house voice
-for Argus's technical docs and extend the "User-facing messages" rules above. Note in
-particular: no em-dashes, and don't surface code internals on user-facing pages. The
-`docs/contributing/` guides (and the `docs/internals/` design docs) are excluded from the published
-site (`srcExclude`).
+**`docs/contributing/` is canonical for every user-facing word**, not just the docs site: the web
+app, the terminal, the README, the GitHub repo description and topics, package metadata, social
+cards, release notes and outreach. Five guides, each owning one question:
+
+| Guide | Owns |
+|---|---|
+| `audience.md` | Who Argus is for. Upstream of the rest, and it governs product decisions too. |
+| `positioning.md` | What we claim: the promise, canonical descriptions, which claims are safe, register per surface, and the inventory of every place a description lives. |
+| `voice-and-tone.md` | How Argus sounds, including terminal output, and the patterns to cut. |
+| `terminology.md` | What we call things: product concepts, agent names, commands, and the words that stay in the code. |
+| `technical-writing.md` | How a docs page is built. The only guide scoped to `docs/`. |
+
+Read `audience.md` before writing anything user-facing. Note in particular: no em-dashes anywhere,
+never call the audience "non-coders", and don't surface code internals outside `docs/internals/`.
+
+Changing how Argus is described means updating `positioning.md` first, then working its surface
+inventory so the surfaces don't drift apart. The `docs/contributing/` guides (and the
+`docs/internals/` design docs) are excluded from the published site (`srcExclude`).
 
 ## Architecture
 
