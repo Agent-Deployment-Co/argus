@@ -76,7 +76,11 @@ person's own activity page: the same view a single Argus client shows for
 their own usage (see [Sessions](/sessions), [Metric Views](/metric-views)),
 scoped to them.
 
-<!-- TODO screenshot argus-hub-user-activity: Argus Hub's per-user activity page (Team row -> person), scoped to one person's usage. Capture with: bun run screenshot "/users/<userId>" --name argus-hub-user-activity --base-url http://localhost:4343 -->
+<div class="screenshot">
+
+![One person's activity page, reached from the Team table, the same Activity view scoped to their usage alone.](./images/screenshots/argus-hub-user-activity@1920x1080@2.webp)
+
+</div>
 
 ## Sources
 

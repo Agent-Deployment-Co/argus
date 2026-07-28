@@ -20,7 +20,11 @@ and hub labels), a `manifest.json` with the schema version and a row count
 per table, and a `load.sql` with the Snowflake DDL and load statements for
 every table. API keys are never included, in the zip or anywhere else.
 
-<!-- TODO screenshot argus-hub-export: the Export page, with the download button for the Snowflake-ready zip. Capture with: bun run screenshot /export --name argus-hub-export --base-url http://localhost:4343 -->
+<div class="screenshot">
+
+![The Argus Hub Export page, with the download button for the Snowflake-ready zip.](./images/screenshots/argus-hub-export@1920x1080@2.webp)
+
+</div>
 
 ## From the command line
 

@@ -76,8 +76,9 @@ organization: tasks worth reviewing, tasks tied to a project or
 initiative, tasks a specific team should look at.
 
 - **Create a label.** Open **Labels** to see every label defined on this
-  Hub, with how many tasks carry it. Add one with a name and an optional
-  description.
+  Hub. Add one with a name and an optional description of what it means
+  (shown when you create it, not in the list). Querying labels over
+  [MCP](/hub-mcp) also returns how many tasks currently carry each one.
 - **Apply a label.** On a task in this view, open its label picker to find
   an existing label or create one on the spot, and toggle it onto that
   task. Applied labels show as pills on the task, both in the list and once
@@ -87,7 +88,11 @@ initiative, tasks a specific team should look at.
 - **Delete a label.** Deleting a label from the Labels page removes it from
   every task that carried it.
 
-<!-- TODO screenshot argus-hub-labels: the Labels page, listing every hub label and how many tasks carry it (and/or a task row with the label picker open). Capture with: bun run screenshot /labels --name argus-hub-labels --base-url http://localhost:4343 -->
+<div class="screenshot">
+
+![The Argus Hub Labels page, listing every hub label defined on this Hub.](./images/screenshots/argus-hub-labels@1920x1080@2.webp)
+
+</div>
 
 Hub labels never travel back to a client. They exist only in the Hub's own
 database, for whoever has access to the Hub dashboard.

@@ -19,7 +19,11 @@ name to open their own activity page: the same Activity/Projects/Tools/
 Health view the single-client Argus app shows (see [Overview](/overview),
 [Metric Views](/metric-views)), scoped to their usage alone.
 
-<!-- TODO screenshot argus-hub-team: the Team table, grouped into sections with the bulk-select checkboxes and per-row Move action visible. Capture with: bun run screenshot /users --name argus-hub-team --base-url http://localhost:4343 -->
+<div class="screenshot">
+
+![The Argus Hub Team table, people grouped into sections with sessions, tokens, cost and last-sync time.](./images/screenshots/argus-hub-team@1920x1080@2.webp)
+
+</div>
 
 ## Groups
 
@@ -43,4 +47,8 @@ Once at least one person has a group, the Group filter appears on
 [Activity](/hub-activity), [Tasks](/hub-tasks) and [Tools](/hub-tools),
 plus an **Ungrouped** option for anyone not yet assigned.
 
-<!-- TODO screenshot argus-hub-user-activity: one person's activity page, reached by clicking their name in the Team table (the same view Activity's Users section links to). Capture with: bun run screenshot "/users/<userId>" --name argus-hub-user-activity --base-url http://localhost:4343 -->
+<div class="screenshot">
+
+![One person's activity page, reached by clicking their name in the Team table.](./images/screenshots/argus-hub-user-activity@1920x1080@2.webp)
+
+</div>
