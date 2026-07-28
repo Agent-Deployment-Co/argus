@@ -137,12 +137,9 @@ export default defineConfig({
         ]
       },
       {
-        text: 'Teams',
-        items: [{ text: 'Argus Hub', link: '/argus-hub' }]
-      },
-      {
         text: 'Using Argus Hub',
         items: [
+          { text: 'Overview', link: '/argus-hub' },
           { text: 'Activity', link: '/hub-activity' },
           { text: 'Tasks', link: '/hub-tasks' },
           { text: 'Tools', link: '/hub-tools' },
