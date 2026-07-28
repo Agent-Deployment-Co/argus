@@ -137,8 +137,17 @@ export default defineConfig({
         ]
       },
       {
-        text: 'Teams',
-        items: [{ text: 'Argus Hub', link: '/argus-hub' }]
+        text: 'Using Argus Hub',
+        items: [
+          { text: 'Overview', link: '/argus-hub' },
+          { text: 'Configuration', link: '/argus-hub/configuration' },
+          { text: 'Activity', link: '/argus-hub/activity' },
+          { text: 'Tasks', link: '/argus-hub/tasks' },
+          { text: 'Tools', link: '/argus-hub/tools' },
+          { text: 'Team', link: '/argus-hub/team' },
+          { text: 'MCP', link: '/argus-hub/mcp' },
+          { text: 'Export', link: '/argus-hub/export' }
+        ]
       },
       {
         text: 'Reference',
