@@ -4,9 +4,9 @@ description: Configure Argus Hub's port, data directory and secret key, keep it 
 
 # Configuration
 
-Argus Hub requires Node.js 20.17 or later, or Bun 1.0 or later.
-
 ## Quick Start
+
+Argus Hub requires Node.js 20.17 or later, or Bun 1.0 or later.
 
 Generate a secret key and start it with:
 
