@@ -9,6 +9,12 @@ window you're looking at, and how that work is spread across people and
 [sources](/terminology#source). It opens with headline totals, then breaks
 those totals down over time, by model, by person and by source.
 
+<div class="screenshot">
+
+![The Argus Hub Activity view: headline totals with trends against the prior window, the daily activity chart and cost by model.](../images/screenshots/argus-hub-activity@1920x1080@2.webp)
+
+</div>
+
 ## Filters
 
 A filter bar sits above the view:
@@ -48,12 +54,6 @@ A horizontal bar chart of the window's spend, broken down by
 its share of total spend and the tokens behind it. Models Argus can't price
 are excluded here and called out in a note below the headline totals
 instead.
-
-<div class="screenshot">
-
-![The Argus Hub Activity view: headline totals with trends against the prior window, the daily activity chart and cost by model.](../images/screenshots/argus-hub-activity@1920x1080@2.webp)
-
-</div>
 
 ## Users
 
