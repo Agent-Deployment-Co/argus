@@ -4,9 +4,9 @@ description: Configure Argus Hub's port, data directory and secret key, keep it 
 
 # Configuration
 
-## Set up a Hub
+## Set up an Argus Hub
 
-Hub requires Node.js 20.17 or later, or Bun 1.0 or later. Generate a secret key and start it with:
+Argus Hub requires Node.js 20.17 or later, or Bun 1.0 or later. Generate a secret key and start it with:
 
 ```bash
 export HUB_SECRET_KEY="$(openssl rand -base64 32)"  # save this value
@@ -17,11 +17,11 @@ The first startup creates `data/hub.db`, generates an API key and generates an a
 Both values are printed once, so copy them to a secure location before closing the terminal.
 
 The **API key** authenticates uploads from Argus clients. The **admin password** protects the
-dashboard at `http://localhost:4343/login` and the Hub's read-only MCP endpoint. Set
-`ADMIN_PASSWORD` before starting Hub to keep the same dashboard password across restarts. If you
-do not set it, Hub generates a new password each time it starts.
+dashboard at `http://localhost:4343/login` and Argus Hub's read-only MCP endpoint. Set
+`ADMIN_PASSWORD` before starting Argus Hub to keep the same dashboard password across restarts. If you
+do not set it, Argus Hub generates a new password each time it starts.
 
-`HUB_SECRET_KEY` is optional, but without it Hub starts with a warning and disables API-key-based
+`HUB_SECRET_KEY` is optional, but without it Argus Hub starts with a warning and disables API-key-based
 task LLM providers in **Settings**, since it has nothing to encrypt those keys with in `hub.db`.
 Set it once, keep it stable across restarts, and back it up separately from `hub.db`: losing it
 makes any provider keys already stored there unreadable.
@@ -31,14 +31,14 @@ The API key allows clients to upload data. The admin password allows access to t
 pooled usage data. Do not put either value in source control or share them in a public channel.
 :::
 
-## Configure the Hub
+## Configure Argus Hub
 
-Hub reads `hub.json` from the current directory, then environment variables, then command-line
+Argus Hub reads `hub.json` from the current directory, then environment variables, then command-line
 flags. A later source takes precedence over an earlier one.
 
 | CLI flag | Environment variable | `hub.json` key | Default | What it controls |
 |---|---|---|---|---|
-| `--port` | `HUB_PORT` | `port` | `4343` | Port Hub listens on |
+| `--port` | `HUB_PORT` | `port` | `4343` | Port Argus Hub listens on |
 | `--data-dir` | `HUB_DATA_DIR` | `dataDir` | `./data` | Folder containing `hub.db` |
 | None | `HUB_SECRET_KEY` | None | None | Base64 encoding of 32 random bytes; encrypts task LLM provider keys stored in `hub.db`. Without it, those providers stay disabled |
 | None | `ADMIN_PASSWORD` | None | Random | Dashboard and MCP password |
@@ -53,20 +53,20 @@ For example:
 }
 ```
 
-There is no `HUB_KEY` setting. Hub stores API keys in `hub.db`. If the database has no API keys
-when Hub starts, it generates a key for the Default organization and prints it to the terminal.
+There is no `HUB_KEY` setting. Argus Hub stores API keys in `hub.db`. If the database has no API keys
+when Argus Hub starts, it generates a key for the Default organization and prints it to the terminal.
 
 Only use `HUB_INSECURE_COOKIE_HOSTS` for hostnames reachable through a private network. Never list
 a hostname that is reachable from the public internet.
 
-To rotate a key, delete the old key's row from the Hub database, then restart Hub. Hub only
+To rotate a key, delete the old key's row from the Argus Hub database, then restart Argus Hub. Argus Hub only
 generates a new key when the `api_keys` table is empty, so disabling a key with `is_enabled = 0`
 does not trigger this: rotation requires removing the row outright, not just disabling it. A
-disabled key is rejected before Hub reads the upload body.
+disabled key is rejected before Argus Hub reads the upload body.
 
-## Run Hub continuously
+## Run Argus Hub continuously
 
-Hub runs in the foreground, so a service manager can restart it and collect its logs. The Argus
+Argus Hub runs in the foreground, so a service manager can restart it and collect its logs. The Argus
 Hub repository contains the Dockerfile and the complete service examples. The common deployment
 shapes are below.
 
@@ -120,7 +120,7 @@ The package is public, so no `docker login` is needed to pull it. Prefer pinning
 yourself (`docker build -t argus-hub .`) works the same way if you'd rather not pull a
 prebuilt image.
 
-`hub.env` should hold at least `HUB_SECRET_KEY` (see [Set up a Hub](#set-up-a-hub)) and,
+`hub.env` should hold at least `HUB_SECRET_KEY` (see [Set up an Argus Hub](#set-up-an-argus-hub)) and,
 if you want it pinned, `ADMIN_PASSWORD`. The image exposes `GET /healthz`, which returns `200 ok`
 without authentication for container health checks and Kubernetes liveness probes.
 
@@ -154,11 +154,11 @@ launchctl load ~/Library/LaunchAgents/co.agentdeployment.argus-hub.plist
 Use the service definition in the [Argus Hub repository](https://github.com/Agent-Deployment-Co/argus-hub)
 for the complete plist, including log paths and restart behavior.
 
-## Keep a Hub private
+## Keep an Argus Hub private
 
-Place Hub behind a VPN or a reverse proxy with TLS. Do not expose it directly to the internet.
-The Hub database contains the session data of every syncing user, so restrict filesystem access
-and include it in backups. Hub sets new database files to mode `0600`.
+Place Argus Hub behind a VPN or a reverse proxy with TLS. Do not expose it directly to the internet.
+The Argus Hub database contains the session data of every syncing user, so restrict filesystem access
+and include it in backups. Argus Hub sets new database files to mode `0600`.
 
 The client sends resolved usage rows, session summaries, tasks, interaction metadata, tool and MCP
 invocations and labels. It does not send retained prompt and response text or BYO API keys. The

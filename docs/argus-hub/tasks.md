@@ -1,13 +1,13 @@
 ---
-description: How Hub rolls up task outcomes, frustration and failure signals across the organization, and how to label tasks for your team.
+description: How Argus Hub rolls up task outcomes, frustration and failure signals across the organization, and how to label tasks for your team.
 ---
 
 # Tasks
 
-Hub's Tasks view takes the same per-session [task](/terminology#task)
+Argus Hub's Tasks view takes the same per-session [task](/terminology#task)
 extraction described in [Tasks](/tasks), a task's description, its outcome
 and how much friction it took, and rolls it up across everyone syncing to
-the Hub. Where the single-client Tasks view shows one session at a time,
+the Argus Hub. Where the single-client Tasks view shows one session at a time,
 this view is for spotting patterns: which projects or people are hitting
 trouble, and what's causing it.
 
@@ -36,7 +36,7 @@ has a clear reading yet.
 
 Two breakdowns, each as a donut: **Outcome** (success, failure, unclear) and
 **Frustration** (none, moderate, high). Both come from the same free-text
-judgment a session's interpretation writes for each task. Hub just
+judgment a session's interpretation writes for each task. Argus Hub just
 classifies and counts it across everyone, using the same rules a single
 client uses, careful about phrases like "not completed" so a negated
 success doesn't get miscounted.
@@ -64,19 +64,19 @@ client. It's measured for Claude sessions only, so a count of zero and "no
 data" show as different things, and an observed-sessions count makes clear
 how much of the window that friction reading actually covers.
 
-## Hub labels
+## Argus Hub labels
 
-Hub labels are separate from the labels you set on a session in the Argus
+Argus Hub labels are separate from the labels you set on a session in the Argus
 app itself (see [Sessions](/sessions#labeling-and-hiding-sessions)). Those
 stay local to your machine and aren't part of what
-[sync](/terminology#sync) uploads. A hub label instead lives on the Hub
-itself, created by whoever runs it, and applied directly to the tasks Hub
+[sync](/terminology#sync) uploads. An Argus Hub label instead lives on the Argus Hub
+itself, created by whoever runs it, and applied directly to the tasks Argus Hub
 has collected. Use them to flag or group tasks across the whole
 organization: tasks worth reviewing, tasks tied to a project or
 initiative, tasks a specific team should look at.
 
 - **Create a label.** Open **Labels** to see every label defined on this
-  Hub. Add one with a name and an optional description of what it means
+  Argus Hub. Add one with a name and an optional description of what it means
   (shown when you create it, not in the list). Querying labels over
   [MCP](/argus-hub/mcp) also returns how many tasks currently carry each one.
 - **Apply a label.** On a task in this view, open its label picker to find
@@ -90,9 +90,9 @@ initiative, tasks a specific team should look at.
 
 <div class="screenshot">
 
-![The Argus Hub Labels page, listing every hub label defined on this Hub.](../images/screenshots/argus-hub-labels@1920x1080@2.webp)
+![The Argus Hub Labels page, listing every Argus Hub label defined on this Argus Hub.](../images/screenshots/argus-hub-labels@1920x1080@2.webp)
 
 </div>
 
-Hub labels never travel back to a client. They exist only in the Hub's own
-database, for whoever has access to the Hub dashboard.
+Argus Hub labels never travel back to a client. They exist only in the Argus Hub's own
+database, for whoever has access to the Argus Hub dashboard.

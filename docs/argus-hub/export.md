@@ -1,22 +1,22 @@
 ---
-description: Download a Hub's data from the dashboard or the command line, and load it into Snowflake.
+description: Download an Argus Hub's data from the dashboard or the command line, and load it into Snowflake.
 ---
 
 # Export
 
-Export gives you the Hub's full dataset as a Snowflake-ready bundle,
+Export gives you the Argus Hub's full dataset as a Snowflake-ready bundle,
 either from the dashboard or the command line. Both paths produce the same
 contents; the CLI adds the option to load it straight into Snowflake.
 
 ## From the browser
 
 Open **Export** and click the download button. Your browser streams a zip
-straight to disk, so Hub never has to hold the whole archive in memory to
+straight to disk, so Argus Hub never has to hold the whole archive in memory to
 serve it.
 
 The zip contains one JSONL file per table (organizations, groups, users,
 clients, sessions, usage, tasks, interactions, invocations, session labels
-and hub labels), a `manifest.json` with the schema version and a row count
+and Argus Hub labels), a `manifest.json` with the schema version and a row count
 per table, and a `load.sql` with the Snowflake DDL and load statements for
 every table. API keys are never included, in the zip or anywhere else.
 
@@ -33,8 +33,8 @@ npx @agentdeploymentco/argus-hub export snowflake
 ```
 
 Without `--load`, this writes the same bundle to a timestamped folder and
-prints where `load.sql` landed. Point `--data-dir` at the Hub's data
-folder if you're not running the command from Hub's working directory.
+prints where `load.sql` landed. Point `--data-dir` at the Argus Hub's data
+folder if you're not running the command from the Argus Hub's working directory.
 
 Add `--load` to upload the bundle and swap it into Snowflake directly,
 passing the connection details:
@@ -65,4 +65,4 @@ See [Export Argus Hub data to Snowflake](https://github.com/Agent-Deployment-Co/
 in the Argus Hub repository for the full flag reference, authentication
 options and known limitations, including that exported files can contain
 personal data (emails, prompts, summaries) and should be handled with the
-same care as the Hub's own database.
+same care as the Argus Hub's own database.

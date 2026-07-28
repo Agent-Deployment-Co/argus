@@ -145,8 +145,8 @@ export default defineConfig({
           { text: 'Tasks', link: '/argus-hub/tasks' },
           { text: 'Tools', link: '/argus-hub/tools' },
           { text: 'Team', link: '/argus-hub/team' },
-          { text: 'Export', link: '/argus-hub/export' },
-          { text: 'Query Hub from an Agent', link: '/argus-hub/mcp' }
+          { text: 'MCP', link: '/argus-hub/mcp' },
+          { text: 'Export', link: '/argus-hub/export' }
         ]
       },
       {

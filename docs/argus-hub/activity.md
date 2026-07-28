@@ -4,7 +4,7 @@ description: What the Argus Hub Activity view shows, org-wide totals, trends aga
 
 # Activity
 
-Activity is Hub's home view: how much agent work the organization did in the
+Activity is Argus Hub's home view: how much agent work the organization did in the
 window you're looking at, and how that work is spread across people and
 [sources](/terminology#source). It opens with headline totals, then breaks
 those totals down over time, by model, by person and by source.
@@ -20,7 +20,7 @@ those totals down over time, by model, by person and by source.
 A filter bar sits above the view:
 
 - **Date** narrows the window, with quick presets or your own From and To
-  dates. Hub defaults to the last 30 days.
+  dates. Argus Hub defaults to the last 30 days.
 - **Sources** narrows to one agent.
 - **Group** narrows to one [group](/argus-hub/team#groups) of people, or to
   **Ungrouped** for people with no group assigned. It only appears once at

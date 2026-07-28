@@ -4,7 +4,7 @@ description: The per-person summary table, organizing people into groups, and ea
 
 # Team
 
-Team is the roster: every person whose Argus has ever synced to this Hub,
+Team is the roster: every person whose Argus has ever synced to this Argus Hub,
 what they've used, and when they last synced. It's also where you organize
 people into groups so Activity, Tasks and Tools can be scoped to a team
 rather than the whole organization.
@@ -27,9 +27,9 @@ Health view the single-client Argus app shows (see [Overview](/overview),
 
 ## Groups
 
-Groups are how you scope Hub's other views (Activity, Tasks, Tools) to a
+Groups are how you scope Argus Hub's other views (Activity, Tasks, Tools) to a
 team rather than the whole organization: a department, a pod, whatever
-division makes sense for you. Group names must be unique on a Hub.
+division makes sense for you. Group names must be unique on an Argus Hub.
 
 - **Create a group** from the button above the table, giving it a name.
 - **Rename** or **delete** a group from its section header. Deleting a

@@ -2,35 +2,35 @@
 description: Query an Argus Hub from an agent over MCP, the full tool list, filters, authentication and a worked example.
 ---
 
-# Query Hub from an agent
+# MCP
 
-Hub exposes its data through [MCP](https://modelcontextprotocol.io) at
+Argus Hub exposes its data through [MCP](https://modelcontextprotocol.io) at
 `POST /mcp`, so an agent can answer questions about the organization's
 usage directly, instead of someone opening the dashboard. It's read-only:
 nothing an agent sends through this endpoint changes what's synced or
-who's in it, apart from the label tools below, which only add or remove a
-Hub label.
+who's in it, apart from the label tools below, which only add or remove an
+Argus Hub label.
 
 ## Transport
 
 The endpoint uses the stateless Streamable HTTP transport: every request
-is a self-contained JSON-RPC call over a single POST to `/mcp`, and Hub
+is a self-contained JSON-RPC call over a single POST to `/mcp`, and Argus Hub
 answers it without any `initialize` handshake or session to keep alive.
 There's nothing to warm up and nothing cached between calls, so an MCP
 client can send `tools/list` or `tools/call` straight away.
 
 ## Authentication
 
-Authenticate with the Hub's admin password, the same one that unlocks the
+Authenticate with Argus Hub's admin password, the same one that unlocks the
 dashboard:
 
 ```text
 Authorization: Bearer <admin-password>
 ```
 
-A missing or wrong password gets rejected before Hub reads the request
-body. If Hub runs with no admin password configured, `/mcp` is open to
-anyone who can reach it, so set one for any Hub reachable outside your own
+A missing or wrong password gets rejected before Argus Hub reads the request
+body. If Argus Hub runs with no admin password configured, `/mcp` is open to
+anyone who can reach it, so set one for any Argus Hub reachable outside your own
 machine.
 
 For Claude Code:
@@ -72,9 +72,9 @@ roster, not a windowed report, so it's the tool to call first to find a
 | `query_tasks` | A paged, filterable list of tasks, with outcome counts for the filtered set. |
 | `query_task_quality` | Success, frustration and friction rates, outcomes over time, and the top failure signals. |
 | `query_tool_usage` | Which tools, skills and MCP servers people use, and how usage compares across sources. |
-| `list_labels` | Every [hub label](/argus-hub/tasks#hub-labels) defined on this Hub, with how many tasks carry it. |
-| `create_label` | Adds a new hub label. |
-| `set_task_label` | Applies or removes a hub label on one task. |
+| `list_labels` | Every [Argus Hub label](/argus-hub/tasks#argus-hub-labels) defined on this Argus Hub, with how many tasks carry it. |
+| `create_label` | Adds a new Argus Hub label. |
+| `set_task_label` | Applies or removes an Argus Hub label on one task. |
 
 A query tool with no matching data returns an empty result (an empty task
 list, an empty roster) rather than an error. `query_activity` and

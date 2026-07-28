@@ -1,12 +1,12 @@
 ---
-description: Which skills, tools, MCP servers and plugins the organization reaches for, aggregated across everyone syncing to a Hub.
+description: Which skills, tools, MCP servers and plugins the organization reaches for, aggregated across everyone syncing to an Argus Hub.
 ---
 
 # Tools
 
-Hub's Tools view covers the same ground as the single-client
+Argus Hub's Tools view covers the same ground as the single-client
 [Tools view](/metric-views#tools), skills, tools, MCP servers and plugins,
-aggregated across everyone syncing to the Hub, plus a handful of sections
+aggregated across everyone syncing to the Argus Hub, plus a handful of sections
 that only make sense once you're looking at more than one person's usage.
 
 The same filter bar as [Activity](/argus-hub/activity) applies here: date range,
@@ -29,7 +29,7 @@ servers make up the long tail beyond the heavily-used ones.
 
 A ranked table of the least-reached tools, skills and MCP servers, by call
 count and by how few distinct people ever use them. Unlike the
-single-client Tools view, Hub only sees what's actually invoked. It has no
+single-client Tools view, Argus Hub only sees what's actually invoked. It has no
 visibility into what's installed but never touched, so this section is
 strictly about low or single-person usage, not an enabled-but-unused
 comparison.
@@ -66,17 +66,17 @@ sessions, users and sources.
 
 ## Plugins
 
-Hub can only report a plugin as **used** or **not observed** in the
+Argus Hub can only report a plugin as **used** or **not observed** in the
 window. It runs server-side with no local install to inspect, so it can't
 tell you a plugin is enabled but unused the way the single-client view
-does. See [Tools](/metric-views#tools) for that distinction; Hub can only
+does. See [Tools](/metric-views#tools) for that distinction; Argus Hub can only
 show what actually got used, and by how many people.
 
 ## Shared vs. solo
 
 Which tools, skills and MCP servers are used by three or more distinct
 people, versus used by only one. Like the per-user rankings elsewhere in
-Hub, this stays hidden until the organization has enough people syncing
+Argus Hub, this stays hidden until the organization has enough people syncing
 that singling one out wouldn't be identifying. It's a quick way to spot a
 tool worth promoting to the whole team, or one that's meant to stay
 personal.
