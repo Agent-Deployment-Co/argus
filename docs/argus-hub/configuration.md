@@ -4,6 +4,10 @@ description: Configure Argus Hub's port, data directory and secret key, keep it 
 
 # Argus Hub: Configuration
 
+Argus Hub starts with one command and a generated secret key. From there, this page covers setting
+its port and data directory, keeping it running with a service manager, and keeping a deployment
+private on your network.
+
 ## Quick Start
 
 Argus Hub requires Node.js 20.17 or later, or Bun 1.0 or later.
@@ -122,7 +126,7 @@ The package is public, so no `docker login` is needed to pull it. Prefer pinning
 yourself (`docker build -t argus-hub .`) works the same way if you'd rather not pull a
 prebuilt image.
 
-`hub.env` should hold at least `HUB_SECRET_KEY` (see [Set up an Argus Hub](#set-up-an-argus-hub)) and,
+`hub.env` should hold at least `HUB_SECRET_KEY` (see [Quick Start](#quick-start)) and,
 if you want it pinned, `ADMIN_PASSWORD`. The image exposes `GET /healthz`, which returns `200 ok`
 without authentication for container health checks and Kubernetes liveness probes.
 
