@@ -9,6 +9,12 @@ what they've used, and when they last synced. It's also where you organize
 people into groups so Activity, Tasks and Tools can be scoped to a team
 rather than the whole organization.
 
+<div class="screenshot">
+
+![The Argus Hub Team table, people grouped into sections with sessions, tokens, cost and last-sync time.](../images/screenshots/argus-hub-team@1920x1080@2.webp)
+
+</div>
+
 ## The table
 
 People are listed in sections, one per group plus a trailing **Ungrouped**
@@ -18,12 +24,6 @@ sessions, tokens, estimated cost and when that person last synced. Click a
 name to open their own activity page: the same Activity/Projects/Tools/
 Health view the single-client Argus app shows (see [Overview](/overview),
 [Metric Views](/metric-views)), scoped to their usage alone.
-
-<div class="screenshot">
-
-![The Argus Hub Team table, people grouped into sections with sessions, tokens, cost and last-sync time.](../images/screenshots/argus-hub-team@1920x1080@2.webp)
-
-</div>
 
 ## Groups
 
