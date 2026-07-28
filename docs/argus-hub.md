@@ -5,8 +5,8 @@ description: Run an Argus Hub so a team can pool its usage into one org-wide das
 # Argus Hub
 
 Argus Hub is a self-hosted server that collects usage data from multiple Argus clients and
-presents an org-wide [dashboard](/terminology#dashboard). It is the on-premises alternative to
-the hosted `argus-dash` backend.
+presents an org-wide [dashboard](/terminology#dashboard). Your company runs it on your own
+network; nothing about it is hosted for you.
 
 Each person points Argus at the Hub and uses the normal [sync](/terminology#sync) command. Hub
 receives the usage snapshot at `POST /api/sync`, combines it in one database and tags it by user.
@@ -15,9 +15,10 @@ machine, as do their BYO model API keys.
 
 ## Set up a Hub
 
-Hub requires Node.js 20.17 or later, or Bun 1.0 or later. Start it with:
+Hub requires Node.js 20.17 or later, or Bun 1.0 or later. Generate a secret key and start it with:
 
 ```bash
+export HUB_SECRET_KEY="$(openssl rand -base64 32)"  # save this value
 npx @agentdeploymentco/argus-hub serve --port 4343
 ```
 
@@ -28,6 +29,11 @@ The **API key** authenticates uploads from Argus clients. The **admin password**
 dashboard at `http://localhost:4343/login` and the Hub's read-only MCP endpoint. Set
 `ADMIN_PASSWORD` before starting Hub to keep the same dashboard password across restarts. If you
 do not set it, Hub generates a new password each time it starts.
+
+`HUB_SECRET_KEY` is optional, but without it Hub starts with a warning and disables API-key-based
+task LLM providers in **Settings**, since it has nothing to encrypt those keys with in `hub.db`.
+Set it once, keep it stable across restarts, and back it up separately from `hub.db`: losing it
+makes any provider keys already stored there unreadable.
 
 ::: warning Keep the credentials private
 The API key allows clients to upload data. The admin password allows access to the organization's
@@ -92,6 +98,7 @@ flags. A later source takes precedence over an earlier one.
 |---|---|---|---|---|
 | `--port` | `HUB_PORT` | `port` | `4343` | Port Hub listens on |
 | `--data-dir` | `HUB_DATA_DIR` | `dataDir` | `./data` | Folder containing `hub.db` |
+| None | `HUB_SECRET_KEY` | None | None | Base64 encoding of 32 random bytes; encrypts task LLM provider keys stored in `hub.db`. Without it, those providers stay disabled |
 | None | `ADMIN_PASSWORD` | None | Random | Dashboard and MCP password |
 | None | `HUB_INSECURE_COOKIE_HOSTS` | None | None | Hostnames allowed to use a non-`Secure` cookie for private plain-HTTP deployments |
 
@@ -154,29 +161,38 @@ password.
 
 ### Docker
 
-Build the image and persist `/data`, which contains `hub.db`:
+Pull the published image and persist `/data`, which contains `hub.db`:
 
 ```bash
-docker build -t argus-hub .
+docker pull ghcr.io/agent-deployment-co/argus-hub:latest
 docker run -d \
   --name argus-hub \
   -p 4343:4343 \
   -v argus-hub-data:/data \
-  argus-hub
+  --env-file hub.env \
+  ghcr.io/agent-deployment-co/argus-hub:latest
 ```
 
-Pass `ADMIN_PASSWORD` with `-e` or an env file. The image exposes `GET /healthz`, which returns
-`200 ok` without authentication for container health checks and Kubernetes liveness probes.
+The package is public, so no `docker login` is needed to pull it. Prefer pinning to a specific
+`<version>` or `sha-<commit>` tag over `latest` outside local testing. Building the image
+yourself (`docker build -t argus-hub .`) works the same way if you'd rather not pull a
+prebuilt image.
+
+`hub.env` should hold at least `HUB_SECRET_KEY` (see [Set up a Hub](#set-up-a-hub)) and, if you
+want it pinned, `ADMIN_PASSWORD`. The image exposes `GET /healthz`, which returns `200 ok`
+without authentication for container health checks and Kubernetes liveness probes.
 
 For Docker Compose, persist the same data volume:
 
 ```yaml
 services:
   argus-hub:
-    build: .
+    image: ghcr.io/agent-deployment-co/argus-hub:latest
     restart: unless-stopped
     ports:
       - "4343:4343"
+    env_file:
+      - hub.env
     volumes:
       - argus-hub-data:/data
 
@@ -210,15 +226,21 @@ each covered in depth under **Using Argus Hub** in the nav:
 | View | What you can see |
 |---|---|
 | [Activity](/hub-activity) | Usage and cost for the whole organization, trended against the prior window |
-| [Tasks](/hub-tasks) | Extracted tasks, outcomes, frustration and friction, top failure signals, and hub labels |
+| [Tasks](/hub-tasks) | Extracted tasks, outcomes, frustration and friction, top failure signals |
 | [Tools](/hub-tools) | Tool, skill and MCP server usage across the organization |
 | [Team](/hub-team) | Per-user sessions, tokens, estimated cost, last-sync time and groups |
+| Labels | Hub-wide task labels — create, apply and remove them; see [Hub labels](/hub-tasks#hub-labels) |
 | [Export](/hub-export) | Download the full dataset, or load it into Snowflake |
 
 The group picker appears after at least one client syncs and someone has been put in a group.
 Leave it on **All** for an organization-wide view, or choose a group to scope Activity, Tasks and
 Tools. The Team table lists everyone by group, and clicking a row opens that person's own
 activity view.
+
+**Settings** holds the task LLM provider Hub will use for organization-level task labeling.
+Nothing in Hub calls this provider yet beyond a **Test connection** check on the Settings page
+itself; it's reserved for a future feature. Any API key you save there is encrypted in `hub.db`
+with `HUB_SECRET_KEY`.
 
 ## Query Hub from an agent
 
