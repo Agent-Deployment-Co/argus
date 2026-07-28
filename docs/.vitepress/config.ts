@@ -139,7 +139,7 @@ export default defineConfig({
       {
         text: 'Using Argus Hub',
         items: [
-          { text: 'Overview', link: '/argus-hub/' },
+          { text: 'Overview', link: '/argus-hub' },
           { text: 'Configuration', link: '/argus-hub/configuration' },
           { text: 'Activity', link: '/argus-hub/activity' },
           { text: 'Tasks', link: '/argus-hub/tasks' },

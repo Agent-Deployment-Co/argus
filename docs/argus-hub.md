@@ -13,7 +13,7 @@ Nothing is forwarded anywhere else. The raw prompt and response text stays on ea
 machine, as do their BYO model API keys.
 
 Setting an Argus Hub up, including generating its secret key, API key and admin password, is covered in
-[Configuration](/argus-hub/configuration#set-up-an-argus-hub).
+[Configuration](/argus-hub/configuration#quick-start).
 
 ## Connect Argus clients
 
