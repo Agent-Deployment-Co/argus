@@ -148,7 +148,7 @@ provider's model, command and API-key variable separate.
     "provider": "openai",
     "providerConfigs": {
       "openai": {
-        "model": "gpt-5.4-nano"
+        "model": "gpt-5.6-luna"
       },
       "claude-api": {
         "model": "claude-haiku-4-5"
@@ -181,7 +181,7 @@ Provider defaults:
 | `claude-cli` | `haiku` | None | `model`, `claudeCliPath`, `effort` |
 | `command` | None | None | `command` |
 | `claude-api` | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` | `model`, `apiKeyEnv`, `maxTokens`, `effort` |
-| `openai` | `gpt-5.4-nano` | `OPENAI_API_KEY` | `model`, `baseUrl`, `apiKeyEnv`, `maxTokens`, `effort` |
+| `openai` | `gpt-5.6-luna` | `OPENAI_API_KEY` | `model`, `baseUrl`, `apiKeyEnv`, `maxTokens`, `effort` |
 | `gemini` | `gemini-3.1-flash-lite` | `GEMINI_API_KEY` | `model`, `apiKeyEnv`, `maxTokens`, `effort` |
 | `openrouter` | None | `OPENROUTER_API_KEY` | `model`, `apiKeyEnv`, `maxTokens`, `effort` |
 | `off` | None | None | None |
