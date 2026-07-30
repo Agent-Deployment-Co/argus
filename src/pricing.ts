@@ -19,9 +19,13 @@ const DEFAULTS: Record<string, Price> = {
   opus: { input: 15, output: 75, cacheRead: 1.5, cacheWrite5m: 18.75, cacheWrite1h: 30 },
   sonnet: { input: 3, output: 15, cacheRead: 0.3, cacheWrite5m: 3.75, cacheWrite1h: 6 },
   haiku: { input: 1, output: 5, cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2 },
+  "gpt-5.6": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.3": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
   "codex-mini": { input: 1.5, output: 6, cacheRead: 0.375, cacheWrite5m: 0, cacheWrite1h: 0 },
@@ -52,7 +56,11 @@ function priceFor(model: string, usage?: Usage): Price | null {
   if (m.includes("sonnet")) return table.sonnet!;
   if (m.includes("haiku")) return table.haiku!;
   if (m.includes("codex-mini")) return table["codex-mini"]!;
+  if (m.includes("gpt-5.6-luna")) return table["gpt-5.6-luna"]!;
+  if (m.includes("gpt-5.6-terra")) return table["gpt-5.6-terra"]!;
+  if (m.includes("gpt-5.6")) return table["gpt-5.6"]!;
   if (m.includes("gpt-5.5")) return table["gpt-5.5"]!;
+  if (m.includes("gpt-5.4-nano")) return table["gpt-5.4-nano"]!;
   if (m.includes("gpt-5.4-mini") || m.includes("gpt-5.4 mini")) return table["gpt-5.4-mini"]!;
   if (m.includes("gpt-5.4")) return table["gpt-5.4"]!;
   if (m.includes("gpt-5.3") || m.includes("gpt-5.2")) return table["gpt-5.3"]!;

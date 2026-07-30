@@ -27,6 +27,10 @@ describe("cost", () => {
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-mini")).toBeCloseTo(4.5, 6);
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.3-codex")).toBeCloseTo(1.75, 6);
     expect(cost({ ...z, cacheRead: 1_000_000 }, "codex-mini-latest")).toBeCloseTo(0.375, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6-luna")).toBeCloseTo(0.2, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5.6-terra")).toBeCloseTo(12, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6")).toBeCloseTo(5, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-nano")).toBeCloseTo(1.25, 6);
   });
 
   test("prices Gemini models and the 2.5 Pro long-context tier", () => {
