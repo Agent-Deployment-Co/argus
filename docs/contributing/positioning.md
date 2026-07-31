@@ -180,7 +180,7 @@ Being clear about this saves more words than any description.
 
 ## Related projects
 
-Other people are working on this too. These are two we've read, and there are
+Other people are working on this too. These are three we've read, and there are
 others we haven't. When someone asks how Argus relates to them, answer plainly,
 and send them elsewhere when the other tool is the better fit.
 
@@ -205,9 +205,27 @@ The two multi-player setups ask different things of you. An
 [Argus Hub](/argus-hub) starts with one command and is joined with a URL and a key
 in Settings. AgentsView expects a PostgreSQL instance you provision and run.
 
-Argus's niche is the reader neither of them is aimed at: someone doing business
-work rather than writing software, who wants to know which of that work went
-nowhere. That's a different reader, not a better one.
+**[Contextify](https://contextify.sh/)** keeps a private, searchable timeline of
+Claude Code and Codex sessions, so the history outlives the 30 days Claude Code
+keeps transcripts by default. It watches sessions as they happen, summarizes them
+on the machine with Apple Intelligence, and can sync across machines through its
+cloud or a server you run yourself. Someone whose problem is losing their session
+history is well served there. Argus overlaps on local indexing, full-text search
+and model-written summaries.
+
+It's a Mac app on Apple Silicon plus a CLI, and there's a Linux CLI that pushes
+sessions to the cloud so work done over SSH on a remote box lands in the same
+index. The CLI also gives Claude Code itself a way to search past conversations,
+which is not something Argus does.
+
+Local use on one Mac is free and needs no account. Commercial use, cloud sync
+past two Macs, and shared team search are paid. The self-hosted version is
+licensed under the Functional Source License, which becomes Apache 2.0 two years
+after each release, so it is source-available rather than open source today.
+
+Argus's niche is the reader none of them is aimed at: someone doing business work
+rather than writing software, who wants to know which of that work went nowhere.
+That's a different reader, not a better one.
 
 Two rules:
 
@@ -217,8 +235,8 @@ Two rules:
 - **Don't characterize a project we haven't read**, and that includes saying a
   tool lacks something. Check first, or say nothing.
 
-Both projects are active and change often. Re-read them before repeating anything
-from this page.
+All three projects are active and change often. Re-read them before repeating
+anything from this page.
 
 ## Surface inventory
 
