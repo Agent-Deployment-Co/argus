@@ -17,6 +17,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4MjdBRDIwQkFGMjczNUMKUldSY2MvSzZJSzBuU0R2WDhNWnJCRTB6OXBhL2FFZDJTTVRGdTVpd0hSMXVMSlJMRzF6SjdGUGsK",
       "endpoints": [
+        "https://argus-downloads.agentdeployment.co/update/{{target}}/{{arch}}/{{current_version}}",
         "https://github.com/Agent-Deployment-Co/argus/releases/latest/download/latest.json"
       ]
     }
