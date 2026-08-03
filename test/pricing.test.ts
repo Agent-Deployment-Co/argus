@@ -6,8 +6,17 @@ const z = { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 
 describe("cost", () => {
   test("prices 1M input tokens per model family at list rates", () => {
     expect(cost({ ...z, input: 1_000_000 }, "claude-sonnet-4-6")).toBeCloseTo(3, 6);
-    expect(cost({ ...z, input: 1_000_000 }, "claude-opus-4-8")).toBeCloseTo(15, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "claude-opus-4-8")).toBeCloseTo(5, 6);
     expect(cost({ ...z, input: 1_000_000 }, "claude-haiku-4-5-20251001")).toBeCloseTo(1, 6);
+  });
+
+  test("prices legacy/deprecated Claude tiers and the newest models at their own rates", () => {
+    expect(cost({ ...z, input: 1_000_000 }, "claude-opus-4-1-20250805")).toBeCloseTo(15, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "claude-opus-4-20250514")).toBeCloseTo(15, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "claude-opus-5")).toBeCloseTo(5, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "claude-sonnet-5")).toBeCloseTo(2, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "claude-haiku-3-5-20241022")).toBeCloseTo(0.8, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "claude-fable-5")).toBeCloseTo(10, 6);
   });
 
   test("prices output and cache classes", () => {
@@ -27,6 +36,10 @@ describe("cost", () => {
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-mini")).toBeCloseTo(4.5, 6);
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.3-codex")).toBeCloseTo(1.75, 6);
     expect(cost({ ...z, cacheRead: 1_000_000 }, "codex-mini-latest")).toBeCloseTo(0.375, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6-luna")).toBeCloseTo(0.2, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5.6-terra")).toBeCloseTo(12, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6")).toBeCloseTo(5, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-nano")).toBeCloseTo(1.25, 6);
   });
 
   test("prices Gemini models and the 2.5 Pro long-context tier", () => {

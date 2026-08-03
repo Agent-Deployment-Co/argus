@@ -58,8 +58,8 @@ describe("usage builders", () => {
     ];
     const { bySource } = buildUsageBySource(rows, [{ source: "claude", sessions: 3 }]);
     const claude = bySource.find((s) => s.name === "claude")!;
-    // opus input 15/Mtok + haiku input 1/Mtok, priced separately then summed.
-    expect(claude.cost).toBeCloseTo((1000 * 15 + 1000 * 1) / 1e6, 9);
+    // opus input 5/Mtok + haiku input 1/Mtok, priced separately then summed.
+    expect(claude.cost).toBeCloseTo((1000 * 5 + 1000 * 1) / 1e6, 9);
     expect(claude.meta?.sessions).toBe(3);
   });
 
