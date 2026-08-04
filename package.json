@@ -16,7 +16,6 @@
     "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "bench:cache": "bun run scripts/bench-cache.ts",
     "screenshot": "bun scripts/screenshot.ts",
-    "og-image": "bun scripts/og-image.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "build:compile": "bun run build:web && bun build --compile src/cli.ts --outfile dist/argus",
     "bump-version": "bun run scripts/bump-version.ts",

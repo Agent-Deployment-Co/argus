@@ -70,14 +70,29 @@ export default defineConfig({
     ['meta', { property: 'og:title', content: 'Argus' }],
     ['meta', { property: 'og:description', content: SITE_DESCRIPTION }],
     ['meta', { property: 'og:url', content: SITE_URL }],
-    // Regenerate with `bun run og-image` after changing the wordmark or the
-    // Activity screenshot. Absolute URL: most platforms won't resolve a relative one.
-    ['meta', { property: 'og:image', content: `${SITE_URL}/og-image.png` }],
+    // The share card is a designed brand asset, not generated from this repo:
+    // it comes from the Argus identity source, so update it there and copy the
+    // 1200x630 PNG in. Absolute URL: most platforms won't resolve a relative one.
+    ['meta', { property: 'og:image', content: `${SITE_URL}/share-card.png` }],
+    ['meta', { property: 'og:image:type', content: 'image/png' }],
     ['meta', { property: 'og:image:width', content: '1200' }],
     ['meta', { property: 'og:image:height', content: '630' }],
-    ['meta', { property: 'og:image:alt', content: 'The Argus dashboard, showing sessions, tokens and estimated cost.' }],
+    [
+      'meta',
+      {
+        property: 'og:image:alt',
+        content: 'The Argus arch logo, with the line "Find and fix wasted agent work."'
+      }
+    ],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
-    ['meta', { name: 'twitter:image', content: `${SITE_URL}/og-image.png` }]
+    ['meta', { name: 'twitter:image', content: `${SITE_URL}/share-card.png` }],
+    [
+      'meta',
+      {
+        name: 'twitter:image:alt',
+        content: 'The Argus arch logo, with the line "Find and fix wasted agent work."'
+      }
+    ]
   ],
   // Per-page social metadata. VitePress merges these into the page's head, and
   // duplicate og:* keys would both render, so replace the defaults in place.

@@ -235,6 +235,7 @@ with two different ideas of what Argus is.
 | Docs meta description | `docs/.vitepress/config.ts` (`description`) | One-liner |
 | Docs `og:title` | `docs/.vitepress/config.ts` (`head`) | Promise |
 | Docs `og:description` | `docs/.vitepress/config.ts` (`head`) | One-liner |
+| Docs share card | `docs/public/share-card.png` (the line set in the image) | Promise |
 | Docs lede | `docs/index.md` | Lede |
 | About page | `docs/about.md` | Lede |
 | npm package | `package.json` (`description`), shipped by `scripts/build-npm-packages.ts` | One-liner |
@@ -242,7 +243,9 @@ with two different ideas of what Argus is.
 | Web app title | `web/index.html` | n/a |
 | Desktop app | `desktop/src-tauri/tauri.conf.json`, `desktop/ui/about.html` | n/a |
 
-The demo site serves the web app, so it inherits `web/index.html`.
+The demo site serves the web app, so it inherits `web/index.html`. The share card
+sets its line as type inside the image, so changing the promise means regenerating
+the card in the identity source and copying the new 1200x630 PNG in.
 
 ## Before you ship outward-facing copy
 
