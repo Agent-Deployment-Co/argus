@@ -39,7 +39,11 @@ describe("cost", () => {
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6-luna")).toBeCloseTo(0.2, 6);
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.6-terra")).toBeCloseTo(12, 6);
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6")).toBeCloseTo(5, 6);
-    expect(cost({ ...z, cacheWrite5m: 1_000_000 }, "gpt-5.6")).toBeCloseTo(6.25, 6);
+    // GPT-5.6 cache writes are split out for visibility but not billed.
+    expect(cost({ ...z, cacheWrite5m: 1_000_000 }, "gpt-5.6")).toBeCloseTo(0, 6);
+    // Older Codex tiers mirror their input rate, so splitting writes out can't drop their cost.
+    expect(cost({ ...z, cacheWrite5m: 1_000_000 }, "gpt-5.5")).toBeCloseTo(5, 6);
+    expect(cost({ ...z, cacheWrite5m: 1_000_000 }, "codex-mini-latest")).toBeCloseTo(1.5, 6);
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-nano")).toBeCloseTo(1.25, 6);
   });
 

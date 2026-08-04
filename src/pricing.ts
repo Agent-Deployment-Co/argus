@@ -13,7 +13,8 @@ export interface Price {
 
 // Static defaults (USD / Mtok). Anthropic cache-write multipliers follow its published
 // model: 5m write = 1.25x input, 1h write = 2x input, cache read = 0.1x input.
-// OpenAI/Codex and Gemini cached input is represented in the shared cacheRead bucket.
+// OpenAI/Codex and Gemini cached input is represented in the shared cacheRead bucket; Codex cache
+// *writes*, which GPT-5.6 reports separately, land in cacheWrite5m (see the gpt-5.6 note below).
 // Override any of these via $ARGUS_CONFIG_DIR/pricing.json.
 const DEFAULTS: Record<string, Price> = {
   fable: { input: 10, output: 50, cacheRead: 1, cacheWrite5m: 12.5, cacheWrite1h: 20 },
@@ -27,17 +28,21 @@ const DEFAULTS: Record<string, Price> = {
   haiku: { input: 1, output: 5, cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2 },
   // Haiku 3.5, retired except on Bedrock/Google Cloud.
   "haiku-legacy": { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite5m: 1, cacheWrite1h: 1.6 },
-  // OpenAI bills GPT-5.6 cache writes at 1.25x the uncached input rate.
-  "gpt-5.6": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 0 },
-  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite5m: 2.5, cacheWrite1h: 0 },
-  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite5m: 0.25, cacheWrite1h: 0 },
-  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "gpt-5.3": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "codex-mini": { input: 1.5, output: 6, cacheRead: 0.375, cacheWrite5m: 0, cacheWrite1h: 0 },
+  // GPT-5.6 cache writes are not billed: the parser splits them out of `input` for visibility, and
+  // no published OpenAI rate charges a write premium, so they price at 0.
+  "gpt-5.6": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite5m: 0, cacheWrite1h: 0 },
+  // Older Codex tiers are not known to report cache writes. If one ever does, the parser would move
+  // those tokens out of `input`, so these mirror each tier's input rate to keep cost from dropping.
+  // (Deliberately unlike gpt-5.6 above, whose write accounting is confirmed unbilled.)
+  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 5, cacheWrite1h: 0 },
+  "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 2.5, cacheWrite1h: 0 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite5m: 0.75, cacheWrite1h: 0 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite5m: 0.2, cacheWrite1h: 0 },
+  "gpt-5.3": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite5m: 1.75, cacheWrite1h: 0 },
+  "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 1.25, cacheWrite1h: 0 },
+  "codex-mini": { input: 1.5, output: 6, cacheRead: 0.375, cacheWrite5m: 1.5, cacheWrite1h: 0 },
   "gemini-2.5-pro": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gemini-2.5-pro-long": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite5m: 0, cacheWrite1h: 0 },

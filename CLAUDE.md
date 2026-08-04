@@ -156,6 +156,9 @@ you'd cause a bug by not knowing:
   `message.id` (first wins) because resumed/compacted sessions re-append earlier messages verbatim.
   Claude and Codex have **different transcript shapes**, parsed by separate branches; cache accounting
   splits Anthropic's 5m/1h ephemeral buckets and treats Codex `cached_input_tokens` as a cache **read**.
+  Codex may report either counter top-level or nested under `input_tokens_details` (GPT-5.6 reports
+  cache **writes** there), and keeps the legacy top-level key at 0 once it moves — so read the
+  **largest** candidate, never the first present one.
 - **Indexing is the sole writer of the reconciled session data** (`argus.db`'s `resolved_*` rows): it
   reconciles then materializes at write time, so consumers `SELECT` finished rows and never reconcile
   on read. `serve` and `sync` write too, but only their own state — `serve` persists user actions
