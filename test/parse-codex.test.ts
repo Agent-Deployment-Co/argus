@@ -207,6 +207,8 @@ describe("Codex transcript fragments", () => {
           info: {
             last_token_usage: {
               input_tokens: 100,
+              // Codex still emits the legacy top-level counter, zeroed, beside the nested details.
+              cached_input_tokens: 0,
               input_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
               output_tokens: 5,
               total_tokens: 105,

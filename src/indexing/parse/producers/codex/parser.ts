@@ -100,20 +100,28 @@ function numericToken(value: unknown): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/** The largest of several candidate spellings for one token counter. */
+function maxToken(...values: unknown[]): number {
+  return values.reduce<number>((best, value) => Math.max(best, numericToken(value)), 0);
+}
+
 
 function normalizeCodexUsage(raw: unknown): Usage {
   const usage = emptyUsage();
   const values = objectValue(raw);
   const inputDetails = objectValue(values.input_tokens_details);
   const input = numericToken(values.input_tokens);
-  const cached = numericToken(values.cached_input_tokens ?? inputDetails.cached_tokens);
+  // Codex keeps serializing the legacy top-level counters as 0 once it moves a value into
+  // input_tokens_details, so take the largest candidate rather than the first present one:
+  // `??` would let that stale 0 mask the nested count.
+  const cached = maxToken(values.cached_input_tokens, inputDetails.cached_tokens);
   // GPT-5.6 reports cache writes in input_tokens_details. Newer Codex versions may copy this
   // through as a top-level field, so accept both shapes while old transcripts remain valid.
-  const cacheWrite = numericToken(
-    values.cache_write_tokens ??
-      values.cache_write_input_tokens ??
-      inputDetails.cache_write_tokens ??
-      inputDetails.cache_write_input_tokens,
+  const cacheWrite = maxToken(
+    values.cache_write_tokens,
+    values.cache_write_input_tokens,
+    inputDetails.cache_write_tokens,
+    inputDetails.cache_write_input_tokens,
   );
   usage.input = Math.max(input - cached - cacheWrite, 0);
   usage.cacheRead = cached;
@@ -123,9 +131,8 @@ function normalizeCodexUsage(raw: unknown): Usage {
   usage.output = numericToken(values.output_tokens);
 
   const total = numericToken(values.total_tokens);
-  if (totalTokens(usage) === 0 && total > 0) {
-    usage.input = Math.max(total - usage.output - cached - cacheWrite, 0);
-  }
+  // Only reachable when every bucket came back 0, so there is nothing to subtract off the total.
+  if (totalTokens(usage) === 0 && total > 0) usage.input = total;
   return usage;
 }
 
