@@ -39,6 +39,7 @@ describe("cost", () => {
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6-luna")).toBeCloseTo(0.2, 6);
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.6-terra")).toBeCloseTo(12, 6);
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6")).toBeCloseTo(5, 6);
+    expect(cost({ ...z, cacheWrite5m: 1_000_000 }, "gpt-5.6")).toBeCloseTo(6.25, 6);
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-nano")).toBeCloseTo(1.25, 6);
   });
 

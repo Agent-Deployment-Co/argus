@@ -10,6 +10,7 @@ export interface Usage {
   input: number;
   output: number;
   cacheRead: number;
+  /** Anthropic's 5-minute cache-write bucket, or a provider-reported write with no TTL. */
   cacheWrite5m: number;
   cacheWrite1h: number;
 }

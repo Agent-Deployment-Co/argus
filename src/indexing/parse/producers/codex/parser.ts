@@ -41,7 +41,7 @@ export const CODEX_ROOT_ID = CODEX_SESSIONS_ROOT_ID;
 export const CODEX_TRANSCRIPT_PARSER: ParserDescriptor = {
   name: "codex-jsonl",
   source: "codex",
-  version: "9",
+  version: "10",
 };
 export const CODEX_PARSER = CODEX_TRANSCRIPT_PARSER;
 
@@ -104,14 +104,28 @@ function numericToken(value: unknown): number {
 function normalizeCodexUsage(raw: unknown): Usage {
   const usage = emptyUsage();
   const values = objectValue(raw);
+  const inputDetails = objectValue(values.input_tokens_details);
   const input = numericToken(values.input_tokens);
-  const cached = numericToken(values.cached_input_tokens);
-  usage.input = Math.max(input - cached, 0);
+  const cached = numericToken(values.cached_input_tokens ?? inputDetails.cached_tokens);
+  // GPT-5.6 reports cache writes in input_tokens_details. Newer Codex versions may copy this
+  // through as a top-level field, so accept both shapes while old transcripts remain valid.
+  const cacheWrite = numericToken(
+    values.cache_write_tokens ??
+      values.cache_write_input_tokens ??
+      inputDetails.cache_write_tokens ??
+      inputDetails.cache_write_input_tokens,
+  );
+  usage.input = Math.max(input - cached - cacheWrite, 0);
   usage.cacheRead = cached;
+  // Usage has two Anthropic TTL buckets. A provider-reported write without a TTL uses the first
+  // bucket so it is retained by the existing store, rollups, and cache-write chart.
+  usage.cacheWrite5m = cacheWrite;
   usage.output = numericToken(values.output_tokens);
 
   const total = numericToken(values.total_tokens);
-  if (totalTokens(usage) === 0 && total > 0) usage.input = total;
+  if (totalTokens(usage) === 0 && total > 0) {
+    usage.input = Math.max(total - usage.output - cached - cacheWrite, 0);
+  }
   return usage;
 }
 

@@ -58,7 +58,7 @@ describe("Codex fragment discovery", () => {
     expect(createCodexTranscriptParserAdapter().parser).toEqual({
       name: "codex-jsonl",
       source: "codex",
-      version: "9",
+      version: "10",
     });
   });
 });
@@ -178,6 +178,74 @@ describe("Codex transcript fragments", () => {
     expect(fragment.facts.invocations.some((invocation) => invocation.name === "exec_command")).toBe(
       false,
     );
+  });
+
+  test("captures GPT-5.6 cache writes from nested and flat Codex usage shapes", () => {
+    const file = createFileIdentity({
+      source: "codex",
+      rootId: "test",
+      role: "transcript",
+      relativePath: "cache-writes.jsonl",
+      path: "/tmp/cache-writes.jsonl",
+    });
+    const raw = [
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "cache-writes", cwd: "/tmp" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:01.000Z",
+        type: "turn_context",
+        payload: { model: "gpt-5.6" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 100,
+              input_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+              output_tokens: 5,
+              total_tokens: 105,
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-11T15:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 50,
+              cached_input_tokens: 20,
+              cache_write_tokens: 8,
+              output_tokens: 2,
+              total_tokens: 52,
+            },
+          },
+        },
+      }),
+    ].join("\n");
+
+    const fragment = parseCodexTranscript(raw, {
+      file,
+      fingerprint: {
+        sizeBytes: String(Buffer.byteLength(raw)),
+        mtimeNs: "1",
+        ctimeNs: "1",
+      },
+      attempts: 1,
+    });
+
+    expect(fragment.facts.messages.map((message) => message.usage)).toEqual([
+      { input: 60, output: 5, cacheRead: 30, cacheWrite5m: 10, cacheWrite1h: 0 },
+      { input: 22, output: 2, cacheRead: 20, cacheWrite5m: 8, cacheWrite1h: 0 },
+    ]);
   });
 
   test("does not carry pending calls past an invalid positive token boundary", () => {
