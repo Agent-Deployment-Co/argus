@@ -10,6 +10,7 @@ import {
   migrateTaskExtractionToSessionInterpretation,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
+  resolveDesktopMetrics,
   resolveDesktopStartAtLogin,
   resolveLogLevel,
   resolveReadOnly,
@@ -30,6 +31,7 @@ function tmpConfig(contents: string): string {
 const CONFIG_ENV = [
   "ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES",
   "ARGUS_AUTO_UPDATE_ENABLED",
+  "ARGUS_DESKTOP_METRICS",
   "ARGUS_DESKTOP_START_AT_LOGIN",
   "ARGUS_TASK_ENABLED",
   "ARGUS_TASK_PROVIDER",
@@ -364,6 +366,21 @@ describe("resolveDesktopStartAtLogin", () => {
   test("env var overrides argus.json", () => {
     process.env.ARGUS_DESKTOP_START_AT_LOGIN = "yes";
     expect(resolveDesktopStartAtLogin({}, { desktop: { startAtLogin: false } })).toBe(true);
+  });
+});
+
+describe("resolveDesktopMetrics", () => {
+  test("defaults to enabled, so update checks identify the install", () => {
+    expect(resolveDesktopMetrics({}, {})).toBe(true);
+  });
+
+  test("argus.json can make update checks anonymous", () => {
+    expect(resolveDesktopMetrics({}, { desktop: { metrics: false } })).toBe(false);
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_DESKTOP_METRICS = "no";
+    expect(resolveDesktopMetrics({}, { desktop: { metrics: true } })).toBe(false);
   });
 });
 

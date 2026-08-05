@@ -58,6 +58,10 @@ reaches GitHub along with the request. If you [sync](/terminology#sync) to an
 [Argus Hub](/terminology#argus-hub), it's the same identifier the Hub uses to tell
 your uploads apart from a colleague's.
 
+If you'd rather not be counted, turn off **Share update metrics** in
+[Settings](/settings). Argus still checks for updates and still installs them; the
+checks just don't say which install they came from.
+
 
 ## Argus Hub
 

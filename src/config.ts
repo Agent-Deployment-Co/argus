@@ -64,6 +64,9 @@ export interface ArgusConfig {
     /** Run the desktop app invisibly: no tray icon, no notifications, no first-run browser
      *  auto-open. Off by default. */
     silent?: boolean;
+    /** Let update checks identify this install by its client id, so installs can be counted rather
+     *  than raw hits. On by default; off makes the checks anonymous. */
+    metrics?: boolean;
   };
   /** Desktop app updates. Enabled by default so signed releases install automatically. */
   autoUpdate?: {
@@ -364,6 +367,22 @@ export const DESKTOP_SETTINGS = {
     path: "desktop.silent",
     env: "ARGUS_DESKTOP_SILENT",
     default: false,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+  // Whether the desktop app's update checks carry the per-install client id (the `x-argus-client`
+  // header, see `metrics_enabled` in desktop/src-tauri/src/lib.rs). Nothing in the CLI reads this:
+  // the CLI never checks for updates, and the desktop shell reads argus.json directly. It lives here
+  // so it resolves through the same chain as every other setting and appears in the Settings screen.
+  metrics: {
+    path: "desktop.metrics",
+    env: "ARGUS_DESKTOP_METRICS",
+    default: true,
+    ui: {
+      label: "Share update metrics",
+      description:
+        "Let update checks say which install they came from, so we can count how many people are running Argus. It sends a random identifier for this copy, never your session data. With it off, update checks are anonymous.",
+      control: "toggle",
+    },
     parse: parseBool,
   } satisfies Setting<boolean>,
 };
@@ -1148,6 +1167,14 @@ export function resolveDesktopStartAtLogin(
   file: ArgusConfig = loadConfig(),
 ): boolean {
   return resolveSetting(DESKTOP_SETTINGS.startAtLogin, flags, file);
+}
+
+/** Whether update checks identify this install by its client id. Defaults on. */
+export function resolveDesktopMetrics(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): boolean {
+  return resolveSetting(DESKTOP_SETTINGS.metrics, flags, file);
 }
 
 /** Whether to keep prompt/response text in the local store (#120). Defaults on; local-only. */

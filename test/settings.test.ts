@@ -62,10 +62,22 @@ describe("describeSettings", () => {
   test("General exposes startup, auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {
     const general = describeSettings({}).categories.find((c) => c.id === "general")!;
     const paths = general.sections.flatMap((s) => s.settings).map((s) => s.path);
-    expect(paths).toEqual(["desktop.startAtLogin", "autoUpdate.enabled", "hub.url", "log.level"]);
+    expect(paths).toEqual([
+      "desktop.startAtLogin",
+      "autoUpdate.enabled",
+      "desktop.metrics",
+      "hub.url",
+      "log.level",
+    ]);
     const startAtLogin = findSetting({}, "desktop.startAtLogin");
     expect(startAtLogin.ui.control).toBe("toggle");
     expect(startAtLogin.effectiveValue).toBe(true);
+    // Update metrics are opt-out: the toggle ships on, and turning it off is what makes an update
+    // check anonymous.
+    const metrics = findSetting({}, "desktop.metrics");
+    expect(metrics.ui.control).toBe("toggle");
+    expect(metrics.effectiveValue).toBe(true);
+    expect(findSetting({ desktop: { metrics: false } }, "desktop.metrics").effectiveValue).toBe(false);
     // Silent mode (#255) is config-only by design — never in the UI, even when set.
     expect(paths).not.toContain("desktop.silent");
     // The key isn't a plain (argus.json) setting — it's a fixed secret-store field under hub.url.

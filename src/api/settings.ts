@@ -176,7 +176,9 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
     label: "General",
     sections: [
       { label: "Startup", settings: [DESKTOP_SETTINGS.startAtLogin] },
-      { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled] },
+      // `desktop.metrics` sits with Updates because that's all it gates today: whether the update
+      // check identifies the install it came from.
+      { label: "Updates", settings: [AUTO_UPDATE_SETTINGS.enabled, DESKTOP_SETTINGS.metrics] },
       { label: "Argus Hub", settings: [HUB_SETTINGS.url], secrets: [HUB_KEY_FIELD] },
       // Terminal verbosity for this `argus serve` process. A change here applies to the running
       // logger immediately (see the PUT /api/settings handler), not just the next start.

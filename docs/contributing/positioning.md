@@ -159,7 +159,8 @@ Details worth having ready:
 - BYO API keys stay local.
 - The desktop app checks for updates on a schedule, through a download service we
   run. That's a network call, and it identifies the install with a random id (an
-  install, not a person). Disclose both rather than claiming nothing ever leaves.
+  install, not a person). Disclose both rather than claiming nothing ever leaves,
+  and mention that the Share update metrics setting turns the id off.
 
 The temptation is to say "nothing leaves your machine" because it's clean. It's
 also not quite true once sync or update checks are in play, and a privacy claim
