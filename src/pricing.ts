@@ -14,6 +14,7 @@ export interface Price {
 // Static defaults (USD / Mtok). Anthropic cache-write multipliers follow its published
 // model: 5m write = 1.25x input, 1h write = 2x input, cache read = 0.1x input.
 // OpenAI/Codex and Gemini cached input is represented in the shared cacheRead bucket.
+// Rates verified against each provider's published list pricing on 2026-08-05.
 // Override any of these via $ARGUS_CONFIG_DIR/pricing.json.
 const DEFAULTS: Record<string, Price> = {
   fable: { input: 10, output: 50, cacheRead: 1, cacheWrite5m: 12.5, cacheWrite1h: 20 },
@@ -27,21 +28,39 @@ const DEFAULTS: Record<string, Price> = {
   haiku: { input: 1, output: 5, cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2 },
   // Haiku 3.5, retired except on Bedrock/Google Cloud.
   "haiku-legacy": { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite5m: 1, cacheWrite1h: 1.6 },
+  // `gpt-5.6` is the sol tier, which is also published unsuffixed. The `-pro` tiers get
+  // no cached-input discount, so their cacheRead matches full input rate, not a tenth of it.
   "gpt-5.6": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.5-pro": { input: 30, output: 180, cacheRead: 30, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.4-pro": { input: 30, output: 180, cacheRead: 30, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gpt-5.3": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5.2-pro": { input: 21, output: 168, cacheRead: 21, cacheWrite5m: 0, cacheWrite1h: 0 },
+  // `gpt-5` also covers GPT-5.1, which shares the GPT-5 rate.
   "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5-nano": { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gpt-5-pro": { input: 15, output: 120, cacheRead: 15, cacheWrite5m: 0, cacheWrite1h: 0 },
   "codex-mini": { input: 1.5, output: 6, cacheRead: 0.375, cacheWrite5m: 0, cacheWrite1h: 0 },
+  // Gemini Pro tiers double above a 200k-token prompt; the Flash tiers are flat.
+  "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3.1-pro-long": { input: 4, output: 18, cacheRead: 0.4, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3-pro-long": { input: 4, output: 18, cacheRead: 0.4, cacheWrite5m: 0, cacheWrite1h: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gemini-2.5-pro": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gemini-2.5-pro-long": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite5m: 0, cacheWrite1h: 0 },
   "gemini-2.5-flash-lite": { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite5m: 0, cacheWrite1h: 0 },
-  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite5m: 0, cacheWrite1h: 0 },
 };
 
 let table: Record<string, Price> = DEFAULTS;
@@ -81,19 +100,39 @@ function priceFor(model: string, usage?: Usage): Price | null {
   if (m.includes("gpt-5.6-luna")) return table["gpt-5.6-luna"]!;
   if (m.includes("gpt-5.6-terra")) return table["gpt-5.6-terra"]!;
   if (m.includes("gpt-5.6")) return table["gpt-5.6"]!;
+  if (m.includes("gpt-5.5-pro")) return table["gpt-5.5-pro"]!;
   if (m.includes("gpt-5.5")) return table["gpt-5.5"]!;
+  if (m.includes("gpt-5.4-pro")) return table["gpt-5.4-pro"]!;
   if (m.includes("gpt-5.4-nano")) return table["gpt-5.4-nano"]!;
   if (m.includes("gpt-5.4-mini") || m.includes("gpt-5.4 mini")) return table["gpt-5.4-mini"]!;
   if (m.includes("gpt-5.4")) return table["gpt-5.4"]!;
+  if (m.includes("gpt-5.2-pro")) return table["gpt-5.2-pro"]!;
   if (m.includes("gpt-5.3") || m.includes("gpt-5.2")) return table["gpt-5.3"]!;
-  if (m.includes("gpt-5-codex") || /^gpt-5(?:-|$)/.test(m)) return table["gpt-5"]!;
-  if (m.includes("gemini-2.5-flash-lite")) return table["gemini-2.5-flash-lite"]!;
-  if (m.includes("gemini-2.5-flash")) return table["gemini-2.5-flash"]!;
-  if (m.includes("gemini-2.5-pro")) {
-    const promptTokens = (usage?.input || 0) + (usage?.cacheRead || 0);
-    return promptTokens > 200_000 ? table["gemini-2.5-pro-long"]! : table["gemini-2.5-pro"]!;
+  if (m.includes("gpt-5-pro")) return table["gpt-5-pro"]!;
+  if (m.includes("gpt-5-nano")) return table["gpt-5-nano"]!;
+  if (m.includes("gpt-5-mini")) return table["gpt-5-mini"]!;
+  // GPT-5.1 shares the GPT-5 rate; "gpt-5-codex" and bare "gpt-5" land here too.
+  if (m.includes("gpt-5-codex") || /^gpt-5(?:\.1)?(?:-|$)/.test(m)) return table["gpt-5"]!;
+  if (m.includes("gemini")) {
+    // Pro tiers step up above a 200k-token prompt (fresh input plus cached input).
+    const long = (usage?.input || 0) + (usage?.cacheRead || 0) > 200_000;
+    if (m.includes("gemini-3.6") && m.includes("flash")) return table["gemini-3.6-flash"]!;
+    if (m.includes("gemini-3.5-flash-lite")) return table["gemini-3.5-flash-lite"]!;
+    if (m.includes("gemini-3.5") && m.includes("flash")) return table["gemini-3.5-flash"]!;
+    if (m.includes("gemini-3.1-flash-lite")) return table["gemini-3.1-flash-lite"]!;
+    if (m.includes("gemini-3.1-pro")) {
+      return long ? table["gemini-3.1-pro-long"]! : table["gemini-3.1-pro"]!;
+    }
+    if (m.includes("gemini-3-pro")) {
+      return long ? table["gemini-3-pro-long"]! : table["gemini-3-pro"]!;
+    }
+    if (m.includes("gemini-3") && m.includes("flash")) return table["gemini-3-flash"]!;
+    if (m.includes("gemini-2.5-flash-lite")) return table["gemini-2.5-flash-lite"]!;
+    if (m.includes("gemini-2.5-flash")) return table["gemini-2.5-flash"]!;
+    if (m.includes("gemini-2.5-pro")) {
+      return long ? table["gemini-2.5-pro-long"]! : table["gemini-2.5-pro"]!;
+    }
   }
-  if (m.includes("gemini-3") && m.includes("flash")) return table["gemini-3-flash"]!;
   if (!unpriced.has(model)) unpriced.add(model);
   return null;
 }
