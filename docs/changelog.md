@@ -8,6 +8,29 @@ description: Every published Argus release, newest first, mirrored from the rele
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.24
+
+Published August 5, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.24).
+
+### Changes
+
+- Surface LLM Base URL in settings, and document model gateways ([#302](https://github.com/Agent-Deployment-Co/argus/pull/302))
+- Link the hosted read-only demo from the docs ([#304](https://github.com/Agent-Deployment-Co/argus/pull/304))
+- Sync Hub after settings changes ([#300](https://github.com/Agent-Deployment-Co/argus/pull/300))
+- Expand Argus Hub documentation ([#306](https://github.com/Agent-Deployment-Co/argus/pull/306))
+- Align in-app and CLI copy with the docs vocabulary ([#308](https://github.com/Agent-Deployment-Co/argus/pull/308))
+- Sessions: restore the project filter chip ([#307](https://github.com/Agent-Deployment-Co/argus/pull/307))
+- docs: fix Hub key-rotation instructions and stale dashboard/MCP filter docs ([#312](https://github.com/Agent-Deployment-Co/argus/pull/312))
+- Positioning canon, docs metadata and repo polish ([#315](https://github.com/Agent-Deployment-Co/argus/pull/315))
+- Expand Argus Hub docs into a multi-page section ([#317](https://github.com/Agent-Deployment-Co/argus/pull/317))
+- docs: fix broken image paths in Argus Hub overview ([#318](https://github.com/Agent-Deployment-Co/argus/pull/318))
+- Set gpt-5.6-luna as default OpenAI model; update OpenAI and Claude pricing ([#319](https://github.com/Agent-Deployment-Co/argus/pull/319))
+- Route desktop updates through Cloudflare ([#313](https://github.com/Agent-Deployment-Co/argus/pull/313))
+- Use the brand share card for the docs social image ([#321](https://github.com/Agent-Deployment-Co/argus/pull/321))
+- Bump version to 0.1.24 ([#323](https://github.com/Agent-Deployment-Co/argus/pull/323))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.23...argus-v0.1.24).
+
 ## Argus v0.1.23
 
 Published July 22, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.23).
