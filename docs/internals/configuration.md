@@ -69,11 +69,17 @@ The desktop tray app also checks for signed updates on an interval. Automatic in
 by default; set `autoUpdate.enabled` to `false` to leave available updates waiting behind the tray
 menu's `Install Update` item.
 
+Those checks carry the store's per-install `client_id` in an `x-argus-client` header, so the download
+service counts installs instead of raw hits. Set `desktop.metrics` to `false` to drop the header and
+leave the checks anonymous; `metrics_enabled` in `desktop/src-tauri/src/lib.rs` reads it at the point
+of use, so the change applies to the next check without a restart.
+
 | Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
 |---|---|---|---|
 | start at login | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | — |
 | automatic desktop updates | `autoUpdate.enabled` | `ARGUS_AUTO_UPDATE_ENABLED` | — |
 | update check interval, minutes | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | — |
+| identify the install on update checks | `desktop.metrics` | `ARGUS_DESKTOP_METRICS` | — |
 
 ```json
 {

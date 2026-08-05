@@ -79,6 +79,7 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 |---|---|---|---|---|---|
 | Automatic updates | Whether the desktop app installs updates automatically. | `autoUpdate.enabled` | `ARGUS_AUTO_UPDATE_ENABLED` | None | `true` |
 | Update check interval | Minutes between desktop update checks. | `autoUpdate.checkIntervalMinutes` | `ARGUS_AUTO_UPDATE_CHECK_INTERVAL_MINUTES` | None | `60` |
+| Share update metrics | Whether update checks identify which install they came from. | `desktop.metrics` | `ARGUS_DESKTOP_METRICS` | None | `true` |
 | Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `true` |
 | Silent desktop mode | Whether the desktop app runs without a tray icon, notifications or opening the browser on first run. | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | None | `false` |
 | Read-only mode | Whether `serve` runs read-only: labels, hiding sessions, refresh and Settings are hidden and their routes aren't mounted. | `readOnly` | `ARGUS_READ_ONLY` | `serve`: `--read-only` | `false` |

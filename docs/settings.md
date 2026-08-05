@@ -21,7 +21,11 @@ managed-settings behavior, see the [Settings Reference](/settings-reference).
   in the same place.
 - **Updates** controls whether the desktop app installs new versions
   automatically. With it off, Argus tells you when an update is ready and you
-  install it from the menu bar.
+  install it from the menu bar. **Share update metrics** is separate: it lets
+  those update checks say which install they came from, so we can count how many
+  people are running Argus. It sends a random identifier for your copy and none
+  of your session data, and turning it off makes the checks anonymous. See
+  [Privacy and Security](/privacy) for what that identifier is.
 - **Argus Hub** holds the address of your team's [Argus Hub](/terminology#argus-hub)
   and the key used to [sync](/terminology#sync) to it. Leave these blank if you
   aren't using a Hub.

@@ -33,7 +33,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
 mod proxy;
 
@@ -62,6 +62,10 @@ struct AppState {
     checking_update: AtomicBool,
     last_update_check_ms: Mutex<Option<u64>>,
     latest_version: Mutex<Option<String>>,
+    /// The per-install client id, remembered after the first successful read of the store. Holds
+    /// only successes: the store doesn't exist yet on a cold first launch, so a miss has to stay
+    /// retryable (see `cached_client_id`).
+    client_id: Mutex<Option<String>>,
 }
 
 const ABOUT_WINDOW_LABEL: &str = "about";
@@ -80,6 +84,15 @@ const PREFERRED_FRONT_PORT: u16 = 4242;
 /// notifies about on its own.
 const PROXY_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Request header carrying the per-install client id on updater requests, so the download service
+/// can count installs rather than raw hits. Same header and same id `sync` sends to a Hub
+/// (`x-argus-client` in src/push.ts). Sent unless `desktop.metrics` is off (`metrics_enabled`).
+const CLIENT_ID_HEADER: &str = "x-argus-client";
+/// How long `wait_for_client_id` gives the sidecar to mint the client id before the first update
+/// check of a launch goes out anonymous, and how often it looks. The sidecar writes the row when it
+/// first opens the store, normally a second or two after launch.
+const CLIENT_ID_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const CLIENT_ID_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged. Silent mode
 /// (`desktop.silent`) suppresses every notification; the setting is read here, at fire time, so a
@@ -184,8 +197,10 @@ fn mirror_sidecar_log(_bytes: &[u8]) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        append_sidecar_log_with_limit, parse_git_config_user_email, rotated_sidecar_log_file,
+        append_sidecar_log_with_limit, managed_metrics_from_candidates,
+        parse_git_config_user_email, rotated_sidecar_log_file,
     };
+    use std::fs;
     use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -228,6 +243,27 @@ mod tests {
         );
         assert_eq!(parse_git_config_user_email("[user]\nemail =   \n"), None);
         assert_eq!(parse_git_config_user_email(""), None);
+    }
+
+    #[test]
+    fn reads_managed_metrics_from_json() -> io::Result<()> {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "argus-managed-settings-test-{}-{}",
+                std::process::id(),
+                NEXT_TEST_DIR.fetch_add(1, Ordering::SeqCst)
+            ))
+            .join("managed.json");
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(&path, r#"{"desktop":{"metrics":false}}"#)?;
+
+        assert_eq!(
+            managed_metrics_from_candidates(&[path.clone()]),
+            Some(false)
+        );
+
+        fs::remove_dir_all(path.parent().unwrap())?;
+        Ok(())
     }
 
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
@@ -538,6 +574,75 @@ fn read_argus_config_json() -> Option<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(&text).ok()
 }
 
+/// Managed settings use the same candidate order as the CLI resolver: standard macOS managed
+/// preferences first, then the explicit file on `ARGUS_MANAGED_CONFIG_FILE`. On other platforms the
+/// explicit file is the only managed-settings source today.
+fn managed_config_candidates() -> Vec<PathBuf> {
+    let explicit = non_empty_env("ARGUS_MANAGED_CONFIG_FILE").map(PathBuf::from);
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut candidates = Vec::new();
+        let base = Path::new("/Library/Managed Preferences");
+        let user = os_username().or_else(|| {
+            home_dir().and_then(|dir| {
+                dir.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned)
+            })
+        });
+        if let Some(user) = user {
+            let user_base = base.join(user);
+            candidates.push(user_base.join("co.agentdeployment.argus.plist"));
+            candidates.push(user_base.join("co.agentdeployment.argus.json"));
+        }
+        candidates.push(base.join("co.agentdeployment.argus.plist"));
+        candidates.push(base.join("co.agentdeployment.argus.json"));
+        if let Some(explicit) = explicit {
+            candidates.push(explicit);
+        }
+        candidates
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        explicit.into_iter().collect()
+    }
+}
+
+/// Read one managed JSON or plist file. A malformed/unreadable candidate is skipped so a later
+/// candidate can still provide the managed settings, matching `src/managed-config.ts`.
+fn read_managed_config_json(path: &Path) -> Option<serde_json::Value> {
+    let text = if path.extension().and_then(|ext| ext.to_str()) == Some("plist") {
+        let path = path.to_str()?;
+        let output = Command::new("/usr/bin/plutil")
+            .args(["-convert", "json", "-o", "-", "--", path])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8(output.stdout).ok()?
+    } else {
+        std::fs::read_to_string(path).ok()?
+    };
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    value.is_object().then_some(value)
+}
+
+/// Resolve `desktop.metrics` from the first managed settings file that parses, preserving the
+/// managed loader's rule that an invalid/missing value falls through to user-controlled layers.
+fn managed_metrics_from_candidates(candidates: &[PathBuf]) -> Option<bool> {
+    let config = candidates
+        .iter()
+        .find_map(|path| read_managed_config_json(path))?;
+    json_bool_setting(config.get("desktop").and_then(|value| value.get("metrics")))
+}
+
+fn managed_metrics_enabled() -> Option<bool> {
+    managed_metrics_from_candidates(&managed_config_candidates())
+}
+
 fn parse_bool_setting(value: &str) -> Option<bool> {
     match value.trim().to_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
@@ -841,6 +946,21 @@ fn start_config_sync_watcher(app: &AppHandle) {
     });
 }
 
+/// Whether update checks may identify this install by its client id (`desktop.metrics` in
+/// argus.json, `ARGUS_DESKTOP_METRICS` in the env). Defaults to true, matching the shared setting.
+/// Read at the point of use, so turning the toggle off applies to the next check with no restart.
+fn metrics_enabled() -> bool {
+    if let Some(value) = managed_metrics_enabled() {
+        return value;
+    }
+    if let Some(value) = non_empty_env("ARGUS_DESKTOP_METRICS") {
+        return parse_bool_setting(&value).unwrap_or(true);
+    }
+    read_argus_config_json()
+        .and_then(|json| json_bool_setting(json.get("desktop").and_then(|v| v.get("metrics"))))
+        .unwrap_or(true)
+}
+
 /// Whether the desktop shell should install signed updates automatically. Defaults to true, matching
 /// the shared `autoUpdate.enabled` setting in `argus.json`.
 fn auto_update_enabled() -> bool {
@@ -895,6 +1015,48 @@ fn local_client_id() -> Option<String> {
             log::debug!("reading the Argus client id from {}: {err}", path.display());
             None
         }
+    }
+}
+
+/// The per-install client id, read from the store once and then remembered. Only successful reads
+/// are cached: `argus.db` doesn't exist until the sidecar first opens it, so a cold launch can ask
+/// before there's anything to read and every later call has to try again.
+fn cached_client_id(app: &AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    let mut cached = state.client_id.lock().unwrap();
+    if cached.is_none() {
+        *cached = local_client_id();
+    }
+    cached.clone()
+}
+
+/// Wait for the store to mint a client id, up to `CLIENT_ID_TIMEOUT`. Runs once per launch, before
+/// the first update check: on a fresh install that check is the one worth attributing, and it would
+/// otherwise race the sidecar creating the store. Returns `None` on timeout, which only costs that
+/// one check its id — the loop's later checks read the cache.
+///
+/// This sits in front of the first-run dashboard open (`maybe_open_on_first_run` runs after the
+/// first check), so the timeout is deliberately short: a store that never appears delays the open by
+/// at most this long instead of holding a fresh install's first launch open indefinitely.
+async fn wait_for_client_id(app: &AppHandle) -> Option<String> {
+    let mut waited = Duration::ZERO;
+    loop {
+        if let Some(client_id) = cached_client_id(app) {
+            return Some(client_id);
+        }
+        if waited >= CLIENT_ID_TIMEOUT {
+            return None;
+        }
+        tokio::time::sleep(CLIENT_ID_POLL_INTERVAL).await;
+        waited += CLIENT_ID_POLL_INTERVAL;
+    }
+}
+
+/// Give a fresh store a chance to mint its client id before any update request. This is shared by
+/// background and tray-triggered checks so the menu cannot bypass the first-launch attribution wait.
+async fn wait_for_client_id_before_update_check(app: &AppHandle) {
+    if metrics_enabled() && wait_for_client_id(app).await.is_none() && metrics_enabled() {
+        log::debug!("no client id yet; the update check goes out without one");
     }
 }
 
@@ -994,7 +1156,7 @@ fn about_info(app: &AppHandle) -> serde_json::Value {
         "lastUpdateCheckMs": last_update_check_ms,
         "buildNumber": env!("ARGUS_BUILD_ID"),
         "dashboardUrl": format!("http://localhost:{}", state.front_port.load(Ordering::SeqCst)),
-        "clientId": local_client_id(),
+        "clientId": cached_client_id(app),
         "syncUserId": sync_user_id(),
     })
 }
@@ -1082,11 +1244,25 @@ fn show_about(app: &AppHandle) {
     }
 }
 
+/// Build the updater, attaching this install's client id unless `desktop.metrics` is off. The header
+/// rides along on both the manifest check and the artifact download — the plugin reuses one header
+/// map for both requests — so the download service sees the same install on each. With metrics off,
+/// or before the store has minted an id, the requests simply go out without it.
+fn updater(app: &AppHandle) -> Result<Updater, String> {
+    let mut builder = app.updater_builder();
+    if let Some(client_id) = metrics_enabled().then(|| cached_client_id(app)).flatten() {
+        builder = builder
+            .header(CLIENT_ID_HEADER, client_id)
+            .map_err(|e| format!("attaching the client id to the update check: {e}"))?;
+    }
+    builder
+        .build()
+        .map_err(|e| format!("preparing updater: {e}"))
+}
+
 async fn check_available_update(app: &AppHandle) -> Result<Option<Update>, String> {
     record_update_check_attempt(app);
-    let update = app
-        .updater()
-        .map_err(|e| format!("preparing updater: {e}"))?
+    let update = updater(app)?
         .check()
         .await
         .map_err(|e| format!("checking for updates: {e}"))?;
@@ -1156,6 +1332,7 @@ async fn check_for_updates_from_menu_inner(
     app: AppHandle,
     install_known_update: bool,
 ) -> Result<ManualUpdateResult, String> {
+    wait_for_client_id_before_update_check(&app).await;
     let Some(update) = check_available_update(&app).await? else {
         return Ok(ManualUpdateResult::Current);
     };
@@ -1306,6 +1483,10 @@ async fn run_background_update_check(app: AppHandle) {
 fn start_update_check_loop(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Let the sidecar mint the client id first so a fresh install's very first check carries it.
+        // Skipped when metrics are off: there's nothing to wait for, and the first-run dashboard open
+        // sits behind this.
+        wait_for_client_id_before_update_check(&handle).await;
         let mut first_run_pending = true;
         loop {
             run_background_update_check(handle.clone()).await;
@@ -1401,6 +1582,7 @@ pub fn run() {
                 checking_update: AtomicBool::new(false),
                 last_update_check_ms: Mutex::new(None),
                 latest_version: Mutex::new(None),
+                client_id: Mutex::new(None),
             });
 
             let tray_icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
