@@ -1,6 +1,6 @@
 {
   "name": "@agentdeploymentco/argus-workspace",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "Argus is a desktop app that helps find and fix wasted agent work. Local, free and open source. Focuses on business tasks, not code. Works with Claude Cowork / Chat / Code, ChatGPT Work and Codex.",
   "type": "module",
   "private": true,
