@@ -254,20 +254,43 @@ Built-in price family keys are:
 
 | Key | Used when the model name contains |
 |---|---|
-| `opus` | `opus` |
-| `sonnet` | `sonnet` |
-| `haiku` | `haiku` |
+| `fable` | `fable` |
+| `mythos` | `mythos` |
+| `opus` | `opus`, other than the versions below |
+| `opus-legacy` | `opus-4-1` or Opus 4, which kept an older rate |
+| `sonnet-5` | `sonnet-5`, on introductory pricing through 31 August 2026 |
+| `sonnet` | `sonnet`, other than Sonnet 5 |
+| `haiku` | `haiku`, other than the versions below |
+| `haiku-legacy` | `haiku-3` or `haiku-3.5` |
+| `gpt-5.6` | `gpt-5.6` or `gpt-5.6-sol`, the top tier |
+| `gpt-5.6-terra` | `gpt-5.6-terra` |
+| `gpt-5.6-luna` | `gpt-5.6-luna` |
 | `gpt-5.5` | `gpt-5.5` |
+| `gpt-5.5-pro` | `gpt-5.5-pro` |
 | `gpt-5.4` | `gpt-5.4` |
 | `gpt-5.4-mini` | `gpt-5.4-mini` or `gpt-5.4 mini` |
+| `gpt-5.4-nano` | `gpt-5.4-nano` |
+| `gpt-5.4-pro` | `gpt-5.4-pro` |
 | `gpt-5.3` | `gpt-5.3` or `gpt-5.2` |
-| `gpt-5` | `gpt-5-codex` or `gpt-5` |
+| `gpt-5.2-pro` | `gpt-5.2-pro` |
+| `gpt-5` | `gpt-5-codex`, `gpt-5` or `gpt-5.1` |
+| `gpt-5-mini` | `gpt-5-mini` |
+| `gpt-5-nano` | `gpt-5-nano` |
+| `gpt-5-pro` | `gpt-5-pro` |
 | `codex-mini` | `codex-mini` |
+| `gemini-3.6-flash` | both `gemini-3.6` and `flash` |
+| `gemini-3.5-flash` | both `gemini-3.5` and `flash`, other than Flash-Lite |
+| `gemini-3.5-flash-lite` | `gemini-3.5-flash-lite` |
+| `gemini-3.1-pro` | `gemini-3.1-pro` with prompts up to 200,000 tokens |
+| `gemini-3.1-pro-long` | `gemini-3.1-pro` with prompts over 200,000 tokens |
+| `gemini-3.1-flash-lite` | `gemini-3.1-flash-lite` |
+| `gemini-3-pro` | `gemini-3-pro` with prompts up to 200,000 tokens |
+| `gemini-3-pro-long` | `gemini-3-pro` with prompts over 200,000 tokens |
+| `gemini-3-flash` | both `gemini-3` and `flash`, other than the versions above |
 | `gemini-2.5-pro` | `gemini-2.5-pro` with prompts up to 200,000 tokens |
 | `gemini-2.5-pro-long` | `gemini-2.5-pro` with prompts over 200,000 tokens |
 | `gemini-2.5-flash` | `gemini-2.5-flash` |
 | `gemini-2.5-flash-lite` | `gemini-2.5-flash-lite` |
-| `gemini-3-flash` | model names containing both `gemini-3` and `flash` |
 
 ## Managed settings
 

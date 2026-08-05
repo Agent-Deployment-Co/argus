@@ -40,13 +40,30 @@ describe("cost", () => {
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.6-terra")).toBeCloseTo(12, 6);
     expect(cost({ ...z, input: 1_000_000 }, "gpt-5.6")).toBeCloseTo(5, 6);
     expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-nano")).toBeCloseTo(1.25, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5.1")).toBeCloseTo(1.25, 6);
   });
 
-  test("prices Gemini models and the 2.5 Pro long-context tier", () => {
+  test("prices OpenAI mini/nano/pro tiers off their own rates, not the base model's", () => {
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5-mini")).toBeCloseTo(0.25, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5-nano")).toBeCloseTo(0.4, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5-pro")).toBeCloseTo(120, 6);
+    expect(cost({ ...z, input: 1_000_000 }, "gpt-5.2-pro")).toBeCloseTo(21, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5.4-pro")).toBeCloseTo(180, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gpt-5.5-pro")).toBeCloseTo(180, 6);
+  });
+
+  test("prices Gemini models and the Pro long-context tiers", () => {
     expect(cost({ ...z, input: 1_000_000 }, "gemini-2.5-flash")).toBeCloseTo(0.3, 6);
     expect(cost({ ...z, cacheRead: 1_000_000 }, "gemini-2.5-flash-lite")).toBeCloseTo(0.01, 6);
-    expect(cost({ ...z, output: 1_000_000 }, "gemini-3.5-flash")).toBeCloseTo(3, 6);
     expect(cost({ ...z, input: 200_000 }, "gemini-2.5-pro")).toBeCloseTo(0.25, 6);
     expect(cost({ ...z, input: 200_001 }, "gemini-2.5-pro")).toBeCloseTo(0.5000025, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gemini-3.6-flash")).toBeCloseTo(7.5, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gemini-3.5-flash")).toBeCloseTo(9, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gemini-3.5-flash-lite")).toBeCloseTo(2.5, 6);
+    expect(cost({ ...z, output: 1_000_000 }, "gemini-3.1-flash-lite")).toBeCloseTo(1.5, 6);
+    expect(cost({ ...z, input: 200_000 }, "gemini-3.1-pro-preview")).toBeCloseTo(0.4, 6);
+    expect(cost({ ...z, input: 200_001 }, "gemini-3.1-pro-preview")).toBeCloseTo(0.800004, 6);
+    expect(cost({ ...z, input: 200_000 }, "gemini-3-pro-preview")).toBeCloseTo(0.4, 6);
+    expect(cost({ ...z, input: 200_001 }, "gemini-3-pro-preview")).toBeCloseTo(0.800004, 6);
   });
 });
