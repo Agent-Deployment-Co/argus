@@ -47,6 +47,17 @@ provider you configured.
 The desktop app checks for new versions on a schedule and downloads them in the
 background. The **Updates** setting in [Settings](/settings) controls whether new versions automatically install; with it off, Argus still checks and tells you when one is ready, and you install it from the menu bar. The command-line tool doesn't check for updates at all.
 
+Those checks and downloads go through a download service The Agent Deployment
+Company runs, and they carry one detail about your copy of Argus: a random
+identifier it creates on your computer the first time it runs. It lets us count
+how many installs are checking for updates, rather than counting the same
+computer over and over. It isn't tied to your name or your email, and nothing
+about your sessions, your settings or your usage goes with it. New versions
+themselves are hosted on GitHub, so when Argus downloads one, that identifier
+reaches GitHub along with the request. If you [sync](/terminology#sync) to an
+[Argus Hub](/terminology#argus-hub), it's the same identifier the Hub uses to tell
+your uploads apart from a colleague's.
+
 
 ## Argus Hub
 

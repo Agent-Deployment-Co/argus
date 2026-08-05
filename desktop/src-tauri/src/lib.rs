@@ -33,7 +33,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
 mod proxy;
 
@@ -62,6 +62,10 @@ struct AppState {
     checking_update: AtomicBool,
     last_update_check_ms: Mutex<Option<u64>>,
     latest_version: Mutex<Option<String>>,
+    /// The per-install client id, remembered after the first successful read of the store. Holds
+    /// only successes: the store doesn't exist yet on a cold first launch, so a miss has to stay
+    /// retryable (see `cached_client_id`).
+    client_id: Mutex<Option<String>>,
 }
 
 const ABOUT_WINDOW_LABEL: &str = "about";
@@ -80,6 +84,15 @@ const PREFERRED_FRONT_PORT: u16 = 4242;
 /// notifies about on its own.
 const PROXY_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Request header carrying the per-install client id on every updater request, so the download
+/// service can count installs rather than raw hits. Same header and same id `sync` sends to a Hub
+/// (`x-argus-client` in src/push.ts).
+const CLIENT_ID_HEADER: &str = "x-argus-client";
+/// How long `wait_for_client_id` gives the sidecar to mint the client id before the first update
+/// check of a launch goes out anonymous, and how often it looks. The sidecar writes the row when it
+/// first opens the store, normally a second or two after launch.
+const CLIENT_ID_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const CLIENT_ID_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Show a native notification. Best-effort: a failure to notify is itself only logged. Silent mode
 /// (`desktop.silent`) suppresses every notification; the setting is read here, at fire time, so a
@@ -898,6 +911,40 @@ fn local_client_id() -> Option<String> {
     }
 }
 
+/// The per-install client id, read from the store once and then remembered. Only successful reads
+/// are cached: `argus.db` doesn't exist until the sidecar first opens it, so a cold launch can ask
+/// before there's anything to read and every later call has to try again.
+fn cached_client_id(app: &AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    let mut cached = state.client_id.lock().unwrap();
+    if cached.is_none() {
+        *cached = local_client_id();
+    }
+    cached.clone()
+}
+
+/// Wait for the store to mint a client id, up to `CLIENT_ID_TIMEOUT`. Runs once per launch, before
+/// the first update check: on a fresh install that check is the one worth attributing, and it would
+/// otherwise race the sidecar creating the store. Returns `None` on timeout, which only costs that
+/// one check its id — the loop's later checks read the cache.
+///
+/// This sits in front of the first-run dashboard open (`maybe_open_on_first_run` runs after the
+/// first check), so the timeout is deliberately short: a store that never appears delays the open by
+/// at most this long instead of holding a fresh install's first launch open indefinitely.
+async fn wait_for_client_id(app: &AppHandle) -> Option<String> {
+    let mut waited = Duration::ZERO;
+    loop {
+        if let Some(client_id) = cached_client_id(app) {
+            return Some(client_id);
+        }
+        if waited >= CLIENT_ID_TIMEOUT {
+            return None;
+        }
+        tokio::time::sleep(CLIENT_ID_POLL_INTERVAL).await;
+        waited += CLIENT_ID_POLL_INTERVAL;
+    }
+}
+
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
     if !output.status.success() {
@@ -994,7 +1041,7 @@ fn about_info(app: &AppHandle) -> serde_json::Value {
         "lastUpdateCheckMs": last_update_check_ms,
         "buildNumber": env!("ARGUS_BUILD_ID"),
         "dashboardUrl": format!("http://localhost:{}", state.front_port.load(Ordering::SeqCst)),
-        "clientId": local_client_id(),
+        "clientId": cached_client_id(app),
         "syncUserId": sync_user_id(),
     })
 }
@@ -1082,11 +1129,25 @@ fn show_about(app: &AppHandle) {
     }
 }
 
+/// Build the updater with this install's client id attached. The header rides along on both the
+/// manifest check and the artifact download — the plugin reuses one header map for both requests —
+/// so the download service sees the same install on each. An install whose id isn't known yet just
+/// sends the requests without it.
+fn updater(app: &AppHandle) -> Result<Updater, String> {
+    let mut builder = app.updater_builder();
+    if let Some(client_id) = cached_client_id(app) {
+        builder = builder
+            .header(CLIENT_ID_HEADER, client_id)
+            .map_err(|e| format!("attaching the client id to the update check: {e}"))?;
+    }
+    builder
+        .build()
+        .map_err(|e| format!("preparing updater: {e}"))
+}
+
 async fn check_available_update(app: &AppHandle) -> Result<Option<Update>, String> {
     record_update_check_attempt(app);
-    let update = app
-        .updater()
-        .map_err(|e| format!("preparing updater: {e}"))?
+    let update = updater(app)?
         .check()
         .await
         .map_err(|e| format!("checking for updates: {e}"))?;
@@ -1306,6 +1367,10 @@ async fn run_background_update_check(app: AppHandle) {
 fn start_update_check_loop(app: &AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Let the sidecar mint the client id first so a fresh install's very first check carries it.
+        if wait_for_client_id(&handle).await.is_none() {
+            log::debug!("no client id yet; the first update check goes out without one");
+        }
         let mut first_run_pending = true;
         loop {
             run_background_update_check(handle.clone()).await;
@@ -1401,6 +1466,7 @@ pub fn run() {
                 checking_update: AtomicBool::new(false),
                 last_update_check_ms: Mutex::new(None),
                 latest_version: Mutex::new(None),
+                client_id: Mutex::new(None),
             });
 
             let tray_icon = Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;

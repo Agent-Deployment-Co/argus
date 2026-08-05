@@ -157,8 +157,9 @@ Details worth having ready:
 - Interpretations built from that text (a task's outcome, a session summary) do
   upload when sync is on. Say so plainly rather than letting someone discover it.
 - BYO API keys stay local.
-- The desktop app checks GitHub for updates on a schedule. That's a network
-  call, so disclose it rather than claiming nothing ever leaves.
+- The desktop app checks for updates on a schedule, through a download service we
+  run. That's a network call, and it identifies the install with a random id (an
+  install, not a person). Disclose both rather than claiming nothing ever leaves.
 
 The temptation is to say "nothing leaves your machine" because it's clean. It's
 also not quite true once sync or update checks are in play, and a privacy claim
