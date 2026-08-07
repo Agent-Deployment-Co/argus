@@ -85,6 +85,29 @@ function refusal(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: message }] };
 }
 
+/** Keep the session search useful without allowing the transcript gate to be bypassed through
+ *  the fields that the dashboard's shared readers use for display and highlighting. */
+function redactSessionSearchRow(row: Awaited<ReturnType<SessionListReader>>["rows"][number], includeTranscripts: boolean) {
+  if (includeTranscripts) {
+    return row.match
+      ? { ...row, match: { ...row.match, snippet: row.match.snippet.replace(SENTINEL_RE, "") } }
+      : row;
+  }
+  const { firstPrompt: _firstPrompt, match, ...withoutPrompt } = row;
+  const safeMatch = match && match.sources[0] !== "conversation"
+    ? { ...match, snippet: match.snippet.replace(SENTINEL_RE, "") }
+    : undefined;
+  return safeMatch ? { ...withoutPrompt, match: safeMatch } : withoutPrompt;
+}
+
+/** `SessionRow.firstPrompt` is the raw opening prompt, even though it is not part of the retained
+ *  interaction-text table. Remove it from MCP detail responses while transcript access is off. */
+function redactSessionDetail(session: Awaited<ReturnType<SessionDetailReader>>, includeTranscripts: boolean) {
+  if (includeTranscripts || !session) return session;
+  const { firstPrompt: _firstPrompt, ...withoutPrompt } = session;
+  return withoutPrompt;
+}
+
 const SERVER_INSTRUCTIONS = `Argus indexes the user's local agent sessions (Claude Code, Claude Cowork, Claude Chat, Codex, Gemini CLI) into a local store. These tools answer questions about the user's own work history: what sessions happened, what they cost, which tools were used, and how sessions went. Everything is read-only.
 
 Dates: since/until are local calendar dates as YYYY-MM-DD, inclusive on both ends. Compute relative ranges yourself from today's local date (e.g. "last week" = the last 7 local dates) and pass them explicitly.
@@ -138,11 +161,7 @@ export function createArgusMcpServer(deps: McpDeps, gate: McpGate): McpServer {
         offset: 0,
       };
       const list = await deps.sessionList(query);
-      const rows = list.rows.map((row) =>
-        row.match
-          ? { ...row, match: { ...row.match, snippet: row.match.snippet.replace(SENTINEL_RE, "") } }
-          : row,
-      );
+      const rows = list.rows.map((row) => redactSessionSearchRow(row, gate.includeTranscripts));
       return jsonResult({ sessions: rows, total: list.total });
     },
   );
@@ -163,9 +182,10 @@ export function createArgusMcpServer(deps: McpDeps, gate: McpGate): McpServer {
     async (args) => {
       const session = await deps.sessionDetail(args.session_id);
       if (!session) return refusal(`No session "${args.session_id}". Find session ids with search_sessions.`);
-      if (!args.include_task_metrics) return jsonResult({ session });
+      const safeSession = redactSessionDetail(session, gate.includeTranscripts);
+      if (!args.include_task_metrics) return jsonResult({ session: safeSession });
       const metrics = await deps.sessionTaskMetrics(args.session_id);
-      return jsonResult({ session, taskMetrics: metrics });
+      return jsonResult({ session: safeSession, taskMetrics: metrics });
     },
   );
 

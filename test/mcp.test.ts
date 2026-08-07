@@ -247,6 +247,7 @@ describe("MCP endpoint (#299)", () => {
   });
 
   test("search_sessions strips the FTS snippet sentinels before returning matches", async () => {
+    process.env.ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS = "true";
     const deps = fakeDeps({
       sessionList: async () => ({
         rows: [
@@ -263,6 +264,55 @@ describe("MCP endpoint (#299)", () => {
     const row = body.result.structuredContent.sessions[0];
     expect(row.match.snippet).toBe("the invoice total");
     expect(row.match.snippet).not.toContain("\x01");
+  });
+
+  test("search_sessions hides the opening prompt and conversation snippets while transcripts are off", async () => {
+    const deps = fakeDeps({
+      sessionList: async () => ({
+        rows: [
+          listItem({
+            firstPrompt: "a private prompt",
+            match: { count: 1, snippet: "a private response", sources: ["conversation"] },
+          }),
+        ],
+        total: 1,
+        offset: 0,
+        limit: 20,
+      }),
+    });
+    const { body } = await callTool(mcpApp(deps), "search_sessions", { query: "private" });
+    const row = body.result.structuredContent.sessions[0];
+    expect(row.firstPrompt).toBeUndefined();
+    expect(row.match).toBeUndefined();
+  });
+
+  test("search_sessions and get_session include retained prompt text when transcripts are on", async () => {
+    process.env.ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS = "true";
+    const deps = fakeDeps({
+      sessionList: async () => ({
+        rows: [
+          listItem({
+            firstPrompt: "a private prompt",
+            match: { count: 1, snippet: "a private response", sources: ["conversation"] },
+          }),
+        ],
+        total: 1,
+        offset: 0,
+        limit: 20,
+      }),
+    });
+    const app = mcpApp(deps);
+    const search = await callTool(app, "search_sessions", { query: "private" });
+    expect(search.body.result.structuredContent.sessions[0].firstPrompt).toBe("a private prompt");
+    expect(search.body.result.structuredContent.sessions[0].match.snippet).toBe("a private response");
+
+    const detail = await callTool(app, "get_session", { session_id: "s1" });
+    expect(detail.body.result.structuredContent.session.firstPrompt).toBe("hi");
+  });
+
+  test("get_session hides the opening prompt while transcripts are off", async () => {
+    const { body } = await callTool(mcpApp(fakeDeps()), "get_session", { session_id: "s1" });
+    expect(body.result.structuredContent.session.firstPrompt).toBeUndefined();
   });
 
   test("get_session returns the session, and attaches task metrics when asked", async () => {
