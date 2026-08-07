@@ -18,5 +18,6 @@ documentation.
 - **[LLM providers](./llm-providers.md)** — the shared LLM access layer and secret storage.
 - **[Task interpretation](./task-interpretation.md)** — the optional, model-driven task pass.
 - **[Web app](./web-app.md)** — how `argus serve` and the `web/` SPA are wired.
+- **[Agent access](./agent-access.md)** — the local `/mcp` endpoint agents query (#299).
 - **[Configuration](./configuration.md)** — the `argus.json` settings file and the settings resolver.
 - **[Analytics](./analytics.md)** — PostHog on the published docs site (config, events, deploy).

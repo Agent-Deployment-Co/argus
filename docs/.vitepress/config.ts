@@ -148,6 +148,7 @@ export default defineConfig({
           { text: 'Tasks', link: '/tasks' },
           { text: 'Metric Views', link: '/metric-views' },
           { text: 'Settings', link: '/settings' },
+          { text: 'Connect Your Agent', link: '/connect-your-agent' },
           { text: 'Model Gateway', link: '/model-gateway' }
         ]
       },
