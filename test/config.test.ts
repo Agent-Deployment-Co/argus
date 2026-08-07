@@ -8,6 +8,7 @@ import {
   loadConfig,
   migrateLlmFlatToProviderConfigs,
   migrateTaskExtractionToSessionInterpretation,
+  resolveAgentAccess,
   resolveAutoUpdateCheckIntervalMinutes,
   resolveAutoUpdateEnabled,
   resolveDesktopMetrics,
@@ -42,6 +43,8 @@ const CONFIG_ENV = [
   "ARGUS_RETAIN_TEXT",
   "ARGUS_LOG_LEVEL",
   "ARGUS_READ_ONLY",
+  "ARGUS_AGENT_ACCESS_ENABLED",
+  "ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS",
 ];
 
 afterEach(() => {
@@ -471,6 +474,44 @@ describe("resolveReadOnly (#281)", () => {
   test("empty env value falls through to the default", () => {
     process.env.ARGUS_READ_ONLY = "";
     expect(resolveReadOnly({}, {})).toBe(false);
+  });
+});
+
+describe("resolveAgentAccess (#299)", () => {
+  test("defaults to endpoint on, transcripts off", () => {
+    expect(resolveAgentAccess({}, {})).toEqual({ enabled: true, includeTranscripts: false });
+  });
+
+  test("argus.json can toggle either setting", () => {
+    expect(resolveAgentAccess({}, { agentAccess: { enabled: false } })).toEqual({
+      enabled: false,
+      includeTranscripts: false,
+    });
+    expect(resolveAgentAccess({}, { agentAccess: { includeTranscripts: true } })).toEqual({
+      enabled: true,
+      includeTranscripts: true,
+    });
+  });
+
+  test("env vars override argus.json", () => {
+    process.env.ARGUS_AGENT_ACCESS_ENABLED = "false";
+    process.env.ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS = "true";
+    expect(
+      resolveAgentAccess({}, { agentAccess: { enabled: true, includeTranscripts: false } }),
+    ).toEqual({ enabled: false, includeTranscripts: true });
+  });
+
+  test("empty env values fall through to the default", () => {
+    process.env.ARGUS_AGENT_ACCESS_ENABLED = "";
+    process.env.ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS = "";
+    expect(resolveAgentAccess({}, {})).toEqual({ enabled: true, includeTranscripts: false });
+  });
+
+  test("both settings register in ALL_SETTINGS under their argus.json paths", () => {
+    expect(ALL_SETTINGS["agentAccess.enabled"]?.env).toBe("ARGUS_AGENT_ACCESS_ENABLED");
+    expect(ALL_SETTINGS["agentAccess.includeTranscripts"]?.env).toBe(
+      "ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS",
+    );
   });
 });
 

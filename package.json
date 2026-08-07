@@ -37,10 +37,13 @@
     "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
+    "@hono/mcp": "^0.3.1",
     "@hono/node-server": "^2.0.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "citty": "^0.2.2",
     "consola": "^3.4.2",
-    "hono": "^4.12.25"
+    "hono": "^4.12.25",
+    "zod": "^3"
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.101.0",

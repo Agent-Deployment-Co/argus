@@ -4,6 +4,7 @@
 // UI metadata), so the web surface stays in sync with the config surface rather than hand-listing
 // fields. This module only *groups* and *serializes* — the value contract stays in `config.ts`.
 import {
+  AGENT_ACCESS_SETTINGS,
   AUTO_UPDATE_SETTINGS,
   DESKTOP_SETTINGS,
   getPath,
@@ -210,6 +211,17 @@ const LAYOUT: { id: string; label: string; sections: LayoutSection[] }[] = [
         ],
         secrets: [API_KEY_FIELD],
         connectionTest: { activeWhen: { path: "sessionInterpretation.enabled" } },
+      },
+    ],
+  },
+  {
+    // Agent access (#299): the local MCP endpoint agents query. Two toggles — the endpoint itself,
+    // and (gated on it) transcript text, the one genuinely new exposure.
+    id: "agent-access",
+    label: "Agent access",
+    sections: [
+      {
+        settings: [AGENT_ACCESS_SETTINGS.enabled, AGENT_ACCESS_SETTINGS.includeTranscripts],
       },
     ],
   },
