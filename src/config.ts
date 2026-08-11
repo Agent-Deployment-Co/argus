@@ -134,6 +134,16 @@ export interface ArgusConfig {
    *  transcripts from disk (#120). Stored text is local-only — never uploaded by `sync`. On by
    *  default; set to false to keep session text out of `argus.db` entirely. */
   retainText?: boolean;
+  /** Agent access (#299): the local MCP endpoint at `/mcp` that lets AI agents on this machine query
+   *  Argus data (session history, usage, task outcomes). */
+  agentAccess?: {
+    /** Serve the MCP endpoint at all. On by default — the endpoint adds discoverability, not new
+     *  exposure, since the read API is already open to local processes. Off → `/mcp` 404s. */
+    enabled?: boolean;
+    /** Let agents read retained session transcript text through `get_session_transcript`. Off by
+     *  default: the genuinely new risk is transcript text flowing into a remote model's context. */
+    includeTranscripts?: boolean;
+  };
   /** Read-only mode (#281): `serve` mounts only the read routes and the SPA hides edit
    *  affordances. A deployment switch, not a user preference — off by default. */
   readOnly?: boolean;
@@ -453,6 +463,36 @@ const READ_ONLY_SETTINGS = {
     env: "ARGUS_READ_ONLY",
     flag: "read-only",
     default: false,
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+};
+
+/** Agent access (#299): the local MCP endpoint at `/mcp`. Both settings resolve per request so the
+ *  Settings toggles apply live, without a serve restart. */
+export const AGENT_ACCESS_SETTINGS = {
+  enabled: {
+    path: "agentAccess.enabled",
+    env: "ARGUS_AGENT_ACCESS_ENABLED",
+    default: true,
+    ui: {
+      label: "Let agents query Argus",
+      description:
+        "Allow AI agents on this machine (Claude Code, Codex, Gemini CLI) to read your Argus data through the local MCP endpoint, so they can answer questions about your past work.",
+      control: "toggle",
+    },
+    parse: parseBool,
+  } satisfies Setting<boolean>,
+  includeTranscripts: {
+    path: "agentAccess.includeTranscripts",
+    env: "ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS",
+    default: false,
+    ui: {
+      label: "Let agents read session transcripts",
+      description:
+        "Allow agents to read your retained prompt and response text. When an agent reads a transcript, that text flows into its model provider's context.",
+      control: "toggle",
+      activeWhen: { path: "agentAccess.enabled" },
+    },
     parse: parseBool,
   } satisfies Setting<boolean>,
 };
@@ -832,6 +872,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(HUB_SETTINGS),
     ...Object.values(AUTO_UPDATE_SETTINGS),
     ...Object.values(RETENTION_SETTINGS),
+    ...Object.values(AGENT_ACCESS_SETTINGS),
     ...Object.values(LOG_SETTINGS),
     ...Object.values(STATE_SETTINGS),
     ...Object.values(READ_ONLY_SETTINGS),
@@ -1183,6 +1224,26 @@ export function resolveRetainText(
   file: ArgusConfig = loadConfig(),
 ): boolean {
   return resolveSetting(RETENTION_SETTINGS.retainText, flags, file);
+}
+
+/** The resolved agent-access settings (#299). */
+export interface ResolvedAgentAccess {
+  /** Serve the MCP endpoint at all. Defaults on. */
+  enabled: boolean;
+  /** Let agents read retained transcript text. Defaults off. */
+  includeTranscripts: boolean;
+}
+
+/** Resolve agent access for one `/mcp` request. Called per request (no caching) so the Settings
+ *  toggles apply live to a running server. */
+export function resolveAgentAccess(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): ResolvedAgentAccess {
+  return {
+    enabled: resolveSetting(AGENT_ACCESS_SETTINGS.enabled, flags, file),
+    includeTranscripts: resolveSetting(AGENT_ACCESS_SETTINGS.includeTranscripts, flags, file),
+  };
 }
 
 /** Whether `serve` should run in read-only mode (#281): `--read-only` flag > `ARGUS_READ_ONLY` env >

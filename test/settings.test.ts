@@ -54,9 +54,20 @@ function findSetting(file: Parameters<typeof describeSettings>[0], path: string)
 }
 
 describe("describeSettings", () => {
-  test("groups the registry into General + Sessions categories", () => {
+  test("groups the registry into General + Sessions + Agent access categories", () => {
     const { categories } = describeSettings({});
-    expect(categories.map((c) => c.id)).toEqual(["general", "sessions"]);
+    expect(categories.map((c) => c.id)).toEqual(["general", "sessions", "agent-access"]);
+  });
+
+  test("Agent access exposes the MCP endpoint toggle and the transcript toggle gated on it (#299)", () => {
+    const category = describeSettings({}).categories.find((c) => c.id === "agent-access")!;
+    const paths = category.sections.flatMap((s) => s.settings).map((s) => s.path);
+    expect(paths).toEqual(["agentAccess.enabled", "agentAccess.includeTranscripts"]);
+    // The endpoint ships on (discoverability, not new exposure); transcripts ship off.
+    expect(findSetting({}, "agentAccess.enabled").effectiveValue).toBe(true);
+    const transcripts = findSetting({}, "agentAccess.includeTranscripts");
+    expect(transcripts.effectiveValue).toBe(false);
+    expect(transcripts.ui.activeWhen).toEqual({ path: "agentAccess.enabled" });
   });
 
   test("General exposes startup, auto-update plus the Argus Hub URL and a secret-backed Hub key field", () => {

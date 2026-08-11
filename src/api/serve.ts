@@ -51,6 +51,7 @@ import { reindexSession, type ReindexSessionResult } from "../indexing/pipeline.
 import { computeTaskMetrics, type TaskMetrics } from "./task-metrics.ts";
 import { buildSessionInteractions, type SessionInteractionsResponse } from "./session-interactions.ts";
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
+import { createMcpHandler } from "./mcp.ts";
 import { CONFIG_FILE } from "../paths.ts";
 import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
 import { LabelError, openStore } from "../store/store.ts";
@@ -238,6 +239,9 @@ interface AppOptions {
   /** The per-view dashboard readers. Omitted in processes that don't read the store (the routes then
    *  answer 503); tests pass stubs to exercise routing without a store. */
   views?: ViewReaders;
+  /** The `/mcp` handler (#299), built by `createMcpHandler` in mcp.ts from the same readers the web
+   *  API uses. Injected like `views` so `createApp` stays unit-testable without the MCP SDK. */
+  mcp?: (c: Context) => Promise<Response>;
   reindex?: SessionReindexer;
   /** Called after a successful reindex so the caller can drop its cached snapshot. */
   onStoreChanged?: () => void;
@@ -573,6 +577,19 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   viewRoute("/api/plugins", views?.plugins);
   viewRoute("/api/health", views?.health);
   viewRoute("/api/recommendations", views?.recommendations);
+
+  // The local MCP endpoint (#299): AI agents on this machine query Argus data over streamable HTTP.
+  // Read-only, so it mounts among the read routes (it survives read-only mode, #281) and carries no
+  // CSRF header requirement (MCP clients can't send one). The MCP spec's DNS-rebinding defense is the
+  // existing rejectUnsafeHost (it tolerates an absent Origin, which MCP clients satisfy); the loopback
+  // bind stays the boundary, consistent with the rest of the API.
+  if (opts.mcp) {
+    app.all("/mcp", (c) => {
+      const blocked = rejectUnsafeHost(c);
+      if (blocked) return blocked;
+      return opts.mcp!(c);
+    });
+  }
 
   // Paginated, filtered, sorted session list — backed by SQL session aggregates (no per-message JS
   // walk). The dashboard views are separate per-view endpoints; sessions were never in them.
@@ -1289,6 +1306,9 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     setSessionHidden,
     setSessionsHidden,
     labels,
+    // The MCP endpoint (#299) reads through the same readers the web API uses, so agents and the
+    // dashboard can never disagree.
+    mcp: createMcpHandler({ views, sessionList, sessionDetail, sessionInteractions, sessionTaskMetrics }),
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
     secrets: defaultSecretStore(),
     claudeBinary,
