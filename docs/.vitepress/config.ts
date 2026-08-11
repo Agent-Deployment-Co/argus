@@ -170,6 +170,7 @@ export default defineConfig({
         items: [
           { text: 'CLI Reference', link: '/cli-reference' },
           { text: 'Settings Reference', link: '/settings-reference' },
+          { text: 'MCP Server', link: '/mcp-server' },
           { text: 'Changelog', link: '/changelog' },
           { text: 'Terminology', link: '/terminology' },
           { text: 'Privacy and Security', link: '/privacy' },

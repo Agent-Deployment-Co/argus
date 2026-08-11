@@ -21,30 +21,14 @@ It only answers the agent that called it, on your machine.
 
 The endpoint runs whenever Argus does, so start with the app (or
 `npx @agentdeploymentco/argus run` if you use the command line). Then point your
-agent at the URL.
-
-**Claude Code:**
+agent at the URL. In Claude Code:
 
 ```bash
 claude mcp add --transport http argus http://127.0.0.1:4242/mcp
 ```
 
-**Codex**, in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.argus]
-url = "http://127.0.0.1:4242/mcp"
-```
-
-**Gemini CLI**, in `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "argus": { "url": "http://127.0.0.1:4242/mcp" }
-  }
-}
-```
+[MCP Server](/mcp-server#setup) has the equivalent for Claude Cowork, Codex,
+Cursor, Gemini CLI, VS Code and anything else that speaks MCP.
 
 Once connected, ask in plain language. "What did I work on last week?" has the
 agent search your sessions. "How much did I spend in March?" reads your usage
@@ -60,6 +44,9 @@ totals. "Where am I getting interrupted most?" reads your session health.
 | `usage_summary` | Token and cost totals by day, model, agent or project. |
 | `tool_usage` | Which tools, tool categories, MCP servers and skills your agents used. |
 | `health_summary` | Friction signals (interruptions, rejections, compactions) and Argus's recommendations. |
+
+[MCP Server](/mcp-server#what-agents-can-ask) covers what each tool takes and
+returns, with examples.
 
 ## Transcript access
 
@@ -82,7 +69,5 @@ is the default; see [`retainText`](/settings-reference#app-and-general-settings)
 ## Without MCP
 
 If your agent or script doesn't speak MCP, the same data is available over plain
-HTTP and the command line. `npx @agentdeploymentco/argus search "invoice" --json`
-searches sessions, and the web app's per-view endpoints answer on the same port
-(for example `http://127.0.0.1:4242/api/usage/daily`). The MCP endpoint is the
-better path when the agent supports it, since the tools describe themselves.
+HTTP and the command line. See
+[MCP Server](/mcp-server#without-mcp) for both.
