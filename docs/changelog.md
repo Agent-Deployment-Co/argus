@@ -8,6 +8,18 @@ description: Every published Argus release, newest first, mirrored from the rele
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.25
+
+Published August 5, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.25).
+
+### Changes
+
+- Update OpenAI and Gemini pricing to current published rates ([#324](https://github.com/Agent-Deployment-Co/argus/pull/324))
+- Send the client id with desktop update checks ([#325](https://github.com/Agent-Deployment-Co/argus/pull/325))
+- Bump version to 0.1.25 ([#326](https://github.com/Agent-Deployment-Co/argus/pull/326))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.24...argus-v0.1.25).
+
 ## Argus v0.1.24
 
 Published August 5, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.24).
