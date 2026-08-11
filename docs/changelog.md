@@ -8,6 +8,17 @@ description: Every published Argus release, newest first, mirrored from the rele
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.26
+
+Published August 11, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.26).
+
+### Changes
+
+- Let AI agents query Argus data via a local MCP endpoint (\#299) ([#329](https://github.com/Agent-Deployment-Co/argus/pull/329))
+- Bump version to 0.1.26 ([#330](https://github.com/Agent-Deployment-Co/argus/pull/330))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.25...argus-v0.1.26).
+
 ## Argus v0.1.25
 
 Published August 5, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.25).
