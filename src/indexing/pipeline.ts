@@ -34,6 +34,7 @@ import { NATIVE_PRODUCERS, nativeProducerForSource } from "./parse/producers/ind
 import type { AgentSource, MessageRecord, ParseResult } from "../types.ts";
 import type { TaskFact } from "../store/store-contract.ts";
 import { interpretSession, sessionInterpretationActive } from "./interpret/index.ts";
+import { scanSessionForSecrets, secretFindingsDigest } from "./secret-scan.ts";
 import type { ResolvedSessionInterpretation } from "../config.ts";
 
 export interface SyncStats {
@@ -318,11 +319,19 @@ function toMaterializeSessions(output: ReconcileResult): MaterializeSession[] {
   const interactionsBySession = groupBy(output.interactions, (i) => i.sourceSessionId);
   const sessions: MaterializeSession[] = [];
   for (const [sid, meta] of output.sessions) {
+    const interactions = interactionsBySession.get(sid) ?? [];
+    // Secret scan (#327): regex-cheap and deterministic, so it runs inline here for every
+    // materialized session — no throttle, no LLM call. Scanning the in-memory interaction text
+    // (not the store) means findings exist even when conversation-text retention is off.
+    const findings = scanSessionForSecrets({ interactions });
     sessions.push({
       meta,
       messages: messagesBySession.get(sid) ?? [],
       tasks: output.tasksBySession.get(sid) ?? [],
-      interactions: interactionsBySession.get(sid) ?? [],
+      interactions,
+      ...(findings.length
+        ? { secretFindings: { digest: secretFindingsDigest(findings), findings } }
+        : {}),
     });
   }
   return sessions;

@@ -2,7 +2,7 @@
 // shared `@agentdeploymentco/argus-schema` wire contract (retired in #235); CLI-only fields extend
 // them from there.
 // CLI-internal parsing types (MessageRecord, ParseResult, …) are defined locally below.
-import type { TaskFact } from "./store/store-contract.ts";
+import type { SecretFinding, TaskFact } from "./store/store-contract.ts";
 import type { ToolCategory } from "./tool-categories.ts";
 export type { ToolCategory } from "./tool-categories.ts";
 
@@ -125,6 +125,12 @@ export type SessionRow = Omit<SchemaSessionRow, "source"> & {
   /** CLI-only: local-only UI state (never pushed by sync). Hidden sessions are excluded from the
    *  sessions list and search, but their usage still counts in aggregate rollups. */
   isHidden: boolean;
+  /** CLI-only (#327): likely exposed credentials the secret scanner found in this session's text —
+   *  redacted locators only, never secret values. Local-only, never pushed by sync. Present only on
+   *  the detail payload; absent when the session has no findings. */
+  secretFindings?: SecretFinding[];
+  /** CLI-only (#327): whether the user dismissed exactly the current finding set. */
+  secretFindingsDismissed?: boolean;
 };
 
 /**

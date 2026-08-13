@@ -42,6 +42,7 @@ erDiagram
   resolved_sessions ||--o{ resolved_interaction_text : "session_id"
   resolved_sessions ||--o{ resolved_invocations : "session_id"
   resolved_sessions ||--o{ resolved_tasks : "session_id"
+  resolved_sessions ||--o{ resolved_secret_findings : "session_id"
 
   resolved_interactions ||..o{ resolved_usage : "interaction_seq (soft)"
   resolved_interactions ||..o{ resolved_invocations : "interaction_seq (soft)"
@@ -174,6 +175,15 @@ erDiagram
     string session_id "UNINDEXED, no PK/FK (FTS5 virtual table)"
     string text "title + summary, indexed, local-only, never synced"
   }
+  resolved_secret_findings {
+    string session_id PK,FK
+    int seq PK
+    string category
+    int interaction_seq "soft -> resolved_interactions.seq"
+    string chunk_type "prompt|response"
+    string hint "redacted locator, local-only, never synced"
+    string findings_digest "the finding-set hash dismissals anchor to"
+  }
 
   source_coverage {
     string source PK
@@ -259,8 +269,9 @@ rollups are SQL joins through those ordinals.
 One row per canonical session. Carries identity (`session_id`, `owner`, `source`, `project`, `cwd`),
 timestamps, `message_count`, the `archived` flag (1 = retained but no longer on disk), the promoted
 friction signals (`friction_interruptions` / `_rejections` / `_compactions` / `_turns`,
-`last_interruption_ms`; NULL where the source can't observe friction), and `meta_json` (the
-authoritative `SessionMeta`). The root of the read model.
+`last_interruption_ms`; NULL where the source can't observe friction), the local-only UI state columns
+(`is_hidden`, `secret_scan_dismissed` — user state carried forward across re-materializes, never
+synced), and `meta_json` (the authoritative `SessionMeta`). The root of the read model.
 
 ### `resolved_usage`
 One row per usage-bearing turn (the provider's metering grain: Claude `message.usage`, Codex
@@ -336,6 +347,15 @@ re-index) — each doing a wholesale delete-then-insert. Like `resolved_tasks_ft
 session is interpreted; `searchSessions` reports it as a distinct `summary` entry in a match's
 `sources[]` (alongside `conversation`/`task`), so the UI labels a title/summary hit precisely.
 
+### `resolved_secret_findings` (#327)
+One row per likely exposed credential the secret scanner found in the session's prompt/response text
+at materialize time. **Redacted locators only**: `category` + `interaction_seq`/`chunk_type` + a short
+`hint` (first/last few characters), never the secret value. `findings_digest` (the scanner's stable
+hash of the session's whole finding set) is denormalized onto every row so a dismissal — the matching
+digest stored on `resolved_sessions.secret_scan_dismissed` — can be compared in SQL, and lapses when a
+re-scan produces different findings. **Local-only, never synced** (the push path never reads it).
+PK `(session_id, seq)`, FK → `resolved_sessions`. See [secret-scanning.md](./secret-scanning.md).
+
 ## Tier 3 — freshness & ownership
 
 ### `source_coverage`
@@ -365,7 +385,7 @@ unchanged sessions and pick up reindexed ones. PK `(hub_url, client_id, session_
 
 ## Schema version & migrations
 
-`PRAGMA user_version` holds the schema version (currently **20**) and `PRAGMA application_id`
+`PRAGMA user_version` holds the schema version (currently **24**) and `PRAGMA application_id`
 (`0x41524753`, "ARGS") tags the file as an Argus store. Upgrades run forward-only `MIGRATIONS` in
 `src/store/store.ts`, each a `{ to, sql }` step applied in a transaction that bumps `user_version`, so
 a partial upgrade never leaves a half-migrated store. Fresh stores are created from `CREATE_SCHEMA_SQL`

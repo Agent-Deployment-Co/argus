@@ -8,6 +8,7 @@ import { Dash, InteractionCount, Skills } from "../components/pills";
 import { Kv, KvRow } from "../components/kv";
 import { InteractionsIcon } from "../lib/icons";
 import { LabelBar } from "../components/LabelBar";
+import { SecretFindingsBanner } from "../components/SecretFindingsBanner";
 import { useReadOnly } from "../lib/read-only";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
@@ -187,6 +188,14 @@ export function SessionDetail() {
           </div>
         )}
       </header>
+
+      {s.secretFindings && s.secretFindings.length > 0 && (
+        <SecretFindingsBanner
+          sessionId={s.sessionId}
+          findings={s.secretFindings}
+          dismissed={s.secretFindingsDismissed ?? false}
+        />
+      )}
 
       {refreshError && <div className="task-error" role="alert">{refreshError}</div>}
       {hideError && <div className="task-error" role="alert">{hideError}</div>}

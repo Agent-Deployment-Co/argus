@@ -124,6 +124,25 @@ export async function setSessionHidden(sessionId: string, hidden: boolean): Prom
   return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide session" : "Failed to unhide session");
 }
 
+/** Dismiss a session's exposed-credential warning (#327). The dismissal is anchored to the current
+ *  finding set server-side, so it lapses automatically if a re-scan finds something different. */
+export async function dismissSecretFindings(sessionId: string): Promise<{ dismissed: boolean }> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/secret-findings/dismiss`, {
+    method: "POST",
+    headers: { ...APP_HEADER },
+  });
+  return jsonOrThrow<{ dismissed: boolean }>(res, "Failed to dismiss the warning");
+}
+
+/** Undo a dismissal so the exposed-credential warning shows again. */
+export async function undismissSecretFindings(sessionId: string): Promise<{ dismissed: boolean }> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/secret-findings/undismiss`, {
+    method: "POST",
+    headers: { ...APP_HEADER },
+  });
+  return jsonOrThrow<{ dismissed: boolean }>(res, "Failed to restore the warning");
+}
+
 /** Flag/unflag many sessions as hidden at once (bulk mode). */
 export async function setSessionsHidden(sessionIds: string[], hidden: boolean): Promise<{ hidden: boolean }> {
   const res = await fetchOrOffline("/api/sessions/bulk/hidden", {

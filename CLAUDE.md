@@ -171,9 +171,11 @@ you'd cause a bug by not knowing:
 - **What crosses the sync wire, and what doesn't.** `sync` uploads the reconciled rows *and the
   interpretations*: sessions (with the model's title/summary), usage, `resolved_tasks` (the full
   `TaskFact` — outcome, frustration, signals), interactions (with `task_seq`), invocations, and user
-  **labels**. Only two things never leave the machine: the retained prompt/response **text**
-  (`resolved_interaction_text`, toggleable via `retainText`) and **BYO API keys** (`secrets.ts`) — so
-  the interpretations *derived from* the text upload, but the raw text does not.
+  **labels**. The things that never leave the machine: the retained prompt/response **text**
+  (`resolved_interaction_text`, toggleable via `retainText`), **secret-scan findings**
+  (`resolved_secret_findings` — redacted locators only, and even those stay local; see
+  `docs/internals/secret-scanning.md`), and **BYO API keys** (`secrets.ts`) — so the interpretations
+  *derived from* the text upload, but the raw text does not.
 - **Canonical tool/MCP parsing lives in `tool-categories.ts`** (`categorizeTool`, `parseMcpTool` — the
   `mcp__server__tool` split). Route through it so categorization and MCP naming stay consistent.
 - **All LLM access goes through `src/llm/`.** `registry.ts` is the single source of truth (adding a
@@ -204,8 +206,10 @@ imports (the Hub backend had inlined its own copies and dropped it too).
 `Dashboard` still backs the web app's per-view response types (imported type-only by `web/src/types.ts`
 from `src/types.ts`); the wire contract itself is being reworked separately.
 
-Two things stay off the wire entirely: the retained prompt/response text (`resolved_interaction_text`)
-and BYO API keys (`secrets.ts`). The task *interpretations* built from that text (outcome, frustration,
-chapter span) do upload — the raw text doesn't. Separately, `store/store-contract.ts` (the parse→store
+Three things stay off the wire entirely: the retained prompt/response text
+(`resolved_interaction_text`), secret-scan findings (`resolved_secret_findings`, #327 — the findings
+hold only redacted locators, and even those stay local), and BYO API keys (`secrets.ts`). The task
+*interpretations* built from that text (outcome, frustration, chapter span) do upload — the raw text
+doesn't. Separately, `store/store-contract.ts` (the parse→store
 fact contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`) is its own contract, distinct from the
 `Dashboard`/`SessionRow` types above.

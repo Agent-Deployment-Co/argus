@@ -217,6 +217,9 @@ function dropPostV18Schema(db: Database): void {
   rawExec(db, "DROP INDEX IF EXISTS resolved_invocations_file_path");
   rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
   rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+  // Post-v23 schema (#327): the findings table and the per-session dismissal record.
+  rawExec(db, "DROP TABLE IF EXISTS resolved_secret_findings");
+  rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN secret_scan_dismissed");
 }
 
 function rawGet<T>(db: Database, sql: string): T | undefined {
@@ -571,6 +574,8 @@ describe("SQLite store", () => {
       await rawExec(db, "DROP TABLE IF EXISTS labels");
       await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_secret_findings");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN secret_scan_dismissed");
       await rawExec(db, "PRAGMA user_version = 22");
     });
 
@@ -1230,6 +1235,8 @@ describe("SQLite store", () => {
     await withRawDatabase(path, async (db) => {
       await rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
       await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_secret_findings");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN secret_scan_dismissed");
       await rawExec(db, "PRAGMA user_version = 22");
     });
 
@@ -1246,6 +1253,50 @@ describe("SQLite store", () => {
     const version = await withRawDatabase(path, (db) =>
       rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
     );
+    expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  test("v23 -> v24 migration adds the secret-findings table and preserves existing data", async () => {
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("codex", [
+        {
+          meta: { source: "codex", sessionId: "codex:v23-scan", project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+          messages: [],
+        },
+      ]);
+    } finally {
+      await store.close();
+    }
+    // Degrade to v23: drop the findings table + dismissal column and set the version back,
+    // simulating a store that predates secret scanning (#327).
+    await withRawDatabase(path, async (db) => {
+      await rawExec(db, "DROP TABLE IF EXISTS resolved_secret_findings");
+      await rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN secret_scan_dismissed");
+      await rawExec(db, "PRAGMA user_version = 23");
+    });
+
+    const migrated = await openStore({ path });
+    try {
+      // The retained session survived, and the new surface works: no findings, nothing to dismiss.
+      expect((await migrated.readResolved()).sessions.has("codex:v23-scan")).toBe(true);
+      expect(await migrated.readSessionSecretFindings("codex:v23-scan")).toEqual({
+        findings: [],
+        dismissed: false,
+      });
+      expect(await migrated.dismissSessionSecretFindings("codex:v23-scan")).toBe(false);
+    } finally {
+      await migrated.close();
+    }
+    const [table, version] = await withRawDatabase(path, async (db) => [
+      await rawGet<{ name: string }>(
+        db,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resolved_secret_findings'",
+      ),
+      await rawGet<{ user_version: number }>(db, "PRAGMA user_version"),
+    ]);
+    expect(table?.name).toBe("resolved_secret_findings");
     expect(version?.user_version).toBe(STORE_SCHEMA_VERSION);
   });
 
@@ -2116,8 +2167,9 @@ describe("session search (#155)", () => {
       await store.close();
     }
     // Degrade to v19: drop the additions of every migration that will re-run from here — v20's search
-    // FTS/file_path index, v21's title/summary columns (#234), and v23's is_hidden column (v22's label
-    // tables are created with IF NOT EXISTS, so they don't need dropping) — and set the version back,
+    // FTS/file_path index, v21's title/summary columns (#234), v23's is_hidden column, and v24's
+    // findings table + dismissal column (#327) (v22's label tables and v24's findings table are
+    // created with IF NOT EXISTS, so they don't strictly need dropping) — and set the version back,
     // simulating an older store that already has interaction text + task data on disk but no search
     // index yet.
     await withRawDatabase(path, (db) => {
@@ -2129,6 +2181,8 @@ describe("session search (#155)", () => {
       rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN summary");
       rawExec(db, "DROP INDEX IF EXISTS resolved_sessions_is_hidden");
       rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN is_hidden");
+      rawExec(db, "DROP TABLE IF EXISTS resolved_secret_findings");
+      rawExec(db, "ALTER TABLE resolved_sessions DROP COLUMN secret_scan_dismissed");
       rawExec(db, "PRAGMA user_version = 19");
     });
 

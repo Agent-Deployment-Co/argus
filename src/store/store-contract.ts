@@ -270,6 +270,44 @@ export interface InteractionTextChunk {
   text: string;
 }
 
+// ---- Secret scanning (#327) ----
+
+/** The credential shapes the secret scanner (src/indexing/secret-scan.ts) recognizes. A controlled
+ *  vocabulary stored as plain TEXT in resolved_secret_findings.category, like invocations.category —
+ *  adding kinds is additive, no schema change. */
+export type SecretFindingCategory =
+  | "aws_access_key"
+  | "github_token"
+  | "anthropic_api_key"
+  | "openai_api_key"
+  | "stripe_key"
+  | "slack_token"
+  | "private_key"
+  | "jwt"
+  | "generic_secret";
+
+/** One likely exposed credential spotted in a session's prompt/response text. Records THAT a secret
+ *  was found, never the secret: category + location + a short redacted `hint` (first/last few
+ *  characters, the card-statement last-4 convention) so the user can recognize which credential it
+ *  was. Local-only — never on the sync wire. */
+export interface SecretFinding {
+  category: SecretFindingCategory;
+  /** Owning interaction's seq within the session (resolved_interactions.seq). */
+  interactionSeq: number;
+  /** Which slot of the interaction matched. */
+  chunkType: "prompt" | "response";
+  /** Redacted locator, e.g. "AKIA…WXYZ"; for private keys the key-type label, e.g. "RSA PRIVATE KEY". */
+  hint: string;
+}
+
+/** A session's secret-scan findings as the serve layer reads them (#327). `dismissed` is true when
+ *  the user dismissed exactly this finding set (the stored dismissal digest matches the current
+ *  rows' digest) — a content change that alters the findings re-surfaces the warning. */
+export interface SessionSecretFindings {
+  findings: SecretFinding[];
+  dismissed: boolean;
+}
+
 export interface InvocationFact {
   id: string;
   source: AgentSource;
@@ -681,6 +719,12 @@ export interface MaterializeSession {
    *  interaction_json is always text-free, and that text is persisted (opt-in, default-on, local-only)
    *  in resolved_interaction_text (#120). */
   interactions?: InteractionFact[];
+  /** Secret-scan findings for this session (#327), computed by the pipeline from the in-memory
+   *  interaction text (so scanning runs even when text retention is off) and persisted to
+   *  resolved_secret_findings. `digest` is the scanner's stable hash of the finding set, stamped on
+   *  every row so a dismissal can be compared against the current set in SQL. Absent/empty → the
+   *  session has no findings (any prior rows are replaced by the wholesale re-materialize). */
+  secretFindings?: { digest: string; findings: SecretFinding[] };
 }
 
 /** Per-source freshness attestation. */
@@ -882,6 +926,22 @@ export interface ReadModelStore {
   readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>>;
   /** Cross-session + per-project friction and the high-token-growth count. */
   readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups>;
+  // ---- Secret-scan findings (#327; local-only, never synced) ----
+  /** A session's secret-scan findings (redacted locators only) plus whether the user dismissed
+   *  exactly this finding set. Backs the session-detail warning banner. */
+  readSessionSecretFindings(sessionId: string): Promise<SessionSecretFindings>;
+  /** Undismissed finding counts for many sessions at once, keyed by session id — backs the session
+   *  list's warning badge. Sessions with no (undismissed) findings are absent from the map. */
+  readSecretFindingCounts(sessionIds: string[]): Promise<Map<string, number>>;
+  /** Count of in-scope sessions with at least one undismissed finding — the recommendations
+   *  rollup's input. Scope (sources/since/until/project) matches readHealthRollups: sessions with a
+   *  usage row in the window. */
+  readSecretFindingsRollup(query?: ResolvedQuery): Promise<number>;
+  /** Record that the user dismissed the session's current findings (stores their digest). Returns
+   *  false when the session has no findings — nothing to dismiss. */
+  dismissSessionSecretFindings(sessionId: string): Promise<boolean>;
+  /** Clear a session's findings dismissal, so the warning shows again. No-op if not dismissed. */
+  clearSessionSecretFindingsDismissal(sessionId: string): Promise<void>;
   // ---- Session/task labels (local-only; never synced) ----
   /** All label definitions, ordered by name (case-insensitive). Excludes soft-deleted labels unless
    *  `includeDeleted` is set. */

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { Calendar, EyeOff, FilterX, Folder, Layers, Search, Tag, X } from "lucide-react";
+import { Calendar, EyeOff, FilterX, Folder, Layers, Search, ShieldAlert, Tag, X } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { compactProject, dayStamp, fmt, pluralize } from "../lib/format";
 import { TasksIcon, TokensIcon } from "../lib/icons";
@@ -354,6 +354,16 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
                 <InteractionCount n={s.interactions} size={12} iconFirst />
                 {s.tasks > 0 && (
                   <IconStat value={s.tasks} title={`${s.tasks} ${pluralize(s.tasks, "task")}`} icon={TasksIcon} size={12} iconFirst />
+                )}
+                {(s.secretFindings ?? 0) > 0 && (
+                  <IconStat
+                    value={s.secretFindings}
+                    title={`${s.secretFindings} possible exposed ${pluralize(s.secretFindings!, "credential", "credentials")}. Open the session for details.`}
+                    icon={ShieldAlert}
+                    size={12}
+                    iconFirst
+                    className="secret-stat"
+                  />
                 )}
               </div>
               {s.labels && s.labels.length > 0 && (
