@@ -15,8 +15,9 @@ Two properties dominate the design:
 
 ## What runs where
 
-The scanner (`src/indexing/secret-scan.ts`) is pure regex plus an entropy check — no LLM call, no
-network, no throttle. It runs **inline at materialize time**, inside `toMaterializeSessions` in
+The scanner engine (`src/indexing/secret-scan.ts`) is pure regex plus per-rule entropy checks — no
+LLM call, no network, no throttle — over rules defined in `src/indexing/secret-scan-rules.ts`
+(adapted from gitleaks). It runs **inline at materialize time**, inside `toMaterializeSessions` in
 `src/indexing/pipeline.ts`, over the reconciled interactions' in-memory prompt/response text. That
 placement was chosen over a drain (like interpret) for two reasons:
 
@@ -31,13 +32,27 @@ would mean plumbing result text through the pipeline; that's a possible follow-u
 
 ## The rule set
 
-A small, high-precision subset in the spirit of gitleaks' rules — anchored, well-known credential
-shapes: AWS access keys (`AKIA`/`ASIA`), GitHub tokens (`ghp_`/`gho_`/…/`github_pat_`), Anthropic
-(`sk-ant-`), OpenAI (`sk-`/`sk-proj-`), Stripe (`sk_live_`/…), Slack (`xox…`), PEM private-key
-headers, JWTs, and a guarded generic `KEY=value` rule. The generic rule is where false positives
-live, so it demands a minimum length, a Shannon-entropy floor, a letters-and-digits mix, and rejects
-recognizable placeholders (`your-…`, `xxxx`, `${VAR}`, `process.env.…`). Precision beats recall: a
-missed obfuscated key costs little; a crying-wolf banner erodes the warning.
+The detection rules come from **gitleaks**
+([config/gitleaks.toml](https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml), MIT
+licensed) rather than being invented here: anchored, well-known credential shapes — AWS access keys
+(`AKIA`/`ASIA`/`ABIA`/`ACCA`), GitHub tokens (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`),
+Anthropic (`sk-ant-api03-`/`sk-ant-admin01-`), OpenAI (`sk-…T3BlbkFJ…` and `sk-proj-`/…), Stripe
+(`sk_`/`rk_` `test`/`live`/`prod`), Slack (`xoxb`/`xoxp`/`xoxe`/`xapp`), PEM private-key blocks,
+JWTs, and a guarded generic `KEY=value` rule.
+
+The rules live in **`src/indexing/secret-scan-rules.ts`, a data-only file** (patterns, entropy
+floors, allowlists, stopwords — no matching logic), with full attribution and a pinned upstream
+commit; the scanner engine in `secret-scan.ts` consumes it. That separation is deliberate: a
+rule-set refresh is a data edit against upstream, not a logic change, and the file documents the
+update procedure.
+
+Matching follows gitleaks' semantics: capture group 1 is the secret when a rule has one, each rule
+carries its own entropy floor, and regex allowlists / stopwords drop candidates (gitleaks'
+`[[rules.allowlists]]` and `stopwords`). The generic rule is where false positives live, so it
+keeps gitleaks' guards — entropy 3.5, an allowlist of non-secret key shapes (e.g. `bucket_key`,
+`api_version`, `csrf_token`), and a stopword core — on top of the anchored assignment shape.
+Precision beats recall: a missed obfuscated key costs little; a crying-wolf banner erodes the
+warning.
 
 Each match stores:
 

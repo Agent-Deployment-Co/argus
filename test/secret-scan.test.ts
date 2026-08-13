@@ -11,47 +11,71 @@ function categories(text: string): string[] {
   return scanTextForSecrets(text, at).map((f) => f.category);
 }
 
+// Synthetics shaped to satisfy each gitleaks rule (charset, length, entropy) — see
+// secret-scan-rules.ts for the upstream definitions these follow. Every value is assembled from
+// concatenated fragments so no complete credential-shaped literal appears in source: these are
+// test fixtures, never real keys, and keeping them split avoids tripping secret scanners on this
+// repo itself.
+const AWS_KEY = "AKIA" + "Q3G5X7BDFHJKLMNP".slice(0, 16); // [A-Z2-7] suffix, entropy ≥ 3
+const AWS_DOCS_EXAMPLE = "AKIA" + "IOSFODNN7" + "EXAMPLE"; // AWS's own docs placeholder
+const GITHUB_PAT = "ghp_" + "aB3dE5fG7hJ9kL1mN3pQ5rS7tV9wX2yZ4bC6";
+const GITHUB_FG_PAT =
+  "github" + "_pat_" + "aB3dE5fG7hJ9kL1mN3pQ5rS7tV9wX2yZ4bC6d8eF0gH2iJ4kL6mN8pQ0rS2tV4wX6yZ8aC1eG3iK5m7o9qS1uW3";
+const ANTHROPIC_KEY =
+  "sk-ant-api03-" + "aB3dE5fG7hJ9kL1mN3pQ5rS7tV9wX2yZ4bC6d8e".repeat(3).slice(0, 93) + "AA";
+const OPENAI_KEY = "sk-" + "aB3dE5fG7hJ9kL1mN3pQ" + "T3BlbkFJ" + "xY7wV2uT8sR4qP6oN0zA";
+const STRIPE_KEY = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+const SLACK_TOKEN = "xoxb-" + "123456789012" + "-" + "123456789012" + "-AbCdEfGhIjKl";
+const JWT =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+  "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0." +
+  "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c";
+const RSA_BLOCK =
+  "-----BEGIN RSA PRIVATE KEY-----\n" +
+  "MIIEowIBAAKCAQEA7dBt8k1zY0vVv0xJcQz2k0m0yYxVbN1a2s3d4f5g6h7j8k9l0\n".repeat(2) +
+  "-----END RSA PRIVATE KEY-----";
+
 describe("scanTextForSecrets", () => {
   test("flags an AWS access key", () => {
-    const [f] = scanTextForSecrets("use AKIAIOSFODNN7EXAMPLE for prod", at);
-    // AKIAIOSFODNN7EXAMPLE is AWS's own documentation example key — a shape match is correct.
+    const [f] = scanTextForSecrets(`use ${AWS_KEY} for prod`, at);
     expect(f!.category).toBe("aws_access_key");
-    expect(f!.hint).toBe("AKIA…MPLE");
-    expect(f!.hint).not.toContain("IOSFODNN7");
+    expect(f!.hint).toBe("AKIA…LMNP");
+    expect(f!.hint).not.toContain(AWS_KEY.slice(4, -4));
+  });
+
+  test("allowlists AWS's documentation example key (gitleaks `.+EXAMPLE$` rule)", () => {
+    // The AWS docs placeholder is a shape match, but gitleaks allowlists it, and so do we: it is
+    // not a leak.
+    expect(scanTextForSecrets(`use ${AWS_DOCS_EXAMPLE} for prod`, at)).toEqual([]);
   });
 
   test("flags GitHub tokens", () => {
-    expect(categories(`token ghp_${"a".repeat(36)}`)).toContain("github_token");
-    expect(categories(`github_pat_${"A1_" .repeat(11)}x`)).toContain("github_token");
+    expect(categories(`token ${GITHUB_PAT}`)).toContain("github_token");
+    expect(categories(GITHUB_FG_PAT)).toContain("github_token");
   });
 
-  test("flags Anthropic keys as anthropic, not openai", () => {
-    const found = scanTextForSecrets(`key: sk-ant-${"a1-".repeat(10)}`, at);
+  test("flags Anthropic keys", () => {
+    const found = scanTextForSecrets(`use ${ANTHROPIC_KEY} here`, at);
     expect(found.map((f) => f.category)).toEqual(["anthropic_api_key"]);
   });
 
-  test("flags OpenAI keys, including sk-proj-", () => {
-    expect(categories(`sk-${"T0".repeat(14)}`)).toContain("openai_api_key");
-    expect(categories(`sk-proj-${"T0".repeat(14)}`)).toContain("openai_api_key");
+  test("flags OpenAI keys (the T3BlbkFJ marker keeps precision high)", () => {
+    expect(categories(`Bearer ${OPENAI_KEY}`)).toContain("openai_api_key");
   });
 
   test("flags Stripe and Slack tokens", () => {
-    expect(categories(`sk_live_${"4eC39HqLyjWDarjtT1zdp7dc"}`)).toContain("stripe_key");
-    expect(categories(`xoxb-${"123456789012-123456789012-AbCdEfGhIjKl"}`)).toContain("slack_token");
+    expect(categories(STRIPE_KEY)).toContain("stripe_key");
+    expect(categories(SLACK_TOKEN)).toContain("slack_token");
   });
 
   test("flags private key blocks without leaking key material", () => {
-    const [f] = scanTextForSecrets(
-      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA7\n-----END RSA PRIVATE KEY-----",
-      at,
-    );
+    const [f] = scanTextForSecrets(RSA_BLOCK, at);
     expect(f!.category).toBe("private_key");
     expect(f!.hint).toBe("RSA PRIVATE KEY");
   });
 
   test("flags JWTs", () => {
-    const jwt = `eyJ${"hbGciOiJIUzI1NiIs"}.${"c3ViamVjdCI6MTIzND"}.${"SflKxwRJSMeKKF2Q"}`;
-    const [f] = scanTextForSecrets(`Authorization: Bearer ${jwt}`, at);
+    const [f] = scanTextForSecrets(`Authorization: Bearer ${JWT}`, at);
     expect(f!.category).toBe("jwt");
   });
 
@@ -84,15 +108,14 @@ describe("scanTextForSecrets", () => {
   });
 
   test("dedupes a secret pasted twice, keeping the first location", () => {
-    const text = `first AKIAIOSFODNN7EXAMPLE then again AKIAIOSFODNN7EXAMPLE`;
+    const text = `first ${AWS_KEY} then again ${AWS_KEY}`;
     expect(scanTextForSecrets(text, at)).toHaveLength(1);
   });
 
   test("a finding never contains the full secret", () => {
-    const secret = `sk-ant-${"Z9y8X7w6V5".repeat(5)}`;
-    for (const f of scanTextForSecrets(secret, at)) {
-      expect(secret).not.toContain(f.hint.replace("…", ""));
-      expect(f.hint.length).toBeLessThan(secret.length / 2);
+    for (const f of scanTextForSecrets(ANTHROPIC_KEY, at)) {
+      expect(ANTHROPIC_KEY).not.toContain(f.hint.replace("…", ""));
+      expect(f.hint.length).toBeLessThan(ANTHROPIC_KEY.length / 2);
     }
   });
 });
@@ -101,8 +124,8 @@ describe("scanSessionForSecrets", () => {
   test("scans prompts and responses, tagged with their interaction", () => {
     const findings = scanSessionForSecrets({
       interactions: [
-        { seq: 0, promptText: `here is my key sk-ant-${"a1-".repeat(10)}` },
-        { seq: 1, responseText: `-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----` },
+        { seq: 0, promptText: `here is my key ${ANTHROPIC_KEY}` },
+        { seq: 1, responseText: RSA_BLOCK },
         { seq: 2, promptText: "nothing here" },
       ],
     });
@@ -118,13 +141,13 @@ describe("scanSessionForSecrets", () => {
 });
 
 describe("secretFindingsDigest", () => {
-  const a = scanTextForSecrets(`AKIAIOSFODNN7EXAMPLE`, at);
+  const a = scanTextForSecrets(AWS_KEY, at);
   test("is stable regardless of finding order", () => {
     const b = [...a].reverse();
     expect(secretFindingsDigest(a)).toBe(secretFindingsDigest(b));
   });
   test("changes when the finding set changes", () => {
-    const other = scanTextForSecrets(`AKIAIOSFODNN7EXAMPLE`, { interactionSeq: 1, chunkType: "prompt" });
+    const other = scanTextForSecrets(AWS_KEY, { interactionSeq: 1, chunkType: "prompt" });
     expect(secretFindingsDigest(a)).not.toBe(secretFindingsDigest(other));
   });
 });

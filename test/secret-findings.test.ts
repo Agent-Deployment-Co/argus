@@ -177,7 +177,9 @@ describe("secret findings store", () => {
 describe("secret scanning in the indexing pipeline", () => {
   test("indexing a transcript with a pasted key records a redacted finding", async () => {
     const root = tempRoot();
-    // A minimal Claude transcript whose opening prompt pastes a (synthetic) key.
+    // A minimal Claude transcript whose opening prompt pastes a (synthetic) GitHub token — shaped
+    // to satisfy the gitleaks rule (ghp_ + 36 base62 chars).
+    const token = "ghp_" + "aB3dE5fG7hJ9kL1mN3pQ5rS7tV9wX2yZ4bC6";
     const projectsDir = join(root, "projects", "-Users-you-proj");
     mkdirSync(projectsDir, { recursive: true });
     const lines = [
@@ -188,7 +190,7 @@ describe("secret scanning in the indexing pipeline", () => {
         timestamp: "2026-06-01T17:00:00.000Z",
         message: {
           content: [
-            { type: "text", text: "why is sk-ant-XXXXXXXXXXXXXXXXXXXXXXXXXXXX failing?" },
+            { type: "text", text: `why does ${token} get a 401?` },
           ],
         },
       },
@@ -202,7 +204,7 @@ describe("secret scanning in the indexing pipeline", () => {
           id: "m1",
           model: "claude-sonnet-4-6",
           usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-          content: [{ type: "text", text: "That key ends up in the request header." }],
+          content: [{ type: "text", text: "That token is expired." }],
         },
       },
     ];
@@ -225,13 +227,13 @@ describe("secret scanning in the indexing pipeline", () => {
       expect(read.dismissed).toBe(false);
       expect(read.findings).toHaveLength(1);
       expect(read.findings[0]).toMatchObject({
-        category: "anthropic_api_key",
+        category: "github_token",
         chunkType: "prompt",
         interactionSeq: 0,
       });
-      // The store holds a redacted locator only — the key material itself is never persisted.
-      expect(read.findings[0]!.hint).toBe("sk-a…XXXX");
-      expect(read.findings[0]!.hint).not.toContain("XXXXXXXXXXXXXXXXXXXXXXXX");
+      // The store holds a redacted locator only — the token material itself is never persisted.
+      expect(read.findings[0]!.hint).toBe("ghp_…4bC6");
+      expect(read.findings[0]!.hint).not.toContain(token.slice(4, -4));
       expect((await store.readSecretFindingCounts(["sess-secret"])).get("sess-secret")).toBe(1);
       expect(await store.readSecretFindingsRollup()).toBe(1);
     } finally {

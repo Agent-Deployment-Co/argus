@@ -1,7 +1,13 @@
-// Secret scanning (#327): a cheap, deterministic, regex-based pass over a session's retained
-// prompt/response text that flags likely exposed credentials (pasted API keys, tokens, private key
-// blocks). Runs at materialize time on the in-memory interaction text — no LLM call, no throttle,
-// and independent of the retainText setting (the text is in memory at write time either way).
+// Secret scanning (#327): a cheap, deterministic pass over a session's retained prompt/response
+// text that flags likely exposed credentials (pasted API keys, tokens, private key blocks). Runs at
+// materialize time on the in-memory interaction text — no LLM call, no throttle, and independent of
+// the retainText setting (the text is in memory at write time either way).
+//
+// This module is the matching ENGINE only. The detection rules (patterns, entropy floors,
+// allowlists, stopwords) live in ./secret-scan-rules.ts, a data-only file adapted from gitleaks
+// (https://github.com/gitleaks/gitleaks, MIT — see that file for full attribution and how to
+// refresh the rules). Keeping rules separate from the engine means a rule-set update is a data
+// edit, not a logic change.
 //
 // The cardinal rule: a finding NEVER stores the matched secret, nor enough of it to reconstruct the
 // value. Only the category, the location (interaction + prompt/response slot), and a short redacted
@@ -9,17 +15,15 @@
 // recognize WHICH credential it was. Findings are local-only — push.ts never reads this table, the
 // same structural guarantee resolved_interaction_text gets.
 //
-// The rule set is a small, high-precision subset in the spirit of gitleaks' rules: well-known
-// credential shapes with anchored prefixes, plus a guarded generic KEY=... assignment rule with an
-// entropy floor and placeholder blocklist to keep false positives low enough that the warning stays
-// trustworthy. Precision beats recall here — a missed obfuscated key is fine, a crying-wolf banner
-// is not.
+// Precision beats recall, deliberately: a missed obfuscated key costs little, a crying-wolf banner
+// erodes the warning.
 import { createHash } from "node:crypto";
 import type {
   InteractionFact,
   SecretFinding,
   SecretFindingCategory,
 } from "../store/store-contract.ts";
+import { SECRET_RULES, type SecretRuleDefinition } from "./secret-scan-rules.ts";
 
 export type { SecretFinding, SecretFindingCategory } from "../store/store-contract.ts";
 
@@ -28,8 +32,8 @@ export type { SecretFinding, SecretFindingCategory } from "../store/store-contra
 const MAX_FINDINGS_PER_SESSION = 100;
 
 /** How many characters of the matched value a hint may reveal at each end. Well-known prefixed
- *  tokens follow the card-statement last-4 convention; generic secrets reveal less because their
- *  whole value is the secret. */
+ *  tokens follow the card-statement last-4 convention; generic secrets and JWTs reveal less because
+ *  more of the value *is* the secret; private keys reveal nothing of the block. */
 const HINT_EDGES: Record<SecretFindingCategory, number> = {
   aws_access_key: 4,
   github_token: 4,
@@ -37,7 +41,7 @@ const HINT_EDGES: Record<SecretFindingCategory, number> = {
   openai_api_key: 4,
   stripe_key: 4,
   slack_token: 4,
-  private_key: 0, // no substring of the block is shown; the hint names the key type instead
+  private_key: 0,
   jwt: 2,
   generic_secret: 2,
 };
@@ -48,16 +52,7 @@ function redact(category: SecretFindingCategory, value: string): string {
   return `${value.slice(0, edge)}…${value.slice(-edge)}`;
 }
 
-interface SecretRule {
-  category: SecretFindingCategory;
-  pattern: RegExp;
-  /** Extract the canonical secret value from a match (defaults to the whole match). */
-  value?: (m: RegExpExecArray) => string;
-  /** Extra precision guard; return false to drop the match. */
-  keep?: (value: string) => boolean;
-}
-
-/** Shannon entropy in bits per character — the generic rule's floor against prose and code
+/** Shannon entropy in bits per character — gitleaks' per-rule floor against prose and code
  *  identifiers, which sit well below real credentials. */
 function shannonEntropy(value: string): number {
   const counts = new Map<string, number>();
@@ -70,71 +65,41 @@ function shannonEntropy(value: string): number {
   return entropy;
 }
 
-/** Placeholder / non-secret shapes the generic assignment rule must not flag. */
-const GENERIC_PLACEHOLDER =
-  /^(?:your[-_ ]?|\$\{|.*\$\{|<[^>]*>$|x+$|\*+$|change[-_ ]?me|example|sample|dummy|placeholder|process\.env\.)/i;
-
-/** True when a generic KEY=value match looks like a real credential: long enough, high-entropy,
- *  mixes letters and digits, and isn't a recognizable placeholder or code expression. Precision
- *  over recall, deliberately. */
-function looksLikeSecret(value: string): boolean {
-  if (value.length < 16) return false;
-  if (GENERIC_PLACEHOLDER.test(value)) return false;
-  if (value.includes("..")) return false; // a path or property chain, not a token
-  if (!/[a-zA-Z]/.test(value) || !/[0-9]/.test(value)) return false;
-  return shannonEntropy(value) >= 3.6;
+/** The private-key rule matches the whole BEGIN…END block; the hint must never carry any of it, so
+ *  extract just the key-type label from the header ("RSA", "OPENSSH", …). */
+function privateKeyLabel(block: string): string {
+  const m = /-----BEGIN ([A-Z0-9 _-]{0,100}?PRIVATE KEY)(?: BLOCK)?-----/i.exec(block);
+  return m?.[1] ? m[1].toUpperCase() : "PRIVATE KEY";
 }
 
-// The rules. Order matters only where prefixes overlap (sk-ant-… must win over sk-…); each rule is
-// applied independently, and overlapping matches are deduped by (category, hint) afterwards.
-const RULES: SecretRule[] = [
-  { category: "aws_access_key", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-  {
-    category: "github_token",
-    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b/g,
-  },
-  { category: "anthropic_api_key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g },
-  {
-    category: "openai_api_key",
-    // (?!ant-) keeps Anthropic keys out of the OpenAI bucket.
-    pattern: /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
-  },
-  { category: "stripe_key", pattern: /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
-  { category: "slack_token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
-  {
-    category: "private_key",
-    pattern: /-----BEGIN ((?:RSA |EC |OPENSSH |PGP |DSA )?PRIVATE KEY(?: BLOCK)?)-----/g,
-    value: (m) => m[1] ?? m[0],
-  },
-  {
-    category: "jwt",
-    pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/g,
-  },
-  {
-    category: "generic_secret",
-    pattern:
-      /\b(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token|secret[_-]?key|client[_-]?secret|password|passwd)\s*["']?\s*[:=]\s*["']?([A-Za-z0-9/_+=$.~_-]{16,})["']?/gi,
-    value: (m) => m[1] ?? m[0],
-    keep: looksLikeSecret,
-  },
-];
+/** Whether a candidate value survives a rule's precision guards: entropy floor, regex allowlist,
+ *  and stopwords (gitleaks' semantics, evaluated against the extracted secret). */
+function passesGuards(rule: SecretRuleDefinition, value: string): boolean {
+  if (rule.entropy != null && shannonEntropy(value) < rule.entropy) return false;
+  if (rule.allowlistRegexes?.some((re) => re.test(value))) return false;
+  const lower = value.toLowerCase();
+  if (rule.stopwords?.some((w) => lower.includes(w))) return false;
+  return true;
+}
 
-/** Scan one piece of text, returning one finding per distinct (category, value) match. */
+/** Scan one piece of text, returning one finding per distinct (rule, value) match. */
 export function scanTextForSecrets(
   text: string,
   location: { interactionSeq: number; chunkType: "prompt" | "response" },
 ): SecretFinding[] {
   const findings: SecretFinding[] = [];
   const seen = new Set<string>();
-  for (const rule of RULES) {
+  for (const rule of SECRET_RULES) {
     rule.pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = rule.pattern.exec(text)) !== null) {
-      const value = rule.value ? rule.value(m) : m[0];
-      if (rule.keep && !rule.keep(value)) continue;
-      // Dedupe on the value itself (via its hint) so a key pasted twice flags once; private keys
-      // have no safe substring, so dedupe on category+location-free type label instead.
-      const key = `${rule.category}${value}`;
+      // gitleaks' secretGroup convention: capture group 1 is the secret when present, else the
+      // whole match (e.g. the GitHub/Slack token rules have no group).
+      const value = m[1] ?? m[0];
+      if (!passesGuards(rule, value)) continue;
+      // Dedupe on the value itself so a key pasted twice flags once; a session that pastes the
+      // same key in several prompts still gets one finding (the first location).
+      const key = `${rule.id}${value}`;
       if (seen.has(key)) continue;
       seen.add(key);
       findings.push({
@@ -143,7 +108,7 @@ export function scanTextForSecrets(
         chunkType: location.chunkType,
         hint:
           rule.category === "private_key"
-            ? value // for private keys the "value" is the header label, e.g. "RSA PRIVATE KEY"
+            ? privateKeyLabel(m[0])
             : redact(rule.category, value),
       });
     }
