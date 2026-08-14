@@ -527,7 +527,7 @@ tr:hover td { background: var(--hover); }
 .secret-banner-head { display: flex; align-items: center; gap: 8px; color: var(--racing-red); }
 .secret-banner-head .task-action { margin-left: auto; }
 .secret-banner-title { font-family: var(--font-ui); font-size: 13px; font-weight: 600; color: var(--heading); }
-.secret-banner-list { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--heading); line-height: 1.6; }
+.secret-banner-list { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--heading); line-height: 1.6; }
 .secret-banner-detail { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .secret-banner-dismissed { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
 .secret-stat { color: var(--racing-red); }

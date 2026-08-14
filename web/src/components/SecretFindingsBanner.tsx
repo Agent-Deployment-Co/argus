@@ -27,6 +27,20 @@ function findingLine(f: SecretFinding): string {
   return `${CATEGORY_LABELS[f.category] ?? f.category}${f.hint ? ` (${f.hint})` : ""} ${where}`;
 }
 
+/** Finding display order (documented, per the repo's ordered-list rule): chronological by
+ *  interaction, the prompt before the response within an interaction, then category and hint to
+ *  break ties. The scanner emits rule-order within a chunk; the user cares about where in the
+ *  session a credential appeared, so we sort here rather than trust arrival order. */
+function orderFindings(findings: SecretFinding[]): SecretFinding[] {
+  return [...findings].sort(
+    (a, b) =>
+      a.interactionSeq - b.interactionSeq ||
+      (a.chunkType === b.chunkType ? 0 : a.chunkType === "prompt" ? -1 : 1) ||
+      a.category.localeCompare(b.category) ||
+      a.hint.localeCompare(b.hint),
+  );
+}
+
 export function SecretFindingsBanner({
   sessionId,
   findings,
@@ -66,6 +80,8 @@ export function SecretFindingsBanner({
     );
   }
 
+  const ordered = orderFindings(findings);
+
   return (
     <div className="secret-banner" role="alert">
       <div className="secret-banner-head">
@@ -83,12 +99,12 @@ export function SecretFindingsBanner({
           Dismiss
         </button>
       </div>
-      <ul className="secret-banner-list">
-        {findings.slice(0, 5).map((f, i) => (
-          <li key={`${f.category}-${f.interactionSeq}-${f.chunkType}-${i}`}>{findingLine(f)}</li>
+      <ol className="secret-banner-list">
+        {ordered.slice(0, 5).map((f) => (
+          <li key={`${f.category}-${f.interactionSeq}-${f.chunkType}-${f.hint}`}>{findingLine(f)}</li>
         ))}
-        {findings.length > 5 && <li>…and {findings.length - 5} more</li>}
-      </ul>
+        {ordered.length > 5 && <li>…and {ordered.length - 5} more</li>}
+      </ol>
       <p className="secret-banner-detail">
         If any of these are real, rotate them. Only the redacted hint is stored, never the
         credential itself.
