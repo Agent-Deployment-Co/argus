@@ -138,6 +138,18 @@ describe("scanSessionForSecrets", () => {
     expect(scanSessionForSecrets({})).toEqual([]);
     expect(scanSessionForSecrets({ interactions: [{ seq: 0 }] })).toEqual([]);
   });
+
+  test("dedupes the same credential across interactions, keeping the first location", () => {
+    const findings = scanSessionForSecrets({
+      interactions: [
+        { seq: 0, promptText: `my key is ${AWS_KEY}` },
+        { seq: 1, promptText: `still failing with ${AWS_KEY}` },
+        { seq: 1, responseText: `confirmed, ${AWS_KEY} is the one` },
+      ],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ interactionSeq: 0, chunkType: "prompt", category: "aws_access_key" });
+  });
 });
 
 describe("secretFindingsDigest", () => {

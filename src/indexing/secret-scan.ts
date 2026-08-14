@@ -83,12 +83,16 @@ function passesGuards(rule: SecretRuleDefinition, value: string): boolean {
 }
 
 /** Scan one piece of text, returning one finding per distinct (rule, value) match. */
+/** Scan one piece of text, returning one finding per distinct (rule, value) match. `seen` is the
+ *  shared per-session dedupe set (keyed `${rule.id} ${value}`): callers scanning a whole session
+ *  pass one set across every chunk so a credential repeated in several prompts/responses flags
+ *  once, at its first location; standalone callers (tests) get a fresh per-call set. */
 export function scanTextForSecrets(
   text: string,
   location: { interactionSeq: number; chunkType: "prompt" | "response" },
+  seen: Set<string> = new Set(),
 ): SecretFinding[] {
   const findings: SecretFinding[] = [];
-  const seen = new Set<string>();
   for (const rule of SECRET_RULES) {
     rule.pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -97,9 +101,7 @@ export function scanTextForSecrets(
       // whole match (e.g. the GitHub/Slack token rules have no group).
       const value = m[1] ?? m[0];
       if (!passesGuards(rule, value)) continue;
-      // Dedupe on the value itself so a key pasted twice flags once; a session that pastes the
-      // same key in several prompts still gets one finding (the first location).
-      const key = `${rule.id}${value}`;
+      const key = `${rule.id} ${value}`;
       if (seen.has(key)) continue;
       seen.add(key);
       findings.push({
@@ -116,27 +118,32 @@ export function scanTextForSecrets(
   return findings;
 }
 
-/** Scan every retained prompt/response text of a session's interactions. Pure and synchronous —
- *  cheap enough to run inline at materialize time for every session. */
+/** Scan every retained prompt/response text of a session's interactions. One dedupe set spans the
+ *  whole session, so the same credential pasted into two interactions yields one finding (at its
+ *  first location) rather than inflating the count. Pure and synchronous — cheap enough to run
+ *  inline at materialize time for every session. */
 export function scanSessionForSecrets(session: {
   interactions?: Pick<InteractionFact, "seq" | "promptText" | "responseText">[];
 }): SecretFinding[] {
   const findings: SecretFinding[] = [];
+  const seen = new Set<string>();
   for (const interaction of session.interactions ?? []) {
     if (interaction.promptText) {
       findings.push(
-        ...scanTextForSecrets(interaction.promptText, {
-          interactionSeq: interaction.seq,
-          chunkType: "prompt",
-        }),
+        ...scanTextForSecrets(
+          interaction.promptText,
+          { interactionSeq: interaction.seq, chunkType: "prompt" },
+          seen,
+        ),
       );
     }
     if (interaction.responseText) {
       findings.push(
-        ...scanTextForSecrets(interaction.responseText, {
-          interactionSeq: interaction.seq,
-          chunkType: "response",
-        }),
+        ...scanTextForSecrets(
+          interaction.responseText,
+          { interactionSeq: interaction.seq, chunkType: "response" },
+          seen,
+        ),
       );
     }
     if (findings.length >= MAX_FINDINGS_PER_SESSION) {
