@@ -9,6 +9,7 @@ import type { SecretFinding } from "../types";
 import { dismissSecretFindings, undismissSecretFindings } from "../lib/sessions";
 import { pluralize } from "../lib/format";
 import { useReadOnly } from "../lib/read-only";
+import { VIEW_QUERY_KEY } from "../lib/views";
 
 /** User-facing labels for the scanner's categories (plain words, not rule ids). */
 const CATEGORY_LABELS: Record<SecretFinding["category"], string> = {
@@ -61,6 +62,10 @@ export function SecretFindingsBanner({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["session", sessionId] });
       void qc.invalidateQueries({ queryKey: ["sessions"] });
+      // The credential warning leads the Activity recommendations, and that view caches for 30s —
+      // without this it keeps counting a session the user just dismissed. Prefix-matching the path
+      // covers every filter combination cached for it.
+      void qc.invalidateQueries({ queryKey: [VIEW_QUERY_KEY, "/api/recommendations"] });
     },
   });
 
