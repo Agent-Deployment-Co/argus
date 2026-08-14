@@ -1,6 +1,8 @@
 // The session-detail warning for secret-scan findings (#327). Renders when a session's scan found
 // likely exposed credentials: what kind, where (prompt/response), and a redacted hint so the user
 // recognizes which credential it was. The store never holds the secret itself.
+// Each finding is a link into the Timeline at the interaction it was found in (#336), so the user
+// can see the turn that leaked it.
 // Dismissal is anchored to the current finding set server-side, so it lapses if a re-scan finds
 // something different; a dismissed banner collapses to a muted line with a way back.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,48 +11,26 @@ import type { SecretFinding } from "../types";
 import { dismissSecretFindings, undismissSecretFindings } from "../lib/sessions";
 import { pluralize } from "../lib/format";
 import { useReadOnly } from "../lib/read-only";
+import {
+  interactionNumber,
+  orderSecretFindings,
+  secretFindingKey,
+  secretFindingLine,
+} from "../lib/secret-findings";
 import { VIEW_QUERY_KEY } from "../lib/views";
-
-/** User-facing labels for the scanner's categories (plain words, not rule ids). */
-const CATEGORY_LABELS: Record<SecretFinding["category"], string> = {
-  aws_access_key: "AWS access key",
-  github_token: "GitHub token",
-  anthropic_api_key: "Anthropic API key",
-  openai_api_key: "OpenAI API key",
-  stripe_key: "Stripe key",
-  slack_token: "Slack token",
-  private_key: "Private key",
-  jwt: "JWT",
-  generic_secret: "Possible secret",
-};
-
-function findingLine(f: SecretFinding): string {
-  const where = f.chunkType === "prompt" ? "in your prompt" : "in the agent's reply";
-  return `${CATEGORY_LABELS[f.category] ?? f.category}${f.hint ? ` (${f.hint})` : ""} ${where}`;
-}
-
-/** Finding display order (documented, per the repo's ordered-list rule): chronological by
- *  interaction, the prompt before the response within an interaction, then category and hint to
- *  break ties. The scanner emits rule-order within a chunk; the user cares about where in the
- *  session a credential appeared, so we sort here rather than trust arrival order. */
-function orderFindings(findings: SecretFinding[]): SecretFinding[] {
-  return [...findings].sort(
-    (a, b) =>
-      a.interactionSeq - b.interactionSeq ||
-      (a.chunkType === b.chunkType ? 0 : a.chunkType === "prompt" ? -1 : 1) ||
-      a.category.localeCompare(b.category) ||
-      a.hint.localeCompare(b.hint),
-  );
-}
 
 export function SecretFindingsBanner({
   sessionId,
   findings,
   dismissed,
+  onFindingClick,
 }: {
   sessionId: string;
   findings: SecretFinding[];
   dismissed: boolean;
+  /** Open the Timeline at the interaction a finding was found in. Omitted when there's nowhere to
+   *  go, in which case the findings render as plain text. */
+  onFindingClick?: (interactionSeq: number) => void;
 }) {
   const qc = useQueryClient();
   // The warning itself is worth showing everywhere; dismissing is a write, and a read-only server
@@ -96,7 +76,7 @@ export function SecretFindingsBanner({
     );
   }
 
-  const ordered = orderFindings(findings);
+  const ordered = orderSecretFindings(findings);
 
   return (
     <div className="secret-banner" role="alert">
@@ -119,9 +99,29 @@ export function SecretFindingsBanner({
       </div>
       <ol className="secret-banner-list">
         {ordered.slice(0, 5).map((f) => (
-          <li key={`${f.category}-${f.interactionSeq}-${f.chunkType}-${f.hint}`}>{findingLine(f)}</li>
+          <li key={secretFindingKey(f)}>
+            {onFindingClick ? (
+              <button
+                type="button"
+                className="secret-banner-link"
+                onClick={() => onFindingClick(f.interactionSeq)}
+                title={`Show interaction ${interactionNumber(f.interactionSeq)} in the timeline`}
+              >
+                {secretFindingLine(f)}
+              </button>
+            ) : (
+              secretFindingLine(f)
+            )}
+          </li>
         ))}
-        {ordered.length > 5 && <li>…and {ordered.length - 5} more</li>}
+        {/* The list stops at 5, but every finding is marked on its turn in the timeline, so say where
+            the rest are rather than leaving them unreachable. */}
+        {ordered.length > 5 && (
+          <li>
+            …and {ordered.length - 5} more
+            {onFindingClick ? ", marked on their turns in the timeline" : ""}
+          </li>
+        )}
       </ol>
       <p className="secret-banner-detail">
         If any of these are real, rotate them. Only the redacted hint is stored, never the

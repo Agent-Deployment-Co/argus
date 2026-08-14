@@ -415,7 +415,19 @@ main:has(.inbox-page) { padding: 0; }
 .tl-turn--agent .tl-role { color: var(--heading); }
 .tl-role-model { text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--muted); }
 .tl-text { margin: 0; line-height: 1.55; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A credential the scanner flagged in this turn (#336): a red shield chip between the role and the
+   text, so the user sees which turn leaked it and what kind it was. Renders whether or not the
+   conversation text was retained. */
+.tl-secrets { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0 0 7px; padding: 0; }
+.tl-secret { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 1px 8px 1px 6px; border: 1px solid var(--racing-red); border-radius: 99px; color: var(--racing-red); font: 600 11px var(--font-ui); }
+.tl-secret svg { flex: 0 0 auto; }
+/* A card carrying a finding gets a tinted edge, so it's findable while scrolling the timeline. */
+.tl-item--secret { border-color: color-mix(in srgb, var(--racing-red) 45%, var(--line)); }
+/* The card a "show me this turn" link landed on, outlined so the jump is legible. */
+.tl-item--focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tl-side { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 55%, var(--bg)); font-size: 12px; }
+.tl-side-head { display: flex; flex-direction: column; gap: 2px; }
+.tl-side-seq { color: var(--heading); font: 600 11px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
 .tl-side-time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .tl-side-stats { display: flex; gap: 18px; }
 .tl-side-stat { display: flex; flex-direction: column; gap: 1px; }
@@ -530,6 +542,9 @@ tr:hover td { background: var(--hover); }
 .secret-banner-head .task-action { margin-left: auto; }
 .secret-banner-title { font-family: var(--font-ui); font-size: 13px; font-weight: 600; color: var(--heading); }
 .secret-banner-list { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--heading); line-height: 1.6; }
+/* Each finding is a link into the timeline at the interaction it came from (#336). */
+.secret-banner-link { appearance: none; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
+.secret-banner-link:hover { color: var(--racing-red); text-decoration-style: solid; }
 .secret-banner-detail { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .secret-banner-dismissed { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
 .secret-stat { color: var(--racing-red); }

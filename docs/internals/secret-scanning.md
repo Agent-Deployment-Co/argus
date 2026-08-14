@@ -92,8 +92,21 @@ which of a user's sessions contained a credential.
 
 ## Surfacing
 
-- **Session detail**: a warning banner listing each finding (kind, hint, prompt vs response) with a
-  Dismiss action; a dismissed banner collapses to a muted line with "Show again".
+- **Session detail**: a warning banner listing each finding (interaction, kind, hint, prompt vs
+  response) with a Dismiss action; a dismissed banner collapses to a muted line with "Show again".
+  Each listed finding is a link into the Timeline at the interaction it came from (#336).
+- **Timeline**: the turn a credential appeared in carries a shield marker naming the category and
+  the redacted hint, on the prompt or the response half it matched (`SessionTimeline` takes the
+  session's findings as a prop — `/api/session/:id` already returns them, so there's no new
+  endpoint). Three things worth knowing about the marker:
+  - It doesn't need retained text. With `retainText` off the timeline shows no prompt or response
+    body, and the marker still says which turn and which kind of credential — which is the part the
+    user acts on.
+  - It marks the **first** place a credential appeared, not every place. The scanner dedupes across
+    the whole session, so a key pasted once and echoed in three later replies is one finding at its
+    first location.
+  - It ignores dismissal. Dismissing silences the banner ("I know about this"); the marker is an
+    annotation on a turn the user navigated to on purpose, so it stays.
 - **Session list**: a red count badge on rows with undismissed findings, plus a `flagged` filter
   (`GET /api/sessions?flagged=1`) that narrows to them. It is the one filter that shows hidden
   sessions, marked as hidden on the row: the count below includes them, so leaving them out would

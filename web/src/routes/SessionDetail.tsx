@@ -12,7 +12,7 @@ import { SecretFindingsBanner } from "../components/SecretFindingsBanner";
 import { useReadOnly } from "../lib/read-only";
 import { StatCards, type Stat } from "../components/StatCards";
 import { OutcomeBadge, TaskDetails } from "../components/TaskDetails";
-import { SessionTimeline } from "../components/SessionTimeline";
+import { SessionTimeline, type TimelineFocus } from "../components/SessionTimeline";
 import { SessionDataCard } from "../components/SessionDataCard";
 import { compactProject, dtAmPm, dur, fmt, modelFamilyColor, pluralize } from "../lib/format";
 import { useSessionLabelsQuery } from "../lib/labels";
@@ -46,12 +46,15 @@ export function SessionDetail() {
   const taskMetrics = useSessionTaskMetrics(sessionId ?? "").data;
   const [tab, setTab] = useState<"overview" | "timeline" | "details">("overview");
   // A one-shot request to open the Timeline tab focused on a task chapter (from a task's timeline
-  // link). The nonce makes each click a fresh value so re-clicking the same task re-focuses it.
-  const [timelineFocus, setTimelineFocus] = useState<{ seq: number; nonce: number } | null>(null);
-  const openInTimeline = (seq: number) => {
-    setTimelineFocus((prev) => ({ seq, nonce: (prev?.nonce ?? 0) + 1 }));
+  // link) or on a single interaction (from a credential finding). The nonce makes each click a fresh
+  // value so re-clicking the same target re-focuses it.
+  const [timelineFocus, setTimelineFocus] = useState<TimelineFocus | null>(null);
+  const focusTimeline = (kind: TimelineFocus["kind"], seq: number) => {
+    setTimelineFocus((prev) => ({ kind, seq, nonce: (prev?.nonce ?? 0) + 1 }));
     setTab("timeline");
   };
+  const openInTimeline = (taskSeq: number) => focusTimeline("task", taskSeq);
+  const openTurnInTimeline = (interactionSeq: number) => focusTimeline("interaction", interactionSeq);
   // Manual tab navigation clears any pending timeline focus so it doesn't re-fire on a later visit.
   const goToTab = (t: "overview" | "timeline" | "details") => {
     setTimelineFocus(null);
@@ -194,6 +197,7 @@ export function SessionDetail() {
           sessionId={s.sessionId}
           findings={s.secretFindings}
           dismissed={s.secretFindingsDismissed ?? false}
+          onFindingClick={openTurnInTimeline}
         />
       )}
 
@@ -363,7 +367,12 @@ export function SessionDetail() {
 
       {tab === "timeline" && (
         <div className="detail-tab-panel">
-          <SessionTimeline key={s.sessionId} sessionId={s.sessionId} focus={timelineFocus} />
+          <SessionTimeline
+            key={s.sessionId}
+            sessionId={s.sessionId}
+            focus={timelineFocus}
+            secretFindings={s.secretFindings}
+          />
         </div>
       )}
 
