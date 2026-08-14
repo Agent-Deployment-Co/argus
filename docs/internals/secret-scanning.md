@@ -107,6 +107,13 @@ which of a user's sessions contained a credential.
     first location.
   - It ignores dismissal. Dismissing silences the banner ("I know about this"); the marker is an
     annotation on a turn the user navigated to on purpose, so it stays.
+
+  The banner and the timeline are two separate fetches (`/api/session/:id` and
+  `…/interactions`), so a re-index under an open tab can leave a finding pointing at an interaction
+  the timeline no longer has. In the store the two can't disagree — findings and the interaction
+  spine are written from the same array in one transaction — so this is a client-side staleness
+  window only. A link that lands nowhere scrolls nowhere and says so
+  (`unresolvedFocusNote`), rather than switching tabs and silently highlighting nothing.
 - **Session list**: a red count badge on rows with undismissed findings, plus a `flagged` filter
   (`GET /api/sessions?flagged=1`) that narrows to them. It is the one filter that shows hidden
   sessions, marked as hidden on the row: the count below includes them, so leaving them out would

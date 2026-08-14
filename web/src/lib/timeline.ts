@@ -61,8 +61,9 @@ export function toChapters(
 }
 
 /** Resolve a focus request against the chapters on screen. Returns null when the target isn't in
- *  this timeline — a link that went stale after a re-index should do nothing rather than scroll
- *  somewhere arbitrary. A task seq resolves to the first chapter carrying it. */
+ *  this timeline — a link that went stale after a re-index should scroll nowhere rather than
+ *  somewhere arbitrary (say so with `unresolvedFocusNote`). A task seq resolves to the first chapter
+ *  carrying it. */
 export function resolveTimelineFocus(
   chapters: TimelineChapter[],
   focus: TimelineFocus | null | undefined,
@@ -74,4 +75,21 @@ export function resolveTimelineFocus(
   }
   const chapterIndex = chapters.findIndex((c) => c.items.some((it) => it.seq === focus.seq));
   return chapterIndex < 0 ? null : { chapterIndex, interactionSeq: focus.seq };
+}
+
+/** What to tell the user when a link sent them here and the target isn't in this timeline. The
+ *  session detail and the timeline are two separate fetches, so a re-index under an open tab can
+ *  leave a credential warning pointing at an interaction the timeline no longer has. Without this
+ *  the click switches tabs and then visibly does nothing, which reads as a broken link.
+ *
+ *  Returns null when there's nothing to say: no request, or the request resolved. Only call it once
+ *  the timeline has loaded, since an unresolvable request and a not-yet-loaded one are the same
+ *  thing here. */
+export function unresolvedFocusNote(
+  chapters: TimelineChapter[],
+  focus: TimelineFocus | null | undefined,
+): string | null {
+  if (!focus || resolveTimelineFocus(chapters, focus)) return null;
+  const what = focus.kind === "task" ? "task" : "interaction";
+  return `That ${what} isn’t in this timeline any more. The session may have changed since this page loaded.`;
 }

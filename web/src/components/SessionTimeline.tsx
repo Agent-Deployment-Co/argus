@@ -17,6 +17,7 @@ import {
   chapterKey,
   resolveTimelineFocus,
   toChapters,
+  unresolvedFocusNote,
   type TimelineFocus,
 } from "../lib/timeline";
 import type { SecretFinding, TimelineInteraction } from "../types";
@@ -202,6 +203,9 @@ export function SessionTimeline({
   const effectiveCollapsed = collapsed ?? defaultCollapsed;
   // Where a "show me this" link points: a chapter, and for a credential finding the card inside it.
   const focusTarget = resolveTimelineFocus(chapters, focus);
+  // A link that went stale (the session was indexed again under an open tab) would otherwise switch
+  // tabs and silently highlight nothing, so say what happened.
+  const staleFocusNote = unresolvedFocusNote(chapters, focus);
   const secretsByInteraction = groupSecretFindingsByInteraction(secretFindings ?? []);
   const toggle = (key: string) =>
     setCollapsed((prev) => {
@@ -212,6 +216,11 @@ export function SessionTimeline({
     });
   return (
     <>
+      {staleFocusNote && (
+        <p className="task-empty tl-note" role="status">
+          {staleFocusNote}
+        </p>
+      )}
       {!data.retainedText && (
         <p className="task-empty tl-note">
           Conversation text wasn’t retained for this session, so prompts and responses aren’t shown —

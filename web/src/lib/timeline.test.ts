@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { chapterKey, resolveTimelineFocus, toChapters } from "./timeline";
+import { chapterKey, resolveTimelineFocus, toChapters, unresolvedFocusNote } from "./timeline";
 import type { TimelineInteraction, TimelineTask } from "../types";
 
 function interaction(seq: number, taskSeq: number | null): TimelineInteraction {
@@ -83,5 +83,36 @@ describe("resolveTimelineFocus", () => {
   it("resolves nothing when nothing was requested", () => {
     expect(resolveTimelineFocus(chapters, null)).toBeNull();
     expect(resolveTimelineFocus(chapters, undefined)).toBeNull();
+  });
+});
+
+describe("unresolvedFocusNote", () => {
+  const chapters = toChapters([interaction(0, 0), interaction(1, 0)], [task(0)]);
+
+  it("stays quiet when nothing was requested", () => {
+    expect(unresolvedFocusNote(chapters, null)).toBeNull();
+    expect(unresolvedFocusNote(chapters, undefined)).toBeNull();
+  });
+
+  it("stays quiet when the request resolved", () => {
+    expect(unresolvedFocusNote(chapters, { kind: "interaction", seq: 1, nonce: 1 })).toBeNull();
+    expect(unresolvedFocusNote(chapters, { kind: "task", seq: 0, nonce: 1 })).toBeNull();
+  });
+
+  it("says an interaction has gone, rather than leaving the click looking broken", () => {
+    expect(unresolvedFocusNote(chapters, { kind: "interaction", seq: 99, nonce: 1 })).toBe(
+      "That interaction isn’t in this timeline any more. The session may have changed since this page loaded.",
+    );
+  });
+
+  it("names a missing task as a task", () => {
+    expect(unresolvedFocusNote(chapters, { kind: "task", seq: 99, nonce: 1 })).toBe(
+      "That task isn’t in this timeline any more. The session may have changed since this page loaded.",
+    );
+  });
+
+  it("says nothing about an empty timeline unless a link pointed into it", () => {
+    expect(unresolvedFocusNote([], null)).toBeNull();
+    expect(unresolvedFocusNote([], { kind: "interaction", seq: 0, nonce: 1 })).not.toBeNull();
   });
 });
