@@ -102,6 +102,21 @@ describe("scanTextForSecrets", () => {
     }
   });
 
+  test("allowlists the generic rule's key-name suppressions (gitleaks regexTarget = match)", () => {
+    // These are shaped like an assignment of a high-entropy value, but the key NAME says they are
+    // not credentials. gitleaks suppresses them against the whole match, so we must too.
+    const texts = [
+      `key_name = kX9f2Q7vB4nR8wZ1mC6pL3dT`,
+      `csrf_token: aB3xY9zQ1mN7pL4kJ2hG5`,
+      `public_token = aB3xY9zQ1mN7pL4kJ2hG5`,
+      `access_id = kX9f2Q7vB4nR8wZ1mC6pL3dT`,
+      `api_endpoint = kX9f2Q7vB4nR8wZ1mC6pL3dT`,
+    ];
+    for (const text of texts) {
+      expect(scanTextForSecrets(text, at)).toEqual([]);
+    }
+  });
+
   test("ignores prose that merely mentions key shapes", () => {
     expect(categories("your OpenAI key starts with sk- followed by random characters")).toEqual([]);
     expect(categories("it looks like xoxb- followed by numbers")).toEqual([]);

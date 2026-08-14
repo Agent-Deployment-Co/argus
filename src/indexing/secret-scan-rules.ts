@@ -50,18 +50,28 @@ const GENERIC_STOPWORDS = [
   "debug",
 ] as const;
 
+/** One gitleaks `[[rules.allowlists]]` block: a candidate matching any of `regexes` is dropped.
+ *  `regexTarget` picks what the regexes are tested against — `"secret"` (gitleaks' default) is the
+ *  extracted value, `"match"` is the rule pattern's whole match. The distinction is load-bearing:
+ *  the generic rule's suppressions are written against the key NAME (`key_name`, `csrf_token`,
+ *  `public_token`, …), which only exists in the whole match, so testing them against the value
+ *  alone would silently suppress nothing. */
+export interface SecretRuleAllowlist {
+  regexTarget?: "secret" | "match";
+  regexes: RegExp[];
+}
+
 /** One detection rule. `pattern` matches a candidate; when it has a capture group, group 1 is the
  *  secret value (gitleaks' `secretGroup` convention), otherwise the whole match is. `entropy` is
  *  the minimum Shannon entropy (bits/char) the value must reach — gitleaks' per-rule `entropy`.
- *  `allowlistRegexes` drop matching values (gitleaks `[[rules.allowlists]] regexes` with the
- *  default `regexTarget = "secret"`), and `stopwords` drop any value containing one (gitleaks
- *  `stopwords`). */
+ *  `allowlists` drop matching candidates (gitleaks `[[rules.allowlists]]`), and `stopwords` drop
+ *  any value containing one (gitleaks `stopwords`). */
 export interface SecretRuleDefinition {
   id: string;
   category: SecretFindingCategory;
   pattern: RegExp;
   entropy?: number;
-  allowlistRegexes?: RegExp[];
+  allowlists?: SecretRuleAllowlist[];
   stopwords?: readonly string[];
 }
 
@@ -76,7 +86,7 @@ export const SECRET_RULES: SecretRuleDefinition[] = [
     category: "aws_access_key",
     pattern: /\b((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16})\b/g,
     entropy: 3,
-    allowlistRegexes: [/.+EXAMPLE$/],
+    allowlists: [{ regexes: [/.+EXAMPLE$/] }],
   },
   {
     id: "github-pat",
@@ -189,10 +199,18 @@ export const SECRET_RULES: SecretRuleDefinition[] = [
     pattern:
       /[\w.-]{0,50}?(?:access|auth|Api|API|credential|creds|key|passw(?:or)?d|secret|token)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}([\w.=-]{10,150}|[a-z0-9][a-z0-9+/]{11,}={0,3})(?:[\x60'"\s;]|\\[nr]|$)/g,
     entropy: 3.5,
-    // gitleaks' "Allowlist for Generic API Keys" (regexTarget = "match"), verbatim.
-    allowlistRegexes: [
-      /^[a-zA-Z_.-]+$/, // a bare identifier/path (no digits) is never a secret
-      /(?:access(?:ibility|or)|access[_.-]?id|random[_.-]?access|api[_.-]?(?:id|name|version)|rapid|capital|[a-z0-9-]*?api[a-z0-9-]*?:jar:|author|X-MS-Exchange-Organization-Auth|Authentication-Results|(?:credentials?[_.-]?id|withCredentials)|(?:bucket|foreign|hot|idx|natural|primary|pub(?:lic)?|schema|sequence)[_.-]?key|(?:turkey)|key[_.-]?(?:alias|board|code|frame|id|length|mesh|name|pair|press(?:ed)?|ring|selector|signature|size|stone|storetype|word|up|down|left|right)|key[_.-]?vault[_.-]?(?:id|name)|keyVaultToStoreSecrets|key(?:store|tab)[_.-]?(?:file|path)|issuerkeyhash|(?:[DdMm]onkey)|keying|(?:secret)[_.-]?(?:length|name|size)|UserSecretsId|(?:csrf)[_.-]?token|(?:io\.jsonwebtoken[ \t]?:[ \t]?[\w-]+)|(?:api|credentials|token)[_.-]?(?:endpoint|ur[il])|public[_.-]?token|(?:key|token)[_.-]?file|(?:[A-Z_]+=\n[A-Z_]+=|[a-z_]+=\n[a-z_]+=)(?:\n|$)|(?:[A-Z.]+\n[a-z.]+=)(?:\n|$))/i,
+    // gitleaks' "Allowlist for Generic API Keys", verbatim — two blocks with different targets.
+    allowlists: [
+      // Against the secret: a bare identifier/path (no digits) is never a credential.
+      { regexes: [/^[a-zA-Z_.-]+$/] },
+      // Against the whole match: these suppress by KEY NAME (`key_name`, `csrf_token`,
+      // `public_token`, …), which lives in the match, not in the extracted value.
+      {
+        regexTarget: "match",
+        regexes: [
+          /(?:access(?:ibility|or)|access[_.-]?id|random[_.-]?access|api[_.-]?(?:id|name|version)|rapid|capital|[a-z0-9-]*?api[a-z0-9-]*?:jar:|author|X-MS-Exchange-Organization-Auth|Authentication-Results|(?:credentials?[_.-]?id|withCredentials)|(?:bucket|foreign|hot|idx|natural|primary|pub(?:lic)?|schema|sequence)[_.-]?key|(?:turkey)|key[_.-]?(?:alias|board|code|frame|id|length|mesh|name|pair|press(?:ed)?|ring|selector|signature|size|stone|storetype|word|up|down|left|right)|key[_.-]?vault[_.-]?(?:id|name)|keyVaultToStoreSecrets|key(?:store|tab)[_.-]?(?:file|path)|issuerkeyhash|(?:[DdMm]onkey)|keying|(?:secret)[_.-]?(?:length|name|size)|UserSecretsId|(?:csrf)[_.-]?token|(?:io\.jsonwebtoken[ \t]?:[ \t]?[\w-]+)|(?:api|credentials|token)[_.-]?(?:endpoint|ur[il])|public[_.-]?token|(?:key|token)[_.-]?file|(?:[A-Z_]+=\n[A-Z_]+=|[a-z_]+=\n[a-z_]+=)(?:\n|$)|(?:[A-Z.]+\n[a-z.]+=)(?:\n|$))/i,
+        ],
+      },
     ],
     // gitleaks' generic-api-key stopwords (trimmed to a representative core — the full upstream
     // list is ~1,400 English words; a value containing any of these is prose or code, not a key).

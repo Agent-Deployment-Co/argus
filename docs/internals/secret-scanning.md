@@ -48,8 +48,10 @@ update procedure.
 
 Matching follows gitleaks' semantics: capture group 1 is the secret when a rule has one, each rule
 carries its own entropy floor, and regex allowlists / stopwords drop candidates (gitleaks'
-`[[rules.allowlists]]` and `stopwords`). The generic rule is where false positives live, so it
-keeps gitleaks' guards — entropy 3.5, an allowlist of non-secret key shapes (e.g. `bucket_key`,
+`[[rules.allowlists]]` and `stopwords`). Each allowlist keeps gitleaks' `regexTarget`, which is
+load-bearing: the key-shape suppressions match the key *name*, so they are tested against the whole
+match, not the extracted value. The generic rule is where false positives live, so it keeps
+gitleaks' guards — entropy 3.5, an allowlist of non-secret key shapes (e.g. `bucket_key`,
 `api_version`, `csrf_token`), and a stopword core — on top of the anchored assignment shape.
 Precision beats recall: a missed obfuscated key costs little; a crying-wolf banner erodes the
 warning.

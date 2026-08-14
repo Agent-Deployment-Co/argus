@@ -72,11 +72,16 @@ function privateKeyLabel(block: string): string {
   return m?.[1] ? m[1].toUpperCase() : "PRIVATE KEY";
 }
 
-/** Whether a candidate value survives a rule's precision guards: entropy floor, regex allowlist,
- *  and stopwords (gitleaks' semantics, evaluated against the extracted secret). */
-function passesGuards(rule: SecretRuleDefinition, value: string): boolean {
+/** Whether a candidate survives a rule's precision guards: entropy floor, regex allowlists, and
+ *  stopwords (gitleaks' semantics). Entropy and stopwords are evaluated against the extracted
+ *  secret; each allowlist picks its own target, since some suppressions are written against the
+ *  key name and so only exist in the whole match. */
+function passesGuards(rule: SecretRuleDefinition, value: string, match: string): boolean {
   if (rule.entropy != null && shannonEntropy(value) < rule.entropy) return false;
-  if (rule.allowlistRegexes?.some((re) => re.test(value))) return false;
+  for (const allowlist of rule.allowlists ?? []) {
+    const target = allowlist.regexTarget === "match" ? match : value;
+    if (allowlist.regexes.some((re) => re.test(target))) return false;
+  }
   const lower = value.toLowerCase();
   if (rule.stopwords?.some((w) => lower.includes(w))) return false;
   return true;
@@ -100,7 +105,7 @@ export function scanTextForSecrets(
       // gitleaks' secretGroup convention: capture group 1 is the secret when present, else the
       // whole match (e.g. the GitHub/Slack token rules have no group).
       const value = m[1] ?? m[0];
-      if (!passesGuards(rule, value)) continue;
+      if (!passesGuards(rule, value, m[0])) continue;
       const key = `${rule.id} ${value}`;
       if (seen.has(key)) continue;
       seen.add(key);
