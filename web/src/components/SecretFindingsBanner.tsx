@@ -66,12 +66,17 @@ export function SecretFindingsBanner({
 
   if (!findings.length) return null;
 
+  // A dismissal can fail for reasons the user can act on — Argus stopped, or a re-index cleared the
+  // findings this page still shows. Say so; silently leaving the banner in place reads as a bug.
+  const error = mutation.error instanceof Error ? mutation.error.message : null;
+
   if (dismissed) {
     return (
       <div className="secret-banner-dismissed">
         <span>
           Credential warning dismissed ({findings.length} {pluralize(findings.length, "finding")}).
         </span>
+        {error && <span className="task-error" role="alert">{error}</span>}
         {!readOnly && (
           <button
             type="button"
@@ -117,6 +122,7 @@ export function SecretFindingsBanner({
         If any of these are real, rotate them. Only the redacted hint is stored, never the
         credential itself.
       </p>
+      {error && <p className="task-error">{error}</p>}
     </div>
   );
 }
