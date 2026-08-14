@@ -1,4 +1,4 @@
-.PHONY: install build test typecheck changelog publish clean desktop dmg version bump help
+.PHONY: install build test typecheck changelog docs docs-preview publish clean desktop dmg version bump help
 
 # GNU Make exposes OS=Windows_NT on Windows. On macOS, retain the cross-build
 # path so one command produces the macOS app plus both Windows architectures.
@@ -16,17 +16,19 @@ NPM_PUBLISH_FLAGS ?= --access public
 
 help:
 	@echo "Targets:"
-	@echo "  install    Install dependencies"
-	@echo "  build      Build the npm packages"
-	@echo "  test       Run tests"
-	@echo "  typecheck  Run TypeScript type checking"
-	@echo "  changelog  Rebuild docs/changelog.md from GitHub releases"
-	@echo "  publish    Build and publish to npm"
-	@echo "  clean      Remove dist/"
-	@echo "  desktop    Build the native desktop app (macOS also cross-builds Windows x64/ARM64)"
-	@echo "  dmg        Build a macOS DMG (requires APPLE_ID and APPLE_PASSWORD)"
-	@echo "  version    Print the current version"
-	@echo "  bump       Bump the version (requires VERSION=major.minor.patch)"
+	@echo "  install       Install dependencies"
+	@echo "  build         Build the npm packages"
+	@echo "  test          Run tests"
+	@echo "  typecheck     Run TypeScript type checking"
+	@echo "  changelog     Rebuild docs/changelog.md from GitHub releases"
+	@echo "  docs          Serve the docs site with live reload"
+	@echo "  docs-preview  Build the docs site and serve the production build"
+	@echo "  publish       Build and publish to npm"
+	@echo "  clean         Remove dist/"
+	@echo "  desktop       Build the native desktop app (macOS also cross-builds Windows x64/ARM64)"
+	@echo "  dmg           Build a macOS DMG (requires APPLE_ID and APPLE_PASSWORD)"
+	@echo "  version       Print the current version"
+	@echo "  bump          Bump the version (requires VERSION=major.minor.patch)"
 
 install:
 	bun install
@@ -51,6 +53,13 @@ typecheck: install
 
 changelog: install
 	bun run docs:changelog
+
+docs: install
+	bun run docs:dev
+
+docs-preview: install
+	bun run docs:build
+	bun run docs:preview
 
 publish: install build
 	@set -eu; \
