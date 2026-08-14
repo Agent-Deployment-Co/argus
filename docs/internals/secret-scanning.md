@@ -94,9 +94,13 @@ which of a user's sessions contained a credential.
 
 - **Session detail**: a warning banner listing each finding (kind, hint, prompt vs response) with a
   Dismiss action; a dismissed banner collapses to a muted line with "Show again".
-- **Session list**: a red count badge on rows with undismissed findings.
+- **Session list**: a red count badge on rows with undismissed findings, plus a `flagged` filter
+  (`GET /api/sessions?flagged=1`) that narrows to them. It is the one filter that shows hidden
+  sessions, marked as hidden on the row: the count below includes them, so leaving them out would
+  make a flagged session both counted and unreachable.
 - **Recommendations** (`/api/recommendations`): an "N sessions may contain exposed credentials"
-  warning that leads the list, so the signal reaches users who never open the session.
+  warning that leads the list, so the signal reaches users who never open the session. It carries a
+  link to the flagged list, scoped by whatever date range and source the view already had.
 
 MCP (`/mcp`) gates findings behind the same transcript-access setting as prompt text: findings are
 derived from transcript text, so agents without transcript access don't get them either.

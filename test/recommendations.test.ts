@@ -62,6 +62,15 @@ describe("ruleExposedSecrets (#327)", () => {
     expect(rec!.title).toContain("3 sessions may contain exposed credentials");
   });
 
+  test("links to the flagged sessions, which is the only way to reach a hidden one", () => {
+    const [rec] = computeRecommendations(baseDash({ secretFindingSessions: 1 } as Partial<Dashboard>));
+    expect(rec!.link).toEqual({
+      to: "/sessions",
+      search: { flagged: 1 },
+      label: "Review flagged sessions",
+    });
+  });
+
   test("leads the list, ahead of the hygiene tips", () => {
     const d = baseDash({
       byPlugin: [plugin("jj", true, false)],

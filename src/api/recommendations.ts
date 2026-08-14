@@ -8,6 +8,9 @@ export interface Recommendation {
   severity: RecommendationSeverity;
   title: string;
   detail: string;
+  /** Where the user goes to act on this. `to` is an app route and `search` the filters to apply to
+   *  it; the web app resolves both through the router, keeping the active date range and source. */
+  link?: { to: string; search?: Record<string, string | number>; label: string };
 }
 
 /** The exact slice of the dashboard the recommendation rules read (#217) — narrowed from the whole
@@ -46,6 +49,10 @@ function ruleExposedSecrets(d: RecommendationInputs): Recommendation | null {
     title: `${n} session${n > 1 ? "s" : ""} may contain exposed credentials`,
     detail:
       "It looks like an API key, token, or other credential was pasted into a session. Open the session to see which kind, and rotate any real credentials you find.",
+    // The count includes sessions the user has hidden, which the list leaves out by default — so the
+    // link carries the flagged filter, which brings them back rather than leaving them uncountable
+    // and unreachable at once.
+    link: { to: "/sessions", search: { flagged: 1 }, label: "Review flagged sessions" },
   };
 }
 

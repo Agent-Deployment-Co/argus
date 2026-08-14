@@ -162,6 +162,26 @@ describe("secret findings store", () => {
     }
   });
 
+  test("the flagged-session set includes hidden sessions, and drops dismissed ones", async () => {
+    const store = await openStore({ path: join(tempRoot(), "argus.db") });
+    try {
+      await store.materializeSessions("claude", [
+        sessionWithFindings("s1", [finding()]),
+        sessionWithFindings("s2", [finding()]),
+        sessionWithFindings("s3", []),
+      ]);
+      // The rollup counts a hidden session, so the list it links to has to be able to show it.
+      await store.setSessionsHidden(["s2"], true);
+      expect(await store.readSecretFindingsRollup()).toBe(2);
+      expect([...(await store.readSessionIdsWithSecretFindings())].sort()).toEqual(["s1", "s2"]);
+
+      await store.dismissSessionSecretFindings("s2");
+      expect([...(await store.readSessionIdsWithSecretFindings())]).toEqual(["s1"]);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("the rollup honors the source filter", async () => {
     const store = await openStore({ path: join(tempRoot(), "argus.db") });
     try {

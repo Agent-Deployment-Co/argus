@@ -141,6 +141,10 @@ export interface SessionListQuery {
   label?: string[];
   /** How `label` narrows when it has more than one id: "any" (union, default) or "all" (intersection). */
   labelMode?: LabelFilterMode;
+  /** Restrict to sessions with undismissed secret-scan findings (#327) — what the exposed-credentials
+   *  recommendation links to. Hidden sessions are included, because the count that links here counts
+   *  them; without this they'd be unreachable. */
+  flagged?: boolean;
   includeGenerated: boolean;
   sort: SessionSort;
   limit: number;
@@ -476,6 +480,8 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
     file: c.req.query("file") || undefined,
     label: label ? label.split(",").filter(Boolean) : undefined,
     labelMode: labelMode as LabelFilterMode | undefined,
+    // Left undefined rather than false when absent, like the other optional filters.
+    flagged: c.req.query("flagged") === "true" || c.req.query("flagged") === "1" || undefined,
     includeGenerated,
     sort: sort as SessionSort,
     limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
@@ -1270,7 +1276,20 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       const labeled = await store.readSessionIdsForLabels(query.label, query.labelMode ?? "any");
       sessionIds = sessionIds ? sessionIds.filter((id) => labeled.has(id)) : [...labeled];
     }
-    const aggregates = await store.readSessionAggregates({ sources, since, until, sessionIds });
+    // The flagged filter (#327) narrows the same candidate set, and is the one filter that reaches
+    // past `is_hidden`: the exposed-credentials count includes hidden sessions, so the list it links
+    // to must be able to show them.
+    if (query.flagged) {
+      const flagged = await store.readSessionIdsWithSecretFindings();
+      sessionIds = sessionIds ? sessionIds.filter((id) => flagged.has(id)) : [...flagged];
+    }
+    const aggregates = await store.readSessionAggregates({
+      sources,
+      since,
+      until,
+      sessionIds,
+      includeHidden: query.flagged,
+    });
     const list = buildSessionList(aggregates, {
       sort: query.sort,
       limit: query.limit,

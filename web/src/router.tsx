@@ -71,6 +71,9 @@ const sessionsRoute = createRoute({
     label?: string;
     /** How multiple `label` ids combine: "any" (union, default) or "all" (intersection). */
     labelMode?: "any" | "all";
+    /** Narrow to sessions with possible exposed credentials (#327), hidden sessions included — what
+     *  the Activity recommendation links to. */
+    flagged?: true;
   } => ({
     since: typeof search.since === "string" && search.since ? search.since : daysAgo(30),
     until: typeof search.until === "string" && search.until ? search.until : daysAgo(0),
@@ -82,6 +85,9 @@ const sessionsRoute = createRoute({
     q: typeof search.q === "string" && search.q ? search.q : undefined,
     label: typeof search.label === "string" && search.label ? search.label : undefined,
     labelMode: search.labelMode === "all" ? "all" : undefined,
+    // Like firstRun above: the default parser JSON-parses values, so `?flagged=1` arrives as the
+    // number 1 rather than the string.
+    flagged: search.flagged === 1 || search.flagged === "1" || search.flagged === true ? true : undefined,
   }),
   search: { middlewares: [retainSearchParams(["since", "until"])] },
 });

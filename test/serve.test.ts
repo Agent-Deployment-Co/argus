@@ -241,6 +241,17 @@ describe("serve API", () => {
     });
   });
 
+  test("GET /api/sessions parses the flagged filter (#327)", async () => {
+    let seen: unknown;
+    const app = createApp(null, {
+      sessionList: async (query) => { seen = query; return { rows: [], total: 0, offset: 0, limit: 50 }; },
+    });
+    await app.request("/api/sessions?flagged=1");
+    expect(seen).toMatchObject({ flagged: true });
+    await app.request("/api/sessions");
+    expect((seen as { flagged?: boolean }).flagged).toBeUndefined();
+  });
+
   test("GET /api/sessions parses a file: term (#155) alongside q", async () => {
     let seen: unknown;
     const app = createApp(null, {

@@ -2982,6 +2982,23 @@ export class SqliteStore implements Store {
     });
   }
 
+  /** Every session with at least one undismissed finding — what the sessions list narrows to when
+   *  the user follows the exposed-credentials recommendation. Deliberately unscoped by date/source
+   *  (the list applies its own filters) and by `is_hidden`: the rollup counts hidden sessions, so
+   *  the list the count links to has to be able to show them. */
+  readSessionIdsWithSecretFindings(): Promise<Set<string>> {
+    return this.schedule(async () => {
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT DISTINCT f.session_id
+         FROM resolved_secret_findings f
+         JOIN resolved_sessions s ON s.session_id = f.session_id
+         WHERE f.findings_digest IS NOT s.secret_scan_dismissed`,
+      );
+      return new Set(rows.map((r) => r.session_id));
+    });
+  }
+
   dismissSessionSecretFindings(sessionId: string): Promise<boolean> {
     return this.schedule(async () => {
       // Anchor the dismissal to the session's CURRENT findings digest, so a later re-scan that
@@ -3400,6 +3417,7 @@ export class SqliteStore implements Store {
         tasks: tasksBySession.get(row.session_id) ?? 0,
         title: row.title,
         summary: row.summary,
+        isHidden: row.is_hidden === 1,
       }));
     });
   }

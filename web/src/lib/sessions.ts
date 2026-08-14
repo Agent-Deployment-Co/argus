@@ -21,6 +21,9 @@ export interface SessionListFilters extends SnapshotFilters {
   label?: string[];
   /** How `label` narrows when it has more than one id: "any" (union, default) or "all" (intersection). */
   labelMode?: "any" | "all";
+  /** Only sessions with possible exposed credentials (#327). The one filter that shows hidden
+   *  sessions, since the warning counts them. */
+  flagged?: boolean;
   sort: SessionSort;
 }
 
@@ -44,6 +47,7 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
     params.set("label", filters.label.join(","));
     if (filters.labelMode === "all") params.set("labelMode", "all");
   }
+  if (filters.flagged) params.set("flagged", "1");
   return `/api/sessions?${params}`;
 }
 

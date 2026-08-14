@@ -687,6 +687,9 @@ export interface SessionAggregate {
    *  list surfaces them with a first-prompt fallback. */
   title: string | null;
   summary: string | null;
+  /** Whether the user hid this session. Only ever true when the read asked for hidden sessions
+   *  (`includeHidden`), so the list can mark why a hidden session is on screen. */
+  isHidden: boolean;
 }
 
 /** Usage sums + message count for one grouping key crossed with model (cost is priced per-model in JS
@@ -937,6 +940,10 @@ export interface ReadModelStore {
    *  rollup's input. Scope (sources/since/until/project) matches readHealthRollups: sessions with a
    *  usage row in the window. */
   readSecretFindingsRollup(query?: ResolvedQuery): Promise<number>;
+  /** Every session with at least one undismissed finding, hidden sessions included — the candidate
+   *  set the sessions list intersects for its `flagged` filter. Unscoped: the list applies its own
+   *  date/source/project narrowing on top. */
+  readSessionIdsWithSecretFindings(): Promise<Set<string>>;
   /** Record that the user dismissed the session's current findings (stores their digest). Returns
    *  false when the session has no findings — nothing to dismiss. */
   dismissSessionSecretFindings(sessionId: string): Promise<boolean>;

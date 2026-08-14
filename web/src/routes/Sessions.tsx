@@ -27,6 +27,9 @@ export interface SessionsSearch {
   q?: string;
   /** Comma-separated label ids (union filter). */
   label?: string;
+  /** Only sessions with possible exposed credentials (#327) — the Activity recommendation's link.
+   *  Unlike every other filter, this one shows hidden sessions too. */
+  flagged?: true;
 }
 
 /** Parse the comma-separated `?label=` search param into an array of label ids. */
@@ -96,6 +99,7 @@ function filtersFromSearch(search: Record<string, unknown>): SessionListFilters 
     file: typeof search.file === "string" && search.file ? search.file : undefined,
     label: labelIdsFromSearch(search),
     labelMode: search.labelMode === "all" ? "all" : "any",
+    flagged: search.flagged === true || undefined,
     sort: (typeof search.sort === "string" ? (search.sort as SessionSort) : "recent") || "recent",
   };
 }
@@ -350,6 +354,16 @@ export function SessionList({ selection }: { selection: SessionSelection }) {
               </div>
               <div className="session-item-stats">
                 <span>{s.source}</span>
+                {s.isHidden && (
+                  // Only the flagged filter surfaces hidden sessions; say so, or the row looks like
+                  // the hide didn't take.
+                  <span
+                    className="muted"
+                    title="You hid this session. It's here because it may contain exposed credentials."
+                  >
+                    <EyeOff size={12} strokeWidth={1.75} aria-label="Hidden session" />
+                  </span>
+                )}
                 <IconStat value={fmt(s.total)} title={`${fmt(s.total)} tokens`} icon={TokensIcon} size={12} iconFirst />
                 <InteractionCount n={s.interactions} size={12} iconFirst />
                 {s.tasks > 0 && (
@@ -642,7 +656,7 @@ export function Sessions() {
   );
 
   const navigate = useNavigate();
-  const { since, until, committedQ, source, project, labelIds, labelMode } = useSearch({
+  const { since, until, committedQ, source, project, labelIds, labelMode, flagged } = useSearch({
     strict: false,
     select: (s) => ({
       since: s.since ?? DEFAULT_SINCE,
@@ -652,9 +666,10 @@ export function Sessions() {
       project: s.project,
       labelIds: labelIdsFromSearch(s as Record<string, unknown>),
       labelMode: s.labelMode === "all" ? "all" : "any",
+      flagged: s.flagged === true,
     }),
   });
-  const setRange = (patch: Record<string, string | undefined>) =>
+  const setRange = (patch: Record<string, string | number | boolean | undefined>) =>
     navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
   const today = daysAgo(0);
   const setSince = (v: string) => setRange({ since: v > today ? today : v > until ? until : v });
@@ -687,7 +702,8 @@ export function Sessions() {
   // Reset mirrors the shared FilterBar's reset (source + date range), plus the toolbar's own search
   // box, label selection, and a `project` filter arrived at via a link from Projects/Health (#273) —
   // enabled only when one of those is off its default.
-  const hasActiveFilters = Boolean(source) || Boolean(project) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0;
+  const hasActiveFilters =
+    Boolean(source) || Boolean(project) || !dateIsDefault || query.trim() !== "" || labelIds.length > 0 || flagged;
   const resetFilters = () => {
     setQuery("");
     setRange({
@@ -698,6 +714,7 @@ export function Sessions() {
       q: undefined,
       label: undefined,
       labelMode: undefined,
+      flagged: undefined,
     });
   };
 
@@ -749,6 +766,24 @@ export function Sessions() {
                 className="inbox-project-chip-clear"
                 aria-label={`Clear project filter (${compactProject(project)})`}
                 onClick={() => setRange({ project: undefined })}
+              >
+                <X size={12} strokeWidth={2.5} aria-hidden />
+              </button>
+            </span>
+          )}
+
+          {flagged && (
+            <span
+              className="inbox-project-chip"
+              title="Showing only sessions that may contain exposed credentials. Sessions you've hidden are included."
+            >
+              <ShieldAlert size={14} strokeWidth={2} aria-hidden />
+              <span className="truncate">Flagged</span>
+              <button
+                type="button"
+                className="inbox-project-chip-clear"
+                aria-label="Clear the flagged filter"
+                onClick={() => setRange({ flagged: undefined })}
               >
                 <X size={12} strokeWidth={2.5} aria-hidden />
               </button>

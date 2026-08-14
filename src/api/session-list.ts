@@ -49,6 +49,9 @@ export interface SessionListItem {
   /** Undismissed secret-scan finding count (#327), attached to the page rows by the serve reader
    *  (like labels). Absent/0 = no warning badge. Local-only, not on the sync wire. */
   secretFindings?: number;
+  /** Set only for a hidden session, which reaches the list only via the `flagged` filter — the row
+   *  says so rather than appearing to contradict the user's own hide. */
+  isHidden?: true;
 }
 
 export interface SessionListResponse {
@@ -111,6 +114,7 @@ function listItem(agg: SessionAggregate): SessionListItem {
     cost: c,
     interactions: agg.interactions,
     tasks: agg.tasks,
+    ...(agg.isHidden ? { isHidden: true as const } : {}),
   };
 }
 

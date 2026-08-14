@@ -27,6 +27,7 @@ function agg(sessionId: string, over: Partial<SessionMeta> & { input: number; st
     tasks: 0,
     title: null,
     summary: null,
+    isHidden: false,
   };
 }
 
@@ -94,6 +95,15 @@ describe("buildSessionList", () => {
     const matches = new Map<string, SessionSearchMatch>([["a", { count: 1, snippet: "s", sources: ["task"] }]]);
     const page = buildSessionList(mixed, { sort: "recent", limit: 10, offset: 0, matches });
     expect(page.rows.map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  test("marks a hidden row, which only the flagged filter can surface (#327)", () => {
+    const rows = [
+      { ...agg("visible", { input: 1, start: 2 }) },
+      { ...agg("hidden", { input: 1, start: 1 }), isHidden: true },
+    ];
+    const page = buildSessionList(rows, { sort: "recent", limit: 10, offset: 0 });
+    expect(page.rows.map((r) => r.isHidden)).toEqual([undefined, true]);
   });
 });
 
