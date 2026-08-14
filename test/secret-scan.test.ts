@@ -102,6 +102,19 @@ describe("scanTextForSecrets", () => {
     }
   });
 
+  test("counts a credential in an assignment once, under its precise category", () => {
+    // The quoted-assignment shape matches both the well-known rule and the generic catch-all. One
+    // pasted key is one finding, or the banner's count reads double.
+    for (const [text, category] of [
+      [`ANTHROPIC_API_KEY="${ANTHROPIC_KEY}"`, "anthropic_api_key"],
+      [`token = "${GITHUB_PAT}"`, "github_token"],
+      [`aws_access_key_id: ${AWS_KEY}`, "aws_access_key"],
+      [`Authorization token: ${JWT}`, "jwt"],
+    ] as const) {
+      expect(scanTextForSecrets(text, at).map((f) => f.category)).toEqual([category]);
+    }
+  });
+
   test("allowlists the generic rule's key-name suppressions (gitleaks regexTarget = match)", () => {
     // These are shaped like an assignment of a high-entropy value, but the key NAME says they are
     // not credentials. gitleaks suppresses them against the whole match, so we must too.

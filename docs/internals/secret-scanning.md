@@ -64,8 +64,9 @@ Each match stores:
   e.g. `AKIA…WXYZ`), or the key-type label for private keys. Generic secrets and JWTs reveal fewer
   characters because more of the value *is* the secret.
 
-Identical values pasted twice flag once. Findings are capped per session so a dumped key list can't
-produce unbounded rows.
+One credential is one finding: the same value pasted twice flags once, at its first location, and a
+value the generic catch-all rule also matches is reported only under its precise category. Findings
+are capped per session so a dumped key list can't produce unbounded rows.
 
 ## Storage and dismissal
 

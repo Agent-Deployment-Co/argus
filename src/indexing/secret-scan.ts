@@ -87,18 +87,34 @@ function passesGuards(rule: SecretRuleDefinition, value: string, match: string):
   return true;
 }
 
-/** Scan one piece of text, returning one finding per distinct (rule, value) match. */
-/** Scan one piece of text, returning one finding per distinct (rule, value) match. `seen` is the
- *  shared per-session dedupe set (keyed `${rule.id} ${value}`): callers scanning a whole session
- *  pass one set across every chunk so a credential repeated in several prompts/responses flags
- *  once, at its first location; standalone callers (tests) get a fresh per-call set. */
+/** The catch-all generic rule overlaps every well-known shape, so run the precise rules first and
+ *  let them claim the value (see `claimed` below). */
+const RULES_BY_PRECISION = [...SECRET_RULES].sort(
+  (a, b) => Number(a.category === "generic_secret") - Number(b.category === "generic_secret"),
+);
+
+/** State shared across one session's chunks. `seen` (keyed `${rule.id} ${value}`) makes a
+ *  credential repeated in several prompts/responses flag once, at its first location; `claimed`
+ *  holds the values a precise rule already matched, so the generic rule doesn't report the same
+ *  credential a second time under a vaguer category. */
+export interface SecretScanState {
+  seen: Set<string>;
+  claimed: string[];
+}
+
+export function newSecretScanState(): SecretScanState {
+  return { seen: new Set(), claimed: [] };
+}
+
+/** Scan one piece of text, returning one finding per distinct credential. Callers scanning a whole
+ *  session pass one `state` across every chunk; standalone callers (tests) get a fresh one. */
 export function scanTextForSecrets(
   text: string,
   location: { interactionSeq: number; chunkType: "prompt" | "response" },
-  seen: Set<string> = new Set(),
+  state: SecretScanState = newSecretScanState(),
 ): SecretFinding[] {
   const findings: SecretFinding[] = [];
-  for (const rule of SECRET_RULES) {
+  for (const rule of RULES_BY_PRECISION) {
     rule.pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = rule.pattern.exec(text)) !== null) {
@@ -106,9 +122,20 @@ export function scanTextForSecrets(
       // whole match (e.g. the GitHub/Slack token rules have no group).
       const value = m[1] ?? m[0];
       if (!passesGuards(rule, value, m[0])) continue;
+      // `TOKEN="ghp_…"` matches both github-pat and generic-api-key: one pasted credential, which
+      // must count once, under the precise category. The values need not be identical — the
+      // generic rule's charset can clip a JWT short — so overlap either way counts as the same
+      // credential.
+      if (
+        rule.category === "generic_secret" &&
+        state.claimed.some((v) => v.includes(value) || value.includes(v))
+      ) {
+        continue;
+      }
       const key = `${rule.id} ${value}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (state.seen.has(key)) continue;
+      state.seen.add(key);
+      if (rule.category !== "generic_secret") state.claimed.push(value);
       findings.push({
         category: rule.category,
         interactionSeq: location.interactionSeq,
@@ -123,7 +150,7 @@ export function scanTextForSecrets(
   return findings;
 }
 
-/** Scan every retained prompt/response text of a session's interactions. One dedupe set spans the
+/** Scan every retained prompt/response text of a session's interactions. One scan state spans the
  *  whole session, so the same credential pasted into two interactions yields one finding (at its
  *  first location) rather than inflating the count. Pure and synchronous — cheap enough to run
  *  inline at materialize time for every session. */
@@ -131,14 +158,14 @@ export function scanSessionForSecrets(session: {
   interactions?: Pick<InteractionFact, "seq" | "promptText" | "responseText">[];
 }): SecretFinding[] {
   const findings: SecretFinding[] = [];
-  const seen = new Set<string>();
+  const state = newSecretScanState();
   for (const interaction of session.interactions ?? []) {
     if (interaction.promptText) {
       findings.push(
         ...scanTextForSecrets(
           interaction.promptText,
           { interactionSeq: interaction.seq, chunkType: "prompt" },
-          seen,
+          state,
         ),
       );
     }
@@ -147,7 +174,7 @@ export function scanSessionForSecrets(session: {
         ...scanTextForSecrets(
           interaction.responseText,
           { interactionSeq: interaction.seq, chunkType: "response" },
-          seen,
+          state,
         ),
       );
     }
