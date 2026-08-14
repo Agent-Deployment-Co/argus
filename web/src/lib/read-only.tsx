@@ -1,7 +1,7 @@
 // Read-only mode (#281): the SPA's one capability flag, read from GET /healthz (the one route
 // that's always mounted, even in read-only mode — see createApp in src/api/serve.ts). Consumers hide
-// edit affordances (labels, hide-session, reindex, settings, onboarding, secrets) rather than
-// rendering a button that hits a route the server dropped.
+// edit affordances (labels, hide-session, reindex, settings, onboarding, secrets, dismissing a
+// credential warning) rather than rendering a button that hits a route the server dropped.
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { fetchOrOffline } from "./http";
 

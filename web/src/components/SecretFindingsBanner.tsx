@@ -8,6 +8,7 @@ import { ShieldAlert } from "lucide-react";
 import type { SecretFinding } from "../types";
 import { dismissSecretFindings, undismissSecretFindings } from "../lib/sessions";
 import { pluralize } from "../lib/format";
+import { useReadOnly } from "../lib/read-only";
 
 /** User-facing labels for the scanner's categories (plain words, not rule ids). */
 const CATEGORY_LABELS: Record<SecretFinding["category"], string> = {
@@ -51,6 +52,9 @@ export function SecretFindingsBanner({
   dismissed: boolean;
 }) {
   const qc = useQueryClient();
+  // The warning itself is worth showing everywhere; dismissing is a write, and a read-only server
+  // never mounts that route, so the buttons would fail silently.
+  const readOnly = useReadOnly();
   const mutation = useMutation({
     mutationFn: (action: "dismiss" | "undismiss") =>
       action === "dismiss" ? dismissSecretFindings(sessionId) : undismissSecretFindings(sessionId),
@@ -68,14 +72,16 @@ export function SecretFindingsBanner({
         <span>
           Credential warning dismissed ({findings.length} {pluralize(findings.length, "finding")}).
         </span>
-        <button
-          type="button"
-          className="kv-more-link"
-          onClick={() => mutation.mutate("undismiss")}
-          disabled={mutation.isPending}
-        >
-          Show again
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            className="kv-more-link"
+            onClick={() => mutation.mutate("undismiss")}
+            disabled={mutation.isPending}
+          >
+            Show again
+          </button>
+        )}
       </div>
     );
   }
@@ -89,15 +95,17 @@ export function SecretFindingsBanner({
         <span className="secret-banner-title">
           This session may contain {findings.length > 1 ? "exposed credentials" : "an exposed credential"}
         </span>
-        <button
-          type="button"
-          className="task-action"
-          onClick={() => mutation.mutate("dismiss")}
-          disabled={mutation.isPending}
-          title="Hide this warning until the findings change"
-        >
-          Dismiss
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            className="task-action"
+            onClick={() => mutation.mutate("dismiss")}
+            disabled={mutation.isPending}
+            title="Hide this warning until the findings change"
+          >
+            Dismiss
+          </button>
+        )}
       </div>
       <ol className="secret-banner-list">
         {ordered.slice(0, 5).map((f) => (
