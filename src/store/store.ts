@@ -1577,21 +1577,11 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
   // 23 -> 24: secret scanning (#327). Add the findings table (empty; findings derive from the scan
   // that runs at each session's next materialize — `index refresh` rescans everything on demand) and
   // the per-session dismissal record (see RESOLVED_SECRET_FINDINGS_DDL / the resolved_sessions
-  // column comment for the model). The CREATE TABLE is written out with IF NOT EXISTS (not the
-  // shared constant) so a store stamped 24+ by an early build of this change re-migrates cleanly.
+  // column comment for the model). Shares the fresh-create DDL so the two paths can't drift.
   23: {
     to: 24,
     sql: `
-      CREATE TABLE IF NOT EXISTS resolved_secret_findings (
-        session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
-        seq INTEGER NOT NULL,
-        category TEXT NOT NULL,
-        interaction_seq INTEGER,
-        chunk_type TEXT,
-        hint TEXT NOT NULL,
-        findings_digest TEXT NOT NULL,
-        PRIMARY KEY (session_id, seq)
-      );
+      ${RESOLVED_SECRET_FINDINGS_DDL}
       ALTER TABLE resolved_sessions ADD COLUMN secret_scan_dismissed TEXT;
     `,
   },
