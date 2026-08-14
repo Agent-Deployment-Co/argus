@@ -36,6 +36,12 @@ totals. "Where am I getting interrupted most?" reads your session health.
 
 ## What agents can ask
 
+<div class="screenshot">
+
+![Claude Code answering "what were my top 3 sessions by token usage last week?" with a ranked table of sessions, projects and token counts.](./images/screenshots/agent-access-answer.png)
+
+</div>
+
 | Tool | What it answers |
 |---|---|
 | `search_sessions` | Find sessions by text, file, date range, agent or project. |
