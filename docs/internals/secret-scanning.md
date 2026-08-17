@@ -90,11 +90,10 @@ forever".
 
 ## What syncs
 
-**Nothing, in v1.** `push.ts` never reads `resolved_secret_findings` or `secret_scan_dismissed`, so
-findings can't cross the wire. The issue floated syncing a bare count as an org-level signal; that
-is an explicit future decision, not a default. If it ever happens, the shape should be a count per
-session at most — never a category-and-hint row, since even a redacted locator tells an org admin
-which of a user's sessions contained a credential.
+Finding details remain local. `push.ts` derives one boolean on each uploaded task by joining a finding
+to its interaction's `task_seq`; the Hub stores that boolean with the task so it can flag affected
+work. No category, hint, digest, dismissal state, or raw text crosses the wire. A finding that is
+not linked to a task produces no task flag.
 
 ## Surfacing
 

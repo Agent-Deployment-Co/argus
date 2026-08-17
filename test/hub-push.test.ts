@@ -62,6 +62,7 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
   `);
   db.run("CREATE TABLE resolved_tasks (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, task_json TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_interactions (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, initiator TEXT, disposition TEXT, compaction_count INTEGER, task_seq INTEGER, interaction_json TEXT, PRIMARY KEY (session_id, seq))");
+  db.run("CREATE TABLE resolved_secret_findings (session_id TEXT, seq INTEGER, category TEXT, interaction_seq INTEGER, chunk_type TEXT, hint TEXT, findings_digest TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_invocations (session_id TEXT, seq INTEGER, source TEXT, interaction_seq INTEGER, tool TEXT, category TEXT, mcp_server TEXT, mcp_tool TEXT, skill TEXT, file_path TEXT, date TEXT, cwd TEXT, args TEXT, approx_result_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT NOT NULL, created_at_ms INTEGER NOT NULL, deleted_at_ms INTEGER)");
   db.run("CREATE TABLE label_assignments (label_id TEXT NOT NULL, target_kind TEXT NOT NULL, session_id TEXT NOT NULL, task_seq INTEGER, applied_by TEXT NOT NULL, applied_at_ms INTEGER NOT NULL)");
@@ -131,6 +132,27 @@ describe("readHubUploadPayload", () => {
     expect(session).toMatchObject({ name: "bug", origin: "user", applied_by: "user", task_seq: null, source: "claude" });
     const task = payload.rows.labels.find((l) => l.target_kind === "task")!;
     expect(task).toMatchObject({ name: "auto", origin: "system", applied_by: "system", task_seq: 0 });
+  });
+
+  test("flags tasks whose interactions have secret-scan findings", () => {
+    const path = buildArgusDb({ sessionId: "sess-flagged" });
+    const db = new Database(path);
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 100, ?)")
+      .run("sess-flagged", JSON.stringify({ id: "task-0", description: "Rotate the key" }));
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 1, 'claude', 200, ?)")
+      .run("sess-flagged", JSON.stringify({ id: "task-1", description: "Update the docs" }));
+    db.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 4, 'claude', 100, 'human', 'completed', 0, 0, '{}')")
+      .run("sess-flagged");
+    db.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 5, 'claude', 200, 'human', 'completed', 0, 1, '{}')")
+      .run("sess-flagged");
+    db.query("INSERT INTO resolved_secret_findings(session_id, seq, category, interaction_seq, chunk_type, hint, findings_digest) VALUES (?, 0, 'github_token', 4, 'prompt', 'ghp_…abcd', 'digest')")
+      .run("sess-flagged");
+    db.close();
+
+    expect(readHubUploadPayload(path).rows.tasks).toEqual([
+      expect.objectContaining({ seq: 0, flagged: true }),
+      expect.objectContaining({ seq: 1, flagged: false }),
+    ]);
   });
 
   test("excludes soft-deleted labels", () => {

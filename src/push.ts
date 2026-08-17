@@ -80,6 +80,8 @@ export interface HubUploadTask {
   source: string;
   ts: number | null;
   task_json: string;
+  /** True when a local secret-scan finding belongs to an interaction in this task. */
+  flagged: boolean;
 }
 
 export interface HubUploadInteraction {
@@ -299,10 +301,20 @@ export function readHubUploadPayload(
       .all();
 
     const allTasks = db
-      .query<HubUploadTask, []>(
-        "SELECT session_id, seq, source, ts, task_json FROM resolved_tasks",
+      .query<Omit<HubUploadTask, "flagged"> & { flagged: number }, []>(
+        `SELECT t.session_id, t.seq, t.source, t.ts, t.task_json,
+                CASE WHEN EXISTS (
+                  SELECT 1
+                  FROM resolved_secret_findings f
+                  JOIN resolved_interactions i
+                    ON i.session_id = f.session_id AND i.seq = f.interaction_seq
+                  WHERE f.session_id = t.session_id AND i.task_seq = t.seq
+                ) THEN 1 ELSE 0 END AS flagged
+         FROM resolved_tasks t
+         ORDER BY t.session_id, t.seq`,
       )
-      .all();
+      .all()
+      .map((task) => ({ ...task, flagged: task.flagged !== 0 }));
 
     const allInteractions = db
       .query<HubUploadInteraction, []>(
