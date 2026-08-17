@@ -3,7 +3,7 @@
 // de-queues them, a version bump re-queues everything, and sessions with no retained text are reported
 // rather than left in a backlog that never shrinks.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../src/store/store.ts";
@@ -168,6 +168,30 @@ describe("secret-scan backlog drain (#335)", () => {
       });
       await runSecretScanDrain(store);
       expect((await store.readSessionSecretFindings("s:drain")).findings).toHaveLength(1);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("hardens database files after a drain write while the store remains open", async () => {
+    if (process.platform === "win32") return;
+    const path = storePath();
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("me", [session("s:permissions", `aws key ${AWS_KEY} pasted`)]);
+      chmodSync(path, 0o644);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (existsSync(`${path}${suffix}`)) chmodSync(`${path}${suffix}`, 0o644);
+      }
+
+      await runSecretScanDrain(store);
+
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (existsSync(`${path}${suffix}`)) {
+          expect(statSync(`${path}${suffix}`).mode & 0o777).toBe(0o600);
+        }
+      }
     } finally {
       await store.close();
     }

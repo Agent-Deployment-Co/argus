@@ -3121,6 +3121,7 @@ export class SqliteStore implements Store {
           [result.version, sessionId],
         );
       });
+      secureSqliteFiles(this.path);
     });
   }
 
