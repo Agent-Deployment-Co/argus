@@ -300,16 +300,13 @@ export function readHubUploadPayload(
       )
       .all();
 
+    const flaggedExpr = hasSecretScanSurface(db)
+      ? `CASE WHEN ${FLAGGED_TASK_EXISTS_SQL} THEN 1 ELSE 0 END`
+      : "0";
     const allTasks = db
       .query<Omit<HubUploadTask, "flagged"> & { flagged: number }, []>(
         `SELECT t.session_id, t.seq, t.source, t.ts, t.task_json,
-                CASE WHEN EXISTS (
-                  SELECT 1
-                  FROM resolved_secret_findings f
-                  JOIN resolved_interactions i
-                    ON i.session_id = f.session_id AND i.seq = f.interaction_seq
-                  WHERE f.session_id = t.session_id AND i.task_seq = t.seq
-                ) THEN 1 ELSE 0 END AS flagged
+                ${flaggedExpr} AS flagged
          FROM resolved_tasks t
          ORDER BY t.session_id, t.seq`,
       )
@@ -370,6 +367,39 @@ export function readSessionIds(dbPath: string, filters: HubUploadFilters = {}): 
 /** Read all applied labels (active definitions only), denormalized with the label name/origin and
  *  the owning session's source, for the Hub upload. Shared by the payload read and the cursor scan
  *  so both see the same label state. */
+/** Whether this store has the secret-scan surface (the findings table + the dismissal column, both
+ *  schema v24). `sync` opens `argus.db` READ-ONLY and never migrates it, so a store last written by
+ *  an older build simply doesn't have them. Probe rather than assume: without this, preparing the
+ *  flag query throws a raw `no such table` SQLiteError, which surfaces as `Upload failed (0):
+ *  SQLiteError: …` and repeats every `--watch` interval. Degrading to "no flags" instead lets the
+ *  upload proceed to the Hub's version check, whose 422 carries the "re-index" guidance. */
+function hasSecretScanSurface(db: Database): boolean {
+  return !!db
+    .query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resolved_secret_findings'",
+    )
+    .get();
+}
+
+// A task is flagged when a secret finding belongs to one of its interactions. Findings carry
+// `interaction_seq`; interactions carry `task_seq`, so the link is a two-hop join with no task pointer
+// to keep in sync.
+//
+// This DELIBERATELY ignores `secret_scan_dismissed`, unlike every local reader of this table
+// (readSecretFindingCounts, readSecretFindingsRollup, readSessionIdsWithSecretFindings). The
+// divergence is the point, so don't "fix" it into consistency: dismissal means "I've seen these
+// findings" and silences one user's banner, while this flag is an org-level record of which work
+// touched a credential. Letting each user's banner state decide what their org sees would make the
+// signal depend on who clicked Dismiss, which is not something an org can reason about. Nothing about
+// the finding itself crosses the wire either way.
+const FLAGGED_TASK_EXISTS_SQL = `EXISTS (
+  SELECT 1
+  FROM resolved_secret_findings f
+  JOIN resolved_interactions i
+    ON i.session_id = f.session_id AND i.seq = f.interaction_seq
+  WHERE f.session_id = t.session_id AND i.task_seq = t.seq
+)`;
+
 function readLabelRows(db: Database): HubUploadLabel[] {
   return db
     .query<HubUploadLabel, []>(
@@ -398,9 +428,39 @@ function labelFingerprint(
   );
 }
 
+/** Which of a session's tasks a secret finding flags, keyed by session id — the same link the payload
+ *  uploads (same shared predicate, so the two can't disagree), read as rows and folded in JS like the
+ *  label fingerprint. This feeds the content digest: the scan drain (#335) writes findings AFTER
+ *  materialize and touches none of the other digest inputs, so without it a session whose only change
+ *  is "we just found a credential in it" keeps its old digest and `sync` skips it forever. Empty when
+ *  the store predates the findings table. */
+function readFlaggedTaskSeqs(db: Database): Map<string, number[]> {
+  const bySession = new Map<string, number[]>();
+  if (!hasSecretScanSurface(db)) return bySession;
+  const rows = db
+    .query<{ session_id: string; task_seq: number }, []>(
+      `SELECT DISTINCT t.session_id AS session_id, t.seq AS task_seq
+       FROM resolved_tasks t
+       WHERE ${FLAGGED_TASK_EXISTS_SQL}`,
+    )
+    .all();
+  for (const row of rows) {
+    const list = bySession.get(row.session_id);
+    if (list) list.push(row.task_seq);
+    else bySession.set(row.session_id, [row.task_seq]);
+  }
+  return bySession;
+}
+
+/** Stable fingerprint of which tasks a session's findings flag. Per-task rather than a bare "has
+ *  findings" bit, so re-interpretation moving a finding from one task to another still re-syncs. */
+function flaggedTaskFingerprint(taskSeqs: number[] | undefined): string {
+  return taskSeqs?.length ? [...taskSeqs].sort((a, b) => a - b).join(",") : "";
+}
+
 /** Compute a stable digest from session fields that can change without advancing last_ts:
  *  archive state, message count, task count, first_prompt, the model-generated title/summary
- *  (#234), and the applied-label fingerprint. */
+ *  (#234), the applied-label fingerprint, and which tasks a secret finding flags (#335). */
 function computeSessionDigest(
   sessionId: string,
   archived: number,
@@ -410,11 +470,12 @@ function computeSessionDigest(
   title: string | null,
   summary: string | null,
   labelFp: string,
+  flaggedFp: string,
 ): string {
   return createHash("sha256")
     .update(
       `${sessionId}|${archived}|${messageCount}|${taskCount}|${firstPrompt ?? ""}` +
-        `|${title ?? ""}|${summary ?? ""}|${labelFp}`,
+        `|${title ?? ""}|${summary ?? ""}|${labelFp}|${flaggedFp}`,
     )
     .digest("hex");
 }
@@ -494,6 +555,10 @@ export function readChangedHubSessionIds(
       else labelsBySession.set(label.session_id, [label]);
     }
 
+    // Same reason as labels: findings are written after materialize, independently of session
+    // activity, so they have to feed the digest or a newly-flagged session never re-uploads (#335).
+    const flaggedBySession = readFlaggedTaskSeqs(db);
+
     const allSessionData = new Map<string, HubSessionCursorRow>();
     const changed: HubSessionCursorRow[] = [];
     for (const row of rows) {
@@ -506,6 +571,7 @@ export function readChangedHubSessionIds(
         row.title,
         row.summary,
         labelFingerprint(labelsBySession.get(row.session_id) ?? []),
+        flaggedTaskFingerprint(flaggedBySession.get(row.session_id)),
       );
       const cursorRow: HubSessionCursorRow = {
         sessionId: row.session_id,
@@ -667,6 +733,13 @@ export async function pushHubJson(
           session.session_id, session.archived, session.message_count, 0, session.first_prompt,
           session.title, session.summary,
           labelFingerprint(payload.rows.labels.filter((l) => l.session_id === session.session_id)),
+          // From the payload we're about to upload, so this fallback digest agrees with the one
+          // readChangedHubSessionIds computes from the store for the same finding state (#335).
+          flaggedTaskFingerprint(
+            payload.rows.tasks
+              .filter((t) => t.session_id === session.session_id && t.flagged)
+              .map((t) => t.seq),
+          ),
         ),
         parserVersion: cursor?.parserVersion ?? PARSED_FRAGMENT_CONTRACT_VERSION,
       };

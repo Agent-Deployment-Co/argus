@@ -95,6 +95,26 @@ to its interaction's `task_seq`; the Hub stores that boolean with the task so it
 work. No category, hint, digest, dismissal state, or raw text crosses the wire. A finding that is
 not linked to a task produces no task flag.
 
+Three properties that boolean has to have, none of which come for free:
+
+- **It ignores dismissal**, alone among readers of the findings table (`readSecretFindingCounts`,
+  `readSecretFindingsRollup`, `readSessionIdsWithSecretFindings` all filter on
+  `findings_digest IS NOT secret_scan_dismissed`). The divergence is deliberate, so don't reconcile it:
+  dismissal means "I've seen these findings" and silences one user's banner, while this flag is an
+  org-level record that a piece of work touched a credential. If each user's banner state decided what
+  their org sees, the signal would depend on who clicked Dismiss, which is not something an org can
+  reason about. `FLAGGED_TASK_EXISTS_SQL` in `push.ts` carries this note too.
+- **It re-syncs.** Findings are written after materialize (inline, or by the drain), touching none of
+  the fields `computeSessionDigest` normally watches, so the digest also folds in *which* tasks the
+  session's findings flag. Without that, the sessions the drain just flagged are exactly the ones
+  `sync` skips. It's per-task rather than a bare "has findings" bit so that re-interpretation moving a
+  finding between tasks still re-syncs. Because the flag ignores dismissal, the digest does too: a
+  dismissal changes nothing on the wire and so triggers no upload.
+- **It degrades.** `sync` opens the store read-only and never migrates it, so a store last written
+  before schema v24 has no findings table. `push.ts` probes for the table and the dismissal column and
+  reports no flags when they're absent, rather than failing the upload with a raw SQLite error and
+  losing the Hub's version answer.
+
 ## Surfacing
 
 - **Session detail**: a warning banner listing each finding (interaction, kind, hint, prompt vs

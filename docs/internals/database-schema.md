@@ -357,8 +357,11 @@ hash of the session's whole finding set) is denormalized onto every row so a dis
 digest stored on `resolved_sessions.secret_scan_dismissed` — can be compared in SQL, and lapses when a
 re-scan produces different findings. Two writers: materialize (from the scan it just ran) and the
 version-stamped rescan drain's `writeSessionSecretFindings` (#335), which catches up sessions the
-current scanner hasn't stamped. **Local-only, never synced** (the push path never reads it).
-PK `(session_id, seq)`, FK → `resolved_sessions`. See [secret-scanning.md](./secret-scanning.md).
+current scanner hasn't stamped. **No row ever crosses the wire**: `push.ts` reads the table only to
+derive one boolean per uploaded task (`flagged`), never a category, hint, digest, or dismissal value.
+That boolean deliberately ignores dismissal; see [secret-scanning.md](./secret-scanning.md) for why.
+PK `(session_id, seq)`, FK → `resolved_sessions`.
+See [secret-scanning.md](./secret-scanning.md).
 
 ## Tier 3 — freshness & ownership
 

@@ -934,7 +934,9 @@ export interface ReadModelStore {
   readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>>;
   /** Cross-session + per-project friction and the high-token-growth count. */
   readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups>;
-  // ---- Secret-scan findings (#327; local-only, never synced) ----
+  // ---- Secret-scan findings (#327). No finding row is ever synced; push.ts reads the table only to
+  // derive one boolean per uploaded task (never a category, hint, or digest). That boolean ignores
+  // dismissal by design, unlike the readers below; see FLAGGED_TASK_EXISTS_SQL in push.ts. ----
   /** A session's secret-scan findings (redacted locators only) plus whether the user dismissed
    *  exactly this finding set. Backs the session-detail warning banner. */
   readSessionSecretFindings(sessionId: string): Promise<SessionSecretFindings>;

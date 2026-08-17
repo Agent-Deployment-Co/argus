@@ -634,7 +634,8 @@ const CREATE_SCHEMA_SQL = `
   ${RESOLVED_SESSIONS_FTS_DDL}
 
   -- Secret-scan findings (#327): likely exposed credentials spotted in session text. Redacted
-  -- locators only, never secret values. Local-only; never synced.
+  -- locators only, never secret values. No row is ever synced: push.ts reads this table only to
+  -- derive one boolean per uploaded task, never a category, hint, or digest.
   ${RESOLVED_SECRET_FINDINGS_DDL}
 
   -- Per-source freshness attestation: lets a consumer know whether the store is current.
