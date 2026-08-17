@@ -135,7 +135,7 @@ inventory so the surfaces don't drift apart. The `docs/contributing/` guides (an
 
 The pipeline is a one-way data flow, and `src/` is laid out by stage (full map in
 `docs/internals/architecture.md`): **`src/indexing/`** (the pipeline — discover, parse, reconcile,
-materialize, plus the interpret drain), **`src/store/`** (the `argus.db` layer + its parse→store
+materialize, plus the interpret and secret-scan drains), **`src/store/`** (the `argus.db` layer + its parse→store
 contract), **`src/reporting/`** (per-session and plugin aggregation), and **`src/api/`** (the serve
 layer). Cross-cutting modules (`types.ts`, `config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`,
 **`src/llm/`** [the shared LLM access layer], **`secrets.ts`** [BYO API-key storage]) and the

@@ -120,7 +120,10 @@ the "save the answer" step that makes reads cheap and reconcile-free.
 Materialize is also where the **secret scan** (#327) lands: the pipeline runs a deterministic regex
 pass over each session's in-memory prompt/response text (`src/indexing/secret-scan.ts`) and persists
 redacted findings — never secret values — to `resolved_secret_findings`. Because the scan runs on
-in-memory text at write time, it works even when conversation-text retention is off. Full design:
+in-memory text at write time, it works even when conversation-text retention is off. Materialize also
+stamps `secret_scan_version`, so a second pass after indexing (`src/indexing/secret-scan-drain.ts`,
+#335) can catch up sessions the current scanner hasn't seen — the back catalogue after an upgrade, or
+everything after a rules refresh — reading their retained text back from the store. Full design:
 [secret-scanning.md](./secret-scanning.md).
 
 ### What "interpret" means (default-on)

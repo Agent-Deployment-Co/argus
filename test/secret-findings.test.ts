@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../src/store/store.ts";
 import type { MaterializeSession, SecretFinding } from "../src/store/store-contract.ts";
-import { secretFindingsDigest } from "../src/indexing/secret-scan.ts";
+import { SECRET_SCAN_VERSION, secretFindingsDigest } from "../src/indexing/secret-scan.ts";
 import { parseAllIncrementalDetailed } from "../src/indexing/pipeline.ts";
 import type { MessageRecord } from "../src/types.ts";
 
@@ -57,9 +57,13 @@ function sessionWithFindings(
   return {
     meta: { source: "claude", sessionId, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/s.jsonl" },
     messages,
-    ...(findings.length
-      ? { secretFindings: { digest: secretFindingsDigest(findings), findings } }
-      : {}),
+    // Always attached, even with zero findings — that's what the pipeline does, so materialize stamps
+    // the scanner version (#335) and the rescan drain leaves the session alone.
+    secretFindings: {
+      version: SECRET_SCAN_VERSION,
+      digest: secretFindingsDigest(findings),
+      findings,
+    },
   };
 }
 

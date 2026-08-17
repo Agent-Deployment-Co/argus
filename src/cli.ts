@@ -4,6 +4,7 @@ import { defineCommand, runMain, showUsage } from "citty";
 import type { ArgsDef, CommandContext, ParsedArgs } from "citty";
 import { printBanner } from "./banner.ts";
 import { scanStore } from "./indexing/pipeline.ts";
+import { SECRET_SCAN_VERSION } from "./indexing/secret-scan.ts";
 import { STORE_FILE } from "./paths.ts";
 import { ALL_SOURCES } from "./reporting/dashboard-builder.ts";
 import { startServer } from "./api/serve.ts";
@@ -310,11 +311,15 @@ async function runStatus(): Promise<void> {
   let interpretation:
     | { interpreted: number; pending: number; outdated: number }
     | undefined;
+  let secretScan:
+    | { scanned: number; pending: number; unscannable: number }
+    | undefined;
   try {
     const store = await openStore();
     try {
       counts = await store.resolvedSessionCounts();
       interpretation = await store.interpretationProgress();
+      secretScan = await store.secretScanProgress(SECRET_SCAN_VERSION);
     } finally {
       await store.close();
     }
@@ -374,6 +379,30 @@ async function runStatus(): Promise<void> {
     printResultLine(
       `Interpreted ${interpretation.interpreted} session${interpretation.interpreted === 1 ? "" : "s"} ` +
         `(${interpretation.pending} waiting${outdated}).`,
+    );
+  }
+  // Secret-scan backlog progress (#335). The waiting count only appears while there is a backlog —
+  // after an upgrade, or a rules refresh — since every newly indexed session is checked as it's
+  // written. Sessions whose conversation text wasn't kept can't be checked from the store at all, so
+  // they get their own line with the one thing that fixes it.
+  if (secretScan && secretScan.scanned > 0) {
+    const waiting = secretScan.pending
+      ? ` (${secretScan.pending} waiting)`
+      : "";
+    printResultLine(
+      `Checked ${secretScan.scanned} session${secretScan.scanned === 1 ? "" : "s"} for exposed credentials${waiting}.`,
+    );
+  } else if (secretScan?.pending) {
+    const n = secretScan.pending;
+    printResultLine(
+      `${n} session${n === 1 ? "" : "s"} waiting to be checked for exposed credentials.`,
+    );
+  }
+  if (secretScan?.unscannable) {
+    const n = secretScan.unscannable;
+    printResultLine(
+      `${n} session${n === 1 ? "" : "s"} can't be checked for exposed credentials without re-reading ` +
+        `${n === 1 ? "its transcript" : "their transcripts"} · run \`argus index refresh\``,
     );
   }
   if (pending)

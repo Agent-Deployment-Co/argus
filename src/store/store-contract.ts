@@ -722,12 +722,17 @@ export interface MaterializeSession {
    *  interaction_json is always text-free, and that text is persisted (opt-in, default-on, local-only)
    *  in resolved_interaction_text (#120). */
   interactions?: InteractionFact[];
-  /** Secret-scan findings for this session (#327), computed by the pipeline from the in-memory
+  /** The secret scan's result for this session (#327), computed by the pipeline from the in-memory
    *  interaction text (so scanning runs even when text retention is off) and persisted to
    *  resolved_secret_findings. `digest` is the scanner's stable hash of the finding set, stamped on
-   *  every row so a dismissal can be compared against the current set in SQL. Absent/empty → the
-   *  session has no findings (any prior rows are replaced by the wholesale re-materialize). */
-  secretFindings?: { digest: string; findings: SecretFinding[] };
+   *  every row so a dismissal can be compared against the current set in SQL. `version` is the
+   *  scanner version that produced it (#335), recorded on resolved_sessions.secret_scan_version so
+   *  the rescan drain knows which sessions the current scanner has already seen.
+   *
+   *  Present with an EMPTY `findings` means "scanned, nothing found" — still a stamp. Absent means
+   *  the caller never scanned (tests, programmatic materialize), which leaves the stamp NULL and so
+   *  hands the session to the drain. */
+  secretFindings?: { version: number; digest: string; findings: SecretFinding[] };
 }
 
 /** Per-source freshness attestation. */
@@ -949,6 +954,25 @@ export interface ReadModelStore {
   dismissSessionSecretFindings(sessionId: string): Promise<boolean>;
   /** Clear a session's findings dismissal, so the warning shows again. No-op if not dismissed. */
   clearSessionSecretFindingsDismissal(sessionId: string): Promise<void>;
+  /** Canonical ids of sessions the current scanner hasn't seen yet (#335), newest-first, capped at
+   *  `limit`. Eligible = secret_scan_version is NULL or below `version` AND the session has retained
+   *  text to scan. `version` is passed in (not read from the scanner) so the store stays unaware of
+   *  the indexing layer. */
+  readPendingSecretScanSessions(version: number, limit: number): Promise<string[]>;
+  /** Replace a session's secret-scan findings and stamp the scanner version that produced them
+   *  (#335) — the drain's write, without re-materializing anything else. Always stamps, even for an
+   *  empty finding set, so a clean session de-queues instead of being rescanned every pass. Leaves
+   *  `secret_scan_dismissed` alone: the read path compares it against the fresh digest, so an
+   *  unchanged finding set stays dismissed and a changed one re-warns. */
+  writeSessionSecretFindings(
+    sessionId: string,
+    result: { version: number; digest: string; findings: SecretFinding[] },
+  ): Promise<void>;
+  /** Secret-scan backlog progress for `argus status` (#335): sessions the scanner has stamped at
+   *  least once, the eligible backlog (`pending`, the same predicate the drain uses), and how many
+   *  need a scan but have no retained text to scan (`unscannable` — the retainText-off case, which
+   *  only `argus index refresh` can reach). */
+  secretScanProgress(version: number): Promise<{ scanned: number; pending: number; unscannable: number }>;
   // ---- Session/task labels (local-only; never synced) ----
   /** All label definitions, ordered by name (case-insensitive). Excludes soft-deleted labels unless
    *  `includeDeleted` is set. */

@@ -1,7 +1,9 @@
 // Secret scanning (#327): a cheap, deterministic pass over a session's retained prompt/response
 // text that flags likely exposed credentials (pasted API keys, tokens, private key blocks). Runs at
 // materialize time on the in-memory interaction text — no LLM call, no throttle, and independent of
-// the retainText setting (the text is in memory at write time either way).
+// the retainText setting (the text is in memory at write time either way). Sessions materialized
+// before the scanner existed, or under an older rule set, are caught up afterwards by the
+// version-stamped drain in ./secret-scan-drain.ts (#335), which reads text back from the store.
 //
 // This module is the matching ENGINE only. The detection rules (patterns, entropy floors,
 // allowlists, stopwords) live in ./secret-scan-rules.ts, a data-only file adapted from gitleaks
@@ -26,6 +28,20 @@ import type {
 import { SECRET_RULES, type SecretRuleDefinition } from "./secret-scan-rules.ts";
 
 export type { SecretFinding, SecretFindingCategory } from "../store/store-contract.ts";
+
+/**
+ * The scanner's implementation version (#335), stamped on every session it scans
+ * (`resolved_sessions.secret_scan_version`; NULL = never scanned). Unlike the interpreter's version
+ * this one IS part of eligibility: bumping it makes every already-scanned session eligible for the
+ * rescan drain, which is the whole point — upgrading to a build that has the scanner, or refreshing
+ * the gitleaks rules, has to reach the back catalogue and not just sessions that happen to change
+ * afterwards.
+ *
+ * Bump it ONLY when the rules or the engine change in a way that could change a session's findings.
+ * A bump rescans every session, and a genuinely different finding set clears the user's dismissal
+ * (dismissal is anchored to the finding-set digest), so a gratuitous bump re-warns in bulk.
+ */
+export const SECRET_SCAN_VERSION = 1;
 
 /** Cap on stored findings per session: a dumped key list shouldn't produce unbounded rows. Sessions
  *  at the cap are vanishingly rare; the banner's message doesn't change past the first few. */

@@ -71,7 +71,7 @@ import {
 } from "../health.ts";
 import { STORE_FILE } from "../paths.ts";
 
-export const STORE_SCHEMA_VERSION = 24;
+export const STORE_SCHEMA_VERSION = 25;
 export const STORE_APPLICATION_ID = 0x41524753; // "ARGS"
 export const DEFAULT_STORE_BUSY_TIMEOUT_MS = 2_000;
 
@@ -538,6 +538,12 @@ const CREATE_SCHEMA_SQL = `
     -- stays dismissed; different findings (new content) re-warn. NULL = not dismissed. Local-only UI
     -- state like is_hidden — carried forward by materialize, never selected by push.
     secret_scan_dismissed TEXT,
+    -- Which scanner version last scanned this session (#335), NULL for never scanned. Written by
+    -- materialize (from the scan it just ran) and by the rescan drain's writeSessionSecretFindings.
+    -- Deliberately NOT carried forward on a re-materialize that didn't scan: the wholesale session
+    -- DELETE cascades the findings away, so keeping the stamp would mark a session scanned with no
+    -- findings to show. Resetting to NULL instead hands it back to the drain, which self-heals.
+    secret_scan_version INTEGER,
     meta_json TEXT NOT NULL
   );
   CREATE INDEX resolved_sessions_project ON resolved_sessions(project);
@@ -550,6 +556,12 @@ const CREATE_SCHEMA_SQL = `
   CREATE INDEX resolved_sessions_interpret_pending
     ON resolved_sessions(last_ts DESC)
     WHERE content_indexed_at_ms > COALESCE(interpreted_at_ms, 0);
+  -- Secret-scan backlog scan (#335). Not a partial index like the one above: its predicate compares
+  -- against the CURRENT scanner version, which changes, and a partial index can't follow that
+  -- without being rebuilt on every bump. Indexing the column plainly keeps the drain's newest-first
+  -- query off a full table scan in the steady state (every row at the current version).
+  CREATE INDEX resolved_sessions_secret_scan_version
+    ON resolved_sessions(secret_scan_version);
 
   CREATE TABLE resolved_usage (
     session_id TEXT NOT NULL REFERENCES resolved_sessions(session_id) ON DELETE CASCADE,
@@ -827,6 +839,20 @@ const INTERPRETATION_ELIGIBLE_SQL = `s.content_indexed_at_ms > COALESCE(s.interp
     JOIN resolved_interactions i ON i.session_id = t.session_id AND i.seq = t.interaction_seq
     WHERE t.session_id = s.session_id AND t.type = 'prompt' AND i.initiator = 'human'
   )`;
+
+// The single definition of "needs a secret scan" (#335), shared by the drain's session query and the
+// `argus status` counts so "waiting" can never desync from what the drain actually processes. Eligible
+// = the current scanner hasn't stamped this session (NULL → never scanned; a lower number → scanned by
+// an older rule set/engine) AND there is retained text to scan. Unlike interpretation, the version IS
+// part of eligibility: a bump is precisely how a rules refresh reaches already-indexed sessions.
+//
+// The retained-text requirement is a real limitation, not an oversight: with retainText off (#120) the
+// text only exists in memory during materialize, so a store-driven rescan has nothing to read. Those
+// sessions are excluded here and counted separately by secretScanProgress, so the gap is visible in
+// `argus status` rather than silent. Assumes resolved_sessions is aliased `s`; takes one bound
+// parameter, the current scanner version.
+const SECRET_SCAN_ELIGIBLE_SQL = `(s.secret_scan_version IS NULL OR s.secret_scan_version < ?)
+  AND EXISTS (SELECT 1 FROM resolved_interaction_text t WHERE t.session_id = s.session_id)`;
 
 interface ResolvedSessionSnapshot {
   metaJson: string;
@@ -1585,6 +1611,18 @@ const MIGRATIONS: Record<number, { to: number; sql: string }> = {
       ALTER TABLE resolved_sessions ADD COLUMN secret_scan_dismissed TEXT;
     `,
   },
+  // 24 -> 25: the secret-scan version stamp (#335). Existing rows migrate to NULL — "upgraded to a
+  // build with the scanner, never scanned" — which is exactly what the rescan drain looks for, so a
+  // user's back catalogue gets scanned incrementally instead of only when a session happens to
+  // change. No backfill: a stamp we can't honestly claim would silently skip those sessions forever.
+  24: {
+    to: 25,
+    sql: `
+      ALTER TABLE resolved_sessions ADD COLUMN secret_scan_version INTEGER;
+      CREATE INDEX IF NOT EXISTS resolved_sessions_secret_scan_version
+        ON resolved_sessions(secret_scan_version);
+    `,
+  },
 };
 
 /** Apply the migration chain from `fromVersion` up to STORE_SCHEMA_VERSION, or throw if none exists. */
@@ -1753,7 +1791,7 @@ async function initializeDatabase(db: Database, path: string): Promise<void> {
     await get(db, "SELECT file_id FROM index_sessions LIMIT 1");
     await get(
       db,
-      "SELECT session_id, archived, title, summary, secret_scan_dismissed FROM resolved_sessions LIMIT 1",
+      "SELECT session_id, archived, title, summary, secret_scan_dismissed, secret_scan_version FROM resolved_sessions LIMIT 1",
     );
     await get(
       db,
@@ -3028,6 +3066,99 @@ export class SqliteStore implements Store {
     });
   }
 
+  // Canonical ids of sessions the current scanner hasn't seen (#335), newest-first, capped at `limit`.
+  // The eligibility predicate is SECRET_SCAN_ELIGIBLE_SQL, shared with secretScanProgress. Newest-first
+  // so the sessions a user is most likely to look at get their warning first on a big backlog.
+  readPendingSecretScanSessions(version: number, limit: number): Promise<string[]> {
+    return this.schedule(async () => {
+      const rows = await all<{ session_id: string }>(
+        this.db,
+        `SELECT s.session_id FROM resolved_sessions s
+         WHERE ${SECRET_SCAN_ELIGIBLE_SQL}
+         ORDER BY s.last_ts DESC, s.session_id
+         LIMIT ?`,
+        [version, limit],
+      );
+      return rows.map((row) => row.session_id);
+    });
+  }
+
+  // The rescan drain's write (#335): replace this session's findings and stamp the scanner version,
+  // without re-materializing anything else — the counterpart to writeSessionTasks for interpretation.
+  // ALWAYS stamps, even for an empty finding set, so a clean session de-queues instead of being
+  // rescanned every pass. Deliberately leaves secret_scan_dismissed alone: the read path compares it
+  // against the fresh digest, so an unchanged finding set stays dismissed and a changed one re-warns.
+  writeSessionSecretFindings(
+    sessionId: string,
+    result: { version: number; digest: string; findings: SecretFinding[] },
+  ): Promise<void> {
+    return this.schedule(async () => {
+      await transaction(this.db, async () => {
+        await run(
+          this.db,
+          "DELETE FROM resolved_secret_findings WHERE session_id = ?",
+          [sessionId],
+        );
+        if (result.findings.length) {
+          await insertRows(
+            this.db,
+            "resolved_secret_findings",
+            ["session_id", "seq", "category", "interaction_seq", "chunk_type", "hint", "findings_digest"],
+            result.findings.map((f, seq) => [
+              sessionId,
+              seq,
+              f.category,
+              f.interactionSeq,
+              f.chunkType,
+              f.hint,
+              result.digest,
+            ]),
+          );
+        }
+        await run(
+          this.db,
+          "UPDATE resolved_sessions SET secret_scan_version = ? WHERE session_id = ?",
+          [result.version, sessionId],
+        );
+      });
+    });
+  }
+
+  // Backlog progress for `argus status` (#335). scanned = stamped at least once. pending uses the SAME
+  // predicate the drain does (SECRET_SCAN_ELIGIBLE_SQL), so "waiting" can't desync from the work.
+  // unscannable is the retainText-off residue: needs a scan, HAS interactions, but no stored text for
+  // them, so the drain can never reach it — surfaced separately instead of sitting in a backlog that
+  // never shrinks. The interactions requirement matters: a session with nothing to scan at all (no
+  // interactions) isn't a retention casualty and would otherwise inflate the number for everyone.
+  secretScanProgress(
+    version: number,
+  ): Promise<{ scanned: number; pending: number; unscannable: number }> {
+    return this.schedule(async () => {
+      const pendingRow = await get<{ n: number }>(
+        this.db,
+        `SELECT COUNT(*) AS n FROM resolved_sessions s WHERE ${SECRET_SCAN_ELIGIBLE_SQL}`,
+        [version],
+      );
+      const unscannableRow = await get<{ n: number }>(
+        this.db,
+        `SELECT COUNT(*) AS n FROM resolved_sessions s
+         WHERE (s.secret_scan_version IS NULL OR s.secret_scan_version < ?)
+           AND EXISTS (SELECT 1 FROM resolved_interactions i WHERE i.session_id = s.session_id)
+           AND NOT EXISTS (SELECT 1 FROM resolved_interaction_text t WHERE t.session_id = s.session_id)`,
+        [version],
+      );
+      const scannedRow = await get<{ n: number }>(
+        this.db,
+        "SELECT COUNT(*) AS n FROM resolved_sessions WHERE secret_scan_version IS NOT NULL",
+      );
+      return {
+        scanned: scannedRow?.n ?? 0,
+        pending: pendingRow?.n ?? 0,
+        unscannable: unscannableRow?.n ?? 0,
+      };
+    });
+  }
+
   readSessionLabels(sessionId: string): Promise<SessionLabels> {
     return this.schedule(async () => {
       const rows = await all<
@@ -4090,6 +4221,12 @@ export class SqliteStore implements Store {
           // read path compares it against the fresh findings' digest, so a dismissal survives a
           // re-materialize whose findings are unchanged and lapses when they differ.
           const secretScanDismissed = existingSnapshot?.secretScanDismissed ?? null;
+          // The scanner version stamp (#335) comes from the scan the caller just ran — NOT carried
+          // forward. A caller that didn't scan (a test, a programmatic materialize) leaves it NULL,
+          // which is honest: the wholesale DELETE below cascades the old findings away, so claiming
+          // "already scanned" would hide a session with no findings to show. NULL hands it to the
+          // rescan drain instead, which is self-healing.
+          const secretScanVersion = session.secretFindings?.version ?? null;
           // Replace this session wholesale (messages, tasks, and tool results cascade via FK). A freshly
           // materialized session is present on disk, so archived resets to 0.
           await run(
@@ -4122,8 +4259,9 @@ export class SqliteStore implements Store {
             `INSERT INTO resolved_sessions(
                session_id, owner, source, project, cwd, first_ts, last_ts, message_count, first_prompt, archived,
                friction_interruptions, friction_rejections, friction_compactions, friction_turns, last_interruption_ms,
-               content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, is_hidden, secret_scan_dismissed, meta_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               content_indexed_at_ms, interpreted_at_ms, interpretation_version, title, summary, is_hidden,
+               secret_scan_dismissed, secret_scan_version, meta_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               sid,
               owner,
@@ -4146,6 +4284,7 @@ export class SqliteStore implements Store {
               summary,
               isHidden ? 1 : 0,
               secretScanDismissed,
+              secretScanVersion,
               JSON.stringify(session.meta),
             ],
           );

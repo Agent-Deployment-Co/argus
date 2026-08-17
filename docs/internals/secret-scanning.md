@@ -19,11 +19,15 @@ The scanner engine (`src/indexing/secret-scan.ts`) is pure regex plus per-rule e
 LLM call, no network, no throttle — over rules defined in `src/indexing/secret-scan-rules.ts`
 (adapted from gitleaks). It runs **inline at materialize time**, inside `toMaterializeSessions` in
 `src/indexing/pipeline.ts`, over the reconciled interactions' in-memory prompt/response text. That
-placement was chosen over a drain (like interpret) for two reasons:
+is the primary path, chosen over a drain (like interpret) for two reasons:
 
 - It's cheap enough to run on every materialized session, so there's nothing to throttle.
 - It scans text *in memory*, so it works even when conversation-text retention (`retainText`) is
   off — a drain reading `resolved_interaction_text` back from the store would find nothing there.
+
+Inline scanning only ever covers sessions the incremental pipeline **touched**, though, which leaves
+everything already in the store unscanned. A second path closes that gap: the version-stamped
+**backlog drain** (`src/indexing/secret-scan-drain.ts`). See "Rescanning" below.
 
 Scope is deliberately the same text the Interpret stage reads (`prompt`/`response` chunks), per the
 issue's sketch. Tool *result* text (e.g. the output of `cat .env`) is not covered: it is never
@@ -70,7 +74,9 @@ are capped per session so a dumped key list can't produce unbounded rows.
 
 ## Storage and dismissal
 
-One table, `resolved_secret_findings` (schema v24), FK-chained to `resolved_sessions` with
+One table, `resolved_secret_findings` (schema v24), plus one column on `resolved_sessions` recording
+which scanner version last looked at each session (`secret_scan_version`, schema v25; see
+"Rescanning"). The findings table is FK-chained to `resolved_sessions` with
 `ON DELETE CASCADE` like every other leaf: re-materializing a session replaces its findings
 wholesale, and retracting a session removes them. Every row carries `findings_digest` — the
 scanner's stable hash of the session's whole finding set — denormalized so SQL can compare the
@@ -127,7 +133,44 @@ derived from transcript text, so agents without transcript access don't get them
 
 ## Rescanning
 
-Findings re-derive on every materialize of a session, and `argus index refresh` re-reads every
-transcript — so a rule-set improvement lands everywhere on the next refresh. There is no scanner
-version stamp in v1 (unlike the interpreter's): the scan is deterministic and free, and a refresh
-is the explicit re-run path.
+Findings re-derive on every materialize of a session, but the incremental pipeline only materializes
+**touched** sessions. Inline scanning alone would therefore mean a user who upgrades gets findings only
+for sessions that happen to change afterwards, leaving their back catalogue silently never scanned. The
+same gap applies to a rule-set refresh: improving `secret-scan-rules.ts` would change nothing for
+sessions already in the store.
+
+`SECRET_SCAN_VERSION` (`src/indexing/secret-scan.ts`) plus a drain closes it, mirroring how
+interpretation is decoupled from the structural index (#153) without the model calls that make that
+drain expensive:
+
+- **The stamp.** `resolved_sessions.secret_scan_version` records the scanner version that last
+  scanned each session; NULL means never scanned. Materialize writes it from the scan it just ran. A
+  materialize that *didn't* scan writes NULL, because the wholesale replace cascades the old findings
+  away and keeping the stamp would claim a scan with nothing to show. Existing rows migrate to NULL,
+  which is exactly the "upgraded, never scanned" state.
+- **Eligibility** (`SECRET_SCAN_ELIGIBLE_SQL` in `store.ts`, alongside `INTERPRETATION_ELIGIBLE_SQL`):
+  the stamp is NULL or below the current version, **and** the session has retained text. Unlike the
+  interpreter's version, this one *is* part of eligibility, since a bump is precisely how a rules
+  refresh reaches already-indexed sessions.
+- **The drain** (`src/indexing/secret-scan-drain.ts`, run from `runIndex` right after the structural
+  index) reads each eligible session's text back via `readSessionInteractions`, rescans it, and
+  replaces its findings wholesale with `writeSessionSecretFindings`. That write always stamps, even for
+  an empty finding set, so a clean session de-queues. There's no rate limiter and no failure cooldown
+  (nothing costs anything, nothing transient to retry), but the pass is bounded and yields every 25
+  sessions so a large backlog can't make `argus run` stop responding.
+
+Two consequences worth keeping in view:
+
+- **Bump the version only when findings can actually change.** Dismissal is anchored to the finding-set
+  digest, so a rescan that finds something different clears the dismissal by design. That's correct for
+  a genuinely different finding set, but it means a gratuitous bump re-warns in bulk. The rule-refresh
+  procedure in `secret-scan-rules.ts` carries this as its last step.
+- **Text retention bounds what the drain can reach.** With `retainText` off (#120) a session's text only
+  ever existed in memory during materialize, so there is nothing to rescan and eligibility excludes
+  those sessions. Interpretation has the same limitation, so this is a known shape rather than a new
+  one. The state is reported rather than silent: `secretScanProgress` counts them separately, and
+  `argus status` says how many sessions can't be checked without re-reading their transcripts, which is
+  what `argus index refresh` does.
+
+`argus index refresh` remains the explicit "rescan everything now" path, and the only one that covers
+sessions whose text wasn't kept. It is no longer the *only* way a rules improvement lands, though.

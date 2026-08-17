@@ -271,7 +271,9 @@ timestamps, `message_count`, the `archived` flag (1 = retained but no longer on 
 friction signals (`friction_interruptions` / `_rejections` / `_compactions` / `_turns`,
 `last_interruption_ms`; NULL where the source can't observe friction), the local-only UI state columns
 (`is_hidden`, `secret_scan_dismissed` — user state carried forward across re-materializes, never
-synced), and `meta_json` (the authoritative `SessionMeta`). The root of the read model.
+synced), `secret_scan_version` (#335 — which scanner version last scanned this session, NULL for never;
+**not** carried forward, since the re-materialize cascades the findings away), and `meta_json` (the
+authoritative `SessionMeta`). The root of the read model.
 
 ### `resolved_usage`
 One row per usage-bearing turn (the provider's metering grain: Claude `message.usage`, Codex
@@ -353,7 +355,9 @@ at materialize time. **Redacted locators only**: `category` + `interaction_seq`/
 `hint` (first/last few characters), never the secret value. `findings_digest` (the scanner's stable
 hash of the session's whole finding set) is denormalized onto every row so a dismissal — the matching
 digest stored on `resolved_sessions.secret_scan_dismissed` — can be compared in SQL, and lapses when a
-re-scan produces different findings. **Local-only, never synced** (the push path never reads it).
+re-scan produces different findings. Two writers: materialize (from the scan it just ran) and the
+version-stamped rescan drain's `writeSessionSecretFindings` (#335), which catches up sessions the
+current scanner hasn't stamped. **Local-only, never synced** (the push path never reads it).
 PK `(session_id, seq)`, FK → `resolved_sessions`. See [secret-scanning.md](./secret-scanning.md).
 
 ## Tier 3 — freshness & ownership
@@ -385,7 +389,7 @@ unchanged sessions and pick up reindexed ones. PK `(hub_url, client_id, session_
 
 ## Schema version & migrations
 
-`PRAGMA user_version` holds the schema version (currently **24**) and `PRAGMA application_id`
+`PRAGMA user_version` holds the schema version (currently **25**) and `PRAGMA application_id`
 (`0x41524753`, "ARGS") tags the file as an Argus store. Upgrades run forward-only `MIGRATIONS` in
 `src/store/store.ts`, each a `{ to, sql }` step applied in a transaction that bumps `user_version`, so
 a partial upgrade never leaves a half-migrated store. Fresh stores are created from `CREATE_SCHEMA_SQL`

@@ -19,6 +19,10 @@
 //   3. Port regexes carefully: RE2 supports inline flags mid-pattern (e.g. `(?-i:...)`) and JS
 //      does not — hoist or restructure them (see generic_secret for the pattern).
 //   4. Bump PINNED_COMMIT and re-run `bun test test/secret-scan.test.ts`.
+//   5. If the change can alter what a scan finds, bump SECRET_SCAN_VERSION in ./secret-scan.ts —
+//      that is what makes the new rules reach sessions already in the store (#335), via the rescan
+//      drain. Skip the bump for edits that can't change findings (comments, reordering): a bump
+//      rescans everything, and a session whose finding set genuinely changed loses its dismissal.
 //
 // Synced against gitleaks master commit:
 const PINNED_COMMIT = "b58d3f102cf3"; // 2026-07-22 — https://github.com/gitleaks/gitleaks/commit/b58d3f102cf3
