@@ -1,12 +1,31 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, ShieldAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClampText } from "./ClampText";
 import { CopyButton } from "./CopyButton";
 import { InteractionCount } from "./pills";
 import { OutcomeBadge } from "./TaskDetails";
 import { dtAmPm, fmt, pluralize } from "../lib/format";
+import {
+  groupSecretFindingsByInteraction,
+  interactionNumber,
+  secretFindingKey,
+  secretFindingLabel,
+  type InteractionSecretFindings,
+} from "../lib/secret-findings";
 import { useSessionInteractionsQuery } from "../lib/sessions";
-import type { TimelineInteraction, TimelineTask } from "../types";
+import {
+  chapterKey,
+  resolveTimelineFocus,
+  toChapters,
+  unresolvedFocusNote,
+  type TimelineFocus,
+} from "../lib/timeline";
+import type { SecretFinding, TimelineInteraction } from "../types";
+
+export type { TimelineFocus } from "../lib/timeline";
+
+/** Nothing found in this turn — the shape the map returns for an interaction with no findings. */
+const NO_FINDINGS: InteractionSecretFindings = { prompt: [], response: [] };
 
 function dispositionNote(disposition: TimelineInteraction["disposition"]): string {
   if (disposition === "interrupted") return "Interrupted — no response.";
@@ -15,12 +34,32 @@ function dispositionNote(disposition: TimelineInteraction["disposition"]): strin
   return "(response not retained)";
 }
 
-/** The details rail for one interaction: when it ran, its token/tool totals, and the per-tool
- *  breakdown. */
+/** The credentials the scanner found in one half of an interaction (#336). Marks the turn even when
+ *  the conversation text wasn't retained — knowing which turn and which kind of credential is the
+ *  point, and the text isn't needed to say it. */
+function TurnSecrets({ findings }: { findings: SecretFinding[] }) {
+  if (findings.length === 0) return null;
+  return (
+    <ol className="tl-secrets" aria-label="Possible credentials in this turn">
+      {findings.map((f) => (
+        <li className="tl-secret" key={secretFindingKey(f)}>
+          <ShieldAlert size={12} strokeWidth={2} aria-hidden />
+          <span>{secretFindingLabel(f)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** The details rail for one interaction: which interaction it is, when it ran, its token/tool
+ *  totals, and the per-tool breakdown. */
 function Details({ it }: { it: TimelineInteraction }) {
   return (
     <aside className="tl-side">
-      {it.timestampMs != null && <div className="tl-side-time">{dtAmPm(it.timestampMs)}</div>}
+      <div className="tl-side-head">
+        <span className="tl-side-seq">Interaction {interactionNumber(it.seq)}</span>
+        {it.timestampMs != null && <span className="tl-side-time">{dtAmPm(it.timestampMs)}</span>}
+      </div>
       <div className="tl-side-stats">
         <div className="tl-side-stat">
           <span className="tl-side-n">{fmt(it.totalTokens)}</span>
@@ -49,13 +88,30 @@ function Details({ it }: { it: TimelineInteraction }) {
 
 /** One interaction as a card: user prompt on top, agent response (with its model) on the bottom, and
  *  the details rail on the right. */
-function InteractionCard({ it }: { it: TimelineInteraction }) {
+function InteractionCard({
+  it,
+  secrets,
+  focused,
+  ref,
+}: {
+  it: TimelineInteraction;
+  secrets: InteractionSecretFindings;
+  /** True when a link (from a credential finding) pointed here — the card is outlined so the user
+   *  sees which turn they were sent to. */
+  focused: boolean;
+  ref?: (el: HTMLLIElement | null) => void;
+}) {
+  const leaking = secrets.prompt.length > 0 || secrets.response.length > 0;
   return (
-    <li className="tl-item">
+    <li
+      className={`tl-item${leaking ? " tl-item--secret" : ""}${focused ? " tl-item--focus" : ""}`}
+      ref={ref}
+    >
       <div className="tl-main">
         <div className="tl-turn tl-turn--user">
           {it.promptText && <CopyButton value={it.promptText} label="Copy prompt" />}
           <span className="tl-role">You</span>
+          <TurnSecrets findings={secrets.prompt} />
           {it.promptText ? (
             <ClampText text={it.promptText} maxLines={10} className="tl-text" />
           ) : (
@@ -68,6 +124,7 @@ function InteractionCard({ it }: { it: TimelineInteraction }) {
             Agent
             {it.models.length > 0 && <span className="tl-role-model"> ({it.models.join(", ")})</span>}
           </span>
+          <TurnSecrets findings={secrets.response} />
           {it.responseText ? (
             <ClampText text={it.responseText} maxLines={10} className="tl-text" />
           ) : (
@@ -80,51 +137,33 @@ function InteractionCard({ it }: { it: TimelineInteraction }) {
   );
 }
 
-interface Chapter {
-  taskSeq: number | null;
-  task?: TimelineTask;
-  items: TimelineInteraction[];
-}
-
-/** Group interactions into task chapters, preserving order. Task membership is non-decreasing across
- *  the timeline (bookmark assignment), so consecutive interactions with the same taskSeq are one
- *  chapter; a run with no task (before the first task) becomes a headerless group. */
-function toChapters(interactions: TimelineInteraction[], tasks: TimelineTask[]): Chapter[] {
-  const byIndex = new Map(tasks.map((t) => [t.seq, t]));
-  const chapters: Chapter[] = [];
-  for (const it of interactions) {
-    const last = chapters[chapters.length - 1];
-    if (last && last.taskSeq === it.taskSeq) {
-      last.items.push(it);
-    } else {
-      chapters.push({
-        taskSeq: it.taskSeq,
-        task: it.taskSeq != null ? byIndex.get(it.taskSeq) : undefined,
-        items: [it],
-      });
-    }
-  }
-  return chapters;
-}
-
 /** The session as an interaction timeline, grouped into task chapters. Each interaction is one unit
  *  (prompt / loop details / response); prompt/response text shows only when conversation-text
- *  retention was on at index time. */
+ *  retention was on at index time. Turns where the scanner found a likely credential carry a marker
+ *  saying what kind and (redacted) which one. */
 export function SessionTimeline({
   sessionId,
   focus,
+  secretFindings,
 }: {
   sessionId: string;
-  /** A one-shot request (from a task's timeline link) to open a chapter by task seq and scroll to it.
-   *  `nonce` changes per click so re-focusing the same task re-triggers. */
-  focus?: { seq: number; nonce: number } | null;
+  /** A one-shot request (from a task's timeline link, or a credential finding) to open a chapter or
+   *  an interaction and scroll to it. */
+  focus?: TimelineFocus | null;
+  /** The session's secret-scan findings, so the timeline can mark the turns they came from. */
+  secretFindings?: SecretFinding[];
 }) {
   const q = useSessionInteractionsQuery(sessionId);
   // Per-chapter collapse overrides. null = the user hasn't touched anything yet, so the default below
   // applies: a session with a single task opens expanded, one with several opens collapsed.
   const [collapsed, setCollapsed] = useState<Set<string> | null>(null);
-  // The section for the focused chapter, so we can scroll it into view once the tab is shown.
+  // The element for the focused target (a chapter, or a single interaction card), so we can scroll it
+  // into view once the tab is shown. A callback ref, because the target is a <section> for a task and
+  // an <li> for an interaction.
   const focusRef = useRef<HTMLElement | null>(null);
+  const setFocusEl = (el: HTMLElement | null) => {
+    focusRef.current = el;
+  };
 
   // Honor a focus request: expand the target chapter and scroll to it. Reruns when the request or the
   // data changes (the timeline may still be loading when the tab first opens).
@@ -132,13 +171,11 @@ export function SessionTimeline({
     const data = q.data;
     if (!focus || !data) return;
     const chaps = toChapters(data.interactions, data.tasks);
-    // The first chapter carrying the requested task seq (chapters are keyed by running index, so the
-    // same taskSeq heading two chapters can't collide — see chapterKey below).
-    const idx = chaps.findIndex((c) => c.taskSeq === focus.seq);
-    if (idx < 0) return;
-    const key = `ch-${idx}`;
+    const target = resolveTimelineFocus(chaps, focus);
+    if (!target) return;
+    const key = chapterKey(target.chapterIndex);
     setCollapsed((prev) => {
-      const base = prev ?? (data.tasks.length > 1 ? new Set(chaps.map((_, i) => `ch-${i}`)) : new Set<string>());
+      const base = prev ?? (data.tasks.length > 1 ? new Set(chaps.map((_, i) => chapterKey(i))) : new Set<string>());
       if (!base.has(key)) return prev; // already expanded (or default-open)
       const next = new Set(base);
       next.delete(key);
@@ -160,16 +197,16 @@ export function SessionTimeline({
   // Only chapter (add headers + rail) once a session has tasks. Runs of interactions with no task
   // become synthetic "No task" chapters; an un-interpreted session (no tasks at all) stays a flat list.
   const chaptered = data.tasks.length > 0;
-  // Key chapters by running index, not taskSeq: task membership is *usually* monotonic across the
-  // timeline, but clock skew or interleaved subagent/resumed interactions can make the same taskSeq
-  // head two separate chapters — index keys stay unique so collapse/focus never conflate them.
-  const chapterKey = (i: number) => `ch-${i}`;
   // More than one task → open with every chapter collapsed; a single task (or none) → expanded.
   const defaultCollapsed =
     data.tasks.length > 1 ? new Set(chapters.map((_, i) => chapterKey(i))) : new Set<string>();
   const effectiveCollapsed = collapsed ?? defaultCollapsed;
-  // The chapter a "view in timeline" link targets: the first one carrying that task seq.
-  const focusChapterIndex = focus != null ? chapters.findIndex((c) => c.taskSeq === focus.seq) : -1;
+  // Where a "show me this" link points: a chapter, and for a credential finding the card inside it.
+  const focusTarget = resolveTimelineFocus(chapters, focus);
+  // A link that went stale (the session was indexed again under an open tab) would otherwise switch
+  // tabs and silently highlight nothing, so say what happened.
+  const staleFocusNote = unresolvedFocusNote(chapters, focus);
+  const secretsByInteraction = groupSecretFindingsByInteraction(secretFindings ?? []);
   const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev ?? defaultCollapsed);
@@ -179,6 +216,11 @@ export function SessionTimeline({
     });
   return (
     <>
+      {staleFocusNote && (
+        <p className="task-empty tl-note" role="status">
+          {staleFocusNote}
+        </p>
+      )}
       {!data.retainedText && (
         <p className="task-empty tl-note">
           Conversation text wasn’t retained for this session, so prompts and responses aren’t shown —
@@ -189,12 +231,15 @@ export function SessionTimeline({
         {chapters.map((chapter, i) => {
           const key = chapterKey(i);
           const isCollapsed = effectiveCollapsed.has(key);
-          const isFocusTarget = i === focusChapterIndex;
+          // A chapter-level focus scrolls to the chapter head; an interaction-level one scrolls to the
+          // card itself, so the chapter only takes the ref when no card is named.
+          const isChapterFocusTarget =
+            focusTarget != null && focusTarget.chapterIndex === i && focusTarget.interactionSeq == null;
           return (
             <section
               className={`tl-chapter${isCollapsed ? " tl-chapter--collapsed" : ""}`}
               key={key}
-              ref={isFocusTarget ? focusRef : undefined}
+              ref={isChapterFocusTarget ? setFocusEl : undefined}
             >
               {chaptered && (
                 <button
@@ -217,9 +262,18 @@ export function SessionTimeline({
               )}
               {!isCollapsed && (
                 <ol className={`tl-cards${chaptered ? " tl-cards--chapter" : ""}`}>
-                  {chapter.items.map((it) => (
-                    <InteractionCard it={it} key={it.seq} />
-                  ))}
+                  {chapter.items.map((it) => {
+                    const isCardFocusTarget = focusTarget?.interactionSeq === it.seq;
+                    return (
+                      <InteractionCard
+                        it={it}
+                        key={it.seq}
+                        secrets={secretsByInteraction.get(it.seq) ?? NO_FINDINGS}
+                        focused={isCardFocusTarget}
+                        ref={isCardFocusTarget ? setFocusEl : undefined}
+                      />
+                    );
+                  })}
                 </ol>
               )}
             </section>

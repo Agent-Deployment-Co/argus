@@ -93,7 +93,7 @@ function redactSessionSearchRow(row: Awaited<ReturnType<SessionListReader>>["row
       ? { ...row, match: { ...row.match, snippet: row.match.snippet.replace(SENTINEL_RE, "") } }
       : row;
   }
-  const { firstPrompt: _firstPrompt, match, ...withoutPrompt } = row;
+  const { firstPrompt: _firstPrompt, secretFindings: _secretFindings, match, ...withoutPrompt } = row;
   const safeMatch = match && match.sources[0] !== "conversation"
     ? { ...match, snippet: match.snippet.replace(SENTINEL_RE, "") }
     : undefined;
@@ -104,7 +104,9 @@ function redactSessionSearchRow(row: Awaited<ReturnType<SessionListReader>>["row
  *  interaction-text table. Remove it from MCP detail responses while transcript access is off. */
 function redactSessionDetail(session: Awaited<ReturnType<SessionDetailReader>>, includeTranscripts: boolean) {
   if (includeTranscripts || !session) return session;
-  const { firstPrompt: _firstPrompt, ...withoutPrompt } = session;
+  // firstPrompt is transcript text. Secret findings (#327) are redacted locators, but they are
+  // derived from the transcript text the user chose not to share with agents, so they go too.
+  const { firstPrompt: _firstPrompt, secretFindings: _secretFindings, ...withoutPrompt } = session;
   return withoutPrompt;
 }
 

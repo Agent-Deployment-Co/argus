@@ -141,6 +141,10 @@ export interface SessionListQuery {
   label?: string[];
   /** How `label` narrows when it has more than one id: "any" (union, default) or "all" (intersection). */
   labelMode?: LabelFilterMode;
+  /** Restrict to sessions with undismissed secret-scan findings (#327) — what the exposed-credentials
+   *  recommendation links to. Hidden sessions are included, because the count that links here counts
+   *  them; without this they'd be unreachable. */
+  flagged?: boolean;
   includeGenerated: boolean;
   sort: SessionSort;
   limit: number;
@@ -235,6 +239,15 @@ export interface LabelOps {
   setForSessions(labelId: string, sessionIds: string[], applied: boolean): Promise<void>;
 }
 
+/** Secret-finding dismissal operations (#327), wired into the dismiss/undismiss write routes.
+ *  Findings are local-only — nothing here touches the sync path. */
+export interface SecretFindingsOps {
+  /** Dismiss the session's current finding set. Returns false when the session has no findings. */
+  dismiss(sessionId: string): Promise<boolean>;
+  /** Clear a dismissal so the warning shows again. */
+  undismiss(sessionId: string): Promise<void>;
+}
+
 interface AppOptions {
   /** The per-view dashboard readers. Omitted in processes that don't read the store (the routes then
    *  answer 503); tests pass stubs to exercise routing without a store. */
@@ -256,6 +269,8 @@ interface AppOptions {
   setSessionsHidden?: SessionsHiddenSetter;
   /** Session/task label read + write operations. Omitted in processes without a store (503). */
   labels?: LabelOps;
+  /** Secret-finding dismissal operations (#327). Omitted in processes without a store (503). */
+  secretFindings?: SecretFindingsOps;
   debugInfo?: DebugInfoReader;
   /** Secret store for the BYO-key settings endpoints. Defaults to the platform store. */
   secrets?: SecretStore;
@@ -465,6 +480,8 @@ function parseSessionListQuery(c: Context): SessionListQuery | string {
     file: c.req.query("file") || undefined,
     label: label ? label.split(",").filter(Boolean) : undefined,
     labelMode: labelMode as LabelFilterMode | undefined,
+    // Left undefined rather than false when absent, like the other optional filters.
+    flagged: c.req.query("flagged") === "true" || c.req.query("flagged") === "1" || undefined,
     includeGenerated,
     sort: sort as SessionSort,
     limit: Math.min(MAX_SESSION_LIMIT, Math.max(1, parseIntOr(c.req.query("limit"), DEFAULT_SESSION_LIMIT))),
@@ -671,6 +688,36 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
     await opts.setSessionHidden(sessionId, hidden);
     opts.onStoreChanged?.();
     return c.json({ hidden });
+  });
+
+  // Dismiss/undismiss a session's exposed-credential warning (#327). The dismissal is anchored to
+  // the current finding set's digest server-side — a re-scan with different findings re-warns.
+  // Pure store writes (like hide), dropped in read-only mode (#281).
+  writes.post("/api/sessions/:id/secret-findings/dismiss", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.secretFindings) return c.json({ error: "Secret findings are unavailable in this process." }, 503);
+
+    const dismissed = await opts.secretFindings.dismiss(sessionId);
+    if (!dismissed) return c.json({ error: "No findings to dismiss." }, 404);
+    opts.onStoreChanged?.();
+    return c.json({ dismissed });
+  });
+
+  writes.post("/api/sessions/:id/secret-findings/undismiss", async (c) => {
+    const blocked = rejectCrossSite(c);
+    if (blocked) return blocked;
+
+    const sessionId = c.req.param("id").trim();
+    if (!sessionId) return c.json({ error: "Missing session id." }, 400);
+    if (!opts.secretFindings) return c.json({ error: "Secret findings are unavailable in this process." }, 503);
+
+    await opts.secretFindings.undismiss(sessionId);
+    opts.onStoreChanged?.();
+    return c.json({ dismissed: false });
   });
 
   // Re-index a single session: re-read its transcript from disk and refresh it in the store
@@ -1154,7 +1201,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     health: (filters) => withStore(filters, async (store, query) => buildHealth(await store.readHealthRollups(query))),
     recommendations: (filters) =>
       withStore(filters, async (store, query) => {
-        const [byPlugin, health] = await Promise.all([byPluginFor(store, query), store.readHealthRollups(query)]);
+        const [byPlugin, health, secretFindingSessions] = await Promise.all([
+          byPluginFor(store, query),
+          store.readHealthRollups(query),
+          store.readSecretFindingsRollup(query),
+        ]);
         return {
           recommendations: computeRecommendations({
             byPlugin,
@@ -1162,6 +1213,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
             frictionTotals: health.frictionTotals,
             // byPluginFor priced every model above, so the unpriced list is complete here.
             unpriced: unpricedModels(),
+            secretFindingSessions,
           }),
         };
       }),
@@ -1224,7 +1276,20 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       const labeled = await store.readSessionIdsForLabels(query.label, query.labelMode ?? "any");
       sessionIds = sessionIds ? sessionIds.filter((id) => labeled.has(id)) : [...labeled];
     }
-    const aggregates = await store.readSessionAggregates({ sources, since, until, sessionIds });
+    // The flagged filter (#327) narrows the same candidate set, and is the one filter that reaches
+    // past `is_hidden`: the exposed-credentials count includes hidden sessions, so the list it links
+    // to must be able to show them.
+    if (query.flagged) {
+      const flagged = await store.readSessionIdsWithSecretFindings();
+      sessionIds = sessionIds ? sessionIds.filter((id) => flagged.has(id)) : [...flagged];
+    }
+    const aggregates = await store.readSessionAggregates({
+      sources,
+      since,
+      until,
+      sessionIds,
+      includeHidden: query.flagged,
+    });
     const list = buildSessionList(aggregates, {
       sort: query.sort,
       limit: query.limit,
@@ -1244,6 +1309,14 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
         return labels && labels.length ? { ...r, labels } : r;
       });
     }
+    // Attach undismissed secret-finding counts (#327) the same way — one batched read for the page.
+    const findingCounts = await store.readSecretFindingCounts(list.rows.map((r) => r.sessionId));
+    if (findingCounts.size) {
+      list.rows = list.rows.map((r) => {
+        const n = findingCounts.get(r.sessionId);
+        return n ? { ...r, secretFindings: n } : r;
+      });
+    }
     return list;
   };
 
@@ -1251,14 +1324,15 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     const store = await readStore();
     const messages = await store.readSessionMessages(sessionId);
     if (!messages.length) return null;
-    const [meta, tasks, interpretation, isHidden, interactions] = await Promise.all([
+    const [meta, tasks, interpretation, isHidden, interactions, secretFindings] = await Promise.all([
       store.readSessionMeta(sessionId),
       store.readSessionTasks(sessionId),
       store.readSessionInterpretation(sessionId),
       store.readSessionHidden(sessionId),
       store.readSessionInteractionCount(sessionId),
+      store.readSessionSecretFindings(sessionId),
     ]);
-    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden, interactions);
+    return buildSessionDetail(sessionId, messages, meta, tasks, interpretation, isHidden, interactions, secretFindings);
   };
 
   const sessionInteractions: SessionInteractionsReader = async (sessionId) => {
@@ -1295,6 +1369,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
       withWriteStore((store) => store.setLabelForSessions(labelId, sessionIds, applied)),
   };
 
+  const secretFindings: SecretFindingsOps = {
+    dismiss: (sessionId) => withWriteStore((store) => store.dismissSessionSecretFindings(sessionId)),
+    undismiss: (sessionId) => withWriteStore((store) => store.clearSessionSecretFindingsDismissal(sessionId)),
+  };
+
   const app = createApp(webRoot, {
     views,
     reindex,
@@ -1306,6 +1385,7 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     setSessionHidden,
     setSessionsHidden,
     labels,
+    secretFindings,
     // The MCP endpoint (#299) reads through the same readers the web API uses, so agents and the
     // dashboard can never disagree.
     mcp: createMcpHandler({ views, sessionList, sessionDetail, sessionInteractions, sessionTaskMetrics }),

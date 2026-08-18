@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { sourcesFor } from "./reporting/dashboard-builder.ts";
 import { syncStatsSummary, reindexSession } from "./indexing/pipeline.ts";
 import { runInterpretationDrain, sessionInterpretationActive } from "./indexing/interpret/index.ts";
+import { runSecretScanDrain } from "./indexing/secret-scan-drain.ts";
 import type { RepeatCollapser } from "./backoff.ts";
 import { openSessionStore } from "./store/session-store.ts";
 import { openStore, rebuildStore } from "./store/store.ts";
@@ -42,9 +43,9 @@ export async function runIndex(
   extractTasks?: boolean,
   debug = false,
   retainText?: boolean,
-  // Persisted across watch ticks by the caller (watchIndex) so the drain's throttle-pause / failure
-  // lines collapse instead of repeating every interval. Omitted for a one-shot `argus index`.
-  interpretCollapser?: RepeatCollapser,
+  // Persisted across watch ticks by the caller (watchIndex) so the post-index drains' throttle-pause /
+  // failure lines collapse instead of repeating every interval. Omitted for a one-shot `argus index`.
+  collapser?: RepeatCollapser,
 ): Promise<void> {
   // Read argus.json once and thread it into both resolvers (avoid a double parse per pass / watch tick).
   const config = loadConfig();
@@ -64,17 +65,20 @@ export async function runIndex(
   } finally {
     await store.close();
   }
-  // Decoupled, throttled interpretation (#153): after the structural index brings the store current,
-  // interpret a bounded, rate-limited batch of eligible sessions, reading retained text back from the
-  // store. A fresh handle (the pipeline closed its own) and strictly after indexing, so there's never a
-  // concurrent writer. No-op when task extraction is disabled — and we skip opening the store entirely.
-  if (sessionInterpretationActive(taskExtraction)) {
-    const store = await openStore();
-    try {
-      await runInterpretationDrain(store, taskExtraction, log, interpretCollapser);
-    } finally {
-      await store.close();
+  // Two decoupled passes run after the structural index brings the store current, both reading their
+  // inputs back from the store: the secret-scan backlog (#335) and throttled interpretation (#153).
+  // A fresh handle (the pipeline closed its own) and strictly after indexing, so there's never a
+  // concurrent writer. Both are silent no-ops when there's nothing eligible, which is the steady state.
+  const drainStore = await openStore();
+  try {
+    // Cheap and unconditional: regex over text already in the store, no setting to honor. Runs first
+    // so a just-upgraded user gets their credential warnings without waiting on the model calls below.
+    await runSecretScanDrain(drainStore, log, collapser);
+    if (sessionInterpretationActive(taskExtraction)) {
+      await runInterpretationDrain(drainStore, taskExtraction, log, collapser);
     }
+  } finally {
+    await drainStore.close();
   }
 }
 

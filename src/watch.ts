@@ -32,7 +32,7 @@ export interface WatchIndexDeps {
     extractTasks?: boolean,
     debug?: boolean,
     retainText?: boolean,
-    interpretCollapser?: RepeatCollapser,
+    collapser?: RepeatCollapser,
   ) => Promise<void>;
 }
 
@@ -44,14 +44,15 @@ export interface WatchIndexDeps {
 export async function watchIndex(opts: WatchIndexOptions, log: Log, signal: AbortSignal, deps: WatchIndexDeps = {}): Promise<void> {
   const indexPass = deps.index ?? runIndex;
   const intervalMs = Math.max(MIN_INTERVAL_MIN, opts.intervalMin) * 60_000;
-  // One collapser for the whole watch lifetime so the interpretation drain's throttle-pause / failure
-  // lines (#153) are said once and not repeated every tick while the situation persists.
-  const interpretCollapser = new RepeatCollapser(log);
+  // One collapser for the whole watch lifetime so the post-index drains' throttle-pause / failure
+  // lines (interpretation #153, secret scanning #335) are said once and not repeated every tick while
+  // the situation persists.
+  const collapser = new RepeatCollapser(log);
   await superviseLoop(
     "indexing",
     async (sig) => {
       while (!sig.aborted) {
-        await indexPass(opts, log, opts.extractTasks, false, opts.retainText, interpretCollapser);
+        await indexPass(opts, log, opts.extractTasks, false, opts.retainText, collapser);
         await sleep(intervalMs, sig);
       }
     },

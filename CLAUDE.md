@@ -135,7 +135,7 @@ inventory so the surfaces don't drift apart. The `docs/contributing/` guides (an
 
 The pipeline is a one-way data flow, and `src/` is laid out by stage (full map in
 `docs/internals/architecture.md`): **`src/indexing/`** (the pipeline — discover, parse, reconcile,
-materialize, plus the interpret drain), **`src/store/`** (the `argus.db` layer + its parse→store
+materialize, plus the interpret and secret-scan drains), **`src/store/`** (the `argus.db` layer + its parse→store
 contract), **`src/reporting/`** (per-session and plugin aggregation), and **`src/api/`** (the serve
 layer). Cross-cutting modules (`types.ts`, `config.ts`, `paths.ts`, `pricing.ts`, `tool-categories.ts`,
 **`src/llm/`** [the shared LLM access layer], **`secrets.ts`** [BYO API-key storage]) and the
@@ -171,9 +171,12 @@ you'd cause a bug by not knowing:
 - **What crosses the sync wire, and what doesn't.** `sync` uploads the reconciled rows *and the
   interpretations*: sessions (with the model's title/summary), usage, `resolved_tasks` (the full
   `TaskFact` — outcome, frustration, signals), interactions (with `task_seq`), invocations, and user
-  **labels**. Only two things never leave the machine: the retained prompt/response **text**
-  (`resolved_interaction_text`, toggleable via `retainText`) and **BYO API keys** (`secrets.ts`) — so
-  the interpretations *derived from* the text upload, but the raw text does not.
+  **labels**, plus one derived boolean per task (`flagged` — whether a secret finding landed in it;
+  it ignores dismissal on purpose). The things that never leave the machine: the retained prompt/response **text**
+  (`resolved_interaction_text`, toggleable via `retainText`), **secret-scan finding rows**
+  (`resolved_secret_findings` — no category, hint, digest, or dismissal value is ever uploaded, only
+  that `flagged` bit; see `docs/internals/secret-scanning.md`), and **BYO API keys** (`secrets.ts`) —
+  so the interpretations *derived from* the text upload, but the raw text does not.
 - **Canonical tool/MCP parsing lives in `tool-categories.ts`** (`categorizeTool`, `parseMcpTool` — the
   `mcp__server__tool` split). Route through it so categorization and MCP naming stay consistent.
 - **All LLM access goes through `src/llm/`.** `registry.ts` is the single source of truth (adding a
@@ -204,8 +207,12 @@ imports (the Hub backend had inlined its own copies and dropped it too).
 `Dashboard` still backs the web app's per-view response types (imported type-only by `web/src/types.ts`
 from `src/types.ts`); the wire contract itself is being reworked separately.
 
-Two things stay off the wire entirely: the retained prompt/response text (`resolved_interaction_text`)
-and BYO API keys (`secrets.ts`). The task *interpretations* built from that text (outcome, frustration,
-chapter span) do upload — the raw text doesn't. Separately, `store/store-contract.ts` (the parse→store
+Two things stay off the wire entirely: the retained prompt/response text
+(`resolved_interaction_text`) and BYO API keys (`secrets.ts`). Secret-scan findings
+(`resolved_secret_findings`, #327) are nearly a third: no finding row is ever uploaded — not the
+category, hint, digest, or dismissal value — but each uploaded task carries a derived `flagged`
+boolean saying whether a finding landed in it (dismissal doesn't clear it: the banner is one user's,
+the flag is the org's). The task *interpretations* built from the
+retained text (outcome, frustration, chapter span) do upload — the raw text doesn't. Separately, `store/store-contract.ts` (the parse→store
 fact contract, including `PARSED_FRAGMENT_CONTRACT_VERSION`) is its own contract, distinct from the
 `Dashboard`/`SessionRow` types above.

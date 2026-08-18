@@ -5,7 +5,13 @@
 // demand from one session's messages. These response shapes are local-only (not on the sync wire).
 import { buildSessionRow } from "../reporting/aggregate.ts";
 import { cost } from "../pricing.ts";
-import type { AppliedLabel, SessionAggregate, SessionSearchMatch, TaskFact } from "../store/store-contract.ts";
+import type {
+  AppliedLabel,
+  SessionAggregate,
+  SessionSearchMatch,
+  SessionSecretFindings,
+  TaskFact,
+} from "../store/store-contract.ts";
 import { totalTokens, type AgentSource, type MessageRecord, type SessionMeta, type SessionRow } from "../types.ts";
 
 export type SessionSort = "recent" | "tokens" | "cost";
@@ -40,6 +46,12 @@ export interface SessionListItem {
   /** Active session-level labels (session-and-task-labels), attached to the page rows by the serve
    *  reader. Task labels are not included here. Local-only, not on the sync wire. */
   labels?: AppliedLabel[];
+  /** Undismissed secret-scan finding count (#327), attached to the page rows by the serve reader
+   *  (like labels). Absent/0 = no warning badge. Local-only, not on the sync wire. */
+  secretFindings?: number;
+  /** Set only for a hidden session, which reaches the list only via the `flagged` filter — the row
+   *  says so rather than appearing to contradict the user's own hide. */
+  isHidden?: true;
 }
 
 export interface SessionListResponse {
@@ -102,6 +114,7 @@ function listItem(agg: SessionAggregate): SessionListItem {
     cost: c,
     interactions: agg.interactions,
     tasks: agg.tasks,
+    ...(agg.isHidden ? { isHidden: true as const } : {}),
   };
 }
 
@@ -156,12 +169,15 @@ export function buildSessionDetail(
   interpretation?: { title: string | null; summary: string | null; interpreted: boolean },
   isHidden = false,
   interactions = 0,
+  /** Secret-scan findings for the banner (#327): the redacted finding list plus whether the user
+   *  dismissed this exact set. */
+  secretFindings?: SessionSecretFindings,
 ): SessionRow {
   // The session summary is the stored resolved_sessions.summary verbatim — no heuristic fallback. It's
   // empty until interpretation produces one; the UI shows the Summary section only when it's non-empty.
   const summary = interpretation?.summary ?? "";
   const title = interpretation?.title || null;
-  return buildSessionRow(
+  const row = buildSessionRow(
     sessionId,
     messages,
     meta,
@@ -172,4 +188,9 @@ export function buildSessionDetail(
     isHidden,
     interactions,
   );
+  if (secretFindings?.findings.length) {
+    row.secretFindings = secretFindings.findings;
+    row.secretFindingsDismissed = secretFindings.dismissed;
+  }
+  return row;
 }

@@ -5,6 +5,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import { openStore } from "../src/store/store.ts";
+import type { MaterializeSession } from "../src/store/store-contract.ts";
 
 // These exercise the citty argument layer end-to-end by running the real CLI. citty parses
 // non-strictly, so src/cli.ts adds an explicit guard (validateArgs) for unknown flags, value-less
@@ -169,6 +171,46 @@ describe("index command group", () => {
   });
 });
 
+/** A claude session with one retained human interaction — enough for `status` to count it and for the
+ *  secret-scan backlog counts to have something to say about it. */
+function statusSession(sessionId: string): MaterializeSession {
+  const ts = 1_717_600_000_000;
+  return {
+    meta: { source: "claude", sessionId, project: "p", cwd: "/tmp/p", filePath: "/tmp/p/r.jsonl" },
+    messages: [
+      {
+        source: "claude",
+        sessionId,
+        project: "p",
+        cwd: "/tmp/p",
+        gitBranch: "main",
+        ts,
+        date: "2026-06-01",
+        model: "claude-opus-4",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+        attributionSkill: null,
+        toolUses: [],
+      },
+    ],
+    interactions: [
+      {
+        id: `${sessionId}-i0`,
+        source: "claude",
+        sourceSessionId: sessionId,
+        seq: 0,
+        initiator: "human",
+        disposition: "completed",
+        compactionCount: 0,
+        timestampMs: ts,
+        promptPosition: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+        position: { originKey: "f", recordIndex: 0, itemIndex: 0 },
+        promptText: "an ordinary question",
+        responseText: "an ordinary answer",
+      },
+    ],
+  };
+}
+
 describe("read command output", () => {
   test("status prints its result even under --quiet", () => {
     const { status, stderr } = runCli(["status", "--quiet"]);
@@ -190,6 +232,30 @@ describe("read command output", () => {
     expect(status).toBe(0);
     expect(stderr).toContain("Store path:");
     expect(stderr).toContain("No sessions yet.");
+  });
+
+  test("status reports the secret-scan backlog and what can't be checked (#335)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-cli-test-"));
+    const path = join(dir, "data", "argus.db");
+    mkdirSync(join(dir, "data"), { recursive: true });
+    // Two sessions the current scanner hasn't seen: one with retained text (the drain can reach it)
+    // and one indexed with retention off (only `index refresh` can).
+    const store = await openStore({ path });
+    try {
+      await store.materializeSessions("claude", [statusSession("claude:waiting")]);
+      await store.materializeSessions("claude", [statusSession("claude:no-text")], {
+        retainText: false,
+      });
+    } finally {
+      await store.close();
+    }
+
+    const { status, stderr } = runCli(["status"], dir);
+    expect(status).toBe(0);
+    expect(stderr).toContain("1 session waiting to be checked for exposed credentials.");
+    expect(stderr).toContain(
+      "1 session can't be checked for exposed credentials without re-reading its transcript",
+    );
   });
 
   test("config get prints an unset result even under --quiet", () => {

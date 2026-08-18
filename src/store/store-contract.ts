@@ -270,6 +270,44 @@ export interface InteractionTextChunk {
   text: string;
 }
 
+// ---- Secret scanning (#327) ----
+
+/** The credential shapes the secret scanner (src/indexing/secret-scan.ts) recognizes. A controlled
+ *  vocabulary stored as plain TEXT in resolved_secret_findings.category, like invocations.category —
+ *  adding kinds is additive, no schema change. */
+export type SecretFindingCategory =
+  | "aws_access_key"
+  | "github_token"
+  | "anthropic_api_key"
+  | "openai_api_key"
+  | "stripe_key"
+  | "slack_token"
+  | "private_key"
+  | "jwt"
+  | "generic_secret";
+
+/** One likely exposed credential spotted in a session's prompt/response text. Records THAT a secret
+ *  was found, never the secret: category + location + a short redacted `hint` (first/last few
+ *  characters, the card-statement last-4 convention) so the user can recognize which credential it
+ *  was. Local-only — never on the sync wire. */
+export interface SecretFinding {
+  category: SecretFindingCategory;
+  /** Owning interaction's seq within the session (resolved_interactions.seq). */
+  interactionSeq: number;
+  /** Which slot of the interaction matched. */
+  chunkType: "prompt" | "response";
+  /** Redacted locator, e.g. "AKIA…WXYZ"; for private keys the key-type label, e.g. "RSA PRIVATE KEY". */
+  hint: string;
+}
+
+/** A session's secret-scan findings as the serve layer reads them (#327). `dismissed` is true when
+ *  the user dismissed exactly this finding set (the stored dismissal digest matches the current
+ *  rows' digest) — a content change that alters the findings re-surfaces the warning. */
+export interface SessionSecretFindings {
+  findings: SecretFinding[];
+  dismissed: boolean;
+}
+
 export interface InvocationFact {
   id: string;
   source: AgentSource;
@@ -649,6 +687,9 @@ export interface SessionAggregate {
    *  list surfaces them with a first-prompt fallback. */
   title: string | null;
   summary: string | null;
+  /** Whether the user hid this session. Only ever true when the read asked for hidden sessions
+   *  (`includeHidden`), so the list can mark why a hidden session is on screen. */
+  isHidden: boolean;
 }
 
 /** Usage sums + message count for one grouping key crossed with model (cost is priced per-model in JS
@@ -681,6 +722,17 @@ export interface MaterializeSession {
    *  interaction_json is always text-free, and that text is persisted (opt-in, default-on, local-only)
    *  in resolved_interaction_text (#120). */
   interactions?: InteractionFact[];
+  /** The secret scan's result for this session (#327), computed by the pipeline from the in-memory
+   *  interaction text (so scanning runs even when text retention is off) and persisted to
+   *  resolved_secret_findings. `digest` is the scanner's stable hash of the finding set, stamped on
+   *  every row so a dismissal can be compared against the current set in SQL. `version` is the
+   *  scanner version that produced it (#335), recorded on resolved_sessions.secret_scan_version so
+   *  the rescan drain knows which sessions the current scanner has already seen.
+   *
+   *  Present with an EMPTY `findings` means "scanned, nothing found" — still a stamp. Absent means
+   *  the caller never scanned (tests, programmatic materialize), which leaves the stamp NULL and so
+   *  hands the session to the drain. */
+  secretFindings?: { version: number; digest: string; findings: SecretFinding[] };
 }
 
 /** Per-source freshness attestation. */
@@ -882,6 +934,47 @@ export interface ReadModelStore {
   readMcpServerTools(query?: ResolvedQuery): Promise<Array<{ server: string; tool: string; count: number }>>;
   /** Cross-session + per-project friction and the high-token-growth count. */
   readHealthRollups(query?: ResolvedQuery): Promise<HealthRollups>;
+  // ---- Secret-scan findings (#327). No finding row is ever synced; push.ts reads the table only to
+  // derive one boolean per uploaded task (never a category, hint, or digest). That boolean ignores
+  // dismissal by design, unlike the readers below; see FLAGGED_TASK_EXISTS_SQL in push.ts. ----
+  /** A session's secret-scan findings (redacted locators only) plus whether the user dismissed
+   *  exactly this finding set. Backs the session-detail warning banner. */
+  readSessionSecretFindings(sessionId: string): Promise<SessionSecretFindings>;
+  /** Undismissed finding counts for many sessions at once, keyed by session id — backs the session
+   *  list's warning badge. Sessions with no (undismissed) findings are absent from the map. */
+  readSecretFindingCounts(sessionIds: string[]): Promise<Map<string, number>>;
+  /** Count of in-scope sessions with at least one undismissed finding — the recommendations
+   *  rollup's input. Scope (sources/since/until/project) matches readHealthRollups: sessions with a
+   *  usage row in the window. */
+  readSecretFindingsRollup(query?: ResolvedQuery): Promise<number>;
+  /** Every session with at least one undismissed finding, hidden sessions included — the candidate
+   *  set the sessions list intersects for its `flagged` filter. Unscoped: the list applies its own
+   *  date/source/project narrowing on top. */
+  readSessionIdsWithSecretFindings(): Promise<Set<string>>;
+  /** Record that the user dismissed the session's current findings (stores their digest). Returns
+   *  false when the session has no findings — nothing to dismiss. */
+  dismissSessionSecretFindings(sessionId: string): Promise<boolean>;
+  /** Clear a session's findings dismissal, so the warning shows again. No-op if not dismissed. */
+  clearSessionSecretFindingsDismissal(sessionId: string): Promise<void>;
+  /** Canonical ids of sessions the current scanner hasn't seen yet (#335), newest-first, capped at
+   *  `limit`. Eligible = secret_scan_version is NULL or below `version` AND the session has retained
+   *  text to scan. `version` is passed in (not read from the scanner) so the store stays unaware of
+   *  the indexing layer. */
+  readPendingSecretScanSessions(version: number, limit: number): Promise<string[]>;
+  /** Replace a session's secret-scan findings and stamp the scanner version that produced them
+   *  (#335) — the drain's write, without re-materializing anything else. Always stamps, even for an
+   *  empty finding set, so a clean session de-queues instead of being rescanned every pass. Leaves
+   *  `secret_scan_dismissed` alone: the read path compares it against the fresh digest, so an
+   *  unchanged finding set stays dismissed and a changed one re-warns. */
+  writeSessionSecretFindings(
+    sessionId: string,
+    result: { version: number; digest: string; findings: SecretFinding[] },
+  ): Promise<void>;
+  /** Secret-scan backlog progress for `argus status` (#335): sessions the scanner has stamped at
+   *  least once, the eligible backlog (`pending`, the same predicate the drain uses), and how many
+   *  need a scan but have no retained text to scan (`unscannable` — the retainText-off case, which
+   *  only `argus index refresh` can reach). */
+  secretScanProgress(version: number): Promise<{ scanned: number; pending: number; unscannable: number }>;
   // ---- Session/task labels (local-only; never synced) ----
   /** All label definitions, ordered by name (case-insensitive). Excludes soft-deleted labels unless
    *  `includeDeleted` is set. */

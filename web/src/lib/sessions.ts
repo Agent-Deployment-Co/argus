@@ -21,6 +21,9 @@ export interface SessionListFilters extends SnapshotFilters {
   label?: string[];
   /** How `label` narrows when it has more than one id: "any" (union, default) or "all" (intersection). */
   labelMode?: "any" | "all";
+  /** Only sessions with possible exposed credentials (#327). The one filter that shows hidden
+   *  sessions, since the warning counts them. */
+  flagged?: boolean;
   sort: SessionSort;
 }
 
@@ -44,6 +47,7 @@ function sessionsUrl(filters: SessionListFilters, offset: number): string {
     params.set("label", filters.label.join(","));
     if (filters.labelMode === "all") params.set("labelMode", "all");
   }
+  if (filters.flagged) params.set("flagged", "1");
   return `/api/sessions?${params}`;
 }
 
@@ -122,6 +126,25 @@ export async function setSessionHidden(sessionId: string, hidden: boolean): Prom
     body: JSON.stringify({ hidden }),
   });
   return jsonOrThrow<{ hidden: boolean }>(res, hidden ? "Failed to hide session" : "Failed to unhide session");
+}
+
+/** Dismiss a session's exposed-credential warning (#327). The dismissal is anchored to the current
+ *  finding set server-side, so it lapses automatically if a re-scan finds something different. */
+export async function dismissSecretFindings(sessionId: string): Promise<{ dismissed: boolean }> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/secret-findings/dismiss`, {
+    method: "POST",
+    headers: { ...APP_HEADER },
+  });
+  return jsonOrThrow<{ dismissed: boolean }>(res, "Failed to dismiss the warning");
+}
+
+/** Undo a dismissal so the exposed-credential warning shows again. */
+export async function undismissSecretFindings(sessionId: string): Promise<{ dismissed: boolean }> {
+  const res = await fetchOrOffline(`/api/sessions/${encodeURIComponent(sessionId)}/secret-findings/undismiss`, {
+    method: "POST",
+    headers: { ...APP_HEADER },
+  });
+  return jsonOrThrow<{ dismissed: boolean }>(res, "Failed to restore the warning");
 }
 
 /** Flag/unflag many sessions as hidden at once (bulk mode). */

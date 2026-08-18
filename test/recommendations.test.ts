@@ -52,6 +52,39 @@ describe("computeRecommendations", () => {
   });
 });
 
+describe("ruleExposedSecrets (#327)", () => {
+  test("fires as a warning when sessions have undismissed findings", () => {
+    const d = baseDash({ secretFindingSessions: 3 } as Partial<Dashboard>);
+    const [rec] = computeRecommendations(d);
+    expect(rec).toBeDefined();
+    expect(rec!.id).toBe("exposed-secrets");
+    expect(rec!.severity).toBe("warning");
+    expect(rec!.title).toContain("3 sessions may contain exposed credentials");
+  });
+
+  test("links to the flagged sessions, which is the only way to reach a hidden one", () => {
+    const [rec] = computeRecommendations(baseDash({ secretFindingSessions: 1 } as Partial<Dashboard>));
+    expect(rec!.link).toEqual({
+      to: "/sessions",
+      search: { flagged: 1 },
+      label: "Review flagged sessions",
+    });
+  });
+
+  test("leads the list, ahead of the hygiene tips", () => {
+    const d = baseDash({
+      byPlugin: [plugin("jj", true, false)],
+      secretFindingSessions: 1,
+    } as Partial<Dashboard>);
+    expect(computeRecommendations(d)[0]!.id).toBe("exposed-secrets");
+  });
+
+  test("silent with no findings or an unset (legacy) count", () => {
+    expect(computeRecommendations(baseDash({ secretFindingSessions: 0 } as Partial<Dashboard>))).toEqual([]);
+    expect(computeRecommendations(baseDash())).toEqual([]);
+  });
+});
+
 describe("ruleUnusedPlugins", () => {
   test("fires for enabled-but-unused plugins, lists their names", () => {
     const d = baseDash({ byPlugin: [plugin("jj", true, false), plugin("gh", true, true)] });

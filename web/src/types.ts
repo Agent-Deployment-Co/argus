@@ -43,6 +43,8 @@ import type {
   SessionProvenance,
   SessionProvenanceFile,
 } from "../../src/store/store-contract";
+// Secret-scan findings (#327): redacted locators only, local-only — same type-only arrangement.
+import type { SecretFinding } from "../../src/store/store-contract";
 // Per-view endpoint payloads (#217) — the single source of truth for each view's shape, imported
 // type-only so the server responses and the UI can't drift.
 import type {
@@ -130,4 +132,6 @@ export type {
   SessionLabelsResponse,
   SessionProvenance,
   SessionProvenanceFile,
+  // Secret scanning (#327).
+  SecretFinding,
 };

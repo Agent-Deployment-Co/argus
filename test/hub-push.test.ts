@@ -47,7 +47,8 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
       first_prompt TEXT, archived INTEGER NOT NULL DEFAULT 0,
       friction_interruptions INTEGER, friction_rejections INTEGER,
       friction_compactions INTEGER, friction_turns INTEGER,
-      last_interruption_ms INTEGER, title TEXT, summary TEXT, meta_json TEXT NOT NULL
+      last_interruption_ms INTEGER, title TEXT, summary TEXT,
+      secret_scan_dismissed TEXT, meta_json TEXT NOT NULL
     )
   `);
   db.run(`
@@ -62,6 +63,7 @@ function buildArgusDb(opts: { sessionId?: string; lastTs?: number | null; versio
   `);
   db.run("CREATE TABLE resolved_tasks (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, task_json TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_interactions (session_id TEXT, seq INTEGER, source TEXT, ts INTEGER, initiator TEXT, disposition TEXT, compaction_count INTEGER, task_seq INTEGER, interaction_json TEXT, PRIMARY KEY (session_id, seq))");
+  db.run("CREATE TABLE resolved_secret_findings (session_id TEXT, seq INTEGER, category TEXT, interaction_seq INTEGER, chunk_type TEXT, hint TEXT, findings_digest TEXT, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE resolved_invocations (session_id TEXT, seq INTEGER, source TEXT, interaction_seq INTEGER, tool TEXT, category TEXT, mcp_server TEXT, mcp_tool TEXT, skill TEXT, file_path TEXT, date TEXT, cwd TEXT, args TEXT, approx_result_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_id, seq))");
   db.run("CREATE TABLE labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, origin TEXT NOT NULL, created_at_ms INTEGER NOT NULL, deleted_at_ms INTEGER)");
   db.run("CREATE TABLE label_assignments (label_id TEXT NOT NULL, target_kind TEXT NOT NULL, session_id TEXT NOT NULL, task_seq INTEGER, applied_by TEXT NOT NULL, applied_at_ms INTEGER NOT NULL)");
@@ -131,6 +133,64 @@ describe("readHubUploadPayload", () => {
     expect(session).toMatchObject({ name: "bug", origin: "user", applied_by: "user", task_seq: null, source: "claude" });
     const task = payload.rows.labels.find((l) => l.target_kind === "task")!;
     expect(task).toMatchObject({ name: "auto", origin: "system", applied_by: "system", task_seq: 0 });
+  });
+
+  test("flags tasks whose interactions have secret-scan findings", () => {
+    const path = buildArgusDb({ sessionId: "sess-flagged" });
+    const db = new Database(path);
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 100, ?)")
+      .run("sess-flagged", JSON.stringify({ id: "task-0", description: "Rotate the key" }));
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 1, 'claude', 200, ?)")
+      .run("sess-flagged", JSON.stringify({ id: "task-1", description: "Update the docs" }));
+    db.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 4, 'claude', 100, 'human', 'completed', 0, 0, '{}')")
+      .run("sess-flagged");
+    db.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 5, 'claude', 200, 'human', 'completed', 0, 1, '{}')")
+      .run("sess-flagged");
+    db.query("INSERT INTO resolved_secret_findings(session_id, seq, category, interaction_seq, chunk_type, hint, findings_digest) VALUES (?, 0, 'github_token', 4, 'prompt', 'ghp_…abcd', 'digest')")
+      .run("sess-flagged");
+    db.close();
+
+    expect(readHubUploadPayload(path).rows.tasks).toEqual([
+      expect.objectContaining({ seq: 0, flagged: true }),
+      expect.objectContaining({ seq: 1, flagged: false }),
+    ]);
+  });
+
+  test("dismissing a finding locally does not clear the task flag", () => {
+    // Deliberate divergence from every local reader of the findings table: dismissal silences one
+    // user's banner, while the flag records for the org that this work touched a credential.
+    const path = buildArgusDb({ sessionId: "sess-dismissed" });
+    const db = new Database(path);
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 100, ?)")
+      .run("sess-dismissed", JSON.stringify({ id: "task-0", description: "Rotate the key" }));
+    db.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 4, 'claude', 100, 'human', 'completed', 0, 0, '{}')")
+      .run("sess-dismissed");
+    db.query("INSERT INTO resolved_secret_findings(session_id, seq, category, interaction_seq, chunk_type, hint, findings_digest) VALUES (?, 0, 'github_token', 4, 'prompt', 'ghp_…abcd', 'digest')")
+      .run("sess-dismissed");
+    // Dismissed against exactly this finding set, which every local surface treats as "hide it".
+    db.query("UPDATE resolved_sessions SET secret_scan_dismissed = 'digest' WHERE session_id = ?")
+      .run("sess-dismissed");
+    db.close();
+
+    expect(readHubUploadPayload(path).rows.tasks).toEqual([
+      expect.objectContaining({ seq: 0, flagged: true }),
+    ]);
+  });
+
+  test("a store that predates the scanner uploads with no flags instead of failing", () => {
+    // `sync` opens the store read-only and never migrates it, so a store last written by a build
+    // without secret scanning simply has no findings table. It must still upload.
+    const path = buildArgusDb({ sessionId: "sess-old-schema" });
+    const db = new Database(path);
+    db.run("DROP TABLE resolved_secret_findings");
+    db.run("ALTER TABLE resolved_sessions DROP COLUMN secret_scan_dismissed");
+    db.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 100, ?)")
+      .run("sess-old-schema", JSON.stringify({ id: "task-0", description: "Rotate the key" }));
+    db.close();
+
+    expect(readHubUploadPayload(path).rows.tasks).toEqual([
+      expect.objectContaining({ seq: 0, flagged: false }),
+    ]);
   });
 
   test("excludes soft-deleted labels", () => {
@@ -715,6 +775,73 @@ describe("pushHubJson digest-based cursor invalidation", () => {
       expect(res.ok).toBe(true);
       expect(c2[0]!.body.rows.sessions).toHaveLength(1);
       expect(c2[0]!.body.rows.tasks).toHaveLength(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("a secret finding appearing without a last_ts bump triggers re-upload (#335)", async () => {
+    // The scan drain writes findings after materialize and touches none of the other digest inputs,
+    // so this is the case that decides whether a just-flagged back-catalogue session ever syncs.
+    const path = buildArgusDb({ sessionId: "sess-late-finding", lastTs: 9_100_000 });
+    const seed = new Database(path);
+    seed.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 9100000, ?)")
+      .run("sess-late-finding", JSON.stringify({ id: "task-0", description: "Rotate the key" }));
+    seed.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 3, 'claude', 9100000, 'human', 'completed', 0, 0, '{}')")
+      .run("sess-late-finding");
+    seed.close();
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1, calls: c1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true); }
+    finally { globalThis.fetch = originalFetch; }
+    expect(c1[0]!.body.rows.tasks).toEqual([expect.objectContaining({ seq: 0, flagged: false })]);
+
+    // The drain finds a credential: findings row only, last_ts untouched.
+    const db = new Database(path);
+    db.query("INSERT INTO resolved_secret_findings(session_id, seq, category, interaction_seq, chunk_type, hint, findings_digest) VALUES (?, 0, 'aws_access_key', 3, 'prompt', 'AKIA…LMNP', 'digest-1')")
+      .run("sess-late-finding");
+    db.close();
+
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      const res = await pushHubJson("http://hub.test", "k", path);
+      expect(res.ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(1);
+      expect(c2[0]!.body.rows.tasks).toEqual([expect.objectContaining({ seq: 0, flagged: true })]);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("dismissing a finding changes nothing on the wire, so it causes no re-upload (#335)", async () => {
+    // The flag ignores dismissal on purpose, so a dismissal must ALSO leave the digest alone — a
+    // re-upload that re-sends the identical flag would be pure noise every watch interval.
+    const path = buildArgusDb({ sessionId: "sess-dismiss-sync", lastTs: 9_200_000 });
+    const seed = new Database(path);
+    seed.query("INSERT INTO resolved_tasks(session_id, seq, source, ts, task_json) VALUES (?, 0, 'claude', 9200000, ?)")
+      .run("sess-dismiss-sync", JSON.stringify({ id: "task-0", description: "Rotate the key" }));
+    seed.query("INSERT INTO resolved_interactions(session_id, seq, source, ts, initiator, disposition, compaction_count, task_seq, interaction_json) VALUES (?, 3, 'claude', 9200000, 'human', 'completed', 0, 0, '{}')")
+      .run("sess-dismiss-sync");
+    seed.query("INSERT INTO resolved_secret_findings(session_id, seq, category, interaction_seq, chunk_type, hint, findings_digest) VALUES (?, 0, 'aws_access_key', 3, 'prompt', 'AKIA…LMNP', 'digest-1')")
+      .run("sess-dismiss-sync");
+    seed.close();
+
+    const originalFetch = globalThis.fetch;
+    const { fetch: f1, calls: c1 } = routedFetch();
+    globalThis.fetch = f1;
+    try { expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true); }
+    finally { globalThis.fetch = originalFetch; }
+    expect(c1[0]!.body.rows.tasks).toEqual([expect.objectContaining({ seq: 0, flagged: true })]);
+
+    const db = new Database(path);
+    db.query("UPDATE resolved_sessions SET secret_scan_dismissed = 'digest-1' WHERE session_id = ?")
+      .run("sess-dismiss-sync");
+    db.close();
+
+    const { fetch: f2, calls: c2 } = routedFetch();
+    globalThis.fetch = f2;
+    try {
+      expect((await pushHubJson("http://hub.test", "k", path)).ok).toBe(true);
+      expect(c2[0]!.body.rows.sessions).toHaveLength(0); // dismissal is local-only → skipped
     } finally { globalThis.fetch = originalFetch; }
   });
 

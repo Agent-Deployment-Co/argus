@@ -140,6 +140,8 @@ describe("serve API", () => {
       { method: "POST", path: "/api/sessions/s1/hidden" },
       { method: "POST", path: "/api/sessions/bulk/hidden" },
       { method: "POST", path: "/api/sessions/s1/reindex" },
+      { method: "POST", path: "/api/sessions/s1/secret-findings/dismiss" },
+      { method: "POST", path: "/api/sessions/s1/secret-findings/undismiss" },
       { method: "POST", path: "/api/labels" },
       { method: "POST", path: "/api/sessions/s1/labels" },
       { method: "POST", path: "/api/sessions/bulk/labels" },
@@ -237,6 +239,17 @@ describe("serve API", () => {
       sort: "tokens", limit: 25, offset: 5, source: "codex",
       project: "web", q: "fix", includeGenerated: true, since: undefined, until: undefined,
     });
+  });
+
+  test("GET /api/sessions parses the flagged filter (#327)", async () => {
+    let seen: unknown;
+    const app = createApp(null, {
+      sessionList: async (query) => { seen = query; return { rows: [], total: 0, offset: 0, limit: 50 }; },
+    });
+    await app.request("/api/sessions?flagged=1");
+    expect(seen).toMatchObject({ flagged: true });
+    await app.request("/api/sessions");
+    expect((seen as { flagged?: boolean }).flagged).toBeUndefined();
   });
 
   test("GET /api/sessions parses a file: term (#155) alongside q", async () => {
@@ -427,6 +440,87 @@ describe("serve API", () => {
     });
     expect(bare.status).toBe(403);
     expect(changed).toBe(0);
+  });
+
+  test("POST /api/sessions/:id/secret-findings/dismiss dismisses the current findings (#327)", async () => {
+    let changed = 0;
+    const calls: string[] = [];
+    const app = createApp(null, {
+      secretFindings: {
+        dismiss: async (sessionId) => {
+          calls.push(sessionId);
+          return true;
+        },
+        undismiss: async () => {},
+      },
+      onStoreChanged: () => { changed++; },
+    });
+
+    const res = await app.request("/api/sessions/codex:sess1/secret-findings/dismiss", {
+      method: "POST",
+      headers: { "X-Argus-App": "1" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ dismissed: true });
+    expect(calls).toEqual(["codex:sess1"]);
+    expect(changed).toBe(1);
+  });
+
+  test("POST /api/sessions/:id/secret-findings/dismiss is 404 when the session has no findings", async () => {
+    const app = createApp(null, {
+      secretFindings: { dismiss: async () => false, undismiss: async () => {} },
+    });
+    const res = await app.request("/api/sessions/codex:sess1/secret-findings/dismiss", {
+      method: "POST",
+      headers: { "X-Argus-App": "1" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("POST /api/sessions/:id/secret-findings/dismiss is 503 when it isn't wired up", async () => {
+    const app = createApp(null);
+    const res = await app.request("/api/sessions/codex:sess1/secret-findings/dismiss", {
+      method: "POST",
+      headers: { "X-Argus-App": "1" },
+    });
+    expect(res.status).toBe(503);
+  });
+
+  test("POST /api/sessions/:id/secret-findings/dismiss rejects cross-site requests (CSRF guard)", async () => {
+    let called = 0;
+    const app = createApp(null, {
+      secretFindings: {
+        dismiss: async () => {
+          called++;
+          return true;
+        },
+        undismiss: async () => {},
+      },
+    });
+    const res = await app.request("/api/sessions/codex:sess1/secret-findings/dismiss", {
+      method: "POST",
+    });
+    expect(res.status).toBe(403);
+    expect(called).toBe(0);
+  });
+
+  test("POST /api/sessions/:id/secret-findings/undismiss clears the dismissal", async () => {
+    const calls: string[] = [];
+    const app = createApp(null, {
+      secretFindings: {
+        dismiss: async () => false,
+        undismiss: async (sessionId) => {
+          calls.push(sessionId);
+        },
+      },
+    });
+    const res = await app.request("/api/sessions/codex:sess1/secret-findings/undismiss", {
+      method: "POST",
+      headers: { "X-Argus-App": "1" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ dismissed: false });
+    expect(calls).toEqual(["codex:sess1"]);
   });
 
   test("POST /api/sessions/bulk/hidden flags many sessions hidden and reports the change", async () => {
