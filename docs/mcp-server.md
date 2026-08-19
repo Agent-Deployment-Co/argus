@@ -366,6 +366,10 @@ them sends that text into the model behind whichever agent asked.
   than failing.
 - `search_sessions` and `get_session` leave out your opening prompt, along with
   any search match that came from the conversation itself.
+- Both also leave out a session's
+  [credential warnings](/sessions#credential-warnings). A warning holds no
+  credential, but Argus works it out from the text you chose not to share, so it
+  follows the same switch.
 
 Both switches apply the moment you flip them, with no restart. Turning **Let
 agents query Argus** off closes the endpoint entirely, and connected agents get a
