@@ -8,6 +8,22 @@ description: Every published Argus release, newest first, mirrored from the rele
 
 Argus publishes release notes on GitHub. This page mirrors every published, non-draft release from newest to oldest.
 
+## Argus v0.1.27
+
+Published August 19, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.27).
+
+### Changes
+
+- Document the local MCP server for every agent ([#331](https://github.com/Agent-Deployment-Co/argus/pull/331))
+- Show an agent access answer in the docs, plus Makefile docs targets ([#333](https://github.com/Agent-Deployment-Co/argus/pull/333))
+- Scan sessions for exposed credentials and surface findings (\#327) ([#332](https://github.com/Agent-Deployment-Co/argus/pull/332))
+- Mark the leaking turn in the timeline (\#336) ([#337](https://github.com/Agent-Deployment-Co/argus/pull/337))
+- Stamp the secret scanner so old sessions get checked (\#335) ([#339](https://github.com/Agent-Deployment-Co/argus/pull/339))
+- Flag tasks with secret findings in Hub sync ([#340](https://github.com/Agent-Deployment-Co/argus/pull/340))
+- Bump version to 0.1.27 ([#341](https://github.com/Agent-Deployment-Co/argus/pull/341))
+
+[Full changelog on GitHub](https://github.com/Agent-Deployment-Co/argus/compare/argus-v0.1.26...argus-v0.1.27).
+
 ## Argus v0.1.26
 
 Published August 11, 2026. [Open release](https://github.com/Agent-Deployment-Co/argus/releases/tag/argus-v0.1.26).
