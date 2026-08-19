@@ -74,6 +74,12 @@ export interface ProjectScenario {
 
 const doc = (p: string) => `${DEMO_USER.home}/${p}`;
 
+// A fabricated Slack bot token, shaped to trip the secret scanner's slack-bot-token rule so the
+// demo can show the exposed-credentials warning. Never issued (sequential digits) and joined
+// from parts rather than written as one literal so it doesn't read as a contiguous token to
+// GitHub's own push-protection secret scanning.
+const FAKE_SLACK_BOT_TOKEN = ["xoxb-9482016733521", "9482016733521", "R5k2QpN8vLxT1wZmY6dHj3sC"].join("-");
+
 // GTM MCP servers Rachel's agents lean on. Public product names; invented usage.
 const HUBSPOT = "mcp__hubspot__search_contacts";
 const HUBSPOT_DEALS = "mcp__hubspot__list_deals";
@@ -661,8 +667,8 @@ export const PROJECTS: ProjectScenario[] = [
         summary:
           "Connected the outreach agent to HubSpot, confirmed a test contact lookup after approving the read scope, and wrote setup notes a teammate can follow.",
         files: [doc("agent-ops/outreach-agent/config.md"), doc("agent-ops/outreach-agent/prompt.md")],
-        tools: ["Read", "Write", "Edit", "Bash", HUBSPOT, "WebFetch"],
-        turns: 8,
+        tools: ["Read", "Write", "Edit", "Bash", HUBSPOT, SLACK, "WebFetch"],
+        turns: 10,
         friction: "heavy",
         tasks: [
           {
@@ -672,6 +678,15 @@ export const PROJECTS: ProjectScenario[] = [
             signals: ["one permission declined", "one interruption"],
             outcomeReason: "Connection worked after Rachel approved the contact-read scope.",
             evidence: "Configured the server; a test contact lookup returned results.",
+          },
+          {
+            description: "Wire up a Slack alert for when the agent hits an error",
+            outcome: "success",
+            frustration: "none",
+            signals: ["pasted a live token to test the webhook directly"],
+            outcomeReason: "Alert posts to #agent-ops on failure, confirmed with a manual trigger.",
+            evidence:
+              `To test the webhook directly, pasted the bot token into the terminal: ${FAKE_SLACK_BOT_TOKEN} — confirmed the alert lands in #agent-ops on a manual trigger, then swapped it back out for the env var.`,
           },
           {
             description: "Write setup notes so a teammate can reproduce the config",
