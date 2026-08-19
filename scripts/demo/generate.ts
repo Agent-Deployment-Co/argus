@@ -4,6 +4,7 @@
 
 import { categorizeTool, parseMcpTool } from "../../src/tool-categories.ts";
 import { localDate } from "../../src/indexing/reconcile.ts";
+import { SECRET_SCAN_VERSION, scanSessionForSecrets, secretFindingsDigest } from "../../src/indexing/secret-scan.ts";
 import type { InteractionFact, MaterializeSession, TaskFact } from "../../src/store/store-contract.ts";
 import {
   emptyUsage,
@@ -476,6 +477,11 @@ export function generateDemoData(opts: GenerateOptions): DemoData {
     const agentMessages = messages.length;
     const userMessages = messages.length + toolCalls;
 
+    // Secret scan (#327): the demo builds MaterializeSessions directly rather than through
+    // reconcile's toMaterializeSessions, so it has to run the same inline scan itself or the
+    // demo would never show the exposed-credentials warning it's meant to exercise.
+    const findings = scanSessionForSecrets({ interactions });
+
     const materialize: MaterializeSession = {
       meta: {
         source: plan.source,
@@ -491,6 +497,11 @@ export function generateDemoData(opts: GenerateOptions): DemoData {
       },
       messages,
       interactions,
+      secretFindings: {
+        version: SECRET_SCAN_VERSION,
+        digest: secretFindingsDigest(findings),
+        findings,
+      },
     };
 
     const list = sessionsByOwner.get(plan.source) ?? [];
