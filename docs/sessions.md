@@ -97,6 +97,39 @@ session (interruptions, tool actions you declined, compactions and turn timings,
 Claude sessions), the full table of tools the session used and the files the agent
 read or changed.
 
+## Credential warnings
+
+Argus checks your sessions for credentials pasted into a conversation, so you can
+rotate anything real. The check runs on your own computer as part of indexing. It's
+pattern matching against well-known credential shapes, with no
+[model](/terminology#model) reading your text and nothing sent anywhere.
+
+A session that looks like it holds a credential opens with a warning above its
+tabs. Each
+line says which [interaction](/terminology#interaction) it turned up in, what kind
+of credential it looks like (an AWS access key, a GitHub token, a private key and
+so on), a few characters of the value and whether it sat in your prompt or the
+agent's reply. Those few characters are all Argus keeps, enough to tell you which
+key it was and not enough to use it.
+
+Click a line to jump to that interaction in the Timeline, where the turn carries the
+same marker on the half it matched. A marker points at the first place a credential
+appeared, so a key you pasted once and the agent repeated later shows up once.
+
+- **Dismiss** hides the warning once you've dealt with it, leaving a muted line with
+  **Show again**. It covers the findings you saw, so a later index that turns up
+  something different warns you again. The Timeline markers stay either way.
+- **In the list**, a session with an undismissed warning carries a red count
+  alongside its token and task counts.
+- **Flagged** narrows the list to those sessions, and arrives as a pill you can
+  remove. The credential recommendation on Activity links straight to it. It's the
+  one filter that includes sessions you've hidden, each marked with an eye icon on
+  the row.
+
+Treat a warning as a reason to look rather than proof of a leak. Argus favors
+precision over reach, so it rarely flags something harmless, and it stays quiet
+about credential shapes it doesn't recognize.
+
 ## Refresh
 
 If a session has grown since Argus last indexed it, the **Refresh** button at the

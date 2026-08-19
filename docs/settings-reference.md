@@ -86,7 +86,7 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 | Hub URL | Argus Hub server URL for [sync](/terminology#sync). | `hub.url` | `ARGUS_HUB_URL` | None | unset |
 | Hub key | Key used to authenticate to Argus Hub. | `hub.key` | `ARGUS_HUB_KEY` | None | unset |
 | Log level | How much detail Argus prints to the terminal. | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` | `info` |
-| Retain session text | Whether Argus keeps prompt and response text in the local [index](/terminology#index) for interpretation. | `retainText` | `ARGUS_RETAIN_TEXT` | `index`, `index rebuild` and `index refresh`: `--retain-text true\|false` | `true` |
+| Retain session text | Whether Argus keeps prompt and response text in the local [index](/terminology#index) for interpretation. New sessions are still checked for [exposed credentials](/sessions#credential-warnings) either way, but with this off, sessions already indexed can't be re-checked without `index refresh`. | `retainText` | `ARGUS_RETAIN_TEXT` | `index`, `index rebuild` and `index refresh`: `--retain-text true\|false` | `true` |
 | Agent access | Whether agents on this computer can query Argus over the local MCP endpoint (`/mcp`). See [Connect Your Agent](/connect-your-agent). | `agentAccess.enabled` | `ARGUS_AGENT_ACCESS_ENABLED` | None | `true` |
 | Agent transcript access | Whether agents can also read retained session transcript text through the MCP endpoint. | `agentAccess.includeTranscripts` | `ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS` | None | `false` |
 | Welcome completed | Whether the first-run welcome screen has been dismissed. | `state.onboardingCompleted` | `ARGUS_STATE_ONBOARDING_COMPLETED` | None | `false` |

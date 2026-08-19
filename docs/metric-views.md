@@ -26,7 +26,9 @@ Below the totals:
 
 - **Recommendations** are things Argus noticed that may be worth acting on, like
   [plugins](/terminology#plugin) you've enabled but never use, or sessions where
-  context grew unusually fast.
+  context grew unusually fast. A
+  [credential warning](/terminology#credential-warning) leads the list when Argus
+  finds one, and links to the sessions it applies to.
 - **Trends** plot your tokens per day and cost per day across the range.
 - **Sources** breaks your usage down by agent, as charts and a table you can
   sort.

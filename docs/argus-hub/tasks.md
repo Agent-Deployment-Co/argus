@@ -64,6 +64,22 @@ client. It's measured for Claude sessions only, so a count of zero and "no
 data" show as different things, and an observed-sessions count makes clear
 how much of the window that friction reading actually covers.
 
+## Credential warnings
+
+When someone's session text looked like it held a credential, their Argus sends a
+flag along with the affected tasks, and this view surfaces it. A warning under the
+page heading counts the tasks it covers in the current window, and **Show only
+these** narrows the view to them. Each one carries a **Credential warning** pill in
+the list.
+
+The details stay on that person's machine. Argus Hub knows only that a task was
+affected, not what kind of credential it was or where in the session it appeared, so
+acting on one means asking that person to rotate it. Dismissing the warning in their
+own Argus hides their banner and leaves this flag in place, since one person having
+read a warning isn't the organization having dealt with it. See
+[Credential warnings](/sessions#credential-warnings) for what they see, and
+[Privacy and Security](/privacy#credential-warnings) for what crosses the wire.
+
 ## Argus Hub labels
 
 Argus Hub labels are separate from the labels you set on a session in the Argus

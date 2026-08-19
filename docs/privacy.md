@@ -23,6 +23,25 @@ the useful details and saves them to a local [index](/terminology#index), a
 database on your computer. It doesn't watch your screen or record anything as you
 work. Everything it needs is already on disk.
 
+## Credential warnings
+
+As it indexes, Argus checks your session text for credentials you may have pasted
+into a conversation, like an API key, a token or a private key. The check is pattern
+matching on your own machine: no model reads it, and nothing is sent anywhere.
+
+What Argus keeps from a match is deliberately thin. It records the kind of
+credential, where in the session it appeared and a few characters of the value,
+enough to tell you which key it was and not enough to use it. The credential itself
+is never copied into the [index](/terminology#index).
+
+Warnings stay on your computer. A [sync](/terminology#sync) uploads none of them.
+What an [Argus Hub](/terminology#argus-hub) does receive is one yes or no on each
+[task](/terminology#task), saying whether a warning landed in it, so whoever runs the
+Hub can see that a piece of work touched a credential and ask you to rotate it. The
+kind, the location and those few characters all stay local. Dismissing a warning in
+your own Argus hides your banner and leaves that flag in place, since the flag
+records that the work touched a credential rather than that you've read the warning.
+
 ## Task interpretation and model providers
 
 [Task interpretation](/tasks) is the one part of Argus that uses a model to read
@@ -90,4 +109,6 @@ see agent use across the team. Two things to know:
 - **What's sent stays minimal.** A sync carries your metrics and task data
   (usage totals, breakdowns, outcomes and the like), plus a few short text
   snippets: a session's opening prompt and the brief evidence behind a task's
-  judgment. The full text of your sessions is never uploaded.
+  judgment. The full text of your sessions is never uploaded, and neither are the
+  details of a [credential warning](#credential-warnings), only a flag on the tasks
+  one applies to.

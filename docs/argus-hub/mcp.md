@@ -59,7 +59,10 @@ share one set of filters:
 
 `query_tasks` adds `q` (free-text search), `outcome` (comma-separated
 `success`, `failure`, `unknown`) and paging with `limit` (default 50,
-maximum 200) and `offset`. `query_users` only takes `group`. It's a
+maximum 200) and `offset`. `query_tasks` and `query_task_quality` both take
+`flagged`, where `1` narrows to tasks carrying a
+[credential warning](/argus-hub/tasks#credential-warnings).
+`query_users` only takes `group`. It's a
 roster, not a windowed report, so it's the tool to call first to find a
 `userId` before scoping the others.
 
@@ -69,7 +72,7 @@ roster, not a windowed report, so it's the tool to call first to find a
 |---|---|
 | `query_users` | The roster: user IDs, display names, emails, group, last-sync time, sessions, tokens and cost. |
 | `query_activity` | Usage and cost over the window, plus the same figures for the prior window for comparison. |
-| `query_tasks` | A paged, filterable list of tasks, with outcome counts for the filtered set. |
+| `query_tasks` | A paged, filterable list of tasks, with outcome counts for the filtered set and how many carry a credential warning. |
 | `query_task_quality` | Success, frustration and friction rates, outcomes over time, and the top failure signals. |
 | `query_tool_usage` | Which tools, skills and MCP servers people use, and how usage compares across sources. |
 | `list_labels` | Every [Argus Hub label](/argus-hub/tasks#argus-hub-labels) defined on this Argus Hub, with how many tasks carry it. |

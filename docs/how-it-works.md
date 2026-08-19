@@ -17,6 +17,13 @@ its next pass and [indexes](/terminology#index) it, reading the session once and
 pulling out the useful details (usage, cost, tools, skills and projects). This
 runs on its own, so your usage stays up to date without you thinking about it.
 
+Indexing also checks each session's text for credentials pasted into it, like an API
+key or a token, and warns you so you can rotate them. That check is local pattern
+matching, with no model and no network. Sessions already in your
+[index](/terminology#index) when you updated Argus get checked in the background as
+well, so you don't have to re-index to see the warnings. See
+[Credential warnings](/sessions#credential-warnings).
+
 ## Your data lives in a local database
 
 Everything Argus indexes is stored in a database on your own computer. That local

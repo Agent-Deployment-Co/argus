@@ -25,6 +25,14 @@ The estimated dollar cost of your agent use, worked out from how many tokens you
 used and each model's price. It's an estimate for understanding trends, not a
 bill.
 
+## Credential warning
+
+A warning Argus raises when a [session](#session)'s text looks like it holds a
+credential someone pasted in, such as an API key, a token or a private key. Argus
+checks for these locally as it indexes, and records only the kind of credential,
+which [interaction](#interaction) it showed up in and a few characters of the
+value, never the value itself. See [Sessions](/sessions#credential-warnings).
+
 ## Dashboard
 
 The org-wide view an [Argus Hub](#argus-hub) presents, pulling together usage from

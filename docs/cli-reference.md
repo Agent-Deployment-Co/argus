@@ -27,7 +27,7 @@ npx @agentdeploymentco/argus <command>
 | `index delete` | Remove the session ids you name from the store. |
 | `sync` | Upload a usage snapshot to an [Argus Hub](/terminology#argus-hub). |
 | `run` | Do it all: keep the index current, serve Argus and sync on a schedule. |
-| `status` | Show where the local store lives and per-source counts. |
+| `status` | Show where the local store lives, per-source counts and how far the [credential check](/sessions#credential-warnings) has got. |
 | `config` | Read or write settings (`config get`, `config set`). |
 | `secret` | Store API keys for the model providers Argus can use. |
 
