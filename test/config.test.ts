@@ -13,6 +13,7 @@ import {
   resolveAutoUpdateEnabled,
   resolveDesktopMetrics,
   resolveDesktopStartAtLogin,
+  resolveHost,
   resolveLogLevel,
   resolveReadOnly,
   resolveRetainText,
@@ -43,6 +44,7 @@ const CONFIG_ENV = [
   "ARGUS_RETAIN_TEXT",
   "ARGUS_LOG_LEVEL",
   "ARGUS_READ_ONLY",
+  "ARGUS_HOST",
   "ARGUS_AGENT_ACCESS_ENABLED",
   "ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS",
 ];
@@ -474,6 +476,45 @@ describe("resolveReadOnly (#281)", () => {
   test("empty env value falls through to the default", () => {
     process.env.ARGUS_READ_ONLY = "";
     expect(resolveReadOnly({}, {})).toBe(false);
+  });
+});
+
+describe("resolveHost (#344)", () => {
+  test("defaults to loopback", () => {
+    expect(resolveHost({}, {})).toBe("127.0.0.1");
+  });
+
+  test("argus.json can widen the bind", () => {
+    expect(resolveHost({}, { host: "0.0.0.0" })).toBe("0.0.0.0");
+  });
+
+  test("env var overrides argus.json", () => {
+    process.env.ARGUS_HOST = "0.0.0.0";
+    expect(resolveHost({}, { host: "192.168.1.5" })).toBe("0.0.0.0");
+  });
+
+  test("flag overrides env and file", () => {
+    process.env.ARGUS_HOST = "0.0.0.0";
+    expect(resolveHost({ host: "127.0.0.1" }, { host: "0.0.0.0" })).toBe("127.0.0.1");
+  });
+
+  test("empty values at any layer fall through to the default", () => {
+    process.env.ARGUS_HOST = "";
+    expect(resolveHost({ host: "" }, { host: "" })).toBe("127.0.0.1");
+  });
+
+  test("keeps a hostname and an IPv6 literal as given", () => {
+    expect(resolveHost({ host: "nas.local" }, {})).toBe("nas.local");
+    expect(resolveHost({ host: "::" }, {})).toBe("::");
+    expect(resolveHost({ host: "[::1]" }, {})).toBe("[::1]");
+  });
+
+  // A typo must narrow exposure, never widen it: anything that isn't a bare address warns and stays
+  // on loopback rather than being handed to the listener.
+  test("a value that isn't a bare address warns and falls back to loopback", () => {
+    for (const bad of ["http://0.0.0.0", "0.0.0.0:4242", "localhost:4242", "[::1]:4242", "0.0.0.0/0", "a b"]) {
+      expect(resolveHost({ host: bad }, {})).toBe("127.0.0.1");
+    }
   });
 });
 

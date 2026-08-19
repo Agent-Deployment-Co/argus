@@ -147,6 +147,11 @@ export interface ArgusConfig {
   /** Read-only mode (#281): `serve` mounts only the read routes and the SPA hides edit
    *  affordances. A deployment switch, not a user preference — off by default. */
   readOnly?: boolean;
+  /** The network interface `serve`/`run` binds (#344). Defaults to loopback, so the dashboard
+   *  answers only on this machine. A deployment switch, not a user preference: pointing it at
+   *  `0.0.0.0` (or one interface address) exposes transcript-derived data to everyone who can reach
+   *  the port, and nothing on that port asks for a sign-in. */
+  host?: string;
   /** App-persisted state: things Argus itself records about what's already happened (a completion
    *  marker, a dismissed prompt), as opposed to a user-editable preference. Never shown in the
    *  settings surface — there's no `ui` on these, so they never land in `EDITABLE`/`LAYOUT`. */
@@ -465,6 +470,49 @@ const READ_ONLY_SETTINGS = {
     default: false,
     parse: parseBool,
   } satisfies Setting<boolean>,
+};
+
+/** The default bind address: loopback only, so `serve` answers on this machine and nowhere else. */
+export const DEFAULT_HOST = "127.0.0.1";
+
+/** Coerce a bind address. Rejects (returns undefined, so the resolver warns and stays on loopback)
+ *  the shapes people reach for that aren't bare addresses: a URL, a host:port pair, anything carrying
+ *  whitespace or a path. A hostname that merely doesn't resolve still gets through and surfaces as a
+ *  bind failure at startup, which names the address that was asked for. */
+function parseHost(raw: unknown): string | undefined {
+  const value = String(raw).trim();
+  if (!value) return undefined;
+  const bracketed = /^\[[^\]]+\]$/.test(value);
+  const colons = value.split(":").length - 1;
+  // More than one colon means a bare IPv6 literal; otherwise a trailing `:digits` is a port, which
+  // belongs in --port. Brackets are legal only around a whole IPv6 literal ([::1], never [::1]:4242).
+  const hasPort = !bracketed && colons === 1 && /:\d+$/.test(value);
+  const notAnAddress =
+    hasPort ||
+    /\s/.test(value) ||
+    value.includes("/") ||
+    value.includes("@") ||
+    (value.includes("[") && !bracketed);
+  if (notAnAddress) {
+    defaultConfigWarn(
+      `Ignoring the address ${JSON.stringify(value)} (expected a bare address like 127.0.0.1, 0.0.0.0, or a hostname).`,
+    );
+    return undefined;
+  }
+  return value;
+}
+
+/** Which interface `serve`/`run` binds (#344). Loopback by default. No `ui` — like `readOnly`, it's a
+ *  deployment switch (`argus serve --host 0.0.0.0`), not something to flip from the Settings screen,
+ *  and flipping it from a remote browser would be a way to widen your own exposure. */
+const HOST_SETTINGS = {
+  host: {
+    path: "host",
+    env: "ARGUS_HOST",
+    flag: "host",
+    default: DEFAULT_HOST,
+    parse: parseHost,
+  } satisfies Setting<string | undefined>,
 };
 
 /** Agent access (#299): the local MCP endpoint at `/mcp`. Both settings resolve per request so the
@@ -876,6 +924,7 @@ export const ALL_SETTINGS: Record<string, Setting<unknown>> = Object.fromEntries
     ...Object.values(LOG_SETTINGS),
     ...Object.values(STATE_SETTINGS),
     ...Object.values(READ_ONLY_SETTINGS),
+    ...Object.values(HOST_SETTINGS),
   ].map((s) => [s.path, s as Setting<unknown>]),
 );
 
@@ -1253,6 +1302,31 @@ export function resolveReadOnly(
   file: ArgusConfig = loadConfig(),
 ): boolean {
   return resolveSetting(READ_ONLY_SETTINGS.enabled, flags, file);
+}
+
+/** Which interface `serve`/`run` binds (#344): `--host` flag > `ARGUS_HOST` env > `argus.json` `host` >
+ *  loopback. An unusable value warns in `parseHost` and resolves to loopback, so a typo narrows
+ *  exposure rather than widening it. */
+export function resolveHost(
+  flags: Record<string, unknown> = {},
+  file: ArgusConfig = loadConfig(),
+): string {
+  return resolveSetting(HOST_SETTINGS.host, flags, file) ?? DEFAULT_HOST;
+}
+
+/** Whether a bind address keeps the server on this machine: `localhost`, any `127.x.x.x`, or the IPv6
+ *  loopback (bracketed or bare). Used to decide whether to warn about what's exposed, so anything it
+ *  doesn't recognize counts as reachable from the network. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/** Whether a bind address covers every interface (`0.0.0.0`, `::`, or an empty host). Those have no
+ *  single address to print, so callers show `localhost` and say the port is open to the network. */
+export function isWildcardHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "" || h === "0.0.0.0" || h === "::" || h === "*";
 }
 
 // Resolving the Hub connection needs the secret store (the Hub key lives in the OS keychain, like the

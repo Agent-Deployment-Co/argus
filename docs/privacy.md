@@ -69,6 +69,24 @@ ships off. Turn it on under **Settings → Agent access** only if you're
 comfortable with that. See [Connect Your Agent](/connect-your-agent) for how it
 works.
 
+## Serving to other computers
+
+Argus answers only on the computer it runs on. The desktop app always works that
+way. The command line does too, unless you ask for something else: `serve --host`
+takes an address to listen on, for running Argus on a machine you don't sit at and
+opening it from your laptop.
+
+Argus has no sign-in, so anyone who can reach that port can read what's in your
+[index](/terminology#index), including the prompt and response text Argus keeps
+when **Retain session text** is on. Use it only on a network you trust, and add
+`--read-only` so a visitor can't change anything. Settings and stored API keys are
+the exception: those answer only on the computer running Argus, whatever address
+you bind. See
+[Opening Argus to your network](/cli-reference#opening-argus-to-your-network).
+
+Opening a port doesn't make Argus send anything anywhere. It changes who can read
+what's already on your own machine.
+
 ## API keys
 
 When you use a provider that needs an API key, Argus stores the key in your

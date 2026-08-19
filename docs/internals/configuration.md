@@ -110,6 +110,40 @@ a restart.
 }
 ```
 
+### Serve bind address (#344)
+
+`serve` and `run` bind loopback by default. `host` moves the listener, for running the CLI on a
+machine the user doesn't sit at (home server, NAS, container) and opening the dashboard from another
+one. The hostname is always passed to `@hono/node-server` explicitly, because it defaults to
+`0.0.0.0` when omitted.
+
+| Setting | `argus.json` (camelCase) | env (SNAKE) | CLI flag (kebab) |
+|---|---|---|---|
+| interface to bind | `host` | `ARGUS_HOST` | `--host` (on `serve` and `run`) |
+
+No `ui` entry: like `readOnly`, it's a deployment switch rather than a user preference, and it would
+be the one setting whose remote edit widens the editor's own exposure. `parseHost` rejects anything
+that isn't a bare address (a URL, a `host:port` pair, whitespace, a path), warns, and resolves to
+loopback, so a typo narrows exposure instead of widening it. A hostname that merely doesn't resolve
+gets through and surfaces as a bind failure naming the address that was asked for.
+
+Two guards in `api/serve.ts` are load-bearing here, and neither changes with the bind:
+
+- **`rejectUnsafeHost`** (settings write, onboarding, connection test, secret read/write/delete,
+  `/mcp`) stays loopback-only on `Host`/`Origin`. Adding the configured host to `LOOPBACK_HOSTS`
+  would reopen the DNS-rebinding hole for exactly that hostname, which is what the guard exists to
+  close. The consequence is deliberate: a browser on another machine reads the dashboard, labels and
+  hides sessions, and cannot write settings or touch stored keys.
+- **`rejectCrossSite`** keys off `Sec-Fetch-Site` plus the `x-argus-app` header, both properties of
+  the request rather than the bind address, so the CSRF defense works unchanged from a LAN origin.
+
+Nothing on the port authenticates, so a non-loopback bind warns at startup (naming the address and
+the port, and suggesting `--read-only` when it's off) and notes that settings and API keys still
+change only on the local machine. The desktop app passes `--host 127.0.0.1` to its sidecar so a
+widened `argus.json`/`ARGUS_HOST` can't expose the tray app's backend port (a *managed* `host` still
+wins, by design: that's the org's call); its front-door proxy (`desktop/src-tauri/src/proxy.rs`) binds
+loopback on its own regardless.
+
 ### Session text retention
 
 Argus keeps the prompt and response text of your sessions in the local store (`argus.db`) so that

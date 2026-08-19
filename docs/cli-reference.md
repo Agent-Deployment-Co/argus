@@ -33,6 +33,45 @@ npx @agentdeploymentco/argus <command>
 
 Run `argus <command> --help` for the flags on any command.
 
+## Opening Argus to your network
+
+By default `serve` and `run` answer only on the computer they run on, at
+`http://localhost:4242`. Pass `--host` to listen on another address, so you can
+open Argus from a different computer:
+
+```bash
+# Reachable from anywhere on your network
+npx @agentdeploymentco/argus serve --host 0.0.0.0 --read-only
+
+# Or one interface, if the machine has several
+npx @agentdeploymentco/argus serve --host 192.168.1.5 --read-only
+```
+
+This is for running Argus on a machine you don't sit at: a home server, a box in
+the corner, a container or VM whose ports you reach from the host. The desktop app
+never does it, and neither does the default.
+
+Argus has no sign-in, so anyone who can reach the port can open the dashboard and
+read what's in your [index](/terminology#index):
+[session](/terminology#session) titles, model-written summaries,
+[tasks](/terminology#task) and how each one went, and the prompt and response text
+Argus keeps when **Retain session text** is on. Only open it on a network you
+trust, and pair it with `--read-only` so a visitor can look but not change
+anything.
+
+Two things stay on the computer running Argus whatever you pass:
+
+- **Settings and API keys.** Changing a setting, testing a model connection or
+  saving a provider key works only in a browser on that computer. Requests from
+  anywhere else are refused. Set those up locally first, then start serving.
+- **The [MCP](/terminology#mcp-server) endpoint.** Agents can query Argus over
+  `/mcp` only from the same computer. See [Connect Your Agent](/connect-your-agent).
+
+`--host` also has a setting (`host`) and an environment variable (`ARGUS_HOST`);
+see the [Settings Reference](/settings-reference). Nothing about this changes what
+Argus sends anywhere: exposing the port lets people read your Argus, it doesn't
+make Argus upload anything. See [Privacy and Security](/privacy).
+
 ## Data locations
 
 Argus keeps its [index](/terminology#index) and settings on your own computer:

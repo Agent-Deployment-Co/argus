@@ -87,6 +87,9 @@ Security posture, consistent with the rest of `serve`:
   read-only so there's no side effect to forge.
 - **No auth token**: the loopback bind is the boundary, same as the rest of the API. A bearer token
   for multi-user machines is a phase-2 candidate.
+- **`--host` (#344) doesn't widen it**: `rejectUnsafeHost` is unchanged by the bind address, so
+  `serve --host 0.0.0.0` serves the dashboard to the network while `/mcp` keeps answering only
+  requests addressed to loopback. Agents on other machines are still out of scope.
 
 Non-goals for v1 (see the issue for the full list): no stdio subcommand, no write tools, no MCP
 resources/prompts, no one-click client-config install, no Hub-side org endpoint.

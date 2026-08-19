@@ -29,6 +29,7 @@ import {
   loadConfig,
   managedSettingValue,
   resolveReadOnly,
+  resolveHost,
   resolveLogLevel,
   resolveSessionInterpretation,
   getPath,
@@ -49,6 +50,7 @@ const DEFAULT_SYNC_INTERVAL_MIN = 5;
 // store-selection helpers used by extracted command bodies and long-running loops.
 interface ServeOptions {
   port: number;
+  host: string;
   open: boolean;
   readOnly: boolean;
 }
@@ -252,6 +254,7 @@ async function runServe(opts: ServeOptions, log: Log): Promise<void> {
   await startServer(
     {
       port: opts.port,
+      host: opts.host,
       open: opts.open,
       // serve shows the whole store; it takes no source/date filters. It's a pure reader: read the
       // already-materialized store, never reconcile/materialize on a page load. Writing on read
@@ -453,6 +456,11 @@ async function runConfigSet(
     );
   }
   const parsed = setting.parse(rawValue);
+  // `parse()` returns undefined to reject a present-but-invalid value (the same contract the settings
+  // API's 400 path uses). Writing it would quietly drop the key and report `= undefined`, so stop here.
+  if (parsed === undefined && rawValue.trim() !== "") {
+    throw new Error(`Invalid value for ${key}: ${JSON.stringify(rawValue)}`);
+  }
   const cfg = loadConfig();
   setPath(cfg as Record<string, unknown>, key, parsed);
   writeConfig(cfg);
@@ -603,6 +611,17 @@ function interpretOverride(args: Record<string, unknown>): boolean | undefined {
 
 /** The local text-retention override shared by the indexing commands (#120). Tri-state: unset defers
  *  to argus.json/env; true/false overrides it for the run. Stored text is local-only — never synced. */
+// The bind address for the two commands that listen (#344). Shared so `serve` and `run` can't drift on
+// the one flag where the wording is the warning.
+const hostArg = {
+  host: {
+    type: "string",
+    description:
+      "Network address to listen on. Defaults to this computer only; 0.0.0.0 opens the dashboard to your network, where anyone who can reach the port can read your session data without signing in (env ARGUS_HOST)",
+    valueHint: "ADDRESS",
+  },
+} as const;
+
 const retainTextArg = {
   "retain-text": {
     type: "string",
@@ -664,6 +683,7 @@ const serve = defineCommand({
       description: "Local port to listen on (env ARGUS_PORT)",
       valueHint: "N",
     },
+    ...hostArg,
     open: {
       type: "boolean",
       default: false,
@@ -678,6 +698,7 @@ const serve = defineCommand({
     runServe(
       {
         port: Number(args.port) || DEFAULT_PORT,
+        host: resolveHost({ host: args.host }, loadConfig()),
         open: args.open,
         readOnly: resolveReadOnly({ "read-only": args["read-only"] }, loadConfig()),
       },
@@ -930,6 +951,7 @@ const runCmd = defineCommand({
     ...interpretOverrideArgs,
     ...logArgs,
     port: { type: "string", alias: "p", default: String(DEFAULT_PORT), description: "Local port to listen on (env ARGUS_PORT)", valueHint: "N" },
+    ...hostArg,
     "index-interval": { type: "string", default: String(DEFAULT_INDEX_INTERVAL_MIN), description: "Minutes between indexing runs", valueHint: "N" },
     "sync-interval": { type: "string", default: String(DEFAULT_SYNC_INTERVAL_MIN), description: "Minutes between uploads", valueHint: "N" },
     "no-sync": { type: "boolean", default: false, description: "Skip uploads (index and serve only)" },
@@ -944,6 +966,7 @@ const runCmd = defineCommand({
       {
         ...syncOptions(args),
         port: Number(args.port) || DEFAULT_PORT,
+        host: resolveHost({ host: args.host }, loadConfig()),
         indexIntervalMin: Number(args["index-interval"]) || DEFAULT_INDEX_INTERVAL_MIN,
         syncIntervalMin: Number(args["sync-interval"]) || DEFAULT_SYNC_INTERVAL_MIN,
         noSync: !!args["no-sync"],

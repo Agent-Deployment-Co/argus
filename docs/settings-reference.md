@@ -83,6 +83,7 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 | Start at login | Whether the desktop app opens when you sign in. | `desktop.startAtLogin` | `ARGUS_DESKTOP_START_AT_LOGIN` | None | `true` |
 | Silent desktop mode | Whether the desktop app runs without a tray icon, notifications or opening the browser on first run. | `desktop.silent` | `ARGUS_DESKTOP_SILENT` | None | `false` |
 | Read-only mode | Whether `serve` runs read-only: labels, hiding sessions, refresh and Settings are hidden and their routes aren't mounted. | `readOnly` | `ARGUS_READ_ONLY` | `serve`: `--read-only` | `false` |
+| Serve address | Which network address `serve` and `run` listen on. The default answers only on the computer running Argus. | `host` | `ARGUS_HOST` | `serve` and `run`: `--host` | `127.0.0.1` |
 | Hub URL | Argus Hub server URL for [sync](/terminology#sync). | `hub.url` | `ARGUS_HUB_URL` | None | unset |
 | Hub key | Key used to authenticate to Argus Hub. | `hub.key` | `ARGUS_HUB_KEY` | None | unset |
 | Log level | How much detail Argus prints to the terminal. | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` | `info` |
@@ -98,6 +99,13 @@ shown in the app Settings screen.
 `readOnly` is a deployment switch for running a shared, read-only Argus instance, not something to
 flip from the app Settings screen. Set it with `argus config set readOnly true`, `ARGUS_READ_ONLY=true`,
 or `serve --read-only`.
+
+`host` is a deployment switch too, and it's the one to be careful with. `0.0.0.0` opens Argus to
+everyone who can reach the port, and there is no sign-in, so pair it with `readOnly`. Settings, the
+model connection test and stored API keys stay reachable only from the computer running Argus whatever
+you set here. See [Opening Argus to your network](/cli-reference#opening-argus-to-your-network). A
+value that isn't a bare address (a URL, or an address with a port on the end) is ignored with a warning
+and Argus stays on the default.
 
 Use the secret store or `ARGUS_HUB_KEY` for the Hub key. A legacy plaintext
 `hub.key` in `argus.json` is still read and migrated by `serve`, but new
