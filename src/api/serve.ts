@@ -6,6 +6,7 @@
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { spawnSync } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,7 +54,7 @@ import { buildSessionInteractions, type SessionInteractionsResponse } from "./se
 import { collectDebugInfo, type DebugInfo } from "./debug-info.ts";
 import { createMcpHandler } from "./mcp.ts";
 import { CONFIG_FILE } from "../paths.ts";
-import { loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
+import { DEFAULT_HOST, isLoopbackHost, isWildcardHost, loadConfig, migrateLlmFlatToProviderConfigs, migrateTaskExtractionToSessionInterpretation, resolveRetainText, type ArgusConfig, type ResolvedSessionInterpretation } from "../config.ts";
 import { LabelError, openStore } from "../store/store.ts";
 import type {
   AppliedLabel,
@@ -63,14 +64,18 @@ import type {
   LabelTarget,
   SessionLabels,
 } from "../store/store-contract.ts";
-import { defaultSecretStore, isSecretName, maskSecret, migrateHubKeyToSecretStore, type SecretStatus, type SecretStore } from "../secrets.ts";
+import { defaultSecretStore, isSecretName, maskSecret, MCP_TOKEN_ENV, migrateHubKeyToSecretStore, resolveApiKey, type SecretStatus, type SecretStore } from "../secrets.ts";
 import { applyOnboardingCompleted, applySetting, describeSettings, testLlmConnection, type SettingsResponse } from "./settings.ts";
 import { resolveClaudeBinary } from "../llm/providers/local.ts";
 import type { ParserDiagnostic, SessionProvenance, TaskFact } from "../store/store-contract.ts";
 import { isLevelEnabled, logger, logWarn, normalizeLogLevel, type Log } from "../logger.ts";
+import { hostWithoutPort, requestIsLoopback } from "./request-security.ts";
 
 export interface ServeOptions {
   port: number;
+  /** Which network interface to bind (#344). Defaults to loopback, so the dashboard answers only on
+   *  this machine. Anything else is opt-in and warned about at startup. */
+  host?: string;
   /** Open the dashboard in the default browser once it's ready. */
   open: boolean;
   /** What to read + how to filter when building the dashboard. */
@@ -94,6 +99,16 @@ export interface ServeOptions {
 export interface ServeHandle {
   closed: Promise<void>;
   close(): Promise<void>;
+}
+
+/** The address to show for a server bound to `host`. A wildcard bind covers every interface and so
+ * has no single address to print; `localhost` is the one that works in a browser on this machine, and
+ * the startup warning says separately that the port is open to the network. IPv6 literals are
+ * bracketed so the result is a usable URL. */
+export function serverUrl(host: string, port: number): string {
+  if (isWildcardHost(host) || isLoopbackHost(host)) return `http://localhost:${port}`;
+  const shown = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${shown}:${port}`;
 }
 
 /** Return the platform command used to open a URL in the user's default browser. Kept pure so the
@@ -283,6 +298,8 @@ interface AppOptions {
   claudeBinary?: string;
   /** Server log sink. Used for explicit user actions like Refresh. */
   log?: Log;
+  /** Bearer token required for MCP requests from a non-loopback peer. */
+  mcpToken?: string;
   /** Read-only mode (#281): mount only the read routes, drop /api/debug and every
    *  /api/settings*, and answer `readOnly: true` on `/healthz` so the SPA hides edit affordances. */
   readOnly?: boolean;
@@ -372,15 +389,16 @@ function taskCountLabel(count: number): string {
  *  without a CORS preflight, which this server never approves — so requiring it blocks CSRF. */
 const APP_HEADER = "x-argus-app";
 
-/** Reject cross-site requests to a mutating route. `serve` binds to loopback, but a malicious page
- *  open in the user's browser can still POST to localhost; a bodyless POST is a CORS "simple request"
+/** Reject cross-site requests to a mutating route. `serve` usually binds to loopback, but a malicious
+ *  page open in the user's browser can still POST to localhost; a bodyless POST is a CORS "simple request"
  *  that fires without a preflight, so the side effect (here: a reindex that can spawn the configured
  *  task-extraction provider over local transcripts) would happen even though the attacker can't read
  *  the response. We require a custom header the browser only lets same-origin script set, and reject
  *  on `Sec-Fetch-Site` as defense in depth. Returns a 403 Response to send, or null to proceed. */
 function rejectCrossSite(c: Context): Response | null {
   // Modern browsers stamp Sec-Fetch-Site and JS can't forge it; same-origin/none are fine, anything
-  // else (same-site/cross-site) is rejected outright.
+  // else (same-site/cross-site) is rejected outright. Both signals are properties of the request, not
+  // of the bind address, so `--host` (#344) leaves this guard working unchanged.
   const site = c.req.header("sec-fetch-site");
   if (site && site !== "same-origin" && site !== "none") {
     return c.json({ error: "Cross-site requests are not allowed." }, 403);
@@ -392,27 +410,19 @@ function rejectCrossSite(c: Context): Response | null {
   return null;
 }
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-
-/** Strip the `:port` suffix from a `Host` header to get the bare host. Handles bracketed IPv6
- *  (`[::1]:4242` → `[::1]`) and leaves a bare IPv6 literal (`::1`, which has no port) untouched —
- *  a naive `/:\d+$/` would mangle `::1` into `:`. */
-function hostWithoutPort(host: string): string {
-  const bracketed = host.match(/^(\[[^\]]+\])(?::\d+)?$/);
-  if (bracketed) return bracketed[1]!;
-  // A bare IPv6 literal contains multiple colons and carries no port — leave it as-is.
-  if (host.indexOf(":") !== host.lastIndexOf(":")) return host;
-  return host.replace(/:\d+$/, "");
-}
-
 /** Extra guard for the secret endpoints: require the request to be addressed to loopback. A
  *  DNS-rebinding attack points an attacker-controlled hostname at 127.0.0.1, so the request reaches
  *  this server but carries the attacker's hostname in `Host` (and `Origin`). Rejecting any non-loopback
  *  Host/Origin closes that hole — on top of `rejectCrossSite`'s CSRF defense — so a stored API key can
- *  never be written or its (masked) status read by a remote page. Returns a 403 Response, or null. */
+ *  never be written or its (masked) status read by a remote page. Returns a 403 Response, or null.
+ *
+ *  Deliberately unaffected by `--host` (#344): a wider bind doesn't widen this allowlist, so the
+ *  settings/secret routes stay loopback-only and a browser on another machine reads the dashboard but
+ *  can't write settings or touch stored keys. Adding the configured host here would reopen the
+ *  rebinding hole for exactly that hostname, which is the thing the guard exists to close. */
 function rejectUnsafeHost(c: Context): Response | null {
   const host = hostWithoutPort(c.req.header("host") ?? "");
-  if (!LOOPBACK_HOSTS.has(host)) {
+  if (!isLoopbackHost(host) || !requestIsLoopback(c)) {
     return c.json({ error: "This endpoint is only reachable on localhost." }, 403);
   }
   const origin = c.req.header("origin");
@@ -423,9 +433,27 @@ function rejectUnsafeHost(c: Context): Response | null {
     } catch {
       return c.json({ error: "Invalid Origin." }, 403);
     }
-    if (!LOOPBACK_HOSTS.has(hostname)) {
+    if (!isLoopbackHost(hostname)) {
       return c.json({ error: "Cross-origin requests are not allowed." }, 403);
     }
+  }
+  return null;
+}
+
+/** Require a bearer token for MCP clients that arrive over a non-loopback connection. Host and
+ * Origin remain useful DNS-rebinding signals for local requests, but neither header identifies a
+ * remote peer because both are client-controlled. */
+function rejectRemoteMcp(c: Context, token: string | undefined): Response | null {
+  if (!token) {
+    return c.json({ error: `Remote MCP access is not configured. Set ${MCP_TOKEN_ENV} first.` }, 403);
+  }
+  const match = /^Bearer\s+(.+)$/i.exec(c.req.header("authorization")?.trim() ?? "");
+  const provided = match?.[1]?.trim();
+  const expectedBytes = Buffer.from(token);
+  const providedBytes = Buffer.from(provided ?? "");
+  const valid = expectedBytes.length === providedBytes.length && timingSafeEqual(expectedBytes, providedBytes);
+  if (!valid) {
+    return c.json({ error: "A valid MCP bearer token is required." }, 401, { "WWW-Authenticate": "Bearer" });
   }
   return null;
 }
@@ -595,14 +623,14 @@ export function createApp(webRoot: string | null, opts: AppOptions = {}): Hono {
   viewRoute("/api/health", views?.health);
   viewRoute("/api/recommendations", views?.recommendations);
 
-  // The local MCP endpoint (#299): AI agents on this machine query Argus data over streamable HTTP.
-  // Read-only, so it mounts among the read routes (it survives read-only mode, #281) and carries no
-  // CSRF header requirement (MCP clients can't send one). The MCP spec's DNS-rebinding defense is the
-  // existing rejectUnsafeHost (it tolerates an absent Origin, which MCP clients satisfy); the loopback
-  // bind stays the boundary, consistent with the rest of the API.
+  // The MCP endpoint (#299): local clients use the DNS-rebinding guard, while a Docker or other
+  // non-loopback client must present the explicit bearer token. The peer check uses the actual socket
+  // address, so a remote client cannot bypass it by sending Host: localhost.
   if (opts.mcp) {
     app.all("/mcp", (c) => {
-      const blocked = rejectUnsafeHost(c);
+      const blocked = requestIsLoopback(c)
+        ? rejectUnsafeHost(c)
+        : rejectRemoteMcp(c, opts.mcpToken);
       if (blocked) return blocked;
       return opts.mcp!(c);
     });
@@ -1374,6 +1402,11 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     undismiss: (sessionId) => withWriteStore((store) => store.clearSessionSecretFindingsDismissal(sessionId)),
   };
 
+  const secrets = defaultSecretStore();
+  const mcpToken = isLoopbackHost(opts.host ?? DEFAULT_HOST)
+    ? undefined
+    : await resolveApiKey(MCP_TOKEN_ENV, secrets);
+
   const app = createApp(webRoot, {
     views,
     reindex,
@@ -1390,7 +1423,8 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
     // dashboard can never disagree.
     mcp: createMcpHandler({ views, sessionList, sessionDetail, sessionInteractions, sessionTaskMetrics }),
     debugInfo: () => collectDebugInfo({ serveReadOnly: opts.build.readOnly ?? false }),
-    secrets: defaultSecretStore(),
+    secrets,
+    mcpToken,
     claudeBinary,
     configPath: opts.configPath,
     log,
@@ -1413,13 +1447,34 @@ export async function startServer(opts: ServeOptions, log: Log): Promise<ServeHa
   });
   let isListening = false;
 
-  // Bind to loopback only. The dashboard endpoints expose transcript-derived data and `serve` is
-  // documented as a local-only tool; without an explicit hostname @hono/node-server listens on 0.0.0.0, which
-  // would expose that data to anyone on the network.
-  const server = serve({ fetch: app.fetch, port: opts.port, hostname: "127.0.0.1" }, (info) => {
+  // Loopback unless the caller asked for something else (#344). The dashboard endpoints expose
+  // transcript-derived data and nothing on this port authenticates, so the default keeps it on this
+  // machine; the hostname is always passed explicitly because @hono/node-server would otherwise
+  // default to 0.0.0.0 on its own.
+  const host = opts.host ?? DEFAULT_HOST;
+  const server = serve({ fetch: app.fetch, port: opts.port, hostname: host }, (info) => {
     isListening = true;
-    const url = `http://localhost:${info.port}`;
+    const url = serverUrl(host, info.port);
     log(`Listening on ${url} — press Ctrl-C to stop`);
+    if (!isLoopbackHost(host)) {
+      // Say plainly what a non-loopback bind opens up: there is no sign-in, and the read routes carry
+      // session titles, summaries, tasks, and retained prompt/response text.
+      const where = isWildcardHost(host) ? "every network interface" : host;
+      logWarn(
+        log,
+        `Listening on ${where}, not just this computer. Anyone who can reach port ${info.port} can ` +
+          `read your session data, and nothing on that port asks for a sign-in.` +
+          (opts.readOnly ? "" : " Add --read-only to keep it view-only."),
+      );
+      // The settings, connection-test, and API-key routes stay loopback-only, so a browser on another
+      // machine gets a refusal there rather than a silent no-op. Worth saying before it happens.
+      log("Settings and API keys still change only in a browser on this computer.");
+      log(
+        mcpToken
+          ? "Remote MCP access requires its bearer token."
+          : `Remote MCP access is off until ${MCP_TOKEN_ENV} is set.`,
+      );
+    }
     if (!webRoot) {
       logWarn(log, "The web app isn't built yet. Showing a placeholder. Run `bun run build:web` first.");
     }

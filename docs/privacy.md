@@ -59,15 +59,34 @@ for the full picture.
 Argus can let AI agents on your computer query your data themselves over a local
 [MCP](/terminology#mcp-server) endpoint, so an agent can answer questions about
 your past work. It's on by default, and it's read-only: an agent can look at
-your sessions, usage and task outcomes, but can't change anything. The endpoint
-only answers on your own computer (it refuses requests that don't come from
-localhost), and Argus still sends nothing anywhere itself.
+your sessions, usage and task outcomes, but can't change anything. Local agents
+can use it without a token. A container or another computer needs the bearer
+token configured with `ARGUS_MCP_TOKEN`, and Argus still sends nothing anywhere
+itself unless you run `sync`.
 
 The one sensitive piece is transcripts. Reading one sends the full text of that
 conversation into the agent's model provider's context, so transcript access
 ships off. Turn it on under **Settings → Agent access** only if you're
 comfortable with that. See [Connect Your Agent](/connect-your-agent) for how it
 works.
+
+## Serving to other computers
+
+Argus answers only on the computer it runs on. The desktop app always works that
+way. The command line does too, unless you ask for something else: `serve --host`
+takes an address to listen on, for running Argus on a machine you don't sit at and
+opening it from your laptop.
+
+Argus has no sign-in, so anyone who can reach that port can read what's in your
+[index](/terminology#index), including the prompt and response text Argus keeps
+when **Retain session text** is on. Use it only on a network you trust, and add
+`--read-only` so a visitor can't change anything. Settings and stored API keys are
+the exception: those answer only on the computer running Argus, whatever address
+you bind. See
+[Opening Argus to your network](/cli-reference#opening-argus-to-your-network).
+
+Opening a port doesn't make Argus send anything anywhere. It changes who can read
+what's already on your own machine.
 
 ## API keys
 

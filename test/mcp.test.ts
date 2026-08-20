@@ -13,6 +13,7 @@ const MCP_ENV = [
   "ARGUS_AGENT_ACCESS_ENABLED",
   "ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS",
   "ARGUS_RETAIN_TEXT",
+  "ARGUS_MCP_TOKEN",
 ];
 
 afterEach(() => {
@@ -21,22 +22,25 @@ afterEach(() => {
 
 /** POST one JSON-RPC message to /mcp and return the status + parsed body. The handler runs with
  *  `enableJsonResponse`, so every request/response comes back as plain JSON. `app.request` doesn't
- *  derive a Host header from the URL, so set it explicitly (the route's DNS-rebinding guard reads it). */
+ *  derive a Host header from the URL, so set it explicitly. `remoteAddress` lets tests model the Node
+ *  adapter's actual TCP peer rather than relying on a spoofable Host header. */
 async function rpc(
   app: Hono,
   method: string,
   params?: unknown,
-  init?: { host?: string },
+  init?: { host?: string; token?: string; remoteAddress?: string },
 ): Promise<{ status: number; body: any }> {
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    Host: init?.host ?? "localhost:4242",
+  });
+  if (init?.token) headers.set("Authorization", `Bearer ${init.token}`);
   const res = await app.request("/mcp", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Host: init?.host ?? "localhost:4242",
-    },
+    headers,
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
+  }, init?.remoteAddress ? { incoming: { socket: { remoteAddress: init.remoteAddress } } } : undefined);
   return { status: res.status, body: await res.json().catch(() => null) };
 }
 
@@ -162,8 +166,8 @@ function fakeDeps(overrides: Partial<McpDeps> = {}): McpDeps {
   };
 }
 
-function mcpApp(deps: McpDeps, opts: { readOnly?: boolean } = {}): Hono {
-  return createApp(null, { mcp: createMcpHandler(deps), readOnly: opts.readOnly });
+function mcpApp(deps: McpDeps, opts: { readOnly?: boolean; mcpToken?: string } = {}): Hono {
+  return createApp(null, { mcp: createMcpHandler(deps), mcpToken: opts.mcpToken, readOnly: opts.readOnly });
 }
 
 describe("MCP endpoint (#299)", () => {
@@ -425,6 +429,24 @@ describe("MCP endpoint (#299)", () => {
   test("a non-loopback Host is rejected (DNS rebinding defense)", async () => {
     const { status } = await rpc(mcpApp(fakeDeps()), "initialize", {}, { host: "evil.example.com" });
     expect(status).toBe(403);
+  });
+
+  test("a non-loopback peer needs the bearer token", async () => {
+    const app = mcpApp(fakeDeps(), { mcpToken: "docker-secret" });
+    const missing = await rpc(app, "initialize", {}, { host: "host.docker.internal:4242", remoteAddress: "172.17.0.2" });
+    expect(missing.status).toBe(401);
+    const accepted = await rpc(app, "initialize", {}, {
+      host: "host.docker.internal:4242",
+      token: "docker-secret",
+      remoteAddress: "172.17.0.2",
+    });
+    expect(accepted.status).toBe(200);
+  });
+
+  test("a remote peer cannot use a spoofed loopback Host", async () => {
+    const app = mcpApp(fakeDeps(), { mcpToken: "docker-secret" });
+    const { status } = await rpc(app, "initialize", {}, { host: "localhost:4242", remoteAddress: "172.17.0.2" });
+    expect(status).toBe(401);
   });
 
   test("GET /mcp is a 405 — no standalone notification stream", async () => {

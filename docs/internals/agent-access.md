@@ -1,8 +1,8 @@
 # Agent access (the `/mcp` endpoint)
 
-Issue #299. `serve` exposes a local [MCP](https://modelcontextprotocol.io) endpoint at
-`POST /mcp` so AI agents on the same machine (Claude Code, Codex, Gemini CLI) can query the Argus
-store: session search and detail, transcripts, usage, tool usage and health. It lets an agent answer
+Issue #299. `serve` exposes an [MCP](https://modelcontextprotocol.io) endpoint at
+`POST /mcp` so AI agents on the same machine, or an explicitly authorized Docker container, can query
+the Argus store: session search and detail, transcripts, usage, tool usage and health. It lets an agent answer
 "what did I work on last week?" from the user's own work history.
 
 ```
@@ -23,7 +23,7 @@ bundle path inside the `.app`, so there is no stable command for a client config
 "works while Argus isn't running" isn't a real use case when the daemon is the product. Documenting
 the raw HTTP API works but makes every client hand-roll calls; MCP tools describe themselves, so the
 agent discovers arguments and shapes on its own. Streamable HTTP on the existing serve app is
-reachable at `http://127.0.0.1:4242/mcp` for everyone: desktop users ride the front-door proxy (a
+reachable at `http://127.0.0.1:4242/mcp` for local clients: desktop users ride the front-door proxy (a
 dumb TCP relay, so `/mcp` passes through with no proxy changes and survives sidecar restarts), CLI
 users hit `serve`/`run` directly. Claude Code, Codex and Gemini CLI all speak streamable HTTP.
 
@@ -81,12 +81,17 @@ Security posture, consistent with the rest of `serve`:
 
 - The endpoint mounts among the **read routes** in `createApp`, so it survives `readOnly` mode
   (#281) and exists even where every write route is dropped.
-- Guarded by the existing **`rejectUnsafeHost`** (loopback-only `Host`/`Origin`) — the MCP spec's
-  DNS-rebinding requirement. It tolerates an absent `Origin`, which MCP clients satisfy.
-- **No `x-argus-app` CSRF requirement**: MCP clients can't set custom headers, and every tool is
-  read-only so there's no side effect to forge.
-- **No auth token**: the loopback bind is the boundary, same as the rest of the API. A bearer token
-  for multi-user machines is a phase-2 candidate.
+- Local requests are guarded by the existing **`rejectUnsafeHost`**, which checks both the actual
+  TCP peer and the `Host`/`Origin` values for the MCP spec's DNS-rebinding requirement. A remote client
+  cannot pass that guard by sending `Host: localhost`.
+- A non-loopback peer must send `Authorization: Bearer <token>`. The token comes from
+  `ARGUS_MCP_TOKEN` or the stored `ARGUS_MCP_TOKEN` secret. The comparison is constant-time, and the
+  token is never logged or returned.
+- **No `x-argus-app` CSRF requirement**: MCP is not a browser write surface, and every tool is
+  read-only. Remote clients use `Authorization` for access instead.
+- **`--host` (#344) widens the listener, not the dashboard's privileged routes**: the dashboard's
+  settings, secrets and connection-test routes still require an actual loopback peer. `/mcp` accepts
+  a Docker or other remote peer only when it presents the bearer token.
 
 Non-goals for v1 (see the issue for the full list): no stdio subcommand, no write tools, no MCP
 resources/prompts, no one-click client-config install, no Hub-side org endpoint.

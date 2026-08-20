@@ -1,10 +1,10 @@
 ---
-description: Connect an agent to the local Argus MCP server in Claude Code, Claude Cowork, Codex, Cursor, Gemini CLI or VS Code, with the full tool reference and worked examples.
+description: Connect an agent to the Argus MCP server in Claude Code, Claude Cowork, Codex, Cursor, Gemini CLI or VS Code, with the full tool reference and worked examples.
 ---
 
 # MCP Server
 
-Argus serves a local [MCP](/terminology#mcp-server) endpoint at
+Argus serves an [MCP](/terminology#mcp-server) endpoint at
 `http://127.0.0.1:4242/mcp` whenever it's running, so an agent on your computer
 can answer questions about your own agent use: what you worked on, what it cost,
 which tools you leaned on and where [sessions](/terminology#session) went
@@ -12,9 +12,9 @@ sideways. This page covers connecting each agent and what the six tools return.
 For what the feature is and how to turn it off, see
 [Connect Your Agent](/connect-your-agent).
 
-Every tool is read-only, so an agent can't change your data through it. The
-endpoint listens on your own computer only, needs no key, and answers nothing but
-the agent that called it.
+Every tool is read-only, so an agent can't change your data through it. Local
+connections need no key. A container or another computer needs the
+`ARGUS_MCP_TOKEN` bearer token.
 
 ## Before you connect
 
@@ -25,6 +25,21 @@ the agent that called it.
   which. On the command line it follows `--port` or `ARGUS_PORT`.
 - **Agent access has to be on.** "Let agents query Argus" is on by default, under
   **Settings → Agent access**.
+
+### Docker or another computer
+
+Bind the server to an address the client can reach and set a token in the Argus
+process:
+
+```bash
+export ARGUS_MCP_TOKEN="use-a-long-random-value"
+npx @agentdeploymentco/argus run --host 0.0.0.0 --read-only
+```
+
+Send the same value as `Authorization: Bearer <token>` on every MCP request.
+Docker Desktop containers usually use `http://host.docker.internal:4242/mcp`.
+On Linux, use the host address exposed to the container. A remote client cannot
+use `Host: localhost` as a substitute for the token.
 
 ## Setup
 
@@ -120,8 +135,9 @@ configuration through **MCP: Open User Configuration**:
 ### Anything else
 
 Any client that speaks MCP over HTTP can point straight at the address. Each call
-is a self-contained request, so there's no session to keep alive and no
-credential to configure. For a client that only starts connectors as a command,
+is a self-contained request, so there's no session to keep alive. Local clients
+need no credential. Remote clients send the bearer token on every request. For a
+client that only starts connectors as a command,
 use the `mcp-remote` bridge shown under
 [Claude Cowork](#claude-cowork-and-claude-desktop).
 

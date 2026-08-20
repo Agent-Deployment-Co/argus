@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSecretStore } from "../src/secrets.ts";
-import { createApp, defaultBrowserCommand, type LabelOps, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
+import { createApp, defaultBrowserCommand, serverUrl, type LabelOps, type SnapshotFilters, type ViewReader, type ViewReaders } from "../src/api/serve.ts";
 import { LabelError } from "../src/store/store.ts";
 import { logger } from "../src/logger.ts";
 import type { LabelRecord, LabelTarget, TaskFact } from "../src/store/store-contract.ts";
@@ -1182,5 +1182,117 @@ describe("label endpoints (session-and-task-labels)", () => {
     const app = createApp(null, { labels });
     const res = await app.request("/api/sessions/s1/tasks/notanumber/labels", { method: "POST", headers: APP, body: JSON.stringify({ labelId: "label:bug" }) });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("serving a non-loopback address (#344)", () => {
+  test("prints the bound address, and localhost for a bind with no single address", () => {
+    // Loopback and wildcard binds both print localhost: it's the address that works in a browser on
+    // this machine, and 0.0.0.0 isn't one you can open.
+    expect(serverUrl("127.0.0.1", 4242)).toBe("http://localhost:4242");
+    expect(serverUrl("localhost", 4242)).toBe("http://localhost:4242");
+    expect(serverUrl("0.0.0.0", 4242)).toBe("http://localhost:4242");
+    expect(serverUrl("::", 4242)).toBe("http://localhost:4242");
+    // A specific interface prints itself, so the log line is the address to open from another machine.
+    expect(serverUrl("192.168.1.5", 4242)).toBe("http://192.168.1.5:4242");
+    expect(serverUrl("nas.local", 8080)).toBe("http://nas.local:8080");
+    // IPv6 literals are bracketed so the result stays a usable URL, whether or not they arrive that way.
+    expect(serverUrl("fe80::1", 4242)).toBe("http://[fe80::1]:4242");
+    expect(serverUrl("[fe80::1]", 4242)).toBe("http://[fe80::1]:4242");
+  });
+
+  // rejectCrossSite keys off Sec-Fetch-Site and the app header, not the bind address, so a browser on
+  // another machine can still label and hide sessions when `--host` is set (#344).
+  test("a same-origin write from a LAN address still passes the cross-site guard", async () => {
+    const calls: [string, boolean][] = [];
+    const app = createApp(null, { setSessionHidden: async (id, value) => void calls.push([id, value]) });
+    const res = await app.request("/api/sessions/codex:s1/hidden", {
+      method: "POST",
+      headers: {
+        "X-Argus-App": "1",
+        Host: "192.168.1.5:4242",
+        Origin: "http://192.168.1.5:4242",
+        "Sec-Fetch-Site": "same-origin",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ hidden: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([["codex:s1", true]]);
+  });
+
+  test("a cross-site write from a LAN address is still rejected", async () => {
+    const app = createApp(null, { setSessionHidden: async () => {} });
+    const res = await app.request("/api/sessions/codex:s1/hidden", {
+      method: "POST",
+      headers: {
+        "X-Argus-App": "1",
+        Host: "192.168.1.5:4242",
+        "Sec-Fetch-Site": "cross-site",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ hidden: true }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  // The decision this flag rests on: widening the bind does not widen the loopback allowlist, so
+  // settings, the connection test, and stored keys stay unreachable from another machine.
+  test("settings and secret routes stay loopback-only for a LAN request", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-serve-host-"));
+    const configPath = join(dir, "argus.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const app = createApp(null, {
+      configPath,
+      secrets: new FileSecretStore(join(dir, "secrets.json")),
+      // A stand-in for the real MCP handler: the guard runs before it, so reaching it would be the bug.
+      mcp: async (c) => c.json({ reached: true }),
+    });
+    const lan = {
+      "X-Argus-App": "1",
+      Host: "192.168.1.5:4242",
+      Origin: "http://192.168.1.5:4242",
+      "Sec-Fetch-Site": "same-origin",
+      "content-type": "application/json",
+    };
+
+    const setting = await app.request("/api/settings/log.level", { method: "PUT", headers: lan, body: JSON.stringify({ value: "debug" }) });
+    expect(setting.status).toBe(403);
+    // ...and nothing was written on the way to the refusal.
+    expect(readFileSync(configPath, "utf8")).toBe("{}");
+
+    const secretWrite = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", { method: "POST", headers: lan, body: JSON.stringify({ value: "sk-nope" }) });
+    expect(secretWrite.status).toBe(403);
+    const secretRead = await app.request("/api/settings/secrets/ANTHROPIC_API_KEY", { headers: lan });
+    expect(secretRead.status).toBe(403);
+    const connectionTest = await app.request("/api/settings/test-connection", { method: "POST", headers: lan });
+    expect(connectionTest.status).toBe(403);
+    const mcp = await app.request("/mcp", { method: "POST", headers: lan, body: "{}" });
+    expect(mcp.status).toBe(403);
+
+    // Reads stay open: that's the point of the flag.
+    expect((await app.request("/healthz")).status).toBe(200);
+  });
+
+  test("a remote peer cannot bypass loopback routes by sending Host: localhost", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-serve-peer-"));
+    const configPath = join(dir, "argus.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const app = createApp(null, { configPath, secrets: new FileSecretStore(join(dir, "secrets.json")) });
+    const res = await app.request(
+      "/api/settings/log.level",
+      {
+        method: "PUT",
+        headers: {
+          "X-Argus-App": "1",
+          Host: "localhost:4242",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: "debug" }),
+      },
+      { incoming: { socket: { remoteAddress: "172.17.0.2" } } },
+    );
+    expect(res.status).toBe(403);
+    expect(readFileSync(configPath, "utf8")).toBe("{}");
   });
 });

@@ -323,8 +323,8 @@ fn refresh_status(app: &AppHandle) {
     let _ = state.stop_item.set_enabled(running);
 }
 
-/// Spawn `argus run --port <port>` as a sidecar, forwarding the web-asset location, and drain its
-/// output to the log. When it exits (crash or stop), clear the handle and refresh the menu so the
+/// Spawn `argus run` as a sidecar on a free loopback port, forwarding the web-asset location, and
+/// drain its output to the log. When it exits (crash or stop), clear the handle and refresh the menu so the
 /// tray never claims to be running a process that has gone away.
 fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     // Re-pick a free backend port on every spawn (not just once per app launch): the front-door
@@ -337,7 +337,18 @@ fn spawn_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
         .store(port, Ordering::SeqCst);
     // Always start the sync loop. It re-reads the Hub settings on each pass, so adding a Hub URL
     // or key in the dashboard takes effect without restarting the sidecar.
-    let args = vec!["run".to_string(), "--port".to_string(), port.to_string()];
+    //
+    // `--host` is passed explicitly so the tray app's backend stays on loopback even if `argus.json`
+    // or `ARGUS_HOST` widens the CLI's bind (#344). The tray app reaches the dashboard through the
+    // loopback front-door proxy and has no reason to open a port to the network; someone who wants
+    // that runs the CLI directly.
+    let args = vec![
+        "run".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
+    ];
     log::info!("starting argus on port {port} (sync watches settings)");
     let mut command = app
         .shell()

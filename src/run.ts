@@ -5,7 +5,7 @@
 // launchd, Docker) owns backgrounding, restarts, and logging.
 import { superviseLoop } from "./backoff.ts";
 import type { BuildDashboardOptions } from "./reporting/dashboard-builder.ts";
-import { startServer } from "./api/serve.ts";
+import { serverUrl, startServer } from "./api/serve.ts";
 import { watchIndex, watchSync } from "./watch.ts";
 import type { SyncOptions } from "./cli-options.ts";
 import type { ResolvedSessionInterpretation } from "./config.ts";
@@ -13,6 +13,8 @@ import type { Log } from "./logger.ts";
 
 export interface RunOptions extends SyncOptions {
   port: number;
+  /** Which network interface the web leg binds (#344). Loopback unless `--host` says otherwise. */
+  host: string;
   indexIntervalMin: number;
   syncIntervalMin: number;
   noSync: boolean;
@@ -43,6 +45,7 @@ export function assertHomeResolved(log: Log): void {
 async function serveLeg(
   opts: {
     port: number;
+    host: string;
     build: BuildDashboardOptions;
     taskExtraction: ResolvedSessionInterpretation;
     readOnly: boolean;
@@ -56,6 +59,7 @@ async function serveLeg(
       const handle = await startServer(
         {
           port: opts.port,
+          host: opts.host,
           open: false,
           build: opts.build,
           taskExtraction: opts.taskExtraction,
@@ -94,7 +98,7 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
 
   log(
     `Running: reading transcripts every ${opts.indexIntervalMin} min, serving on ` +
-      `http://localhost:${opts.port}` +
+      serverUrl(opts.host, opts.port) +
       (opts.noSync ? "" : `, checking for Hub uploads every ${opts.syncIntervalMin} min`) +
       `. Press Ctrl-C to stop.`,
   );
@@ -104,7 +108,11 @@ export async function runRun(opts: RunOptions, log: Log): Promise<void> {
     // never stops serving.
     const legs: Promise<void>[] = [
       watchIndex({ ...src, intervalMin: opts.indexIntervalMin }, log, ac.signal),
-      serveLeg({ port: opts.port, build, taskExtraction: opts.taskExtraction, readOnly: opts.readOnly }, log, ac.signal),
+      serveLeg(
+        { port: opts.port, host: opts.host, build, taskExtraction: opts.taskExtraction, readOnly: opts.readOnly },
+        log,
+        ac.signal,
+      ),
     ];
     if (!opts.noSync) {
       legs.push(
