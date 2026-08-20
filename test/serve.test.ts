@@ -1273,4 +1273,26 @@ describe("serving a non-loopback address (#344)", () => {
     // Reads stay open: that's the point of the flag.
     expect((await app.request("/healthz")).status).toBe(200);
   });
+
+  test("a remote peer cannot bypass loopback routes by sending Host: localhost", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-serve-peer-"));
+    const configPath = join(dir, "argus.json");
+    writeFileSync(configPath, "{}", "utf8");
+    const app = createApp(null, { configPath, secrets: new FileSecretStore(join(dir, "secrets.json")) });
+    const res = await app.request(
+      "/api/settings/log.level",
+      {
+        method: "PUT",
+        headers: {
+          "X-Argus-App": "1",
+          Host: "localhost:4242",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: "debug" }),
+      },
+      { incoming: { socket: { remoteAddress: "172.17.0.2" } } },
+    );
+    expect(res.status).toBe(403);
+    expect(readFileSync(configPath, "utf8")).toBe("{}");
+  });
 });

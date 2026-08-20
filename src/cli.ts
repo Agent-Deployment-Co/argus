@@ -1136,7 +1136,7 @@ const secretSet = defineCommand({
     name: {
       type: "positional",
       required: true,
-      description: "secret name (e.g. ANTHROPIC_API_KEY, ARGUS_HUB_KEY)",
+      description: "secret name (e.g. ANTHROPIC_API_KEY, ARGUS_HUB_KEY, ARGUS_MCP_TOKEN)",
     },
     ...logArgs,
   },
@@ -1192,7 +1192,7 @@ const secret = defineCommand({
   meta: {
     name: "secret",
     description:
-      "manage stored secrets — LLM API keys and the Argus Hub key (kept in your OS keychain where available)",
+      "manage stored secrets: provider keys, the Argus Hub key and the MCP access token (kept in your OS keychain where available)",
   },
   subCommands: { set: secretSet, rm: secretRm, status: secretStatus },
   run: (ctx) => {

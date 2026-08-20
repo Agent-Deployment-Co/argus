@@ -21,11 +21,14 @@ import { getPath, HUB_SETTINGS, loadConfig, resolveSetting, setPath, writeConfig
 /** The env-var name the Argus Hub key is stored under (and resolved from). */
 const HUB_KEY_ENV = HUB_SETTINGS.key.env!;
 
+/** The bearer token used when a non-local MCP client connects to a widened serve listener. */
+export const MCP_TOKEN_ENV = "ARGUS_MCP_TOKEN";
+
 /** The secret names Argus stores: the providers' standard API-key env vars (derived from the provider
  *  registry so a new provider's key is automatically storable) plus the Argus Hub key. Keyed to the
  *  env-var names so the value resolves through `apiKeyEnv`/`ARGUS_HUB_KEY` and (on the desktop) needs no
  *  argus.json parsing on the native side. */
-export const SECRET_NAMES: readonly string[] = [...PROVIDER_API_KEY_ENVS, HUB_KEY_ENV];
+export const SECRET_NAMES: readonly string[] = [...PROVIDER_API_KEY_ENVS, HUB_KEY_ENV, MCP_TOKEN_ENV];
 
 export function isSecretName(name: string): boolean {
   return SECRET_NAMES.includes(name);

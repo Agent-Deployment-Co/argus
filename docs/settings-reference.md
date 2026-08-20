@@ -88,7 +88,7 @@ provider value `claude` is still accepted as an alias for `claude-cli`.
 | Hub key | Key used to authenticate to Argus Hub. | `hub.key` | `ARGUS_HUB_KEY` | None | unset |
 | Log level | How much detail Argus prints to the terminal. | `log.level` | `ARGUS_LOG_LEVEL` | `--log-level` | `info` |
 | Retain session text | Whether Argus keeps prompt and response text in the local [index](/terminology#index) for interpretation. New sessions are still checked for [exposed credentials](/sessions#credential-warnings) either way, but with this off, sessions already indexed can't be re-checked without `index refresh`. | `retainText` | `ARGUS_RETAIN_TEXT` | `index`, `index rebuild` and `index refresh`: `--retain-text true\|false` | `true` |
-| Agent access | Whether agents on this computer can query Argus over the local MCP endpoint (`/mcp`). See [Connect Your Agent](/connect-your-agent). | `agentAccess.enabled` | `ARGUS_AGENT_ACCESS_ENABLED` | None | `true` |
+| Agent access | Whether agents can query Argus over MCP. Local agents need no token; remote clients also need `ARGUS_MCP_TOKEN`. | `agentAccess.enabled` | `ARGUS_AGENT_ACCESS_ENABLED` | None | `true` |
 | Agent transcript access | Whether agents can also read retained session transcript text through the MCP endpoint. | `agentAccess.includeTranscripts` | `ARGUS_AGENT_ACCESS_INCLUDE_TRANSCRIPTS` | None | `false` |
 | Welcome completed | Whether the first-run welcome screen has been dismissed. | `state.onboardingCompleted` | `ARGUS_STATE_ONBOARDING_COMPLETED` | None | `false` |
 
@@ -106,6 +106,10 @@ model connection test and stored API keys stay reachable only from the computer 
 you set here. See [Opening Argus to your network](/cli-reference#opening-argus-to-your-network). A
 value that isn't a bare address (a URL, or an address with a port on the end) is ignored with a warning
 and Argus stays on the default.
+
+Remote MCP access is separate from the dashboard. Set `ARGUS_MCP_TOKEN` on the machine running Argus,
+then send that value as an `Authorization: Bearer ...` header from the container. Local MCP clients do
+not need a token. The token is also available through `argus secret set ARGUS_MCP_TOKEN`.
 
 Use the secret store or `ARGUS_HUB_KEY` for the Hub key. A legacy plaintext
 `hub.key` in `argus.json` is still read and migrated by `serve`, but new
@@ -211,6 +215,7 @@ secret store.
 | `GEMINI_API_KEY` | `gemini` provider | yes |
 | `OPENROUTER_API_KEY` | `openrouter` provider | yes |
 | `ARGUS_HUB_KEY` | Argus Hub sync | yes |
+| `ARGUS_MCP_TOKEN` | Remote MCP clients | yes |
 
 Manage secrets from the command line:
 

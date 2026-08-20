@@ -485,7 +485,8 @@ function parseHost(raw: unknown): string | undefined {
   const bracketed = /^\[[^\]]+\]$/.test(value);
   const colons = value.split(":").length - 1;
   // More than one colon means a bare IPv6 literal; otherwise a trailing `:digits` is a port, which
-  // belongs in --port. Brackets are legal only around a whole IPv6 literal ([::1], never [::1]:4242).
+  // belongs in --port. Brackets are accepted as URL notation around a whole IPv6 literal, then
+  // removed before the value reaches the listener ([::1] becomes ::1, never [::1]:4242).
   const hasPort = !bracketed && colons === 1 && /:\d+$/.test(value);
   const notAnAddress =
     hasPort ||
@@ -499,7 +500,7 @@ function parseHost(raw: unknown): string | undefined {
     );
     return undefined;
   }
-  return value;
+  return bracketed ? value.slice(1, -1) : value;
 }
 
 /** Which interface `serve`/`run` binds (#344). Loopback by default. No `ui` — like `readOnly`, it's a
@@ -525,7 +526,7 @@ export const AGENT_ACCESS_SETTINGS = {
     ui: {
       label: "Let agents query Argus",
       description:
-        "Allow AI agents on this machine (Claude Code, Codex, Gemini CLI) to read your Argus data through the local MCP endpoint, so they can answer questions about your past work.",
+        "Allow AI agents on this computer to read your Argus data through MCP. A Docker container or another computer also needs the ARGUS_MCP_TOKEN bearer token.",
       control: "toggle",
     },
     parse: parseBool,
@@ -1318,7 +1319,7 @@ export function resolveHost(
  *  loopback (bracketed or bare). Used to decide whether to warn about what's exposed, so anything it
  *  doesn't recognize counts as reachable from the network. */
 export function isLoopbackHost(host: string): boolean {
-  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/^::ffff:/, "");
   return h === "localhost" || h === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 

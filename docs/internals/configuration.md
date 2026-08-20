@@ -127,19 +127,20 @@ that isn't a bare address (a URL, a `host:port` pair, whitespace, a path), warns
 loopback, so a typo narrows exposure instead of widening it. A hostname that merely doesn't resolve
 gets through and surfaces as a bind failure naming the address that was asked for.
 
-Two guards in `api/serve.ts` are load-bearing here, and neither changes with the bind:
+The request guards in `api/serve.ts` are load-bearing here:
 
 - **`rejectUnsafeHost`** (settings write, onboarding, connection test, secret read/write/delete,
-  `/mcp`) stays loopback-only on `Host`/`Origin`. Adding the configured host to `LOOPBACK_HOSTS`
-  would reopen the DNS-rebinding hole for exactly that hostname, which is what the guard exists to
-  close. The consequence is deliberate: a browser on another machine reads the dashboard, labels and
-  hides sessions, and cannot write settings or touch stored keys.
+  and local MCP) checks the actual TCP peer as well as `Host`/`Origin`. A remote client cannot bypass it
+  by sending `Host: localhost`. The settings, secret and connection-test routes stay loopback-only.
+- **Remote MCP** is the explicit exception. A non-loopback peer must present the bearer token from
+  `ARGUS_MCP_TOKEN`, so a Docker client can query the read-only tools without exposing settings or
+  stored keys. Adding the configured host to the loopback allowlist would not be safe because the Host
+  header is client-controlled.
 - **`rejectCrossSite`** keys off `Sec-Fetch-Site` plus the `x-argus-app` header, both properties of
   the request rather than the bind address, so the CSRF defense works unchanged from a LAN origin.
 
-Nothing on the port authenticates, so a non-loopback bind warns at startup (naming the address and
-the port, and suggesting `--read-only` when it's off) and notes that settings and API keys still
-change only on the local machine. The desktop app passes `--host 127.0.0.1` to its sidecar so a
+The dashboard has no sign-in, so a non-loopback bind warns at startup (naming the address and
+the port, and suggesting `--read-only` when it's off). The desktop app passes `--host 127.0.0.1` to its sidecar so a
 widened `argus.json`/`ARGUS_HOST` can't expose the tray app's backend port (a *managed* `host` still
 wins, by design: that's the org's call); its front-door proxy (`desktop/src-tauri/src/proxy.rs`) binds
 loopback on its own regardless.

@@ -1,5 +1,5 @@
 ---
-description: Let AI agents on your computer query your Argus data over the local MCP endpoint, so they can answer questions about your past work.
+description: Let AI agents on your computer or an authorized container query your Argus data over MCP, so they can answer questions about your past work.
 ---
 
 # Connect Your Agent
@@ -15,7 +15,8 @@ Agents connect over [MCP](/terminology#mcp-server), the standard protocol for
 giving agents tools. Argus serves a local MCP endpoint at
 `http://127.0.0.1:4242/mcp` whenever the app is running, with six read-only
 tools. It can't change anything, and it never sends your data anywhere itself.
-It only answers the agent that called it, on your machine.
+Local agents connect without a token. A container or another computer needs a
+bearer token.
 
 ## Connect
 
@@ -29,6 +30,22 @@ claude mcp add --transport http argus http://127.0.0.1:4242/mcp
 
 [MCP Server](/mcp-server#setup) has the equivalent for Claude Cowork, Codex,
 Cursor, Gemini CLI, VS Code and anything else that speaks MCP.
+
+### Connect a Docker container
+
+Bind the CLI to an address the container can reach, then set a token on the
+machine running Argus:
+
+```bash
+export ARGUS_MCP_TOKEN="use-a-long-random-value"
+npx @agentdeploymentco/argus run --host 0.0.0.0 --read-only
+```
+
+Configure the container's MCP client with the matching `Authorization: Bearer`
+header. Docker Desktop containers usually reach the host at
+`http://host.docker.internal:4242/mcp`. On Linux, use the host address exposed
+to the container. A remote client without the token cannot use `/mcp`, even if
+it sends `Host: localhost`.
 
 Once connected, ask in plain language. "What did I work on last week?" has the
 agent search your sessions. "How much did I spend in March?" reads your usage

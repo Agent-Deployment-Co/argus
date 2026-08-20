@@ -29,7 +29,7 @@ npx @agentdeploymentco/argus <command>
 | `run` | Do it all: keep the index current, serve Argus and sync on a schedule. |
 | `status` | Show where the local store lives, per-source counts and how far the [credential check](/sessions#credential-warnings) has got. |
 | `config` | Read or write settings (`config get`, `config set`). |
-| `secret` | Store API keys for the model providers Argus can use. |
+| `secret` | Store provider keys, the Hub key and the MCP access token. |
 
 Run `argus <command> --help` for the flags on any command.
 
@@ -51,7 +51,7 @@ This is for running Argus on a machine you don't sit at: a home server, a box in
 the corner, a container or VM whose ports you reach from the host. The desktop app
 never does it, and neither does the default.
 
-Argus has no sign-in, so anyone who can reach the port can open the dashboard and
+The dashboard has no sign-in, so anyone who can reach the port can open it and
 read what's in your [index](/terminology#index):
 [session](/terminology#session) titles, model-written summaries,
 [tasks](/terminology#task) and how each one went, and the prompt and response text
@@ -64,8 +64,12 @@ Two things stay on the computer running Argus whatever you pass:
 - **Settings and API keys.** Changing a setting, testing a model connection or
   saving a provider key works only in a browser on that computer. Requests from
   anywhere else are refused. Set those up locally first, then start serving.
-- **The [MCP](/terminology#mcp-server) endpoint.** Agents can query Argus over
-  `/mcp` only from the same computer. See [Connect Your Agent](/connect-your-agent).
+- **The [MCP](/terminology#mcp-server) endpoint.** A local agent can query `/mcp`
+  without a token. A container or another computer needs a bearer token. Set
+  `ARGUS_MCP_TOKEN` on the machine running Argus and send it as an
+  `Authorization: Bearer ...` header. For Docker Desktop, the container usually
+  reaches the host at `http://host.docker.internal:4242/mcp`. On Linux, use the
+  host address reachable from the container. See [Connect Your Agent](/connect-your-agent).
 
 `--host` also has a setting (`host`) and an environment variable (`ARGUS_HOST`);
 see the [Settings Reference](/settings-reference). Nothing about this changes what

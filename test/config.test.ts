@@ -506,7 +506,7 @@ describe("resolveHost (#344)", () => {
   test("keeps a hostname and an IPv6 literal as given", () => {
     expect(resolveHost({ host: "nas.local" }, {})).toBe("nas.local");
     expect(resolveHost({ host: "::" }, {})).toBe("::");
-    expect(resolveHost({ host: "[::1]" }, {})).toBe("[::1]");
+    expect(resolveHost({ host: "[::1]" }, {})).toBe("::1");
   });
 
   // A typo must narrow exposure, never widen it: anything that isn't a bare address warns and stays

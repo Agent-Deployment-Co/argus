@@ -1,5 +1,5 @@
-// The local MCP endpoint (POST /mcp, #299): lets AI agents on this machine (Claude Code, Codex,
-// Gemini CLI) query the Argus store — session search/detail/transcripts, usage, tools, health — over
+// The MCP endpoint (POST /mcp, #299): lets AI agents on this machine, or an authorized container,
+// query the Argus store for session search/detail/transcripts, usage, tools and health over
 // streamable HTTP, so an agent can answer "what did I work on last week?" from the user's own work
 // history. Every tool is read-only and reuses the exact readers `startServer` assembles for the web
 // API, so MCP answers can never drift from what the dashboard shows.
@@ -7,9 +7,9 @@
 // Transport shape: stateless streamable HTTP — a fresh `McpServer` + `StreamableHTTPTransport` per
 // request, no session ids, no server-initiated messages (tools only), `enableJsonResponse` so POSTs
 // come back as plain JSON (valid per the spec, and far easier to smoke-test than SSE). GET /mcp is
-// rejected with 405 (spec-blessed for servers without a standalone notification stream). The route
-// lives behind `rejectUnsafeHost` in serve.ts (the MCP spec's DNS-rebinding requirement), with no
-// CSRF header — MCP clients can't send one, and every tool is read-only.
+// rejected with 405 (spec-blessed for servers without a standalone notification stream). Local
+// requests use the DNS-rebinding guard in serve.ts. Non-local requests need a bearer token, while no
+// browser CSRF header is required because every tool is read-only.
 import { StreamableHTTPTransport } from "@hono/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Context } from "hono";

@@ -59,9 +59,10 @@ for the full picture.
 Argus can let AI agents on your computer query your data themselves over a local
 [MCP](/terminology#mcp-server) endpoint, so an agent can answer questions about
 your past work. It's on by default, and it's read-only: an agent can look at
-your sessions, usage and task outcomes, but can't change anything. The endpoint
-only answers on your own computer (it refuses requests that don't come from
-localhost), and Argus still sends nothing anywhere itself.
+your sessions, usage and task outcomes, but can't change anything. Local agents
+can use it without a token. A container or another computer needs the bearer
+token configured with `ARGUS_MCP_TOKEN`, and Argus still sends nothing anywhere
+itself unless you run `sync`.
 
 The one sensitive piece is transcripts. Reading one sends the full text of that
 conversation into the agent's model provider's context, so transcript access
