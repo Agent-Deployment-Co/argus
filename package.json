@@ -43,7 +43,7 @@
     "citty": "^0.2.2",
     "consola": "^3.4.2",
     "hono": "^4.12.25",
-    "zod": "^3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.101.0",
@@ -71,5 +71,8 @@
     "type": "git",
     "url": "git+https://github.com/Agent-Deployment-Co/argus.git"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "vue": "^3.5.45"
+  }
 }
